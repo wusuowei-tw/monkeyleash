@@ -172,6 +172,45 @@ def generate_legacy_list(target, go_live):
     return files
 
 
+def write_decisions_pending(target, buckets, carried_untracked, unmarked):
+    """把需要人決定的項目**寫成檔案**,不只印終端機。
+
+    印出來沒人看等於沒列(F-036 的同一個病:訊號不落地就等於沒有訊號)。
+    寫成 docs/decisions-pending.md —— 人回頭找得到,也進得了版控、能被 review。
+    沒有任何待決項目時回 None(不留空檔案佔位)。
+    """
+    sections = []
+    if buckets.get("ask"):
+        sections.append(("需要你決定帶不帶(標記為 ask,安裝時沒有帶過去)",
+                         buckets["ask"],
+                         "這些檔案混著框架與專案兩種東西。看過內容後,"
+                         "要嘛手動複製過來、要嘛確認不需要。"))
+    if carried_untracked:
+        sections.append(("帶過去了但來源 repo 還沒進版控 —— 確認不是暫存檔",
+                         carried_untracked,
+                         "來源是未追蹤檔,可能是還沒 commit 的框架檔,也可能是暫存物。"))
+    if unmarked:
+        sections.append(("跟框架檔住在同一個目錄、卻沒被帶過去 —— 確認不是漏的",
+                         unmarked,
+                         "少帶是靜默的(F-030/F-031)。逐一確認這些是專案自己的、不是漏掉的框架檔。"))
+    if not sections:
+        return None
+
+    path = os.path.join(target, "docs", "decisions-pending.md")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lines = ["# 安裝待決定項目\n",
+             "由 install.py 產生。**這是這些決定的落地處,不是終端機。**",
+             "處理完一項就把它從這裡刪掉;清空了就代表安裝的人工部分做完了。\n"]
+    for title, items, note in sections:
+        lines.append("## %s\n" % title)
+        lines.append("%s\n" % note)
+        for it in sorted(items):
+            lines.append("- [ ] `%s`" % it)
+        lines.append("")
+    io.open(path, "w", encoding="utf-8", newline="\n").write("\n".join(lines) + "\n")
+    return path
+
+
 def verify(target):
     """安裝時**強制**跑一次。不通過就不算安裝完成。
 
@@ -241,6 +280,7 @@ def main(target):
          "凍結既有 .py 的紅燈豁免清單(go-live %s)" % go_live[:7]], target)
 
     blocked = verify(target)
+    pending = write_decisions_pending(target, buckets, carried_untracked, unmarked)
 
     print("裝好了:%s" % target)
     print("  複製      %d 個檔案" % len(buckets["copy"]))
@@ -252,20 +292,13 @@ def main(target):
         print("\n帶過去了但來源 repo 還沒把它們進版控 —— 確認不是暫存檔:")
         for p in carried_untracked:
             print("    %s" % p)
-    if buckets["ask"]:
-        print("\n要人決定的(沒有帶過去):")
-        for p in buckets["ask"]:
-            print("    %s" % p)
-    if buckets["skip"]:
-        print("\n明確不帶的:")
-        for p in buckets["skip"]:
-            print("    %s" % p)
-    if unmarked:
-        print("\n跟框架檔住在同一個目錄、卻沒被帶過去的 —— 確認不是漏的:")
-        for p in unmarked:
-            print("    %s" % p)
+    # ask / 未涵蓋鄰居 / 未進版控 —— **落地成檔案**,不只印終端機。
+    # 印出來沒人看等於沒列;寫成 decisions-pending.md,人回頭找得到,也進得了版控。
+    if pending:
+        print("\n要人決定的項目已寫進:%s" % os.path.relpath(pending, target).replace("\\", "/"))
+        print("    (別只看終端機 —— 那份檔案是這些決定的落地處)")
     else:
-        print("\n框架檔的鄰居全部都有歸屬。")
+        print("\n沒有待決定項目。")
     print("\n閘門實測(R2 在 idle 站擋下原始碼提交):")
     for line in blocked.strip().splitlines():
         print("    %s" % line)

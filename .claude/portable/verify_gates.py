@@ -102,6 +102,15 @@ def scenario_r6(target):
         f.write("not/in/the/tree.py\n")
 
 
+def scenario_r8(target):
+    """生產程式碼 import research/ —— R8 擋(在 implement 站,避免被 R2 範圍先擋)。
+
+    R8 在 R3 之前判,所以即使沒有測試檔也是 R8 先觸發,不會被 R3 搶走。
+    """
+    set_stage(target, "implement")
+    write(target, "prod_module.py", "from research import explore\nx = 1\n")
+
+
 def scenario_r7(target):
     """R7 是**前哨規則**,不是 commit 規則 —— 它擋的是工具呼叫,不是 staged 檔案。
 
@@ -120,6 +129,7 @@ SCENARIOS = {
     "R5": scenario_r5,
     "R6": scenario_r6,
     "R7": scenario_r7,
+    "R8": scenario_r8,
 }
 
 

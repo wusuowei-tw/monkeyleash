@@ -31,6 +31,19 @@ stages:
     zh: 拆票
     allows_src_write: false
 
+  # research —— 探索區。allows_src_write 綁**路徑**不綁階段:只能寫 research/ 底下。
+  # agent 能自己寫 pipeline.json 宣告階段,所以把豁免爆炸半徑縮到零 ——
+  # 不管誰宣告 research,都寫不了生產碼(src_write_scope 之外一律擋)。
+  # 出口只有兩個:殺掉、或把檔案移出 research/ 走六站。移出就是六站事件,沒有第三條出口。
+  - id: research
+    skill: research
+    zh: 探索研究
+    allows_src_write: true
+    src_write_scope: research/
+    # research/ 底下豁免 R3(探索不必先寫測試),但**不豁免資料完整性(DI)軸**:
+    # DI 在 code-review 跑,而研究碼要進生產必得走六站、過 code-review,DI 那時照樣管。
+    exempts_r3_in_scope: true
+
   - id: implement
     skill: implement
     zh: TDD 實作

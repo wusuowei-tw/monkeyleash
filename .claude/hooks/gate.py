@@ -13,6 +13,7 @@
   R3  寫原始碼但對應 tests/test_<name>.py 不存在(防先寫碼再補測試)
 """
 
+import ast
 import io
 import json
 import os
@@ -320,6 +321,42 @@ def bash_write_violation(command):
             "     比零涵蓋更危險 —— 零涵蓋你知道它是零。所以入口收成一個,\n"
             "     走檔案工具的話 R1–R6 全部適用。\n"
             "     例外(附理由)在 gate.py 的 BASH_ALLOWED_CMDS / BASH_ALLOWED_TARGETS。")
+
+
+RESEARCH_ROOT = "research"
+
+
+def _under_research(rel_path):
+    """這個路徑在不在 research/ 底下。**邊界比對,不是前綴**(F-051):
+    `research/x` 算,`research_utils/x` 不算。"""
+    r = rel_path.replace("\\", "/")
+    return r == RESEARCH_ROOT or r.startswith(RESEARCH_ROOT + "/")
+
+
+def imports_research(content):
+    """這段 Python 有沒有 import research/(頂層套件 `research`)。
+
+    用 AST,不用字串比對 —— 字串比對分不開 `import research` 與 `import research_utils`,
+    而那正是 F-051 的邊界問題。AST 給的是模組名,取頂層套件精確比對。
+
+    **fail-closed**:解析不了(語法壞掉)一律當作**可能 import 了** ——
+    「我看不懂這段碼」不能翻譯成「它沒 import research」(R8 是擋東西的規則,
+    看不懂時只能更嚴)。
+    """
+    try:
+        tree = ast.parse(content or "")
+    except Exception:
+        return True
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] == RESEARCH_ROOT:
+                    return True
+        elif isinstance(node, ast.ImportFrom):
+            # from research / from research.x import ...；相對 import(module=None)不算
+            if node.module and node.module.split(".")[0] == RESEARCH_ROOT:
+                return True
+    return False
 
 
 RULE_CODE_RE = re.compile(r"\[(R\d+)(?:/[^\]]*)?\]")
@@ -729,6 +766,20 @@ def check(path, content, at_commit=False, trace=None):
 
     writable = {s["id"] for s in stages if s.get("allows_src_write")}
 
+    # 路徑範圍寫入(research 站):allows_src_write 綁**路徑**不綁階段。
+    # 宣告了 src_write_scope 的站,只能寫該範圍底下 —— 範圍外一律擋,不分時點。
+    # agent 能自己寫 pipeline.json 宣告階段,所以把豁免爆炸半徑縮到零:
+    # 不管誰宣告 research,都寫不了生產碼。
+    stage_def = next((s for s in stages if s.get("id") == stage), None)
+    scope = stage_def.get("src_write_scope") if stage_def else None
+    if scope and not gate_self:
+        sc = scope.rstrip("/")
+        if not (r == sc or r.startswith(sc + "/")):
+            return ("[R2/範圍] %s:current_stage='%s' 只能寫 %s 底下的原始碼。\n"
+                    "     這是探索區,寫不了生產碼 —— 要進生產,把檔案**移出** %s,\n"
+                    "     那是必須走六站的事件(不是第三條出口)。" % (r, stage, scope, scope))
+        # 範圍內:R2 放行(research 本來就在 writable 集合裡,下面的檢查會過),落到 R3
+
     if gate_self:
         pass  # R2 豁免已在上面記帳並回報;R3 在下方照常適用
     elif at_commit:
@@ -757,12 +808,39 @@ def check(path, content, at_commit=False, trace=None):
     # R3 對應測試檔須先存在
     if r.endswith(".py"):
         # trace 的語意是「這條規則的職責範圍被進入」,不是「它做出了判決」。
-        # 涵蓋性問的是有沒有人負責,判決屬於宣告式分歧那條不變式的管轄。
-        # 記錄點必須在判定之前 —— 放在判定路徑上的話,跳過判定就等於跳過記錄,
-        # 偵測「規則被跳過」的機制自己會被同一個跳過略過。
+        # 記錄點必須在判定之前 —— 跳過判定就等於跳過記錄,偵測「規則被跳過」的
+        # 機制自己會被同一個跳過略過。
         if trace is not None:
             trace.append("R3")
+            trace.append("R8")
+
+        # R8:生產程式碼(非 research/)不得 import research/。
+        # 反方向放行(research 可 import 生產資料層),所以只擋生產這一側。
+        # **邊界比對**:研究套件是 `research`,不是 `research_utils`(F-051,在 imports_research 裡)。
+        if not _under_research(r):
+            body = content
+            if body is None:
+                try:
+                    with io.open(os.path.join(ROOT, r), encoding="utf-8") as f:
+                        body = f.read()
+                except Exception:
+                    body = ""
+            if imports_research(body):
+                return ("[R8] %s:生產程式碼不得 import research/。\n"
+                        "     research/ 是探索區,可以被丟棄;生產碼依賴它,"
+                        "研究一被殺掉生產就壞。\n"
+                        "     反方向可以:research/ 底下的碼 import 生產資料層是允許的。\n"
+                        "     要用到某段研究成果,把它移出 research/ 走六站,不是 import 它。"
+                        % r)
+
         base = os.path.splitext(os.path.basename(r))[0]
+
+        # research/ 底下在 research 站豁免 R3(探索不必先寫測試)。
+        # 這不放寬資料完整性(DI)軸 —— DI 在 code-review 跑,而研究碼要進生產
+        # 必得走六站、過 code-review,DI 那時照樣管(docs/adr/0011)。
+        if (stage_def and stage_def.get("exempts_r3_in_scope")
+                and _under_research(r)):
+            return None
 
         # 豁免:票裡已宣告「不測」的模組(接縫裁決在 spec 階段就定了)。
         # 宣告來源是前一站的產物,不是這裡硬編碼;沒宣告就不豁免。
