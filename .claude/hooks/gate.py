@@ -1,0 +1,1124 @@
+# -*- coding: utf-8 -*-
+"""六站流程閘門 — 單一判定邏輯,兩層共用。
+
+兩種呼叫模式(邏輯只有這一份):
+  1. agent 前哨:`python gate.py`            讀 stdin 的 PreToolUse JSON,判單一檔案
+     exit 0 放行 / exit 2 擋下(stderr 回饋給 AI)
+  2. 權威判定:`python gate.py --pre-commit`  讀 git staged 檔案,逐一判定
+     exit 0 放行 / exit 1 擋下 commit(綁得住所有人,含非 Claude 的 agent 與人工 commit)
+
+三條硬擋:
+  R1  docs/specs/** 內容含程式碼(``` 圍籬 / def / import / function)
+  R2  pipeline.json 的 stage != implement 時寫入原始碼目錄
+  R3  寫原始碼但對應 tests/test_<name>.py 不存在(防先寫碼再補測試)
+"""
+
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PIPELINE = os.path.join(ROOT, ".dev", "pipeline.json")          # 狀態(被寫)
+STAGES_DEF = os.path.join(ROOT, ".agents", "pipeline-stages.yaml")  # 定義(唯讀)
+CANON_CODE_REVIEW = os.path.join(ROOT, ".agents", "skills", "code-review", "SKILL.md")
+
+# 原本是 SRC_DIRS 白名單 —— 那是 fail-open:任何**新**模組都不在名單上,
+# 一律放行。spec 要求「新增一個獨立模組」時整站無防護。改為黑名單:
+# 除了下列非原始碼位置,其餘副檔名符合的一律視為原始碼。新模組預設被守。
+# 狀態檔分類。判準是**這個檔案壞掉或消失時,正確行為是什麼**:
+#   證據(消失即失去判定依據 → fail-closed)  放 .dev/,進版控
+#   快取(可重建的純加速結構 → 重算)         放 .cache/,不進版控
+# 目錄本身就是分類,不必靠記性維持;新增狀態檔時看它該擺哪就知道它是哪一類。
+EXEMPTION_LOG = os.path.join(ROOT, ".dev", "gate-exemptions.jsonl")   # 證據
+RUN_LOG = os.path.join(ROOT, ".dev", "test-runs.jsonl")               # 證據
+
+LEGACY_LIST = os.path.join(ROOT, ".agents", "legacy-no-redlight.txt")  # 凍結定義,只減不增
+
+
+def read_go_live():
+    """紅燈紀錄機制上線的 commit —— 清單的入場券就是「在這個 commit 的樹裡」。
+    不用日期(可改),用樹(要改寫歷史才動得了)。
+
+    **從清單檔本身讀,不寫死在這裡。** gate.py 是要被照抄到新專案的框架檔,
+    而 sha 綁死產生它的那個 repo:寫死的話照抄過去會拿一個在目標 repo
+    不存在的 commit 去驗每一筆,安裝的強制驗證當場失敗。
+    sha 與它定義的清單是同一件事,住在同一個檔案裡。
+    """
+    try:
+        for line in io.open(LEGACY_LIST, encoding="utf-8"):
+            if line.startswith("# go-live:"):
+                return line.split(":", 1)[1].strip() or None
+    except Exception:
+        return None
+    return None
+
+
+MOUNT_CACHE = os.path.join(ROOT, ".cache", "mount-check.json")        # 快取
+
+# 閘門自身 —— R2 豁免、R3 照常適用。名單是**具體檔案**,不是「.claude 底下的 .py」
+# 這種籠統類別:後者又是白名單思維的變形。理由見 docs/adr/0004。
+GATE_SELF = (".claude/hooks/gate.py",)
+
+# 規則的分時點語意差異 —— **宣告寫在規則自己的定義裡**,不在測試裡維護豁免清單
+# (那會退化成裝飾)。要新增一條分歧就得動這裡並寫 ADR,是看得見的動作。
+# 未宣告卻出現「權威比前哨鬆」= 缺陷,由不變式測試擋下。
+RULE_DIVERGENCE = {
+    "R2": {
+        "adr": "docs/adr/0005-r2-time-point-semantics.md",
+        "why": "寫入時問『現在這一站可以寫原始碼嗎』;提交時問『你是不是還停在前置站』。"
+               "實作完成後站別本來就會往 review / idle 走,拿寫入時的問題去問提交會擋掉每一次合法提交。",
+    },
+    "R7": {
+        "adr": "docs/adr/0008-r7-is-sentinel-only.md",
+        "why": "R7 管的是**工具呼叫**,而 commit 只看得到 staged 檔案內容 —— "
+               "『這個檔案是用 Bash 還是 Write 寫的』在提交時已經不存在了。"
+               "因此 R7 只活在前哨,繞過前哨就沒有第二道。這是規則對象的性質,不是放水。",
+    },
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 三份非原始碼清單。**判準只有一句:會不會被執行,或被建置工具當成邏輯消費。**
+#
+# 每一項都要寫理由,而且理由要用同一句判準表述 —— 清單一長,判準就會漂移,
+# 理由欄是讓漂移看得見的東西。沒有它,一年後有人往裡面加 entrypoint.sh,
+# 沒有東西攔得住。
+#
+# 三份互斥:同一個項目不得落在兩份裡,否則行為取決於檢查順序,那是隱形的。
+# ─────────────────────────────────────────────────────────────────────────────
+
+NON_SOURCE_DIRS = {
+    ".dev": "流程狀態與證據,不被執行",
+    ".agents": "skill 定義與站別定義,由 agent 讀取為指令文字,不被執行",
+    "skills": "同 .agents,鏡像目錄",
+    "docs": "文件,不被執行",
+    "tests": "測試自身,受測試執行器消費但不是產品原始碼(R3 的對象是被測物)",
+    "logs": "執行輸出,不被執行",
+    "assets": "靜態資產,不被執行",
+    "build": "建置產出物,不是來源",
+    "scripts": "維運腳本,不進產品線;變更由人直接驗證",
+    ".venv": "第三方套件,不是本 repo 的來源",
+    "node_modules": "第三方套件,不是本 repo 的來源",
+    ".git": "版控內部資料,不被執行",
+    "__pycache__": "位元碼快取,由來源產生",
+    "tradingagents.egg-info": "封裝中繼資料,由來源產生",
+}
+# prototype 依定義是丟棄式的,不進產品線,不受站別限制(見 docs/adr/0002)
+PROTOTYPE_RE = re.compile(r"^\.scratch/[^/]+/prototype/")
+
+# 原本是 CODE_EXT 白名單(只有 9 種副檔名算原始碼)—— 與 SRC_DIRS 同一個病:
+# 任何**新型態**的檔案(Dockerfile、Makefile、無副檔名腳本、還沒用過的工具的組態)
+# 都不在名單上,一律放行。目錄那層已反轉(見 docs/adr/0003),這是最後一處。
+#
+# 反轉後:原始碼目錄底下一切皆視為原始碼,除非副檔名在下列清單內。
+# 誤擋的方向可枚舉且穩定(文件、資料、鎖定檔),漏守的方向是開放的。
+# 被誤擋的檔案,正確處置是把副檔名加進這裡 —— 看得見的決定,不是沉默的洞。
+NON_SOURCE_EXT = {
+    ".md": "文件,不被執行", ".rst": "文件,不被執行",
+    ".txt": "文件,不被執行", ".adoc": "文件,不被執行",
+    ".csv": "資料,不被執行", ".tsv": "資料,不被執行",
+    ".json": "設定值或資料,被讀取但不含可執行邏輯",
+    ".yaml": "設定值或資料,被讀取但不含可執行邏輯",
+    ".yml": "設定值或資料,被讀取但不含可執行邏輯",
+    ".toml": "設定值,被讀取但不含可執行邏輯",
+    ".ini": "設定值,被讀取但不含可執行邏輯",
+    ".cfg": "設定值,被讀取但不含可執行邏輯",
+    ".xml": "資料,被讀取但不含可執行邏輯",
+    ".properties": "設定值,被讀取但不含可執行邏輯",
+    ".lock": "相依鎖定檔,由套件管理器產生",
+    ".log": "執行輸出,不被執行",
+    ".pyc": "位元碼,由來源產生", ".pyo": "位元碼,由來源產生",
+    ".png": "資產,不被執行", ".jpg": "資產,不被執行",
+    ".jpeg": "資產,不被執行", ".gif": "資產,不被執行",
+    ".svg": "資產,不被執行", ".ico": "資產,不被執行",
+    ".pdf": "資產,不被執行", ".zip": "封存,不被執行", ".gz": "封存,不被執行",
+    ".parquet": "資料,不被執行", ".duckdb": "資料庫檔,不被執行",
+    ".db": "資料庫檔,不被執行", ".sqlite": "資料庫檔,不被執行",
+    ".example": "樣板,不被執行也不被建置消費",
+    ".sample": "樣板,不被執行也不被建置消費",
+    ".template": "樣板,不被執行也不被建置消費",
+}
+
+# 無副檔名、或副檔名分不出性質的具體檔名。這是第三個面向:
+# 「無副檔名的檔案一律視為原始碼」會讓 Makefile 與 LICENSE 落在同一類 ——
+# 前者會被建置工具消費、後者不會,單靠副檔名分不開,所以誠實開第三份。
+NON_SOURCE_NAMES = {
+    "LICENSE": "純文字授權書,不被執行也不被建置消費",
+    "NOTICE": "純文字聲明,不被執行也不被建置消費",
+    "AUTHORS": "純文字名單,不被執行也不被建置消費",
+    ".gitignore": "版控忽略規則,只含路徑樣式,無可執行邏輯",
+    ".dockerignore": "建置忽略規則,只含路徑樣式,無可執行邏輯",
+    ".env": "環境變數值,被行程讀取但不含可執行邏輯",
+}
+
+CODE_IN_SPEC_RE = re.compile(r"```|^\s*(def|class|import|from|function|const|let)\s", re.M)
+
+
+def exemption_hint(rel_path=None):
+    """指出**該改的那一份**清單與該加的項目。
+
+    三份全印出來的話,人得自己判斷該改哪一份 —— 那正好是這個訊息要省掉的認知成本。
+    有副檔名就指副檔名清單,沒有就指檔名清單;判斷不出來才退回全印。
+    """
+    me = os.path.relpath(os.path.abspath(__file__), ROOT).replace("\\", "/")
+    lines = {"NON_SOURCE_DIRS": "?", "NON_SOURCE_EXT": "?", "NON_SOURCE_NAMES": "?"}
+    try:
+        for i, line in enumerate(io.open(os.path.abspath(__file__), encoding="utf-8"), 1):
+            for name in lines:
+                if line.startswith(name) and lines[name] == "?":
+                    lines[name] = i
+    except Exception:
+        pass
+
+    if rel_path:
+        base = os.path.basename(rel_path)
+        ext = os.path.splitext(base)[1]
+        if ext:
+            return ("%s:%s 的 NON_SOURCE_EXT 加一筆 %r(附理由:為什麼它不會被執行"
+                    "或被建置消費)" % (me, lines["NON_SOURCE_EXT"], ext))
+        return ("%s:%s 的 NON_SOURCE_NAMES 加一筆 %r(附理由:為什麼它不會被執行"
+                "或被建置消費)" % (me, lines["NON_SOURCE_NAMES"], base))
+
+    return " / ".join("%s:%s 的 %s" % (me, lines[n], n) for n in lines)
+
+
+def authoritative_layer(root=None):
+    """權威層裝了沒。回傳 (installed, detail)。
+
+    `.git/hooks/` 依 git 設計不進版控 —— clone 出來的副本上這一層不存在,
+    而且**完全靜默**:前哨照跑、測試照綠,沒有東西會說它不在。
+    F-009 的最終形式:規則存在,但整層沒被部署。
+
+    判定看的是**內容**不是檔案存不存在:專案本來就可能有自己的 pre-commit,
+    只驗檔案在不在的話,別人的 hook 佔著位子就會被判成已安裝。
+
+    **這個偵測自己有涵蓋不到的地方,見 not_installed_notice()。**
+    零接觸安裝不可能:git 刻意不讓 clone 自動執行任何東西。
+    """
+    r = root or ROOT
+    hooks_dir = os.path.join(r, ".git", "hooks")
+    try:
+        p = subprocess.run(["git", "config", "--get", "core.hooksPath"],
+                           cwd=r, capture_output=True)
+        configured = p.stdout.decode("utf-8", "replace").strip()
+        if p.returncode == 0 and configured:
+            hooks_dir = configured if os.path.isabs(configured) else os.path.join(r, configured)
+    except Exception:
+        pass  # 讀不到就用預設位置查;查不到會判成沒裝 —— 吵鬧的方向
+
+    hook = os.path.join(hooks_dir, "pre-commit")
+    if not os.path.exists(hook):
+        return False, "找不到 pre-commit(查過 %s)" % rel(hook)
+    try:
+        body = io.open(hook, encoding="utf-8", errors="replace").read()
+    except Exception as e:
+        return False, "pre-commit 讀不到(%s):%s" % (rel(hook), e)
+    if "gate.py" not in body:
+        return False, ("%s 存在,但它不呼叫 gate.py —— 那是別人的 hook 佔著位子,"
+                       "不是本框架的權威層。" % rel(hook))
+    return True, "%s 已呼叫 gate.py" % rel(hook)
+
+
+def not_installed_notice(detail):
+    """沒裝時要說的話 —— 含**它自己涵蓋不到什麼**。
+
+    只說「沒裝,請裝」讀起來像裝了就全部關上了。實際上:
+      前哨(隨 .claude/settings.json 走)只涵蓋 AI 路徑;
+      測試(隨 tests/ 走)涵蓋所有人,但沒有機制強制它被跑(F-025)。
+    兩者都碰不到「clone 下來直接手動 commit 的人」。那個缺口關不掉,明寫(docs/adr 票 05)。
+    """
+    return ("[權威層未安裝] %s\n"
+            "     裝法:把 .git/hooks/pre-commit 指向 gate.py --pre-commit,\n"
+            "     或 git config core.hooksPath <進版控的 hook 目錄>。\n"
+            "     注意:本偵測只在 AI 走前哨、或有人跑測試時會出聲 ——\n"
+            "     **clone 下來直接手動 commit 的人碰不到它**,那個缺口關不掉。" % detail)
+
+
+def sentinel_footer():
+    """前哨擋下訊息的結尾。
+
+    原本無條件寫「權威判定在 pre-commit,繞過前哨仍會在 commit 被擋」——
+    權威層不在時那是假的,而且是最糟的一種假:它讓人以為還有第二道。
+    """
+    installed, detail = authoritative_layer()
+    if installed:
+        return "(權威判定在 pre-commit,繞過前哨仍會在 commit 被擋)"
+    return not_installed_notice(detail)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R7 —— Bash 寫入 repo 一律擋。**收口,不是擴涵蓋。**
+#
+# 不做「解析寫入目標」:heredoc 內文的路徑、sed -i、> 重導、tee、自己算路徑的腳本
+# —— 解不完,而 **60% 有效的解析器比零涵蓋更危險**:零涵蓋你知道它是零,
+# 60% 你會以為 Bash 被守住了。那是 R4 的形狀(讀起來在守,實際只守一部分,
+# 而沒有東西告訴你是哪一部分)。
+#
+# 述詞只回答「有沒有在寫」,不回答「寫到哪」。判斷不出來就當作在寫。
+# 所有寫入被逼回 Write/Edit,而那條路 R1–R6 已經守得住且驗過兩個環境。
+#
+# **殘留缺口(明寫)**:`python foo.py` 這種指令本身看不出在寫的仍然穿得過去。
+# 不假裝擋得住 —— 那正是拒絕解析器的同一個理由。
+# ─────────────────────────────────────────────────────────────────────────────
+
+WRITE_CONSTRUCT = re.compile(
+    r"(?:^|[\s;&|(])(?:tee|cp|mv|touch|mkdir|install|rm|rmdir|dd|truncate"
+    r"|Set-Content|Add-Content|Out-File|New-Item|Clear-Content)(?:\s|$)"
+    r"|(?<![0-9])>>?(?!&)"          # > 與 >>,但排除 2>&1 這種 fd 重導
+    r"|<<"                          # heredoc
+    r"|sed\s+(?:-[a-zA-Z]*\s+)*-i", re.IGNORECASE)
+
+BASH_ALLOWED_CMDS = {
+    "git": "版控自己的寫入(索引、工作區、.git),逼它走檔案工具沒有意義",
+    "python -m pytest": "測試執行器產生 .dev/ 證據與 __pycache__,那是它的職責",
+    "pytest": "同上",
+    "pip": "套件管理器寫 .venv,不是本 repo 的來源",
+    "python -m pip": "同上",
+    "npx": "上游 skills 工具,唯一入口是 scripts/skills-update.sh",
+    "bash scripts/skills-update.sh": "skills 更新的唯一入口,它自己會跑全規則驗證",
+    "python .claude/": "閘門與可攜化工具自身(gate/redlight/install/verify_gates)",
+}
+
+BASH_ALLOWED_TARGETS = {
+    "/dev/null": "丟棄輸出,不產生檔案",
+    "/tmp/": "系統暫存,在 repo 之外",
+    "scratchpad": "工作階段暫存目錄,在 repo 之外",
+    ".dev/": "流程證據,由機制自己追加(append-only),不是人在編輯",
+    "__pycache__": "位元碼,由直譯器產生",
+    ".cache/": "快取,可重算",
+    "build/": "建置產出物,不是來源",
+}
+
+
+def bash_write_violation(command):
+    """R7:這個 Bash 指令會不會寫入 repo。回 None(放行)或訊息。"""
+    if not command or not command.strip():
+        return None
+    cmd = command.strip()
+
+    # 逐段比對:`a && b` 的每一段都要在許可清單裡才算數,
+    # 否則 `git status && rm -rf x` 會整條被許可。
+    segments = [s.strip() for s in re.split(r"&&|\|\||;", cmd) if s.strip()]
+    if segments and all(
+            any(seg.startswith(p) for p in BASH_ALLOWED_CMDS) for seg in segments):
+        return None
+
+    if not WRITE_CONSTRUCT.search(cmd):
+        return None
+
+    # 「確定在 repo 外」與「不知道寫到哪」是兩件事:前者可以放行(repo 外是 G1 的事),
+    # 後者必須擋。只放行前者。
+    for target, _why in BASH_ALLOWED_TARGETS.items():
+        if target in cmd:
+            return None
+
+    return ("[R7] 這個 Bash 指令會寫入檔案,請改用 Write / Edit。\n"
+            "     理由不是風格:從指令字串解析『寫到哪』解不完,而半套的解析器\n"
+            "     比零涵蓋更危險 —— 零涵蓋你知道它是零。所以入口收成一個,\n"
+            "     走檔案工具的話 R1–R6 全部適用。\n"
+            "     例外(附理由)在 gate.py 的 BASH_ALLOWED_CMDS / BASH_ALLOWED_TARGETS。")
+
+
+RULE_CODE_RE = re.compile(r"\[(R\d+)(?:/[^\]]*)?\]")
+
+
+def rule_codes(source_path=None):
+    """本檔目前定義了哪些規則 —— 從**規則自己的擋下訊息**掃出來。
+
+    不維護對照表:任何寫死條數或列表的驗收條件,下次加規則時不會有人記得改,
+    而漏掉的那條不會有任何東西出聲。規則代號本來就寫在它自己的訊息裡,
+    那是現場已有的事實,不必另外登記一份。
+
+    `[R2/commit]` 這種帶子類的歸到 R2 —— 子類是同一條規則的不同時點,不是新規則。
+    """
+    path = source_path or os.path.abspath(__file__)
+    try:
+        with io.open(path, encoding="utf-8") as f:
+            return set(RULE_CODE_RE.findall(f.read()))
+    except Exception:
+        return set()
+
+
+def _err(msg):
+    """把訊息寫進 stderr,**明確用 utf-8**。
+
+    直接 `sys.stderr.write` 會用主控台編碼,中文擋下訊息在 cp950 終端機上
+    變成亂碼 —— 一個讀不懂的擋下訊息,人會照著繞而不是照著修,
+    那跟沒有訊息差不多(F-031:壞掉的訊號訓練人忽略訊號)。
+    """
+    try:
+        sys.stderr.buffer.write(msg.encode("utf-8"))
+        sys.stderr.buffer.flush()
+    except Exception:
+        sys.stderr.write(msg)
+
+
+def rel(path):
+    try:
+        return os.path.relpath(os.path.abspath(path), ROOT).replace("\\", "/")
+    except ValueError:
+        return path.replace("\\", "/")
+
+
+def load_stage_defs():
+    """讀唯讀定義檔。回傳 (stages, flow, err)。
+
+    **fail-closed**:讀不到、格式壞掉、或沒有任何站宣告 allows_src_write 時,
+    回傳 err 且 stages 為空 —— 呼叫端一律不放行原始碼寫入。
+    閘門壞掉時必須更嚴不能更鬆,否則比沒有閘門危險(你會以為它在守)。
+    """
+    rel_def = os.path.relpath(STAGES_DEF, ROOT).replace("\\", "/")
+    try:
+        import yaml
+    except Exception as e:
+        return [], "", "無法載入 yaml 套件(%s)" % e
+    if not os.path.exists(STAGES_DEF):
+        return [], "", "定義檔不存在:%s" % rel_def
+    try:
+        with io.open(STAGES_DEF, encoding="utf-8") as f:
+            doc = yaml.safe_load(f)
+    except Exception as e:
+        return [], "", "定義檔解析失敗:%s(%s)" % (rel_def, e)
+    if not isinstance(doc, dict) or not isinstance(doc.get("stages"), list) or not doc["stages"]:
+        return [], "", "定義檔缺少有效的 stages 清單:%s" % rel_def
+    stages = doc["stages"]
+    if not all(isinstance(s, dict) and s.get("id") for s in stages):
+        return [], "", "定義檔的 stages 項目缺少 id:%s" % rel_def
+    if not any(s.get("allows_src_write") for s in stages):
+        return [], "", "定義檔沒有任何站宣告 allows_src_write:%s" % rel_def
+    flow = " -> ".join("/%s" % s["skill"] for s in stages if s.get("skill"))
+    return stages, flow, None
+
+
+UNREADABLE_STAGE = "__unreadable__"
+
+
+def parse_hook_payload(raw):
+    """把 PreToolUse 的原始位元組解成 payload。**明確 utf-8,失敗就丟例外。**
+
+    這不是接線,是**解碼 + 解析**,所以它有測試(tests/test_gate_boundaries.py)。
+    先前被歸類為「進入點分派,不測」,而那條接線裡藏著整個系統最要命的一行:
+    `json.load(sys.stdin)` 用平台預設編碼解 UTF-8 payload,中文路徑當場壞掉,
+    例外被 `except: return 0` 吞成放行,前哨層整輪靜默失效(F-042)。
+
+    **判準:進入點若包含解碼、解析、格式轉換,它就不是接線。**
+    接線是把 A 傳給 B;一旦中間有轉換,它就是有行為的程式碼。
+    """
+    return json.loads(raw.decode("utf-8"))
+
+
+def load_stage():
+    """讀執行期狀態。current_stage 為權威欄位。
+
+    讀不到時回 UNREADABLE_STAGE,**不回 "idle"**。
+    回 idle 的話:寫入時 idle 不可寫 → 擋下(看起來沒問題),
+    但**提交時 idle 是刻意放行的**(ADR 0005),於是 pipeline.json 壞掉或被刪,
+    R2 在提交時就無條件通過。「不知道停在哪一站」不等於「停在 idle」。
+    """
+    try:
+        with io.open(PIPELINE, encoding="utf-8") as f:
+            d = json.load(f)
+        return d.get("current_stage", "idle"), d.get("ticket_id")
+    except Exception:
+        return UNREADABLE_STAGE, None
+
+
+def load_feature():
+    try:
+        with io.open(PIPELINE, encoding="utf-8") as f:
+            return json.load(f).get("feature")
+    except Exception:
+        return None
+
+
+def ticket_untested_modules(feature, ticket_id):
+    """讀票裡「**Untested by decision:**」宣告的模組名。
+
+    豁免不是 gate.py 自己開的後門 —— 它去讀一個**前一站產物裡已經存在的決定**。
+    要新增豁免必須回頭改票,那是看得見、會被審查的動作;
+    在被擋住的當下加豁免會留下票的修改痕跡,對得起來。
+    宣告不存在 = 不豁免(fail-closed)。
+    """
+    if not feature or not ticket_id:
+        return set(), None
+    d = os.path.join(ROOT, ".scratch", feature, "issues")
+    if not os.path.isdir(d):
+        return set(), None
+    for name in sorted(os.listdir(d)):
+        if not name.startswith(str(ticket_id)):
+            continue
+        p = os.path.join(d, name)
+        try:
+            for line in io.open(p, encoding="utf-8"):
+                if line.startswith("**Untested by decision:**"):
+                    raw = line.split(":**", 1)[1]
+                    mods = {m.strip() for m in raw.replace("、", ",").split(",") if m.strip()}
+                    return mods, ".scratch/%s/issues/%s" % (feature, name)
+        except Exception:
+            return set(), None
+        return set(), ".scratch/%s/issues/%s" % (feature, name)
+    return set(), None
+
+
+def logged_exemption_backed(rel_path, base):
+    """commit 時 ticket_id 已清空(一輪做完站別會往前走),改查豁免紀錄。
+
+    但**不採信紀錄本身** —— 回頭打開它指名的票,確認那張票真的列了這個模組。
+    紀錄只是索引,票才是決定。這樣偽造一行紀錄沒有用,票對不上就擋。
+    """
+    log = os.path.join(ROOT, ".dev", "gate-exemptions.jsonl")
+    if not os.path.exists(log):
+        return False
+    for line in io.open(log, encoding="utf-8"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if rec.get("file") != rel_path or rec.get("module") != base:
+            continue
+        p = os.path.join(ROOT, (rec.get("declared_in") or "").replace("/", os.sep))
+        if not os.path.exists(p):
+            continue
+        for l in io.open(p, encoding="utf-8"):
+            if l.startswith("**Untested by decision:**"):
+                mods = {m.strip() for m in
+                        l.split(":**", 1)[1].replace("、", ",").split(",") if m.strip()}
+                if base in mods:
+                    return True
+    return False
+
+
+def check_legacy_list():
+    """權威層規則:凍結清單裡每一筆都必須在 LEGACY_GO_LIVE 的樹裡。
+
+    沒有這條的話,清單檔本身落在 .agents/(非原始碼)、沒有任何規則守它,
+    被 R3 擋下的人只要在末尾加一行就豁免到手 —— 完全不必碰 git 歷史,
+    而「無法自我服務」正是選這個設計的**唯一**理由。
+    「有一條測試會抓到」不算守住:沒有機制強制那條測試被跑。
+
+    與 R4/R5 同構,回傳違規訊息串列。**fail-closed**:清單讀不到算違規。
+    """
+    if not os.path.exists(LEGACY_LIST):
+        return ["[R6] 找不到豁免清單 %s —— 讀不到一律當違規,不當作乾淨。" % rel(LEGACY_LIST)]
+    go_live = read_go_live()
+    if not go_live:
+        return ["[R6] %s 沒有 go-live sha(第一行應為 `# go-live: <sha>`)。\n"
+                "     讀不到基準點就無從驗證清單 —— 不是「沒基準所以都算過」。"
+                % rel(LEGACY_LIST)]
+    out = []
+    for p in sorted(legacy_no_redlight()):
+        try:
+            rc = subprocess.call(["git", "cat-file", "-e", "%s:%s" % (go_live, p)],
+                                 cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except Exception as e:
+            return ["[R6] 無法查驗豁免清單(%s)—— 查不動一律當違規。" % e]
+        if rc != 0:
+            out.append("[R6] %s 不在機制上線 commit %s 的樹裡,不得列入紅燈豁免清單。\n"
+                       "     清單只減不增:新檔案要走紅燈,不是往豁免名單裡加。"
+                       % (p, go_live[:7]))
+    return out
+
+
+def redlight_missing(base, also_accept=()):
+    """R3 的另一半:這個模組的測試曾經在**實作還不存在時**紅過嗎?
+
+    also_accept:除 tests/test_<base>.py 外同樣算數的測試檔位置。兩半必須接受
+    同一組位置 —— 只認 tests/ 的話,pkg/foo.py 配 pkg/test_foo.py 會通過前半、
+    卡死後半,而且沒有任何合法解法。
+
+    回 None 表示有合格紀錄;回訊息表示沒有 —— 呼叫端據此擋下。
+
+    判準不比較任何時間戳。要問的不是「檔案何時出現」,而是「紅燈發生時實作存不存在」,
+    而那件事在紅燈那一刻已由紀錄自己宣告(見 .claude/hooks/redlight.py)。
+
+    **全程 fail-closed**:紀錄檔不存在、讀不動、格式不對、欄位缺漏,一律當作沒有紀錄。
+    讀不到就放行是 F-001 的形狀,在這裡不重演。
+    """
+    wanted = {"tests/test_%s.py" % base} | {p.replace("\\", "/") for p in also_accept}
+    want = "tests/test_%s.py" % base
+    if not os.path.exists(RUN_LOG):
+        return ("找不到紅燈紀錄檔 %s —— 無法證明測試曾經紅過。\n"
+                "     跑一次測試讓紀錄長出來;讀不到紀錄一律不放行。"
+                % rel(RUN_LOG))
+    saw_any = False
+    try:
+        for line in io.open(RUN_LOG, encoding="utf-8"):
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)          # 壞行 -> 例外 -> fail-closed
+            if rec.get("test_file") not in wanted:
+                continue
+            saw_any = True
+            if "impl_exists" not in rec:    # 欄位缺漏也算格式不對
+                return ("紅燈紀錄缺 impl_exists 欄位(%s),格式不對即不放行。" % want)
+            if rec.get("result") == "red" and rec["impl_exists"] is False:
+                return None
+    except Exception as e:
+        return ("紅燈紀錄無法解析(%s):%s —— 格式不對一律不放行。" % (rel(RUN_LOG), e))
+
+    if saw_any:
+        return ("%s 有執行紀錄,但沒有任何一筆是「紅燈且當時實作不存在」。\n"
+                "     那代表實作先於測試存在 —— 是補測試,不是紅綠燈。" % want)
+    return ("%s 沒有任何執行紀錄 —— 無法證明它曾經紅過。" % want)
+
+
+def is_source_path(rel_path):
+    """這個路徑是不是 R2/R3 的對象。黑名單反轉後的唯一判定點。
+
+    抽成函式不只為了可讀:豁免清單要能斷言「裡面每一項本來都會被 R3 管」,
+    而那個斷言若在測試裡自帶一份判定邏輯,測的就是它自己的副本(ADR 0003)。
+    """
+    r = rel_path.replace("\\", "/")
+    top = r.split("/")[0] if "/" in r else ""
+    return not (top in NON_SOURCE_DIRS
+                or PROTOTYPE_RE.match(r)
+                or r.endswith(tuple(NON_SOURCE_EXT))
+                or os.path.basename(r) in NON_SOURCE_NAMES)
+
+
+def legacy_no_redlight():
+    """機制上線前就存在、因此無法誠實提供紅燈紀錄的既有 .py。
+
+    豁免的只有 R3 的**後半**(紅燈紀錄);前半(對應測試檔須存在)照常適用。
+
+    為什麼不是「檔案已存在就豁免」:那個條件 **agent 隨時可以自己製造** ——
+    建一個空檔,下一次寫入就成了「既有檔案」,規則自帶開關。
+    凍結清單則進不去:每一項都必須在 LEGACY_GO_LIVE 的樹裡找得到(測試守住),
+    偽造需要改寫歷史。同一個原則的第三次出現(閘門自我修改、票宣告接縫、本清單)。
+
+    **fail-closed**:清單讀不到 = 沒有任何豁免,不是全部豁免。
+    """
+    out = set()
+    try:
+        for line in io.open(LEGACY_LIST, encoding="utf-8"):
+            line = line.split("#", 1)[0].strip()
+            if line:
+                out.add(line.replace("\\", "/"))
+    except Exception:
+        return set()
+    return out
+
+
+def is_bare_package_marker(rel_path, content):
+    """__init__.py 且不含任何 def/class —— 純套件標記,沒有行為可測。
+
+    放進去任何邏輯就不再是標記,R3 立刻恢復適用(fail-closed)。
+    """
+    if os.path.basename(rel_path) != "__init__.py":
+        return False
+    body = content
+    if body is None:
+        try:
+            body = io.open(os.path.join(ROOT, rel_path), encoding="utf-8").read()
+        except Exception:
+            return False
+    return not re.search(r"^\s*(def|class)\s", body or "", re.M)
+
+
+def log_exemption(path, base, ticket, declared_in, reason="ticket-declared"):
+    """每授予一次豁免記一筆,供 code-review 的 Standards 軸逐筆比對。
+
+    reason 區分豁免來源:票宣告的接縫、或閘門自我修改。
+    搶修是罕見事件 —— 某一輪出現十筆 gate-self-modification 就不是搶修,
+    是把後門當日常通道,審查時看得出來。
+    """
+    rec = {"file": path, "module": base, "ticket": ticket,
+           "declared_in": declared_in, "reason": reason}
+    try:
+        _append_jsonl(EXEMPTION_LOG, rec)
+    except Exception as e:
+        # 豁免的正當性建立在「它被記錄下來、可被逐筆對帳」上面(ADR 0004/0006)。
+        # 記錄失敗還照給,等於給了一個**沒有人看得到**的豁免 —— 原本這裡是 pass。
+        _err("[閘門/fail-closed] 豁免無法記帳(%s):%s\n"
+             "     記不下來的豁免不算數 —— 對帳看不到它,等於它沒發生過。\n"
+             % (rel(EXEMPTION_LOG), e))
+        raise SystemExit(2)
+
+
+def _append_jsonl(path, rec):
+    """追加一筆 JSON Lines。抽成函式是為了讓「寫入失敗」可以被測試注入。"""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with io.open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def self_modification_note(rel_path):
+    """閘門自我修改的豁免說明。靜默的洞比會叫的洞危險(F-011 的教訓)。"""
+    if rel_path not in GATE_SELF:
+        return None
+    return ("[R2/自我修改豁免] %s:閘門自身,不受站別限制 —— 已記錄。\n"
+            "     理由:閘門把站別卡住時,修法需要改本檔;R2 管到它就把人鎖在外面(docs/adr/0004)。\n"
+            "     R3 沒有例外:寫測試不需要先解鎖任何東西。" % rel_path)
+
+
+def check(path, content, at_commit=False, trace=None):
+    """回傳 None(放行)或違規訊息字串。content 為 None 時從磁碟讀。
+
+    at_commit 改變 R2 的問題,不是放寬它:
+      寫入時問「現在這一站可以寫原始碼嗎」—— 防的是還沒談清楚就開始寫。
+      commit 時問「你是不是還停在前置站就在交原始碼」—— 實作做完後站別本來就會
+      往 review / idle 走,拿寫入時的問題去問 commit 會擋掉每一次合法提交。
+    """
+    r = rel(path)
+
+    # **repo 以外的路徑不歸這裡管。**
+    # 六站流程規則管的是這個 repo。`rel()` 對外部檔案會產生 `../../..` 開頭的路徑,
+    # 而 `is_source_path` 看到 top 是 `..`(不在非原始碼清單裡)就判成原始碼 ——
+    # 於是編輯 `~/.claude/` 底下任何 .py 都被 R2 誤擋。誤擋面積大到會讓人關掉整個 hook,
+    # 而關掉的涵蓋率是零(F-031)。repo 外的破壞性動作由 G1 負責,不是這條規則的職責。
+    if r == ".." or r.startswith("../"):
+        return None
+
+    # R1 規格書禁止夾程式碼
+    # 兩個路徑都算規格書:docs/specs/(自維護時期)與 .scratch/<feature>/spec.md
+    # (官方 local-markdown issue tracker 的規定位置)。只守前者的話 R1 在官方佈局下是死規則。
+    if r.startswith("docs/specs/") or re.match(r"^\.scratch/[^/]+/spec\.md$", r):
+        if trace is not None:
+            trace.append("R1")
+        body = content
+        if body is None:
+            try:
+                with io.open(os.path.join(ROOT, r), encoding="utf-8") as f:
+                    body = f.read()
+            except Exception as e:
+                # 讀不到內容 = 「規格書裡有沒有程式碼」這個問題**沒被回答**,
+                # 而沒被回答不等於答案是「沒有」。原本這裡 return None(放行)。
+                return ("[R1/fail-closed] %s:讀不到內容(%s),無法判定規格書裡有沒有程式碼。\n"
+                        "     閘門壞掉時只能更嚴,不能更鬆。" % (r, e))
+        if CODE_IN_SPEC_RE.search(body or ""):
+            return ("[R1] %s:規格書禁止含程式碼。spec 站只描述『要解決什麼問題』與"
+                    "『怎樣算做完』,請移除 code 圍籬 / def / import / function。" % r)
+        return None
+
+    if not is_source_path(r):
+        return None
+
+    if trace is not None:
+        trace.append("R2")
+
+    stage, ticket = load_stage()
+    stages, flow, defs_err = load_stage_defs()
+
+    # 閘門自身:R2 豁免(死鎖),R3 不豁免。放行但**不靜默** —— 記帳並回報。
+    gate_self = r in GATE_SELF
+    if gate_self:
+        log_exemption(r, os.path.splitext(os.path.basename(r))[0], ticket,
+                      "docs/adr/0004-gate-self-modification.md",
+                      reason="gate-self-modification")
+        _err(self_modification_note(r) + "\n")
+
+    # R2-fc fail-closed:定義讀不到就不知道哪站可寫 —— 一律不放行
+    if defs_err and not gate_self:
+        return ("[R2/fail-closed] %s:站別定義不可用,原始碼寫入一律擋下。\n"
+                "     原因:%s\n"
+                "     閘門壞掉時只能更嚴,不能更鬆。修好定義檔後再寫。" % (r, defs_err))
+
+    # 站別讀不到 -> 兩個時點都擋。這是唯一與時點無關的 R2 分支:
+    # 「你停在哪一站」這個問題本身沒有答案時,兩種問法都答不出來。
+    if stage == UNREADABLE_STAGE and not gate_self:
+        return ("[R2/fail-closed] %s:讀不到流程狀態(%s)。\n"
+                "     不知道停在哪一站,不等於停在 idle —— 後者在提交時是放行的。\n"
+                "     修好 pipeline.json 再繼續。" % (r, rel(PIPELINE)))
+
+    writable = {s["id"] for s in stages if s.get("allows_src_write")}
+
+    if gate_self:
+        pass  # R2 豁免已在上面記帳並回報;R3 在下方照常適用
+    elif at_commit:
+        # 前置站 = 第一個可寫站之前的所有站。停在那裡卻在交原始碼,代表寫在該寫之前。
+        ids = [s["id"] for s in stages]
+        first_writable = next((i for i, s in enumerate(stages) if s.get("allows_src_write")), len(ids))
+        pre_implement = set(ids[:first_writable]) - {"idle"}
+        if stage in pre_implement:
+            return ("[R2/commit] %s:current_stage='%s' 是前置站,卻要提交原始碼。\n"
+                    "     代表這些碼寫在該寫之前。回頭把流程走完,或由使用者調整 current_stage。"
+                    % (r, stage))
+        # 這裡不可 return —— 只有 R2 的問法要換,R3 在 commit 時同樣要驗,
+        # 而且權威層更該驗。早一版寫成 return None,等於把 R3 在 commit 時整個跳過。
+
+    # R2 只有宣告 allows_src_write 的站能寫原始碼(站名定義來自 pipeline-stages.yaml)
+    elif stage not in writable:
+        return ("[R2] %s:目前 current_stage='%s',不可寫入原始碼"
+                "(可寫入的站:%s)。\n"
+                "     流程 %s\n"
+                "     站名定義:.agents/pipeline-stages.yaml(唯讀)\n"
+                "     跳過流程請由使用者自行修改 .dev/pipeline.json 的 current_stage\n"
+                "     若這不是原始碼(誤擋):把它的目錄加進 %s;\n"
+                "     **不得退回白名單** —— 三次 fail-open 缺陷都源自白名單思維(docs/adr/0003)"
+                % (r, stage, "/".join(sorted(writable)) or "(無)", flow, exemption_hint(r)))
+
+    # R3 對應測試檔須先存在
+    if r.endswith(".py"):
+        # trace 的語意是「這條規則的職責範圍被進入」,不是「它做出了判決」。
+        # 涵蓋性問的是有沒有人負責,判決屬於宣告式分歧那條不變式的管轄。
+        # 記錄點必須在判定之前 —— 放在判定路徑上的話,跳過判定就等於跳過記錄,
+        # 偵測「規則被跳過」的機制自己會被同一個跳過略過。
+        if trace is not None:
+            trace.append("R3")
+        base = os.path.splitext(os.path.basename(r))[0]
+
+        # 豁免:票裡已宣告「不測」的模組(接縫裁決在 spec 階段就定了)。
+        # 宣告來源是前一站的產物,不是這裡硬編碼;沒宣告就不豁免。
+        if is_bare_package_marker(r, content):
+            return None
+
+        untested, declared_in = ticket_untested_modules(load_feature(), ticket)
+        if base in untested:
+            log_exemption(r, base, ticket, declared_in)
+            return None
+
+        # commit 時 ticket_id 已清空,改查紀錄並回頭驗票(見 logged_exemption_backed)
+        if at_commit and logged_exemption_backed(r, base):
+            return None
+
+        cands = [
+            os.path.join(ROOT, "tests", "test_%s.py" % base),
+            os.path.join(ROOT, os.path.dirname(r), "test_%s.py" % base),
+            os.path.join(ROOT, "tests", os.path.dirname(r), "test_%s.py" % base),
+        ]
+        # R3 的另一半:紅燈紀錄。豁免的是**列在凍結清單裡的既有檔案**,
+        # 不是「檔案已存在」—— 後者 agent 自己造得出來(建個空檔就進豁免集合),
+        # 等於規則自帶開關。清單的入場券是「在機制上線 commit 的樹裡」,偽造不了。
+        if r not in legacy_no_redlight() and any(os.path.exists(c) for c in cands):
+            # 後半接受的位置必須與前半的 cands 完全相同,否則會出現通過前半、
+            # 卡死後半、且無合法解法的死路。
+            why = redlight_missing(base, [os.path.relpath(c, ROOT).replace(os.sep, "/")
+                                          for c in cands])
+            if why:
+                return ("[R3/紅燈] %s:測試檔存在,但沒有合格的紅燈紀錄。\n"
+                        "     %s\n"
+                        "     先跑測試確認它在實作不存在時是紅的,再回來寫功能碼。" % (r, why))
+
+        if not any(os.path.exists(c) for c in cands):
+            return ("[R3] %s:找不到對應測試(tests/test_%s.py),不可先寫功能碼。\n"
+                    "     請先寫測試、執行它、確認紅燈,再回來寫功能碼。票號:%s\n"
+                    "     若這不是原始碼(誤擋):把它的目錄加進 %s;\n"
+                    "     **不得退回白名單**(docs/adr/0003)"
+                    % (r, base, ticket or "未設定", exemption_hint(r)))
+    return None
+
+
+def mode_hook():
+    """agent 前哨:讀 PreToolUse JSON。
+
+    **以位元組讀取,明確用 utf-8 解碼。** `json.load(sys.stdin)` 在 Windows 上
+    會用主控台編碼(cp950)去解,payload 裡的中文路徑當場壞掉,json 報
+    `Invalid \\escape`,而原本的 `except: return 0` 把它吞成放行 ——
+    **整個前哨層因此靜默失效,一整輪沒有擋過任何東西**,而測試全綠、
+    pre-commit 照常擋,沒有任何跡象。見 F-042。
+    """
+    try:
+        payload = parse_hook_payload(sys.stdin.buffer.read())
+    except Exception as e:
+        # fail-closed:讀不懂輸入不代表沒事。payload 形狀或編碼一變就靜默關閉,
+        # 那是最廉價的繞法,而且沒有人會發現。
+        _err("[六站閘門/fail-closed] 讀不懂 PreToolUse 輸入(%s)—— 一律擋下。\n" % e)
+        return 2
+    ti = payload.get("tool_input") or {}
+
+    # R7 —— Bash/PowerShell 的寫入一律收口回檔案工具。
+    # 這一格在維度 5 盤點之前是**零涵蓋**,而零涵蓋不會產生任何訊號:
+    # 沒有規則被評估,就沒有規則會出錯(F-039)。
+    command = ti.get("command")
+    if isinstance(command, str) and command.strip():
+        msg = bash_write_violation(command)
+        if msg:
+            # **不套 sentinel_footer()**:那句話說「繞過前哨仍會在 commit 被擋」,
+            # 對 R7 是假的 —— commit 看不到工具呼叫,只看得到 staged 檔案。
+            # 宣稱有第二道而實際沒有,比沒有第二道更危險(ADR 0008)。
+            _err(
+                "[六站閘門/前哨] %s\n"
+                "(R7 只活在前哨:commit 看得到檔案內容,看不到你用什麼工具寫的。\n"
+                " 繞過前哨就沒有第二道了 —— 見 docs/adr/0008)\n" % msg)
+            return 2
+        return 0
+
+    path = ti.get("file_path") or ti.get("notebook_path") or ""
+    if not path:
+        return 0
+    content = ti.get("content") or ti.get("new_string") or ""
+    mounts = mount_violations_cached()
+    if mounts:
+        _err("[六站閘門/前哨] skill 掛載點有問題,先修好再繼續 —— "
+                         "你可能正照著被覆蓋過的指令工作:\n")
+        for m in mounts:
+            _err("  %s\n" % m)
+        return 2
+
+    msg = check(path, content)
+    if msg:
+        _err("[六站閘門/前哨] %s\n%s\n" % (msg, sentinel_footer()))
+        return 2
+
+    # 沒被擋也要有機會發現權威層不在 —— 只在擋下時才講的話,
+    # 一個從來沒違規的 repo 永遠學不到它只有一道防線。每 session 至多一次。
+    installed, detail = authoritative_layer()
+    if not installed and _should_renotice():
+        _err("%s\n" % not_installed_notice(detail))
+    return 0
+
+
+def _should_renotice():
+    """權威層未安裝的提醒節流:每 4 小時至多一次。
+
+    每次工具呼叫都印會被當成背景噪音而被濾掉 —— 那等於沒印(F-031:
+    壞掉的訊號會訓練人忽略訊號)。標記檔屬**快取**類:刪掉只是再提醒一次,
+    不影響任何判定,所以放 .cache/ 不進版控。
+    """
+    marker = os.path.join(ROOT, ".cache", "authoritative-layer-notice")
+    try:
+        if os.path.exists(marker) and (time.time() - os.path.getmtime(marker)) < 4 * 3600:
+            return False
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        io.open(marker, "w", encoding="utf-8").write("")
+    except Exception:
+        return True   # 節流機制壞掉 -> 寧可多印,不要漏印
+    return True
+
+
+def skill_mirror_violations(canon_dir, mirror_dirs):
+    """R4 —— **一條規則,依當下佈局分支**。
+
+    不寫成兩個檢查並排:並排會讓其中一個分支在當下佈局永遠不跑,
+    那正是這條規則改寫前的處境(佈局改成 symlink 後,內容比對永遠不可能觸發,
+    全輪唯一一次觸發還是人工製造的負向測試)。
+    單一規則每次執行都必須回答「現在是哪種佈局」,沒有假裝在守的死路徑。
+
+      鏡像是 symlink   -> 驗完整性(斷裂、指向不存在、指向正典之外)
+      鏡像是實體目錄   -> 驗內容一致
+    """
+    import hashlib
+    if not os.path.isdir(canon_dir):
+        return []
+    canon_real = os.path.realpath(canon_dir)
+
+    # 迭代來源必須是**正典與鏡像的聯集**,不能只用正典 ——
+    # 只走正典的話,正典項目消失時鏡像那個斷掉的 symlink 永遠不會被走訪,
+    # 而那正是「斷裂」最典型的成因。迭代來源本身就會決定涵蓋範圍(維度 4 的同一個形狀)。
+    names = set(os.listdir(canon_dir))
+    for mirror in mirror_dirs:
+        if os.path.isdir(mirror):
+            names.update(os.listdir(mirror))
+
+    out = []
+    for name in sorted(names):
+        src = os.path.join(canon_dir, name, "SKILL.md")
+        for mirror in mirror_dirs:
+            # 鏡像整個沒建起來不是 drift,是還沒裝 —— 那由安裝流程負責,不是 R4。
+            if not os.path.isdir(mirror):
+                continue
+            entry = os.path.join(mirror, name)
+            rel_entry = rel(entry)
+            if not os.path.lexists(entry):
+                # **少了東西是 R4 最典型的破法**,原本卻被靜默跳過:
+                # 舊碼只驗得出「內容不同」,而硬連結/symlink 佈局下內容不可能不同,
+                # 兩層疊起來 R4 在實務上是空的(票 02 的機器列舉實測抓到)。
+                out.append("[R4] 鏡像缺少 %s —— 正典有而鏡像沒有。\n"
+                           "     重建:bash scripts/skills-update.sh" % rel_entry)
+                continue
+
+            if os.path.islink(entry):
+                # 分支一:symlink 佈局 —— 內容由構造保證,要守的是連結本身
+                target = os.path.realpath(entry)
+                if not os.path.exists(entry):
+                    out.append("[R4] symlink 斷裂:%s 指向已不存在的目標。\n"
+                               "     重建:npx skills experimental_sync" % rel_entry)
+                elif os.path.commonpath([target, canon_real]) != canon_real:
+                    out.append("[R4] symlink 指向正典之外:%s -> %s。\n"
+                               "     正典是 %s;內容一樣不代表來源正確,"
+                               "上游更新不會傳播到別處的副本。" % (rel_entry, target, rel(canon_dir)))
+                continue
+
+            # 分支二:實體副本佈局 —— 兩份各自獨立,會 drift,要守的是內容
+            m = os.path.join(entry, "SKILL.md")
+            if not os.path.exists(src):
+                out.append("[R4] 正典缺少 %s/SKILL.md,鏡像 %s 卻還留著。\n"
+                           "     正典被刪而鏡像留著舊的,一樣是不一致。"
+                           % (rel(os.path.join(canon_dir, name)), rel_entry))
+                continue
+            if not os.path.exists(m):
+                out.append("[R4] 鏡像缺少 %s/SKILL.md —— 正典有而鏡像沒有。\n"
+                           "     重建:bash scripts/skills-update.sh" % rel_entry)
+                continue
+            if (hashlib.md5(io.open(m, "rb").read()).hexdigest()
+                    != hashlib.md5(io.open(src, "rb").read()).hexdigest()):
+                out.append("[R4] 實體副本內容不一致:%s/SKILL.md 與正典不同。\n"
+                           "     鏡像目錄應為 symlink;重建:npx skills experimental_sync"
+                           % rel_entry)
+    return out
+
+
+def _skills_mtime():
+    """正典 skill 目錄的最新修改時間。讀不到回 None —— 呼叫端據此重算,不沿用。"""
+    canon = os.path.join(ROOT, ".agents", "skills")
+    try:
+        newest = os.path.getmtime(canon)
+        for name in os.listdir(canon):
+            p = os.path.join(canon, name, "SKILL.md")
+            if os.path.exists(p):
+                newest = max(newest, os.path.getmtime(p))
+        return newest
+    except Exception:
+        return None
+
+
+def _mount_violations_uncached():
+    """實際執行掛載點檢查(R5 的兩項)。"""
+    return check_third_axis_mount() + check_to_spec_override()
+
+
+def mount_violations_cached():
+    """以工作階段為單位的掛載點檢查。
+
+    覆蓋只可能來自外部更新指令 —— 那是離散事件,不是編輯中途會發生的事,
+    所以用 skill 目錄的修改時間當失效條件,未變動就沿用上次結果。
+
+    **失效判斷本身出錯時一律重算**:讀不到修改時間、或修改時間比快取還舊
+    (時鐘回撥、檔案被還原)都重算。快取的 fail-open 形狀就是「拿不準就用舊值」。
+    """
+    now = _skills_mtime()
+    cached = None
+    try:
+        with io.open(MOUNT_CACHE, encoding="utf-8") as f:
+            cached = json.load(f)
+    except Exception:
+        cached = None
+
+    if (now is not None and cached
+            and isinstance(cached.get("mtime"), (int, float))
+            and now == cached["mtime"]):
+        return list(cached.get("violations") or [])
+
+    violations = _mount_violations_uncached()
+    if now is not None:
+        try:
+            os.makedirs(os.path.dirname(MOUNT_CACHE), exist_ok=True)
+            with io.open(MOUNT_CACHE, "w", encoding="utf-8") as f:
+                json.dump({"mtime": now, "violations": violations}, f, ensure_ascii=False)
+        except Exception:
+            pass
+    return violations
+
+
+def mode_hook_would_block_on_mounts():
+    """前哨是否應因掛載點問題而擋下。抽成述詞,讓它可被直接斷言 ——
+    走 subprocess 抓 stderr 等於在測進入點分派,那已裁決不測。"""
+    return bool(mount_violations_cached())
+
+
+def check_skill_copies():
+    """以本 repo 的實際路徑呼叫 R4。"""
+    return skill_mirror_violations(
+        os.path.join(ROOT, ".agents", "skills"),
+        [os.path.join(ROOT, ".claude", "skills"), os.path.join(ROOT, "skills")])
+
+
+MOUNT_MARKERS = (
+    "### 3b. Identify the data-integrity sources",
+    "**Data Integrity sub-agent prompt**",
+    "Clean degradation is mandatory.",
+    "Exemption reconciliation (local addition)",
+)
+
+
+def check_to_spec_override():
+    """R5(P2)to-spec 的 inline snippet 覆寫。
+
+    上游允許把 prototype 的 snippet inline 進 spec —— 那與 R1 正面衝突(見 docs/adr/0002)。
+    覆寫被 update 蓋掉的話,skill 會開始要求 AI 做 R1 一定會擋的事。
+    同樣只判存在與位置(布林),不判內容。
+    """
+    p = os.path.join(ROOT, ".agents", "skills", "to-spec", "SKILL.md")
+    if not os.path.exists(p):
+        return ["[R5] 找不到正典 .agents/skills/to-spec/SKILL.md"]
+    body = io.open(p, encoding="utf-8").read()
+    if "LOCAL OVERRIDE (prototype snippets)" not in body:
+        return ["[R5] 正典 to-spec 缺 inline snippet 覆寫掛載點。\n"
+                "     多半是直接跑了 `npx skills update`(會覆蓋本地 patch)。\n"
+                "     修復:bash scripts/skills-update.sh(唯一允許的更新入口)"]
+    i_impl = body.find("## Implementation Decisions")
+    i_ovr = body.find("LOCAL OVERRIDE (prototype snippets)")
+    i_test = body.find("## Testing Decisions")
+    if not (i_impl != -1 and i_test != -1 and i_impl < i_ovr < i_test):
+        return ["[R5] 正典 to-spec 的覆寫位置錯誤:必須落在「## Implementation Decisions」"
+                "與「## Testing Decisions」之間(實際 impl=%d, override=%d, test=%d)。\n"
+                "     多半是上游改了錨點附近結構,patch 插到錯的地方。"
+                % (i_impl, i_ovr, i_test)]
+    return []
+
+
+def check_third_axis_mount():
+    """R5 第三軸掛載點。
+
+    `npx skills update` 會用上游版覆蓋正典 code-review,靜默移除本地第三軸。
+    brief 目前留空、不影響行為,但掛載點消失代表 patch 沒被重套 —— 擋下,
+    不讓「記得重套」這件事依賴人的記性。
+    """
+    if not os.path.exists(CANON_CODE_REVIEW):
+        return ["[R5] 找不到正典 %s" % os.path.relpath(CANON_CODE_REVIEW, ROOT)]
+    body = io.open(CANON_CODE_REVIEW, encoding="utf-8").read()
+    missing = [m for m in MOUNT_MARKERS if m not in body]
+    if missing:
+        return ["[R5] 正典 code-review 缺第三軸掛載點:%s\n"
+                "     多半是直接跑了 `npx skills update`(會覆蓋本地 patch)。\n"
+                "     修復:bash scripts/skills-update.sh(唯一允許的更新入口)"
+                % "、".join('"%s"' % m for m in missing)]
+
+    # 位置判定:錨點插入法真正的失效模式不是「掛載點消失」,
+    # 而是上游改動錨點附近結構、patch 插進去但位置錯了 —— 此時字串全在、卻掛錯地方。
+    # 只判位置對錯(布林),不判內容好壞(那是審查不是閘門)。
+    def at(marker):
+        return body.find(marker)
+
+    i_sec3, i_3b, i_sec4 = at("### 3. Identify the standards sources"), \
+        at("### 3b. Identify the data-integrity sources"), at("### 4. Spawn")
+    i_prompt, i_agg = at("**Data Integrity sub-agent prompt**"), at("### 5. Aggregate")
+
+    misplaced = []
+    if not (i_sec3 != -1 and i_sec4 != -1 and i_sec3 < i_3b < i_sec4):
+        misplaced.append("3b 節必須落在「### 3.」與「### 4.」之間"
+                         "(實際 sec3=%d, 3b=%d, sec4=%d)" % (i_sec3, i_3b, i_sec4))
+    if not (i_sec4 != -1 and i_agg != -1 and i_sec4 < i_prompt < i_agg):
+        misplaced.append("Data Integrity sub-agent prompt 必須落在「### 4.」與 aggregate 段之間"
+                         "(實際 sec4=%d, prompt=%d, agg=%d)" % (i_sec4, i_prompt, i_agg))
+    if misplaced:
+        return ["[R5] 正典 code-review 第三軸掛載點位置錯誤:\n"
+                + "".join("     - %s\n" % m for m in misplaced)
+                + "     多半是上游改了錨點附近結構,patch 插到錯的地方。\n"
+                  "     檢查 .claude/patches/apply_patches.py 的錨點是否仍成立。"]
+    return []
+
+
+def mode_pre_commit():
+    """權威判定:掃 staged 檔案 + R4 副本一致性 + R5 第三軸掛載點。"""
+    try:
+        out = subprocess.check_output(
+            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+            cwd=ROOT).decode("utf-8", "replace")
+    except Exception as e:
+        _err("[六站閘門] 無法取得 staged 檔案:%s\n" % e)
+        return 1
+    violations = [m for m in (check(f.strip(), None, at_commit=True)
+                              for f in out.splitlines() if f.strip()) if m]
+    violations += check_skill_copies()
+    violations += check_third_axis_mount()
+    violations += check_to_spec_override()
+    violations += check_legacy_list()
+    if violations:
+        _err("\n[六站閘門/pre-commit] commit 已擋下,%d 項違規:\n\n" % len(violations))
+        for v in violations:
+            _err("  %s\n" % v)
+        _err("\n如確定要略過:git commit --no-verify(會留下紀錄,請自行負責)\n")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(mode_pre_commit() if "--pre-commit" in sys.argv else mode_hook())

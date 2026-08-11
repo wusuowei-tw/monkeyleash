@@ -1,0 +1,77 @@
+# 框架可攜標記表 —— 哪些檔案搬得過去,以及怎麼搬。
+#
+# 格式:路徑<空白>標記。以 / 結尾的是目錄,涵蓋底下所有東西。最長前綴者勝
+# (不是讀取順序 —— 順序決定的話換個排法就換個行為,那是隱形的)。
+#
+# 標記:
+#   copy      框架的一部分,內容與專案無關,照抄
+#   generate  內容綁這個 repo(sha、路徑清單),必須在目標 repo 重新產生;照抄會靜默壞掉
+#   ask       混著框架與專案兩種東西,要人決定帶哪些
+#   skip      專案自己的東西,只是剛好住在框架根目錄底下
+#
+# **範圍之內、沒有更具體標記的一律 copy**,而且安裝時會被列出來讓人確認。
+# 沒標記不等於不帶 —— 那又是白名單。
+#
+# 代價不對稱:多帶是吵鬧的(到了新專案馬上發現不對),
+# 少帶是靜默的(沒人知道少了一條規則)。所以預設偏向多帶。
+
+# ── 判定邏輯與定義 ────────────────────────────────────────────
+.claude/hooks/                  copy
+.claude/portable/               copy
+.claude/patches/                copy
+.claude/settings.json           copy
+.agents/pipeline-stages.yaml    copy
+.agents/skills/                 copy
+.agents/portable-manifest.txt   copy
+scripts/skills-update.sh        copy
+
+# ── 綁死這個 repo,必須重新產生 ────────────────────────────────
+.agents/legacy-no-redlight.txt  generate
+.dev/                           generate
+
+# ── 框架的測試(閘門自己的) ───────────────────────────────────
+tests/conftest.py               copy
+tests/test_gate.py              copy
+tests/test_redlight.py          copy
+tests/test_manifest.py          copy
+tests/test_claude_md.py         copy
+tests/test_apply_patches.py     copy
+tests/test_bash_write.py        copy
+tests/test_gate_boundaries.py   copy
+tests/test_g1_guard.py          copy
+tests/test_leak_scan.py         copy
+
+# ── 專案自己的測試,住在同一個目錄但不是框架的 ──────────────
+# 「沒被提到」不是合法狀態:tests/ 是框架與專案混居的地方,
+# 每一個檔案都必須被明確歸類,否則打包時會靜默漏帶或誤帶。
+tests/test_api_key_env.py           skip
+tests/test_capabilities.py          skip
+tests/test_checkpoint_resume.py     skip
+tests/test_classify.py              skip
+tests/test_dataflows_config.py      skip
+tests/test_deepseek_reasoning.py    skip
+tests/test_env_overrides.py         skip
+tests/test_google_api_key.py        skip
+tests/test_memory_log.py            skip
+tests/test_minimax.py               skip
+tests/test_model_validation.py      skip
+tests/test_ollama_base_url.py       skip
+tests/test_rank.py                  skip
+tests/test_safe_ticker_component.py skip
+tests/test_signal_processing.py     skip
+tests/test_structured_agents.py     skip
+tests/test_ticker_symbol_handling.py skip
+
+# ── 決策紀錄 ──────────────────────────────────────────────────
+docs/adr/                       copy
+docs/agents/issue-tracker.md    copy
+docs/agents/domain.md           copy
+# 摩擦記錄是這個 repo 走出來的歷史,但那些判準是這套東西**最可攜的資產**,
+# 比任何一支程式碼都通用 —— 整份帶走,不再每次安裝都問。
+docs/agents/friction-log.md     copy
+# 只帶 FRAMEWORK 界線之間那一段;專案段留在原地(票 04)
+CLAUDE.md                       generate
+
+# 位元碼快取,由來源產生;帶過去只是噪音
+.claude/hooks/__pycache__/    skip
+.claude/portable/__pycache__/ skip

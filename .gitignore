@@ -1,0 +1,21 @@
+# 由 skills 工具重建的鏡像。
+#
+# **前導斜線是必要的,不是風格。** 寫成 `skills/` 的話,gitignore 會在
+# **任何深度**比對同名目錄 —— 於是 `.agents/skills/`(正典)也被排除,
+# 而 git 對 ignored 檔案依定義是靜默的:首次 commit 少了 34 個檔案,
+# 沒有任何訊息,要自己去數 41 vs 75 才看得到。
+# R4 存在的目的正是守住正典與鏡像的一致,結果正典被 .gitignore 吃掉了。
+/.claude/skills/
+/skills/
+
+# 產生物
+__pycache__/
+.pytest_cache/
+.cache/
+*.pyc
+
+# 安裝目標 repo 才有的狀態與證據 —— 本 repo 是發布來源,不是工作 repo
+/.dev/
+
+# 工作階段暫存(票已搬進版控的 docs/tickets/;.scratch 只留真正的暫存物)
+/.scratch/

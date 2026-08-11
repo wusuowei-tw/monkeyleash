@@ -1,0 +1,21 @@
+# 行尾正規化:repo 內一律 LF,避免 Windows 端的 CRLF 汙染歷史與 diff。
+
+* text=auto
+
+# shell 腳本與 hook:**必須 LF**。CRLF 會讓 sh 在 Unix / git-bash 上以
+# `\r: command not found` 之類的方式壞掉,而那是靜默到執行才炸的。
+# 涵蓋:scripts/skills-update.sh、skills 底下的 *.template.sh、
+#       安裝器產生的 pre-commit(內容是 sh)。
+*.sh text eol=lf
+
+# 版控的 git hooks(無副檔名,但由 sh 執行)—— 必須 LF。
+.githooks/* text eol=lf
+
+# Python:LF,跨平台一致。涵蓋 install 入口、gate.py、redlight.py、
+# g1_guard.py、leak_scan.py、verify_gates.py 等全部判定與安裝邏輯。
+*.py text eol=lf
+
+# 二進位(字型等)不做行尾處理。
+*.otf binary
+*.ttf binary
+*.png binary

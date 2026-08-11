@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-gates"
+version = "0.1.0"
+description = "六站流程閘門與 agent 檔案系統災難防護"
+requires-python = ">=3.10"
+dependencies = [
+    # gate.py 讀 .agents/pipeline-stages.yaml。讀不到會 fail-closed 擋掉所有
+    # 原始碼寫入 —— 少了它閘門不是壞掉,是把人鎖在外面。
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# **pytest 必須是宣告的相依,不是只設 ini_options。**
+# F-012:上一個 repo 一直有 [tool.pytest.ini_options],但 pytest 從未被宣告
+# 也從未被安裝 —— 17 個測試檔全部跑不起來,而 R3 一路全綠。
+# R3 的紅燈紀錄那半依賴測試實際執行,不能靠「有人記得手動裝」。
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "unit: fast isolated unit tests",
+    "integration: tests requiring external services",
+    "smoke: quick sanity-check tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

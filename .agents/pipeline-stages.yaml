@@ -1,0 +1,47 @@
+# 開發流程站別 —— 唯一定義來源(唯讀)
+#
+# 只被讀的是定義,會被寫的是狀態,兩者不同居:
+#   定義(本檔)          純規格,不被任何流程寫入
+#   狀態(.dev/pipeline.json)  執行期由 skill 寫入 current_stage
+#
+# 消費端(改站名只改這裡):
+#   - .claude/hooks/gate.py       R2 判定與訊息
+#   - CLAUDE.md                   流程說明指向本檔
+#   - docs/decisions.md           流程決策列引用本檔
+#   - .dev/pipeline.json          current_stage 的合法值域
+
+stages:
+  - id: idle
+    skill: null
+    zh: 待命
+    allows_src_write: false
+
+  - id: grill
+    skill: grill-with-docs
+    zh: 拷問共識
+    allows_src_write: false
+
+  - id: spec
+    skill: to-spec
+    zh: 寫規格
+    allows_src_write: false
+
+  - id: tickets
+    skill: to-tickets
+    zh: 拆票
+    allows_src_write: false
+
+  - id: implement
+    skill: implement
+    zh: TDD 實作
+    allows_src_write: true
+
+  - id: review
+    skill: code-review
+    zh: 代碼審查
+    allows_src_write: false
+
+  - id: arch
+    skill: improve-codebase-architecture
+    zh: 架構掃除
+    allows_src_write: false

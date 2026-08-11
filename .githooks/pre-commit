@@ -1,0 +1,7 @@
+#!/bin/sh
+# 洩漏偵測 pre-commit —— **進版控**,靠 core.hooksPath 啟用(見 bootstrap.sh)。
+#
+# .git/hooks/ 不進版控,clone 不會帶走它(ADR 0007)。所以 hook 放在
+# 版控裡的 .githooks/,用 `git config core.hooksPath .githooks` 指過來 ——
+# hook 跟著 clone 走,啟用只要一行 config(零接觸不可能,git 刻意如此)。
+exec python "$(git rev-parse --show-toplevel)/.claude/portable/leak_scan.py" --staged

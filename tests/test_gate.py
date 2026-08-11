@@ -1,0 +1,894 @@
+# -*- coding: utf-8 -*-
+"""票 01 — 兩層不變式,以及閘門自我修改的豁免。
+
+不變式是單向的:**任何時點下,權威層的嚴格程度不得低於前哨。**
+前哨擋而權威放行 = 缺陷;權威擋而前哨放行 = 合規(R4/R5 只在提交時評估就是這種)。
+
+這條測試存在的理由是 F-017:修 R2 的時點語意時,at_commit 分支被寫成提早返回,
+把 R3 在提交時整個跳過,權威層反而比前哨鬆。當時沒有任何東西發現。
+"""
+
+import importlib.util
+import io
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def _load_gate():
+    spec = importlib.util.spec_from_file_location(
+        "gate_under_test", ROOT / ".claude" / "hooks" / "gate.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+gate = _load_gate()
+
+
+# 語料:涵蓋 R1 / R2 / R3 的放行與擋下路徑。
+# 內容刻意樸素 —— 這裡驗的是路徑與站別的判定,不是內容解析。
+CORPUS = [
+    ("docs/specs/x.md", "## 問題\n只有散文。"),
+    ("docs/specs/x.md", "## 問題\n```python\nprint(1)\n```"),
+    (".scratch/f/spec.md", "## 問題\n只有散文。"),
+    (".scratch/f/spec.md", "## 問題\n```python\nprint(1)\n```"),
+    (".scratch/f/issues/01-x.md", "票內容"),
+    (".scratch/f/prototype/try.py", "print(1)"),
+    ("macro_audit/classify.py", "x = 1"),
+    ("macro_audit/no_such_module.py", "x = 1"),
+    ("tests/test_classify.py", "def test_x(): pass"),
+    ("docs/agents/friction-log.md", "import 這個字不是程式"),
+    (".dev/pipeline.json", "{}"),
+    ("README.md", "說明"),
+]
+
+STAGES = ["idle", "grill", "spec", "tickets", "implement", "review"]
+
+
+@pytest.fixture
+def fake_repo(tmp_path, monkeypatch):
+    """一個測試自己造的最小 repo。回傳 (根目錄, 被測原始碼的絕對路徑)。
+
+    **框架測試只能斷言框架的性質**(票 07)。借宿主 repo 現成的檔案
+    (`macro_audit/classify.py`)當樣本,等於把「這個 repo 剛好有這個檔案」
+    寫進斷言 —— 裝到新專案就紅,而那個紅與新專案無關,
+    只會教人「這套測試本來就紅」,之後真的紅也不會被當一回事(F-031)。
+
+    路徑用絕對的:`rel()` 走 `abspath`,相對路徑會以 cwd 為基準而不是 ROOT。
+    """
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "tests").mkdir()
+    probe = tmp_path / "pkg" / "thing.py"
+    probe.write_text("x = 1", encoding="utf-8")
+    (tmp_path / "tests" / "test_thing.py").write_text("def test_x(): pass", encoding="utf-8")
+    monkeypatch.setattr(gate, "ROOT", str(tmp_path))
+    monkeypatch.setattr(gate, "LEGACY_LIST", str(tmp_path / "legacy.txt"))
+    monkeypatch.setattr(gate, "RUN_LOG", str(tmp_path / "no-such-log.jsonl"))
+    monkeypatch.setattr(gate, "load_stage", lambda: ("implement", "01"))
+    return tmp_path, str(probe)
+
+
+def _rule_of(msg):
+    """從擋下訊息取規則代號。`[R2/commit]` 與 `[R2/fail-closed]` 都歸 R2。"""
+    return msg.split("]")[0].lstrip("[").split("/")[0] if msg else None
+
+
+@pytest.mark.parametrize("stage", STAGES)
+@pytest.mark.parametrize("path,content", CORPUS)
+def test_coverage_no_rule_is_skipped_at_the_authoritative_layer(
+        monkeypatch, stage, path, content):
+    """不變式一(結構):每條在前哨會評估的規則,權威層也必須評估到。
+
+    用規則代號出現與否判定,不比較判決 —— 抓的是規則被刪除或跳過。
+    F-017 就是這個形狀:at_commit 分支提早返回,R3 在提交時整個沒被評估。
+    """
+    monkeypatch.setattr(gate, "load_stage", lambda: (stage, "01"))
+    sentinel, authoritative = [], []
+    gate.check(path, content, at_commit=False, trace=sentinel)
+    gate.check(path, content, at_commit=True, trace=authoritative)
+    missing = set(sentinel) - set(authoritative)
+    assert not missing, (
+        "規則 %s 在前哨被評估,在權威層卻沒有:stage=%s path=%s —— "
+        "繞過前哨的人就完全沒有東西守。" % (sorted(missing), stage, path))
+
+
+@pytest.mark.parametrize("stage", STAGES)
+@pytest.mark.parametrize("path,content", CORPUS)
+def test_every_divergence_is_declared_by_its_rule(monkeypatch, stage, path, content):
+    """不變式二(行為):權威比前哨鬆的每一個案例,其負責規則必須帶有分時點宣告。
+
+    抓的是規則還在、被評估、判決卻被放水 —— 涵蓋性單獨看不見的變體。
+    宣告寫在規則自己的定義裡並指向 ADR,不在本測試維護豁免清單(那會退化成裝飾)。
+    """
+    monkeypatch.setattr(gate, "load_stage", lambda: (stage, "01"))
+    s_msg = gate.check(path, content, at_commit=False)
+    a_msg = gate.check(path, content, at_commit=True)
+    if s_msg is None or a_msg is not None:
+        return  # 沒有分歧
+    rule = _rule_of(s_msg)
+    decl = gate.RULE_DIVERGENCE.get(rule)
+    assert decl, (
+        "未宣告的分時點分歧:規則 %s 在前哨擋、權威放行(stage=%s path=%s)。"
+        "刻意的話寫進 gate.RULE_DIVERGENCE 並附 ADR;不是的話就是缺陷。"
+        % (rule, stage, path))
+    adr = ROOT / decl["adr"]
+    assert adr.exists(), "宣告指向的 ADR 不存在:%s" % decl["adr"]
+
+
+@pytest.mark.parametrize("path,expected", [
+    ("docs/specs/x.md", "R1"),
+    (".scratch/f/spec.md", "R1"),
+    ("macro_audit/anything.py", "R2"),
+    ("macro_audit/anything.py", "R3"),
+])
+def test_the_detector_itself_records_each_rule(monkeypatch, path, expected):
+    """守住涵蓋性測試自己:trace 若漏記某條規則,它就永遠偵測不到那條規則被跳過。
+
+    這條的由來:R3 的 trace 記錄曾經整個沒被寫進去,而涵蓋性測試照樣全綠 ——
+    偵測「X 沒發生」的機制自己被 X 略過了。
+    任何這類機制都要問一次:它自己會不會被它要偵測的東西略過?
+    """
+    monkeypatch.setattr(gate, "load_stage", lambda: ("implement", "01"))
+    t = []
+    gate.check(path, "x = 1", at_commit=False, trace=t)
+    assert expected in t, "trace 沒記到 %s(path=%s),涵蓋性測試對它是盲的" % (expected, path)
+
+
+def test_the_invariants_do_not_assert_the_reverse(monkeypatch):
+    """權威嚴於前哨是合規的,不是不對稱缺陷。
+
+    R4/R5 只在提交時評估就是這種情況;為了讓兩層對稱而把成本推進前哨是錯的方向。
+    這裡以「存在一個權威嚴於前哨的案例、而測試不因此失敗」來表達單向性。
+    """
+    monkeypatch.setattr(gate, "load_stage", lambda: ("implement", "01"))
+    # R4/R5 只在 pre_commit 模式被呼叫,check() 本身不含它們 —— 單向性由此成立:
+    # 權威層額外跑的檢查不需要在前哨有對應。
+    assert "check_skill_copies" not in gate.mode_hook.__code__.co_names
+    assert "check_skill_copies" in gate.mode_pre_commit.__code__.co_names
+
+
+class TestExtensionDenylist:
+    """票 02 — 副檔名判定從白名單反轉為黑名單。
+
+    白名單是 fail-open:任何新型態的檔案都不在名單上,一律放行。
+    目錄那層已經反轉過(F-011),副檔名這層是同一個病的最後一處。
+    反轉後被誤擋的檔案,正確處置是把副檔名加進非原始碼清單 ——
+    那是一個看得見的決定,不是沉默的洞。
+    """
+
+    @pytest.mark.parametrize("path", [
+        "macro_audit/Dockerfile",
+        "macro_audit/Makefile",
+        "macro_audit/run_daily",          # 無副檔名的腳本
+        "macro_audit/deploy.tf",          # 還沒用過的工具的組態
+        "macro_audit/schema.sql",
+    ])
+    def test_unknown_file_types_in_source_dirs_are_guarded(self, monkeypatch, path):
+        """白名單時代這些全部放行。反轉後預設被守。"""
+        monkeypatch.setattr(gate, "load_stage", lambda: ("spec", None))
+        msg = gate.check(path, "anything", at_commit=False)
+        assert msg is not None and "R2" in msg, "%s 未被守到" % path
+
+    @pytest.mark.parametrize("path", [
+        "macro_audit/README.md",
+        "macro_audit/fixtures/us_macro_series.yaml",
+        "macro_audit/data.csv",
+        "macro_audit/notes.txt",
+    ])
+    def test_declared_non_source_extensions_pass(self, monkeypatch, path):
+        """在非原始碼清單裡的副檔名照常放行。"""
+        monkeypatch.setattr(gate, "load_stage", lambda: ("spec", None))
+        assert gate.check(path, "anything", at_commit=False) is None, path
+
+    def test_a_false_block_is_fixed_by_declaring_the_extension(self, monkeypatch):
+        """誤擋的處置是把副檔名加進清單 —— 看得見的決定,不是沉默的洞。"""
+        monkeypatch.setattr(gate, "load_stage", lambda: ("spec", None))
+        p = "macro_audit/config.someformat"
+        assert gate.check(p, "x", at_commit=False) is not None  # 未宣告 → 守
+        # 清單是 {項目: 理由} —— 宣告一個新例外必須同時寫下理由,這是本票的設計,
+        # 不是測試遷就實作:沒有理由欄的話判準會漂移而沒有東西攔得住。
+        declared = dict(gate.NON_SOURCE_EXT)
+        declared[".someformat"] = "示範用格式,不被執行也不被建置消費"
+        monkeypatch.setattr(gate, "NON_SOURCE_EXT", declared)
+        assert gate.check(p, "x", at_commit=False) is None      # 宣告後 → 放行
+
+    @pytest.mark.parametrize("path,expected_list", [
+        ("macro_audit/deploy.tf", "NON_SOURCE_EXT"),      # 有副檔名 → 指副檔名清單
+        ("macro_audit/Makefile", "NON_SOURCE_NAMES"),     # 無副檔名 → 指檔名清單
+    ])
+    def test_block_message_points_at_the_right_list(self, monkeypatch, path, expected_list):
+        """三個路徑全印出來的話,人要自己判斷該改哪一份 ——
+        那正好是這個訊息本來要省掉的認知成本。"""
+        monkeypatch.setattr(gate, "load_stage", lambda: ("spec", None))
+        msg = gate.check(path, "x", at_commit=False)
+        assert expected_list in msg and ".claude/hooks/gate.py:" in msg
+        wrong = "NON_SOURCE_NAMES" if expected_list == "NON_SOURCE_EXT" else "NON_SOURCE_EXT"
+        assert wrong not in msg, "同時指了兩份清單,認知成本沒省掉"
+
+
+class TestNonSourceListsAreWellFormed:
+    """三份清單的形狀 —— 清單一長,判準就會漂移。"""
+
+    LISTS = ("NON_SOURCE_DIRS", "NON_SOURCE_EXT", "NON_SOURCE_NAMES")
+
+    @pytest.mark.parametrize("name", LISTS)
+    def test_every_entry_carries_a_reason(self, name):
+        """理由欄是讓判準漂移看得見的東西。
+
+        沒有理由欄的話,一年後有人往裡面加 entrypoint.sh,沒有東西攔得住 ——
+        判準是「會不會被執行或被建置工具消費」,理由欄逼人每次都回答一次。
+        """
+        table = getattr(gate, name)
+        assert isinstance(table, dict), "%s 必須是 {項目: 理由} 而非裸清單" % name
+        for key, why in table.items():
+            assert isinstance(why, str) and why.strip(), "%s 的 %r 沒有理由" % (name, key)
+
+    def test_the_three_lists_are_mutually_exclusive(self):
+        """同一個項目不得落在兩份裡,否則行為取決於檢查順序 —— 那是隱形的。"""
+        seen = {}
+        for name in self.LISTS:
+            for key in getattr(gate, name):
+                assert key not in seen, (
+                    "%r 同時在 %s 與 %s,行為取決於檢查順序" % (key, seen[key], name))
+                seen[key] = name
+
+    def test_no_filename_is_also_matched_by_an_extension_rule(self):
+        """檔名清單裡的項目不得同時被某條副檔名規則命中。
+
+        `.env` 這種「長得像副檔名的檔名」是典型:放錯清單時兩邊都會中,
+        誰先檢查誰決定行為。
+        """
+        exts = tuple(gate.NON_SOURCE_EXT)
+        for name in gate.NON_SOURCE_NAMES:
+            assert not name.endswith(exts), (
+                "檔名 %r 同時被副檔名規則命中,兩份清單重疊" % name)
+
+
+class TestSkillMirrorSingleRule:
+    """票 03 — 鏡像檢查改成單一規則兩分支。
+
+    原本守的是「三份實體副本可能各自 drift」。佈局改成 symlink 之後,
+    一致性由構造保證 —— 那條規則全輪只觸發過一次,還是人工製造的負向測試。
+    一條永遠不會在真實流程生效的規則,看起來像在守,實際上什麼都沒守。
+
+    改法不是並排兩個檢查(那會讓其中一個在當下佈局永遠不跑,又是同一個處境),
+    而是一條規則每次執行都必須回答「現在是哪種佈局」。
+    """
+
+    @staticmethod
+    def _canon(tmp_path):
+        canon = tmp_path / "canon" / "tdd"
+        canon.mkdir(parents=True)
+        (canon / "SKILL.md").write_text("原始內容", encoding="utf-8")
+        return tmp_path / "canon"
+
+    @staticmethod
+    def _try_symlink(src, dst):
+        try:
+            dst.symlink_to(src, target_is_directory=True)
+            return dst.is_symlink()
+        except (OSError, NotImplementedError):
+            return False
+
+    def test_intact_symlink_passes(self, tmp_path):
+        canon = self._canon(tmp_path)
+        mirror = tmp_path / "mirror"
+        mirror.mkdir()
+        if not self._try_symlink(canon / "tdd", mirror / "tdd"):
+            pytest.skip("此環境無法建立 symlink")
+        assert gate.skill_mirror_violations(str(canon), [str(mirror)]) == []
+
+    def test_broken_symlink_is_blocked(self, tmp_path):
+        canon = self._canon(tmp_path)
+        mirror = tmp_path / "mirror"
+        mirror.mkdir()
+        if not self._try_symlink(canon / "tdd", mirror / "tdd"):
+            pytest.skip("此環境無法建立 symlink")
+        import shutil
+        shutil.rmtree(canon / "tdd")          # 弄斷:目標消失
+        out = gate.skill_mirror_violations(str(canon), [str(mirror)])
+        assert out and "R4" in out[0]
+
+    def test_symlink_pointing_outside_canonical_is_blocked(self, tmp_path):
+        canon = self._canon(tmp_path)
+        elsewhere = tmp_path / "elsewhere" / "tdd"
+        elsewhere.mkdir(parents=True)
+        (elsewhere / "SKILL.md").write_text("原始內容", encoding="utf-8")
+        mirror = tmp_path / "mirror"
+        mirror.mkdir()
+        if not self._try_symlink(elsewhere, mirror / "tdd"):
+            pytest.skip("此環境無法建立 symlink")
+        out = gate.skill_mirror_violations(str(canon), [str(mirror)])
+        assert out and "R4" in out[0], "指向正典以外仍被放行 —— 內容一樣不代表來源正確"
+
+    def test_physical_copy_with_same_content_passes(self, tmp_path):
+        canon = self._canon(tmp_path)
+        mirror = tmp_path / "mirror" / "tdd"
+        mirror.mkdir(parents=True)
+        (mirror / "SKILL.md").write_text("原始內容", encoding="utf-8")
+        assert gate.skill_mirror_violations(str(canon), [str(tmp_path / "mirror")]) == []
+
+    def test_physical_copy_that_drifted_is_blocked(self, tmp_path):
+        canon = self._canon(tmp_path)
+        mirror = tmp_path / "mirror" / "tdd"
+        mirror.mkdir(parents=True)
+        (mirror / "SKILL.md").write_text("被改過的內容", encoding="utf-8")
+        out = gate.skill_mirror_violations(str(canon), [str(tmp_path / "mirror")])
+        assert out and "R4" in out[0]
+
+    def test_both_branches_are_reachable_by_the_tests(self, tmp_path):
+        """守住這條規則自己:兩個分支都要有測試涵蓋。
+
+        只測一個分支的話,另一個又會變成沒人知道它壞掉的死路徑 ——
+        那正是這條規則被改寫的原因(維度 4:偵測機制自己會不會被略過)。
+        """
+        names = [n for n in dir(self) if n.startswith("test_")]
+        assert any("symlink" in n for n in names)
+        assert any("physical" in n for n in names)
+
+
+class TestMountCheckCache:
+    """票 04 — 掛載點檢查進前哨,以工作階段為單位快取。
+
+    使用者要在**編輯當下**就知道 skill 被外部更新覆蓋了,不必等提交 ——
+    在那之前他可能已經照著壞掉的指令工作了半天。
+    但覆蓋只可能來自外部更新指令,是離散事件,不該讓每次編輯都付出讀多個檔案的成本。
+
+    快取的 fail-open 形狀是「拿不準就用舊值」。因此失效判斷本身出錯時要**重算**。
+    """
+
+    def test_unchanged_mtime_reuses_the_cached_result(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(gate, "MOUNT_CACHE", str(tmp_path / "mount.json"))
+        calls = []
+        monkeypatch.setattr(gate, "_mount_violations_uncached",
+                            lambda: calls.append(1) or [])
+        monkeypatch.setattr(gate, "_skills_mtime", lambda: 1000.0)
+        gate.mount_violations_cached()
+        gate.mount_violations_cached()
+        assert len(calls) == 1, "mtime 未變動卻重算了,前哨成本沒省下來"
+
+    def test_changed_mtime_recomputes(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(gate, "MOUNT_CACHE", str(tmp_path / "mount.json"))
+        calls = []
+        monkeypatch.setattr(gate, "_mount_violations_uncached",
+                            lambda: calls.append(1) or [])
+        monkeypatch.setattr(gate, "_skills_mtime", lambda: 1000.0)
+        gate.mount_violations_cached()
+        monkeypatch.setattr(gate, "_skills_mtime", lambda: 2000.0)
+        gate.mount_violations_cached()
+        assert len(calls) == 2
+
+    def test_unreadable_mtime_recomputes_rather_than_reusing(self, tmp_path, monkeypatch):
+        """讀不到修改時間 → 重算。拿不準就用舊值是快取的 fail-open 形狀。"""
+        monkeypatch.setattr(gate, "MOUNT_CACHE", str(tmp_path / "mount.json"))
+        calls = []
+        monkeypatch.setattr(gate, "_mount_violations_uncached",
+                            lambda: calls.append(1) or [])
+        monkeypatch.setattr(gate, "_skills_mtime", lambda: 1000.0)
+        gate.mount_violations_cached()
+        monkeypatch.setattr(gate, "_skills_mtime", lambda: None)
+        gate.mount_violations_cached()
+        assert len(calls) == 2
+
+    def test_mtime_older_than_cache_recomputes(self, tmp_path, monkeypatch):
+        """時鐘回撥、檔案被還原 —— 比快取還舊也要重算,不是沿用。"""
+        monkeypatch.setattr(gate, "MOUNT_CACHE", str(tmp_path / "mount.json"))
+        calls = []
+        monkeypatch.setattr(gate, "_mount_violations_uncached",
+                            lambda: calls.append(1) or [])
+        monkeypatch.setattr(gate, "_skills_mtime", lambda: 2000.0)
+        gate.mount_violations_cached()
+        monkeypatch.setattr(gate, "_skills_mtime", lambda: 1000.0)
+        gate.mount_violations_cached()
+        assert len(calls) == 2
+
+    def test_deleting_the_cache_still_works(self, tmp_path, monkeypatch):
+        """快取是可重建的加速結構 —— 消失就重算,不影響判定。"""
+        cache = tmp_path / "mount.json"
+        monkeypatch.setattr(gate, "MOUNT_CACHE", str(cache))
+        monkeypatch.setattr(gate, "_mount_violations_uncached", lambda: [])
+        monkeypatch.setattr(gate, "_skills_mtime", lambda: 1000.0)
+        gate.mount_violations_cached()
+        cache.unlink()
+        assert gate.mount_violations_cached() == []
+
+    def test_broken_patch_is_caught_at_write_time(self, monkeypatch):
+        """前哨要在編輯當下就擋,不必等提交。"""
+        monkeypatch.setattr(gate, "mount_violations_cached",
+                            lambda: ["[R5] 掛載點消失"])
+        monkeypatch.setattr(gate, "load_stage", lambda: ("implement", "01"))
+        assert gate.mode_hook_would_block_on_mounts() is True
+
+
+class TestStateFileClassification:
+    """票 04 — 狀態檔分類。判準是**這個檔案壞掉或消失時,正確行為是什麼**。
+
+    證據消失即失去判定依據,必須 fail-closed;快取消失就重算。
+    目錄本身就是分類,不必靠記性維持。
+    """
+
+    def test_evidence_files_live_under_dev(self):
+        for p in (gate.PIPELINE, gate.EXEMPTION_LOG):
+            assert "/.dev/" in p.replace("\\", "/"), p
+
+    def test_cache_files_live_under_cache_dir(self):
+        assert "/.cache/" in gate.MOUNT_CACHE.replace("\\", "/"), gate.MOUNT_CACHE
+
+    def test_cache_dir_is_ignored_by_version_control(self):
+        """問 git,不比對 .gitignore 的字串。
+
+        原本斷言 `"/.cache/" in text` —— 那綁死了**宿主 repo 的寫法**:
+        安裝到新專案時 .gitignore 寫的是 `.cache/`(沒有前導斜線),同樣有效,
+        測試卻紅。要驗的性質是「這個目錄被版控忽略」,而那件事只有 git 說了算(票 07)。
+        """
+        rc = subprocess.run(["git", "check-ignore", "-q", ".cache/probe"],
+                            cwd=str(ROOT), capture_output=True).returncode
+        assert rc == 0, "快取目錄未被版控忽略(git check-ignore 說沒有)"
+
+
+class TestR3ReadsRedlight:
+    """票 06 — R3 的完整斷言:測試檔存在 **且** 有一筆宣告當時實作不存在的紅燈紀錄。
+
+    R3 的原始規格本來就是兩個條件,實作只做了前半,而且沒有東西發現它掉了(F-012)。
+    只驗檔案存在的話,一個永遠跑不起來的測試檔也能過關。
+
+    擋得住順手作弊(先寫實作再補測試),擋不住刻意作弊(直接改紀錄檔)——
+    後者靠 code review,閘門不假裝能防它。
+    """
+
+    @staticmethod
+    def _write_log(path, records):
+        with io.open(path, "w", encoding="utf-8") as f:
+            for r in records:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    def test_a_proper_red_then_green_sequence_passes(self, tmp_path, monkeypatch):
+        log = tmp_path / "runs.jsonl"
+        self._write_log(log, [{"test_file": "tests/test_widget.py", "result": "red",
+                               "impl_exists": False, "impl_hash": None}])
+        monkeypatch.setattr(gate, "RUN_LOG", str(log))
+        assert gate.redlight_missing("widget") is None
+
+    def test_implementation_written_before_the_test_is_blocked(self, tmp_path, monkeypatch):
+        """紅燈時實作就已經在了 —— 那不是紅綠燈,是補測試。"""
+        log = tmp_path / "runs.jsonl"
+        self._write_log(log, [{"test_file": "tests/test_widget.py", "result": "red",
+                               "impl_exists": True, "impl_hash": "abc"}])
+        monkeypatch.setattr(gate, "RUN_LOG", str(log))
+        msg = gate.redlight_missing("widget")
+        assert msg and "實作" in msg
+
+    def test_only_green_records_is_blocked(self, tmp_path, monkeypatch):
+        log = tmp_path / "runs.jsonl"
+        self._write_log(log, [{"test_file": "tests/test_widget.py", "result": "green",
+                               "impl_exists": True, "impl_hash": "abc"}])
+        monkeypatch.setattr(gate, "RUN_LOG", str(log))
+        assert gate.redlight_missing("widget") is not None
+
+    def test_missing_log_is_fail_closed(self, tmp_path, monkeypatch):
+        """讀不到就擋,不是讀不到就放行 —— 這是 F-001 的同一個位置,在測試裡釘死。"""
+        monkeypatch.setattr(gate, "RUN_LOG", str(tmp_path / "does-not-exist.jsonl"))
+        assert gate.redlight_missing("widget") is not None
+
+    def test_malformed_log_is_fail_closed(self, tmp_path, monkeypatch):
+        log = tmp_path / "runs.jsonl"
+        io.open(log, "w", encoding="utf-8").write("這不是 json\n{壞掉的\n")
+        monkeypatch.setattr(gate, "RUN_LOG", str(log))
+        assert gate.redlight_missing("widget") is not None
+
+    def test_record_missing_the_impl_exists_field_is_fail_closed(self, tmp_path, monkeypatch):
+        """欄位缺漏也算格式不對 —— 不能因為「看起來像紅燈」就放行。"""
+        log = tmp_path / "runs.jsonl"
+        self._write_log(log, [{"test_file": "tests/test_widget.py", "result": "red"}])
+        monkeypatch.setattr(gate, "RUN_LOG", str(log))
+        assert gate.redlight_missing("widget") is not None
+
+
+class TestGateSelfModification:
+    """閘門自己受不受閘門管。
+
+    R2 有例外(死鎖):閘門把站別卡住時,修法需要改 gate.py,R2 管到它就把人鎖在外面。
+    R3 沒有例外:寫測試不需要先解鎖任何東西,而爆炸半徑最大的程式更該有測試。
+    """
+
+    def test_gate_itself_is_exempt_from_stage_rule(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(gate, "load_stage", lambda: ("spec", None))
+        msg = gate.check(".claude/hooks/gate.py", "x = 1", at_commit=False)
+        assert msg is None or "R2" not in msg
+
+    def test_gate_exemption_is_never_silent(self, monkeypatch):
+        """靜默的洞比會叫的洞危險(F-011 的教訓)。"""
+        monkeypatch.setattr(gate, "load_stage", lambda: ("spec", None))
+        note = gate.self_modification_note(".claude/hooks/gate.py")
+        assert note is not None
+        assert "自我修改豁免" in note and "已記錄" in note
+
+    def test_gate_exemption_is_recorded_with_its_reason(self, monkeypatch, tmp_path):
+        log = tmp_path / "gate-exemptions.jsonl"
+        monkeypatch.setattr(gate, "EXEMPTION_LOG", str(log))
+        monkeypatch.setattr(gate, "load_stage", lambda: ("spec", None))
+        gate.check(".claude/hooks/gate.py", "x = 1", at_commit=False)
+        records = [json.loads(l) for l in io.open(log, encoding="utf-8") if l.strip()]
+        assert any(r.get("reason") == "gate-self-modification" for r in records), records
+
+    def test_gate_is_still_subject_to_the_test_file_rule(self, monkeypatch):
+        """R3 沒有例外。這裡用一個不存在對應測試的假閘門檔驗證。"""
+        monkeypatch.setattr(gate, "load_stage", lambda: ("implement", "01"))
+        msg = gate.check(".claude/hooks/no_such_gate_helper.py", "x = 1", at_commit=False)
+        assert msg is not None and "R3" in msg
+
+    def test_patch_script_gets_no_exemption(self, monkeypatch):
+        """豁免對象是閘門自身這個具體清單,不是「.claude 底下的 .py」這個籠統類別。"""
+        monkeypatch.setattr(gate, "load_stage", lambda: ("spec", None))
+        msg = gate.check(".claude/patches/apply_patches.py", "x = 1", at_commit=False)
+        assert msg is not None and "R2" in msg
+
+
+
+class TestLegacyNoRedlightList:
+    """既有 .py 的「紅燈紀錄」豁免 —— 豁免條件必須是【無法自我服務】的。
+
+    被否決的作法:紅燈紀錄只在「檔案還不存在」時要求。那個豁免條件是
+    **agent 隨時可以自己製造的狀態**:先建一個空檔,下一次寫入就成了「既有檔案」,
+    自動進入豁免集合。規則等於自帶開關。
+
+    採用的作法:豁免集合 = 一份以【機制上線 commit 的樹】為權威的凍結清單。
+    要進去得改那份清單,而清單裡每一項都必須在上線 commit 裡找得到 ——
+    這個條件偽造不了,除非改寫歷史。與票宣告式豁免同構:宣告在前,不得在被擋當下新增。
+
+    這份清單只豁免 R3 的**後半**(紅燈紀錄)。前半(對應測試檔須存在)照常適用。
+    """
+
+    def test_the_list_is_what_the_generator_would_produce(self):
+        """清單必須等於「上線 commit 的樹 ∩ 原始碼 .py」,扣掉已排水的。
+
+        原本寫的是 `len(...) > 50` —— 那斷言的是**宿主 repo 有上百個既有 .py**
+        這個事實,不是框架的性質。裝到新專案(五個框架檔)就紅,而那個紅
+        與新專案無關,只會教人「這套測試本來就紅」(票 07、F-031)。
+
+        換成這條之後,兩種環境都成立,而且比原本強:它抓得到「手加一筆」
+        (超出生成集合)與「清單根本沒生成」(缺一大片且沒有排水證據)。
+        """
+        go_live = gate.read_go_live()
+        out = subprocess.run(["git", "ls-tree", "-r", "--name-only", go_live],
+                             cwd=str(ROOT), capture_output=True)
+        tree = [l.strip() for l in out.stdout.decode("utf-8", "replace").splitlines()
+                if l.strip()]
+        expected = {p for p in tree if p.endswith(".py") and gate.is_source_path(p)}
+        entries = gate.legacy_no_redlight()
+
+        assert entries <= expected, (
+            "清單裡有生成集合以外的項目(只減不增):%s" % sorted(entries - expected))
+        undrained = [p for p in sorted(expected - entries)
+                     if gate.redlight_missing(pathlib.Path(p).stem) is not None]
+        assert not undrained, (
+            "這些在上線 commit 的樹裡卻不在清單上,也沒有合格紅燈紀錄可以解釋 ——"
+            "清單沒生成完整:%s" % undrained)
+
+    def test_every_entry_existed_in_the_go_live_commit(self):
+        """只減不增:新檔案永遠進不去,它不在那個 commit 的樹裡。
+
+        用 git 物件庫判定,不用時間戳 —— 時間可以改,樹不行(除非改寫歷史)。
+        """
+        missing = [p for p in sorted(gate.legacy_no_redlight())
+                   if subprocess.run(
+                       ["git", "cat-file", "-e", "%s:%s" % (gate.read_go_live(), p)],
+                       cwd=str(ROOT), capture_output=True).returncode != 0]
+        assert not missing, (
+            "這些項目不在機制上線 commit %s 的樹裡 —— 是後來手加的:\n%s"
+            % (gate.read_go_live(), "\n".join(missing)))
+
+    def test_every_entry_is_actually_subject_to_R3(self):
+        """清單只能裝「本來會被 R3 要求紅燈」的檔案,裝別的等於偷渡擴大豁免範圍。"""
+        stray = [p for p in sorted(gate.legacy_no_redlight())
+                 if not (p.endswith(".py") and gate.is_source_path(p))]
+        assert not stray, "這些不是 R3 的對象,不該出現在豁免清單:%s" % stray
+
+    def test_no_entry_still_holds_a_qualifying_redlight_record(self):
+        """**絆線,不是縮減機制。**
+
+        原本寫成「要排水,債務隨時間縮減」。審查指出那條路徑走不通:
+        合格紅燈要求紀錄當下實作不存在,而檔案還在就產不出那種紀錄 ——
+        清單因此接近永久。實務上只有「刪掉重寫」會觸發。
+
+        留著它是因為它仍會在**同名撞號**時響:別的模組的紅燈紀錄讓清單裡某一筆
+        看起來有了排水資格,那代表 basename 鍵撞到了,需要有人看一眼(ADR 0006)。
+        """
+        stale = [p for p in sorted(gate.legacy_no_redlight())
+                 if gate.redlight_missing(pathlib.Path(p).stem) is None]
+        assert not stale, (
+            "這些已經有合格紅燈紀錄,應從豁免清單移除(債務要隨時間縮減):%s" % stale)
+
+    def test_a_listed_file_is_exempt_from_the_redlight_requirement(self, fake_repo):
+        root, probe = fake_repo
+        (root / "legacy.txt").write_text("pkg/thing.py\n", encoding="utf-8")
+        assert gate.check(probe, "x = 2") is None
+
+    def test_an_existing_but_unlisted_file_still_needs_a_redlight_record(self, fake_repo):
+        """(a) 的洞:建一個空檔就進豁免集合。凍結清單擋住的正是這個。
+
+        樣本是測試自己造的:`pkg/thing.py` 存在、`tests/test_thing.py` 也存在 ——
+        舊判準(creating_new)會放行,新判準要求它在清單裡才放行。
+        """
+        root, probe = fake_repo
+        (root / "legacy.txt").write_text("# 空清單\n", encoding="utf-8")
+        out = gate.check(probe, "x = 2")
+        assert out and "R3/紅燈" in out, \
+            "既有但未列冊仍應要求紅燈紀錄,實得:%r" % out
+
+    def test_an_unreadable_list_exempts_nothing(self, fake_repo, monkeypatch):
+        """清單本身 fail-closed:讀不到是「沒有任何豁免」,不是「全部豁免」。"""
+        root, probe = fake_repo
+        monkeypatch.setattr(gate, "LEGACY_LIST", str(root / "gone.txt"))
+        out = gate.check(probe, "x = 2")
+        assert out and "R3/紅燈" in out, "豁免清單不存在時竟然放行(fail-open):%r" % out
+
+    def test_comments_and_blank_lines_are_not_treated_as_paths(
+            self, tmp_path, monkeypatch):
+        lst = tmp_path / "legacy.txt"
+        lst.write_text("# 產生指令:...\n\npkg/thing.py\n", encoding="utf-8")
+        monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
+        assert gate.legacy_no_redlight() == {"pkg/thing.py"}
+
+
+class TestTheListItselfIsGuarded:
+    """審查發現:凍結清單落在 .agents/(非原始碼),沒有任何規則守它 ——
+    被 R3 擋下時只要在清單末尾加一行就豁免到手,**完全不必碰 git 歷史**。
+    那讓「無法自我服務」這個選 (b) 的唯一理由當場失效,(b) 退化成 (a)。
+
+    「有一條測試會抓到」不算守住:沒有任何機制強制那條測試被跑。
+    判定必須跟 R4/R5 同構 —— 進權威層(pre-commit)。
+    """
+
+    def test_an_entry_absent_from_the_go_live_tree_is_a_violation(
+            self, tmp_path, monkeypatch):
+        lst = tmp_path / "legacy.txt"
+        # sha 取自本 repo 自己的清單,不寫死 —— 寫死的話換個 repo 就紅(票 07)
+        # 有效樣本取閘門自己:它必然在任何裝了本框架的 repo 的上線 commit 樹裡,
+        # 不像 macro_audit/classify.py 那樣只存在於宿主 repo。
+        lst.write_text("# go-live: %s\n.claude/hooks/gate.py\nnot/in/the/tree.py\n"
+                       % gate.read_go_live(), encoding="utf-8")
+        monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
+        v = gate.check_legacy_list()
+        assert len(v) == 1 and "not/in/the/tree.py" in v[0], v
+
+    def test_the_shipped_list_is_clean(self):
+        assert gate.check_legacy_list() == []
+
+    def test_the_rule_is_actually_invoked_at_the_authoritative_layer(self, monkeypatch):
+        """規則存在但沒人呼叫,就是 F-017 的形狀 —— 在這裡釘死。"""
+        monkeypatch.setattr(gate.subprocess, "check_output", lambda *a, **k: b"")
+        monkeypatch.setattr(gate, "check_skill_copies", lambda: [])
+        monkeypatch.setattr(gate, "check_third_axis_mount", lambda: [])
+        monkeypatch.setattr(gate, "check_to_spec_override", lambda: [])
+        monkeypatch.setattr(gate, "check_legacy_list", lambda: ["假違規"])
+        assert gate.mode_pre_commit() == 1, "pre-commit 沒有呼叫 check_legacy_list"
+
+    def test_an_unreadable_list_is_not_silently_clean(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(gate, "LEGACY_LIST", str(tmp_path / "gone.txt"))
+        assert gate.check_legacy_list() != [], "清單消失時竟然回報乾淨(fail-open)"
+
+
+class TestRedlightAcceptsTheSameTestLocationsAsR3:
+    """R3 前半接受三個測試檔位置,後半只認 tests/test_X.py ——
+    pkg/foo.py 配 pkg/test_foo.py 的佈局會被永久擋死,而且沒有合法解法。
+    同一條規則的兩半必須問同一個問題(維度 2 的形狀,只是發生在單一時點內)。
+    """
+
+    def test_a_sibling_test_file_can_satisfy_the_redlight_half(
+            self, tmp_path, monkeypatch):
+        log = tmp_path / "runs.jsonl"
+        log.write_text(json.dumps({"test_file": "pkg/test_foo.py", "result": "red",
+                                   "impl_exists": False, "impl_hash": None}) + "\n",
+                       encoding="utf-8")
+        monkeypatch.setattr(gate, "RUN_LOG", str(log))
+        assert gate.redlight_missing("foo", ("pkg/test_foo.py",)) is None
+
+
+class TestGoLiveShaTravelsWithTheList:
+    """go-live sha 必須跟它定義的清單住在一起,不能寫死在 gate.py 裡。
+
+    gate.py 是要被照抄到新專案的框架檔;清單與 sha 則綁死這個 repo。
+    sha 留在 gate.py 裡的話,照抄過去 `check_legacy_list()` 會拿一個
+    **在目標 repo 不存在的 commit** 去驗每一筆,安裝的強制驗證當場失敗 ——
+    而那是可攜化票 01 端到端跑一次才會撞到的東西。
+    """
+
+    def test_the_sha_is_read_from_the_list_file(self, tmp_path, monkeypatch):
+        lst = tmp_path / "legacy.txt"
+        lst.write_text("# go-live: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"
+                       "macro_audit/classify.py\n", encoding="utf-8")
+        monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
+        assert gate.read_go_live() == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+    def test_the_sha_line_is_not_mistaken_for_a_path(self, tmp_path, monkeypatch):
+        lst = tmp_path / "legacy.txt"
+        lst.write_text("# go-live: deadbeef\nmacro_audit/classify.py\n", encoding="utf-8")
+        monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
+        assert gate.legacy_no_redlight() == {"macro_audit/classify.py"}
+
+    def test_a_list_without_a_sha_is_a_violation_not_a_pass(self, tmp_path, monkeypatch):
+        """讀不到基準點就無從驗證清單 —— fail-closed,不是「沒基準所以都算過」。"""
+        lst = tmp_path / "legacy.txt"
+        lst.write_text("macro_audit/classify.py\n", encoding="utf-8")
+        monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
+        v = gate.check_legacy_list()
+        assert v and "go-live" in v[0], v
+
+    def test_the_shipped_list_carries_its_own_sha(self):
+        assert gate.read_go_live(), "正式清單沒有帶 go-live sha,照抄到新專案會壞"
+
+
+class TestRulesAreEnumeratedFromTheDefinition:
+    """驗收條件不得寫死條數。
+
+    「五條規則各擋一次」在寫下的當下已經是六條 —— 任何寫死數量的驗收條件,
+    下次加規則時不會有人記得改,而漏掉的那條不會有任何東西出聲。
+    清單必須從規則定義本身列舉。
+    """
+
+    def test_a_new_rule_code_is_discovered_without_touching_any_list(self, tmp_path):
+        """機制的真正斷言:餵一條**不存在的**規則進去,它必須被列出來。
+
+        拿現有的 R1–R6 當斷言的話,一份硬編碼清單也會綠 ——
+        那是套套邏輯的第三種形狀(斷言與現況重合,F-032)。
+        """
+        fake = tmp_path / "fake_gate.py"
+        fake.write_text('msg = "[R99] 這是一條新規則"\n'
+                        'other = "[R100/子類] 帶子類的也算"\n', encoding="utf-8")
+        codes = gate.rule_codes(str(fake))
+        assert codes == {"R99", "R100"}, codes
+
+    def test_the_shipped_gate_enumerates_all_of_its_rules(self):
+        codes = gate.rule_codes()
+        assert {"R1", "R2", "R3", "R4", "R5", "R6"} <= codes, codes
+
+    def test_every_rule_has_a_scenario_that_actually_triggers_it(self):
+        """新增一條規則而沒有對應實測 —— 這裡會紅。
+
+        這是「驗收條件會自己長大」的實作點:清單來自定義,對照表來自實測腳本,
+        兩者的差集必須為空。差集不為空代表有規則從來沒被證明擋得住。
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "verify_gates_under_test",
+            ROOT / ".claude" / "portable" / "verify_gates.py")
+        vg = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(vg)
+        missing = gate.rule_codes() - set(vg.SCENARIOS)
+        assert not missing, (
+            "這些規則沒有任何實測會觸發它們:%s —— "
+            "規則存在但沒被證明擋得住,跟沒有規則的差別只在讀碼的人心裡。"
+            % sorted(missing))
+
+
+class TestMirrorMissingIsAViolation:
+    """鏡像少了東西,是 R4 最典型的破法 —— 而它原本被靜默跳過。
+
+    原碼:`if not os.path.exists(src) or not os.path.exists(m): continue`
+    —— 兩邊有任何一邊缺檔就跳過。於是 R4 只驗得出「內容不同」,
+    驗不出「東西不見了」;而在硬連結/symlink 佈局下內容根本不可能不同(票 10)。
+    兩層疊起來,R4 在實務上是空的。
+
+    由票 02 的機器列舉實測抓到:六條規則裡只有 R4 沒擋下自己的情境。
+    """
+
+    @staticmethod
+    def _layout(tmp_path):
+        canon = tmp_path / "canon"
+        (canon / "tdd").mkdir(parents=True)
+        (canon / "tdd" / "SKILL.md").write_text("內容", encoding="utf-8")
+        mirror = tmp_path / "mirror"
+        (mirror / "tdd").mkdir(parents=True)
+        (mirror / "tdd" / "SKILL.md").write_text("內容", encoding="utf-8")
+        return canon, mirror
+
+    def test_identical_layout_is_clean(self, tmp_path):
+        canon, mirror = self._layout(tmp_path)
+        assert gate.skill_mirror_violations(str(canon), [str(mirror)]) == []
+
+    def test_a_missing_file_in_the_mirror_is_a_violation(self, tmp_path):
+        canon, mirror = self._layout(tmp_path)
+        (mirror / "tdd" / "SKILL.md").unlink()
+        v = gate.skill_mirror_violations(str(canon), [str(mirror)])
+        assert v and "R4" in v[0], "鏡像少了 SKILL.md 卻沒被判違規:%s" % v
+
+    def test_a_missing_directory_in_the_mirror_is_a_violation(self, tmp_path):
+        canon, mirror = self._layout(tmp_path)
+        shutil.rmtree(str(mirror / "tdd"))
+        v = gate.skill_mirror_violations(str(canon), [str(mirror)])
+        assert v and "R4" in v[0], "鏡像整個少了一個 skill 卻沒被判違規:%s" % v
+
+    def test_an_extra_skill_in_the_mirror_is_a_violation(self, tmp_path):
+        """反方向:鏡像有而正典沒有 —— 正典被刪、鏡像留著舊的,同樣是不一致。"""
+        canon, mirror = self._layout(tmp_path)
+        (mirror / "ghost").mkdir()
+        (mirror / "ghost" / "SKILL.md").write_text("孤兒", encoding="utf-8")
+        v = gate.skill_mirror_violations(str(canon), [str(mirror)])
+        assert v and "R4" in v[0], "鏡像多出一個正典沒有的 skill 卻沒被判違規:%s" % v
+
+    def test_a_mirror_that_does_not_exist_at_all_is_not_a_violation(self, tmp_path):
+        """鏡像整個沒建起來不是 drift —— 那是還沒裝,由安裝流程負責,不是 R4。"""
+        canon, _ = self._layout(tmp_path)
+        assert gate.skill_mirror_violations(
+            str(canon), [str(tmp_path / "never-created")]) == []
+
+
+class TestAuthoritativeLayerDetection:
+    """權威層沒裝時要有東西叫。
+
+    `.git/hooks/` 依 git 設計不進版控,clone 出來的副本上權威層不存在,
+    而且**完全靜默**:前哨照跑、測試照綠,gate.py 甚至還在訊息裡宣稱
+    「繞過前哨仍會在 commit 被擋」—— 那句話當場是假的。
+    F-009 的最終形式:規則存在,但整層沒被部署。
+
+    只驗未安裝路徑:已安裝路徑就是本機現況,測它等於測環境(接縫 S3)。
+
+    **偵測器自己適用維度 4**:它會不會被同一個「沒裝」略過?
+    會 —— clone 下來直接手動 commit 的人,前哨與測試都碰不到他。
+    這個缺口關不掉(git 刻意不讓 clone 自動執行任何東西),
+    所以實作不得假裝關掉了:涵蓋範圍必須寫在訊息裡,票 05 的 ADR 才有東西可引。
+    """
+
+    @staticmethod
+    def _repo(tmp_path, hook_body=None, hooks_dir=".git/hooks"):
+        (tmp_path / ".git").mkdir(exist_ok=True)
+        if hook_body is not None:
+            d = tmp_path / hooks_dir.replace("/", os.sep if False else "/")
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "pre-commit").write_text(hook_body, encoding="utf-8")
+        return tmp_path
+
+    def test_no_hook_at_all_is_not_installed(self, tmp_path):
+        installed, detail = gate.authoritative_layer(str(self._repo(tmp_path)))
+        assert installed is False
+        assert "pre-commit" in detail
+
+    def test_a_hook_that_does_not_call_the_gate_is_not_installed(self, tmp_path):
+        """別人的 hook 佔著位子 —— 檔案在,但它不呼叫閘門。
+
+        只驗「檔案存不存在」的話這種情況會判成已安裝,而那正是最容易發生的:
+        專案本來就有自己的 pre-commit。
+        """
+        root = self._repo(tmp_path, "#!/bin/sh\nnpm run lint\n")
+        installed, detail = gate.authoritative_layer(str(root))
+        assert installed is False
+        assert "gate.py" in detail
+
+    def test_a_hook_that_calls_the_gate_is_installed(self, tmp_path):
+        root = self._repo(tmp_path, '#!/bin/sh\nexec python "$(git rev-parse '
+                                    '--show-toplevel)/.claude/hooks/gate.py" --pre-commit\n')
+        installed, _ = gate.authoritative_layer(str(root))
+        assert installed is True
+
+    def test_the_notice_names_the_gap_it_cannot_close(self, tmp_path):
+        """偵測器涵蓋不到「clone 下來直接手動 commit 的人」。
+
+        訊息不得只說「沒裝,請裝」—— 那讀起來像裝了就全部關上了。
+        已知關不掉的部分要出現在訊息裡。
+        """
+        _, detail = gate.authoritative_layer(str(self._repo(tmp_path)))
+        notice = gate.not_installed_notice(detail)
+        assert "手動" in notice or "人工" in notice, notice
+        assert "關不掉" in notice, "沒說那個缺口關不掉,讀起來像裝了就全部關上了"
+
+    def test_the_sentinel_stops_claiming_commit_will_catch_it(self, tmp_path, monkeypatch):
+        """前哨的擋下訊息原本無條件宣稱「繞過前哨仍會在 commit 被擋」。
+
+        權威層不在時那是**假的**,而且是最糟的一種假:它讓人以為還有第二道。
+        """
+        monkeypatch.setattr(gate, "authoritative_layer", lambda root=None: (False, "沒裝"))
+        msg = gate.sentinel_footer()
+        assert "仍會在 commit 被擋" not in msg
+        assert "沒裝" in msg or "未安裝" in msg
+
+    def test_the_sentinel_still_says_so_when_it_is_true(self, monkeypatch):
+        monkeypatch.setattr(gate, "authoritative_layer", lambda root=None: (True, "裝好了"))
+        assert "commit" in gate.sentinel_footer()
