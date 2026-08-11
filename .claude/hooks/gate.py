@@ -833,6 +833,17 @@ def check(path, content, at_commit=False, trace=None):
                         "     要用到某段研究成果,把它移出 research/ 走六站,不是 import 它。"
                         % r)
 
+        # legacy 清單:早於閘門的既有碼,豁免 R3 **整條**(兩半)。
+        # 只豁免紅燈半的話,測試檔存在半照樣擋光既有碼 —— 一個 121 個檔案、
+        # 0 個測試的既有 repo 裝上閘門後,每個既有檔案一被編輯就被 R3 第一半擋死,
+        # 而 legacy 清單救不了(它豁免的不是那一半)。那讓清單在無測試的既有 repo
+        # 幾乎是廢的(docs/adr/0006 的語意更新)。
+        # 出口不變:補測試 → 從清單移除(R6 守著只減不增與刪檔排水);新檔案不受影響
+        # (它不在凍結清單裡,入場券是「在上線 commit 的樹裡」,偽造不了)。
+        # 放在 R8 之後:既有檔案被改成 import research 仍要被 R8 擋,legacy 不豁免那個。
+        if r in legacy_no_redlight():
+            return None
+
         base = os.path.splitext(os.path.basename(r))[0]
 
         # research/ 底下在 research 站豁免 R3(探索不必先寫測試)。

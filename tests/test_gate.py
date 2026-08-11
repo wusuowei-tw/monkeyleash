@@ -611,6 +611,27 @@ class TestLegacyNoRedlightList:
         (root / "legacy.txt").write_text("pkg/thing.py\n", encoding="utf-8")
         assert gate.check(probe, "x = 2") is None
 
+    def test_a_listed_file_is_exempt_from_R3_ENTIRELY_even_without_a_test(self, fake_repo):
+        """**語意更新(ADR 0006)**:legacy 清單豁免 R3 **整條**,不只紅燈半。
+
+        測試檔存在半也豁免 —— 否則 121 個檔案 0 個測試的既有 repo,
+        每個既有檔案一被編輯就被 R3 第一半擋死,而 legacy 清單救不了。
+        這裡刪掉測試檔:列冊的既有檔案**連測試都沒有**,仍該放行。
+        """
+        root, probe = fake_repo
+        (root / "tests" / "test_thing.py").unlink()   # 連測試都沒有
+        (root / "legacy.txt").write_text("pkg/thing.py\n", encoding="utf-8")
+        assert gate.check(probe, "x = 2") is None, \
+            "列冊的既有檔案(無測試)仍被 R3 第一半擋 —— 語意沒改到"
+
+    def test_a_new_file_without_a_test_is_still_blocked(self, fake_repo):
+        """新檔案不受影響:不在清單裡、沒有測試 → R3 照擋(整條豁免只給既有碼)。"""
+        root, probe = fake_repo
+        (root / "tests" / "test_thing.py").unlink()
+        (root / "legacy.txt").write_text("# 空清單\n", encoding="utf-8")
+        out = gate.check(probe, "x = 2")
+        assert out and "R3" in out, "新檔案無測試竟放行(整條豁免漏到新檔):%r" % out
+
     def test_an_existing_but_unlisted_file_still_needs_a_redlight_record(self, fake_repo):
         """(a) 的洞:建一個空檔就進豁免集合。凍結清單擋住的正是這個。
 
