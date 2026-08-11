@@ -137,6 +137,8 @@ NON_SOURCE_EXT = {
     ".jpeg": "資產,不被執行", ".gif": "資產,不被執行",
     ".svg": "資產,不被執行", ".ico": "資產,不被執行",
     ".pdf": "資產,不被執行", ".zip": "封存,不被執行", ".gz": "封存,不被執行",
+    ".xlsx": "試算表報表,資料,不被執行(儀表板產物,日常資料流)",
+    ".xls": "試算表報表,資料,不被執行", ".ods": "試算表報表,資料,不被執行",
     ".parquet": "資料,不被執行", ".duckdb": "資料庫檔,不被執行",
     ".db": "資料庫檔,不被執行", ".sqlite": "資料庫檔,不被執行",
     ".example": "樣板,不被執行也不被建置消費",
@@ -971,6 +973,25 @@ def rule_of(msg):
     return m.group(1) if m else "?"
 
 
+def tag_enforce(msg):
+    """正式(非影子)擋下時,在規則代號後插入 `[enforce]` 狀態標示。
+
+    **要求:從任何一次攔截訊息就能讀出「現在是影子還是正式」,不必查檔案。**
+    影子側的狀態軌跡在 shadow-log 的 `verdict=would-block`(證據落在檔案);
+    正式側沒有檔案軌跡 —— 若訊息不自帶標示,兩者在終端機上長得一樣,
+    「閘門到底在擋還是在放」只能靠翻 .dev/ 才知道。所以正式標示必須進訊息本身。
+    只在**影子有替代分支的那些出口**套用(那些點才有影子/正式之分);
+    fail-closed 與掛載點錯誤永遠擋、不受影子左右,不在此列。
+    規則代號可能是 `[R2]` 或 `[R2/commit]`,標示插在該括號之後。
+    """
+    if not msg:
+        return msg
+    m = re.search(r"\[R\d+[^\]]*\]", msg)
+    if m:
+        return msg[:m.end()] + "[enforce]" + msg[m.end():]
+    return "[enforce] " + msg
+
+
 def log_shadow(msg, at_commit):
     """把一筆『本該擋』寫進 shadow-log(證據)。append-only。"""
     rec = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -1018,7 +1039,7 @@ def mode_hook():
             _err(
                 "[六站閘門/前哨] %s\n"
                 "(R7 只活在前哨:commit 看得到檔案內容,看不到你用什麼工具寫的。\n"
-                " 繞過前哨就沒有第二道了 —— 見 docs/adr/0008)\n" % msg)
+                " 繞過前哨就沒有第二道了 —— 見 docs/adr/0008)\n" % tag_enforce(msg))
             return 2
         return 0
 
@@ -1039,7 +1060,7 @@ def mode_hook():
         if shadow_active():
             log_shadow(msg, at_commit=False)
             return 0
-        _err("[六站閘門/前哨] %s\n%s\n" % (msg, sentinel_footer()))
+        _err("[六站閘門/前哨] %s\n%s\n" % (tag_enforce(msg), sentinel_footer()))
         return 2
 
     # 沒被擋也要有機會發現權威層不在 —— 只在擋下時才講的話,
@@ -1306,7 +1327,7 @@ def mode_pre_commit():
             return 0
         _err("\n[六站閘門/pre-commit] commit 已擋下,%d 項違規:\n\n" % len(violations))
         for v in violations:
-            _err("  %s\n" % v)
+            _err("  %s\n" % tag_enforce(v))
         _err("\n如確定要略過:git commit --no-verify(會留下紀錄,請自行負責)\n")
         return 1
     return 0

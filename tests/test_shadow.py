@@ -109,6 +109,42 @@ class TestLogShadow:
         assert rec["verdict"] == "would-block"
 
 
+class TestEnforceTag:
+    """正式擋下的訊息要帶 `[enforce]` 狀態標示 —— 從任何一次攔截訊息就能讀出
+    『現在是影子還是正式』,不必查 .dev/。影子側靠 shadow-log 的 verdict,
+    正式側沒有檔案軌跡,所以標示必須進訊息本身。"""
+
+    def test_inserts_enforce_after_rule_code(self):
+        out = gate.tag_enforce("[R2] foo.py:idle 不可寫入原始碼")
+        assert out.startswith("[R2][enforce]")
+
+    def test_handles_rule_variant_with_slash(self):
+        # 規則代號可能是 [R2/commit];標示要插在整個括號之後,不是 [R2 之後。
+        out = gate.tag_enforce("[R2/commit] foo.py:前置站卻要提交原始碼")
+        assert out.startswith("[R2/commit][enforce]")
+
+    def test_rule_of_still_reads_code_after_tagging(self):
+        # 加標示不能打壞既有的規則抽取(shadow_review 靠它逐條算晉升)。
+        assert gate.rule_of(gate.tag_enforce("[R3] bar.py:找不到測試")) == "R3"
+
+    def test_no_rule_code_falls_back_to_prefix_tag(self):
+        assert gate.tag_enforce("something odd").startswith("[enforce] ")
+
+    def test_empty_message_untouched(self):
+        assert gate.tag_enforce("") == ""
+
+    def test_enforce_and_shadow_are_distinguishable(self, tmp_path, monkeypatch):
+        """同一條規則:正式擋 → 訊息含 [enforce];影子 → 日誌 verdict=would-block。
+        兩態必須能從輸出區分,否則『閘門在擋還是在放』只能翻檔案。"""
+        msg = "[R2] foo.py:idle 不可寫入原始碼"
+        enforced = gate.tag_enforce(msg)
+        monkeypatch.setattr(gate, "SHADOW_LOG", str(tmp_path / "log.jsonl"))
+        rec = gate.log_shadow(msg, at_commit=False)
+        assert "[enforce]" in enforced
+        assert "[enforce]" not in rec["message"]      # 影子側不冒充正式
+        assert rec["verdict"] == "would-block"          # 影子側自己的狀態標示
+
+
 class TestPerRulePromotion:
     """晉升 per-rule 不全局:每條規則自己 ≥10 筆已分類且假陽率 <5% 才轉正。
     全局比率會讓一條規則的真陽稀釋另一條的假陽。"""

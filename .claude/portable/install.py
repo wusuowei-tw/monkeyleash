@@ -165,7 +165,7 @@ def generate_legacy_list(target, go_live):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     with io.open(dst, "w", encoding="utf-8", newline="\n") as f:
         f.write("# go-live: %s\n" % go_live)
-        f.write("# 機制上線前就存在的 .py —— 只豁免 R3 的後半(紅燈紀錄),前半照常適用。\n")
+        f.write("# 機制上線前就存在的 .py —— 豁免 R3 **整條**(兩半:紅燈紀錄 + 測試檔存在)。\n")
         f.write("# 生成的,不是手寫的。只減不增(R6 驗每一筆都在上面那個 commit 的樹裡)。\n")
         for p in files:
             f.write(p + "\n")
@@ -253,9 +253,39 @@ def verify(target):
     return out
 
 
+def refuse_if_dirty(target):
+    """既有 repo 的 working tree 不乾淨 → 拒絕安裝並列出變更。
+
+    **「安裝器假設 repo 乾淨」是個沒寫出來的前置條件。**
+    install 隨後會 `git add -A && git commit` 生成 go-live —— 在乾淨 repo 無害,
+    在髒 repo 會把使用者未提交的工作**全部掃進**框架安裝 commit(難以復原,
+    而且 submodule / WIP 都會被吞)。同一行程式碼的破壞性取決於落地環境(friction)。
+    把這個前置條件從假設變成機器檢查:髒就停,讓機器擋而不是靠人擋。
+    """
+    if not os.path.isdir(os.path.join(target, ".git")):
+        return  # 全新 / 非 git 目錄:沒有既有工作可吞
+    # --ignore-submodules=dirty:submodule 的**內部**未提交變更(status 的 ` m`)
+    # 住在 submodule 自己的 index,父 repo 的 `git add -A` 碰不到、吞不走 ——
+    # 它不是這道檢查要防的危險。**指標移動**(` M`)才會被 add -A 提交進安裝 commit,
+    # 那個仍會被抓到。把「髒」定義成「add -A 吞得走的東西」,而不是 status 的預設髒。
+    rc, out = run(["git", "status", "--porcelain", "--ignore-submodules=dirty"],
+                  target, check=False)
+    changes = [l for l in out.splitlines() if l.strip()]
+    if changes:
+        listed = "\n".join("    " + c for c in changes[:20])
+        more = ("\n    …(還有 %d 個)" % (len(changes) - 20)) if len(changes) > 20 else ""
+        raise SystemExit(
+            "拒絕安裝:目標 repo 的 working tree 不乾淨(%d 個未提交變更)。\n"
+            "install 會 git add -A && commit 生成 go-live —— 那會把下面這些\n"
+            "未提交的工作全部掃進框架安裝 commit,難以復原。\n"
+            "先 commit 或 stash 這些變更,再重跑安裝:\n%s%s"
+            % (len(changes), listed, more))
+
+
 def main(target):
     target = os.path.abspath(target)
     os.makedirs(target, exist_ok=True)
+    refuse_if_dirty(target)
     if not os.path.isdir(os.path.join(target, ".git")):
         run(["git", "init", "-q"], target)
         run(["git", "config", "user.email", "gate@local"], target)
