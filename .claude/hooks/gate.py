@@ -14,6 +14,7 @@
 """
 
 import ast
+import datetime
 import io
 import json
 import os
@@ -894,6 +895,95 @@ def check(path, content, at_commit=False, trace=None):
     return None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 影子模式(rollout 工具):裝進既有 repo 時先「不擋、只寫日誌」,量測誤擋率再晉升。
+#
+# 安全閥 SHADOW_MAX 住在 G1 保護的 ~/.claude/shadow-clamp.txt,gate.py **唯讀** ——
+# agent 改不了它(乙案,ADR 0012)。控制項不可竄改,證據(shadow-log)可(F-057)。
+#
+# **fail-closed 方向**:安全閥缺席 / 讀不到 / 壞掉 → 影子**不生效**、照常擋。
+# 往「閘門開著」倒,不往「影子開著」倒 —— 安全閥的故障不能變成閘門的關閉。
+# ─────────────────────────────────────────────────────────────────────────────
+
+SHADOW_CLAMP = os.path.join(os.path.expanduser("~"), ".claude", "shadow-clamp.txt")
+SHADOW_STATE = os.path.join(ROOT, ".dev", "shadow.json")        # 本 repo 開沒開影子
+SHADOW_LOG = os.path.join(ROOT, ".dev", "shadow-log.jsonl")     # 證據(可竄改,F-057)
+
+
+def _parse_iso(s):
+    try:
+        return datetime.date.fromisoformat(s.strip())
+    except Exception:
+        return None
+
+
+def read_shadow_clamp():
+    """讀安全閥。回傳 date 或 None。**任何問題一律回 None(影子不生效)。**
+
+    用 `utf-8-sig`:PowerShell 的 Set-Content -Encoding utf8 寫的是帶 BOM 的 UTF-8,
+    clamp 檔第一個位元組是 \\ufeff。用 utf-8 讀、哪天 BOM 黏上鍵名 → 解析失敗 →
+    fail-closed → 影子永遠開不了,而所有訊息都說「照常擋,正常」——
+    fail-closed 系統的故障是隱形的,輸入端的坑要在進門前排掉(使用者指出)。
+
+    格式:恰好一行 `SHADOW_MAX=<ISO 日期>`;# 註解、空行忽略。多行或壞掉 → None。
+    """
+    try:
+        lines = io.open(SHADOW_CLAMP, encoding="utf-8-sig").read().splitlines()
+    except Exception:
+        return None
+    vals = []
+    for line in lines:
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("SHADOW_MAX="):
+            vals.append(_parse_iso(line.split("=", 1)[1]))
+        else:
+            return None          # 不認得的行 -> 壞掉 -> fail-closed
+    if len(vals) != 1 or vals[0] is None:
+        return None
+    return vals[0]
+
+
+def shadow_active(today=None):
+    """影子現在生效嗎。回傳 bool。
+
+    生效條件全部要成立:安全閥合法、本 repo 宣告了影子、今天 <= min(兩個到期日)。
+    任一缺席 -> False -> 照常擋。
+    """
+    today = today or datetime.date.today()
+    clamp = read_shadow_clamp()
+    if clamp is None:
+        return False
+    try:
+        st = json.load(io.open(SHADOW_STATE, encoding="utf-8"))
+        until = _parse_iso(st.get("until", ""))
+    except Exception:
+        return False
+    if until is None:
+        return False
+    return today <= min(clamp, until)
+
+
+def rule_of(msg):
+    """從擋下訊息取規則代號(R\\d+)。取不到回 '?'。"""
+    m = re.search(r"\[(R\d+)", msg or "")
+    return m.group(1) if m else "?"
+
+
+def log_shadow(msg, at_commit):
+    """把一筆『本該擋』寫進 shadow-log(證據)。append-only。"""
+    rec = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+           "rule": rule_of(msg), "at_commit": at_commit,
+           "verdict": "would-block",
+           "message": (msg or "").splitlines()[0] if msg else ""}
+    try:
+        _append_jsonl(SHADOW_LOG, rec)
+    except Exception:
+        pass
+    return rec
+
+
 def mode_hook():
     """agent 前哨:讀 PreToolUse JSON。
 
@@ -919,6 +1009,9 @@ def mode_hook():
     if isinstance(command, str) and command.strip():
         msg = bash_write_violation(command)
         if msg:
+            if shadow_active():
+                log_shadow(msg, at_commit=False)
+                return 0
             # **不套 sentinel_footer()**:那句話說「繞過前哨仍會在 commit 被擋」,
             # 對 R7 是假的 —— commit 看不到工具呼叫,只看得到 staged 檔案。
             # 宣稱有第二道而實際沒有,比沒有第二道更危險(ADR 0008)。
@@ -943,6 +1036,9 @@ def mode_hook():
 
     msg = check(path, content)
     if msg:
+        if shadow_active():
+            log_shadow(msg, at_commit=False)
+            return 0
         _err("[六站閘門/前哨] %s\n%s\n" % (msg, sentinel_footer()))
         return 2
 
@@ -1201,6 +1297,13 @@ def mode_pre_commit():
     violations += check_to_spec_override()
     violations += check_legacy_list()
     if violations:
+        if shadow_active():
+            # 影子:不擋,逐筆寫進 shadow-log(每筆一個規則,per-rule 晉升要逐條算)。
+            for v in violations:
+                log_shadow(v, at_commit=True)
+            _err("[六站閘門/影子] %d 項本該擋下,已寫進 %s(影子模式:不擋)。\n"
+                 % (len(violations), rel(SHADOW_LOG)))
+            return 0
         _err("\n[六站閘門/pre-commit] commit 已擋下,%d 項違規:\n\n" % len(violations))
         for v in violations:
             _err("  %s\n" % v)
