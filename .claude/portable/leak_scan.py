@@ -37,11 +37,13 @@ def _err(msg):
         sys.stderr.write(msg)
 
 # 不掃這些:二進位、鏡像、快取、pattern 檔自己(它本來就含要偵測的字樣)。
+# .gitignore 同一類:它的工作就是列出秘密檔的形狀(*.pfx 之類),
+# 內容掃它必然假陽性 —— 安裝器產的秘密檔區塊實測就被自己擋過(F-062)。
 SKIP_SUFFIX = (".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".gz",
                ".pyc", ".otf", ".ttf", ".woff", ".woff2", ".parquet", ".duckdb")
 SKIP_PARTS = (".git/", ".claude/skills/", "skills/", "__pycache__/",
               ".pytest_cache/", ".cache/", ".dev/")
-SELF = {"leak-patterns.txt", "leak_scan.py"}
+SELF = {"leak-patterns.txt", "leak_scan.py", ".gitignore"}
 
 
 def _read_patterns(path, required):

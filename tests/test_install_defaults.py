@@ -22,11 +22,15 @@ def install_mod():
 
 
 def test_hook_wires_leak_scan_before_gate(install_mod):
-    """pre-commit 樣板必須先跑 leak_scan 再跑 gate —— 秘密進歷史前的唯一便宜時點。"""
-    hook = install_mod.HOOK
-    assert "leak_scan.py" in hook, "HOOK 沒接 leak_scan:裝出的 repo 對洩漏 commit 全放行"
-    assert "gate.py" in hook
-    assert hook.index("leak_scan.py") < hook.index("gate.py"), "洩漏偵測要在權威判定之前"
+    """pre-commit 樣板必須先跑 leak_scan 再跑 gate —— 秘密進歷史前的唯一便宜時點。
+    只比指令行,不比原始字串 index:註解裡提到腳本名不算接線。"""
+    cmds = [l for l in install_mod.HOOK.splitlines()
+            if l.strip() and not l.lstrip().startswith("#")]
+    leak = [i for i, l in enumerate(cmds) if "leak_scan.py" in l]
+    gate = [i for i, l in enumerate(cmds) if "gate.py" in l and "--pre-commit" in l]
+    assert leak, "HOOK 沒有執行 leak_scan 的指令行:裝出的 repo 對洩漏 commit 全放行"
+    assert gate, "HOOK 沒有執行 gate.py --pre-commit 的指令行"
+    assert leak[0] < gate[0], "洩漏偵測要在權威判定之前"
 
 
 def test_hook_fails_closed_on_leak(install_mod):

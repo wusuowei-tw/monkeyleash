@@ -130,3 +130,12 @@ def test_the_shipped_tree_is_clean():
         for fn in fns:
             files.append(os.path.join(dp, fn))
     assert ls.scan(files) == 0, "發布來源含洩漏 —— 見上方輸出"
+
+
+def test_gitignore_content_is_not_scanned(tmp_path):
+    """.gitignore 的工作是列出秘密檔形狀 —— 內容掃它必然假陽性(F-062 實測:
+    安裝器產的秘密檔區塊被掃描器擋下)。與 pattern 檔跳過自己同一個理由。
+    副檔名組裝而不寫死,同本檔其他測試。"""
+    g = tmp_path / ".gitignore"
+    g.write_text("*." + "pfx" + "\n*." + "pem" + "\n", encoding="utf-8")
+    assert ls.scan([str(g)]) == 0
