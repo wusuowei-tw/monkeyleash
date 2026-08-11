@@ -32,8 +32,23 @@ import claude_md  # noqa: E402
 import manifest  # noqa: E402  (同目錄,安裝器與標記表是一組的)
 
 HOOK = ("#!/bin/sh\n"
-        "# 六站閘門 — 權威判定。邏輯不在這裡,只呼叫共用的 gate.py。\n"
-        'exec python "$(git rev-parse --show-toplevel)/.claude/hooks/gate.py" --pre-commit\n')
+        "# 六站閘門 — 洩漏偵測 + 權威判定。邏輯不在這裡,只呼叫共用腳本。\n"
+        "# 洩漏偵測在前:秘密一旦進了歷史,擋下 commit 是唯一便宜的時點。\n"
+        "# 之前只接 gate.py —— 裝出來的 repo 對真 key 的 commit 完全放行(負控實測),\n"
+        "# 而 F-055 說的就是洩漏 hook 不會自己跟過去。接線是安裝器的責任。\n"
+        'root="$(git rev-parse --show-toplevel)"\n'
+        'python "$root/.claude/portable/leak_scan.py" --staged || exit 1\n'
+        'exec python "$root/.claude/hooks/gate.py" --pre-commit\n')
+
+# 安裝出的 repo 的 .gitignore 必帶兩組:框架垃圾 + 秘密檔。
+# 秘密那組是預設值問題:框架裝好的新專案,第一個放進去的秘密(.env)
+# 原本不被任何規則守著 —— 不是使用者疏忽,是安裝器沒給預設。
+GITIGNORE_FRAMEWORK = ("__pycache__/", ".cache/", "/.claude/skills/", "/skills/")
+# 憑證副檔名用組裝而不寫死 —— 寫死的話 leak_scan 的通用 pattern 會擋住
+# 本檔自己的 commit(防禦清單長得像洩漏)。與 tests/test_leak_scan.py 同一手法。
+GITIGNORE_SECRETS = ((".env", ".env.*", "!.env.example", "credentials.json",
+                      "service-account*.json")
+                     + tuple("*." + ext for ext in ("pem", "pfx", "p12", "key")))
 
 
 def run(args, cwd, check=True):
@@ -122,13 +137,19 @@ def generate_state(target):
     # 而 git 對 ignored 檔案依定義是靜默的。後果不是少幾個檔案:
     # 正典沒進版控 → 下一次從這個 repo 安裝時帶不走 skills → R5 在目標 repo 失敗。
     # 淨室測試抓到的,而且要「安裝出來的 repo 再安裝一次」才會現形。
-    add = [p for p in ("__pycache__/", ".cache/", "/.claude/skills/", "/skills/")
-           if p not in have]
+    add = [p for p in GITIGNORE_FRAMEWORK if p not in have]
     if add:
         with io.open(ignore, "a", encoding="utf-8", newline="\n") as f:
             f.write(("\n" if have and not have.endswith("\n") else "")
                     + "# 六站閘門會產生的東西(鏡像目錄由 skills 工具重建)\n"
                     + "\n".join(add) + "\n")
+        have = io.open(ignore, encoding="utf-8").read()
+    secrets = [p for p in GITIGNORE_SECRETS if p not in have]
+    if secrets:
+        with io.open(ignore, "a", encoding="utf-8", newline="\n") as f:
+            f.write(("\n" if have and not have.endswith("\n") else "")
+                    + "# 秘密與憑證 —— 永不進版控(安裝器預設,見 F-062)\n"
+                    + "\n".join(secrets) + "\n")
 
 
 def install_hook(target):

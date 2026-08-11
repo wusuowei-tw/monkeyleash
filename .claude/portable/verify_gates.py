@@ -178,6 +178,23 @@ def main(workdir):
     print("=== 真實安裝(不是簡化版)===")
     install.main(target)
 
+    # 安裝器預設值(F-062):這兩項少任何一個,新 repo 的第一個秘密就沒人守。
+    # 負控實測過:HOOK 沒接 leak_scan 時,含真 key 的 commit 直接成功。
+    hook_body = io.open(os.path.join(target, ".git", "hooks", "pre-commit"),
+                        encoding="utf-8").read()
+    ignore_body = io.open(os.path.join(target, ".gitignore"), encoding="utf-8").read()
+    defaults_bad = []
+    if "leak_scan.py" not in hook_body:
+        defaults_bad.append("pre-commit 沒接 leak_scan(洩漏 commit 會直接成功)")
+    if ".env" not in ignore_body.splitlines():
+        defaults_bad.append(".gitignore 沒守 .env")
+    if defaults_bad:
+        raise SystemExit("\n=== 安裝器預設值缺陷 ===\n"
+                         + "".join("    %s\n" % b for b in defaults_bad))
+    print("\n=== 安裝器預設值(F-062)===")
+    print("    pre-commit 已接 leak_scan ✓")
+    print("    .gitignore 已守 .env 家族與金鑰檔 ✓")
+
     gate = load_target_gate(target)
     codes = sorted(gate.rule_codes(), key=lambda c: int(c[1:]))
     print("\n=== 規則清單(從 gate.py 的定義列舉,不是對照表)===")
