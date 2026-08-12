@@ -117,18 +117,23 @@ def test_the_shipped_tree_is_clean():
     """**發布來源自己必須乾淨** —— 持續的機器保證,不是一次性人工斷言。
 
     掃描用兩份 pattern 的聯集(含本機個人清單),所以它也會抓到
-    「不小心把個人資料寫進版控檔」。"""
+    「不小心把個人資料寫進版控檔」。
+
+    **掃的是 git 認得的檔案,不是檔案系統走訪。** 這條原本用 os.walk,於是
+    把 `.env` 也掃了進來 —— 而 `.env` 是**刻意**不進版控的,裡面本來就該有金鑰。
+    諷刺的是這個坑是框架自己挖的:安裝器會把 `.env` 寫進目標 repo 的 .gitignore,
+    所以每個裝了框架的專案遲早都會踩到這條紅測試,而且**它會把真金鑰印進測試輸出**
+    (log、CI 畫面、對話紀錄都算外流面)。
+    「發布來源乾淨」問的是**會被推出去的東西**乾不乾淨,那個集合的定義是 git 的,
+    不是檔案系統的。用 ls-files 就同時解決假陽性與印金鑰兩件事。
+    """
     import os
-    files = []
-    for dp, dns, fns in os.walk(str(ROOT)):
-        rel = os.path.relpath(dp, str(ROOT)).replace("\\", "/")
-        if any(x in ("/" + rel + "/") for x in
-               ("/.git/", "/skills/", "/__pycache__/", "/.pytest_cache/",
-                "/.dev/", "/.cache/", "/.scratch/")) or rel.startswith(".claude/skills"):
-            dns[:] = []
-            continue
-        for fn in fns:
-            files.append(os.path.join(dp, fn))
+    import subprocess
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=str(ROOT), capture_output=True)
+    rels = [p for p in out.stdout.decode("utf-8", "replace").split("\0") if p.strip()]
+    files = [os.path.join(str(ROOT), p.replace("/", os.sep)) for p in rels]
+    files = [f for f in files if os.path.isfile(f)]
+    assert files, "git ls-files 回空 —— 掃不到東西的綠燈不算綠燈"
     assert ls.scan(files) == 0, "發布來源含洩漏 —— 見上方輸出"
 
 
