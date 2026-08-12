@@ -1302,17 +1302,32 @@ def check_third_axis_mount():
     return []
 
 
+def staged_paths(cwd=None):
+    """staged 檔案清單。**用 -z(NUL 分隔),不是 --name-only + splitlines。**
+
+    git 對非 ASCII 檔名預設回傳 C-quoted 路徑(`"docs/\\345\\217\\260….md"`),
+    而下游 `replace("\\\\", "/")`(為正規化 os.path.relpath 的 Windows 反斜線而存在,
+    本身正當)會把 escape 的反斜線一起換掉 —— 路徑徹底壞掉,`top` 不再是 docs,
+    中文檔名的文件被判成原始碼、被 R2 誤擋。這是 F-042 那個編碼假設的第三次現身。
+
+    不用 `core.quotePath=false`:它只關掉引號,檔名含換行或引號時仍有歧義。
+    NUL 是唯一不可能出現在路徑裡的位元組 —— 結構上無歧義,不是剛好夠用。
+    """
+    out = subprocess.check_output(
+        ["git", "diff", "--cached", "-z", "--name-only", "--diff-filter=ACM"],
+        cwd=cwd or ROOT).decode("utf-8", "replace")
+    return [p for p in out.split("\0") if p.strip()]
+
+
 def mode_pre_commit():
     """權威判定:掃 staged 檔案 + R4 副本一致性 + R5 第三軸掛載點。"""
     try:
-        out = subprocess.check_output(
-            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
-            cwd=ROOT).decode("utf-8", "replace")
+        staged = staged_paths()
     except Exception as e:
         _err("[六站閘門] 無法取得 staged 檔案:%s\n" % e)
         return 1
-    violations = [m for m in (check(f.strip(), None, at_commit=True)
-                              for f in out.splitlines() if f.strip()) if m]
+    violations = [m for m in (check(f, None, at_commit=True)
+                              for f in staged) if m]
     violations += check_skill_copies()
     violations += check_third_axis_mount()
     violations += check_to_spec_override()

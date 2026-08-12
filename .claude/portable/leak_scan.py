@@ -88,11 +88,18 @@ def load_patterns():
     return out
 
 
-def staged_files():
-    out = subprocess.run(["git", "diff", "--cached", "--name-only",
-                          "--diff-filter=ACM"], capture_output=True)
-    return [l.strip() for l in out.stdout.decode("utf-8", "replace").splitlines()
-            if l.strip()]
+def staged_files(cwd=None):
+    """staged 檔案清單。**-z(NUL 分隔),不是 --name-only + splitlines。**
+
+    這裡的失效方向是 **fail-open,比閘門那邊更危險**:git 對非 ASCII 檔名回傳
+    C-quoted 路徑,壞掉的路徑 `io.open` 開不起來,而 scan() 對開不動的檔案
+    `except: continue`(「讀不動的不是洩漏」)—— 於是**中文檔名檔案裡的金鑰
+    完全不會被掃到,而且一聲不吭**。同一個編碼假設,在閘門是誤擋(看得見),
+    在這裡是靜默放行。見 F-042 家族。
+    """
+    out = subprocess.run(["git", "diff", "--cached", "-z", "--name-only",
+                          "--diff-filter=ACM"], capture_output=True, cwd=cwd)
+    return [p for p in out.stdout.decode("utf-8", "replace").split("\0") if p.strip()]
 
 
 def should_skip(rel):

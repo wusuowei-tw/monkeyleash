@@ -59,6 +59,25 @@ def run(args, cwd, check=True):
     return p.returncode, out
 
 
+def git_paths(args, cwd, check=True):
+    """凡是**拿 git 輸出當路徑**的地方都走這裡。`-z`(NUL 分隔),不是 splitlines。
+
+    git 對非 ASCII 檔名預設回傳 C-quoted 路徑(`"\\345\\217\\260….py"`)。
+    在這支的後果是**靜默漏帶**:中文檔名的檔案列不出來 → 不被複製到目標 repo,
+    而少帶正是 F-030/F-031 那一族最難發現的失效。ls-tree 那邊還會把壞路徑寫進
+    legacy 清單,R6 事後拿它去 `git cat-file` 查證必然失敗。
+
+    不用 `core.quotePath=false`:它只解引號,檔名含換行或引號仍有歧義。
+    另外走 stdout,不併 stderr —— 併起來的話警告訊息會被當成路徑。
+    """
+    p = subprocess.run(["git"] + args + ["-z"], cwd=cwd, capture_output=True)
+    if check and p.returncode != 0:
+        raise SystemExit("指令失敗(%s):git %s\n%s"
+                         % (p.returncode, " ".join(args),
+                            (p.stdout + p.stderr).decode("utf-8", "replace")))
+    return [x for x in p.stdout.decode("utf-8", "replace").split("\0") if x.strip()]
+
+
 def source_files():
     """來源檔案集合 —— **含未追蹤但沒被 ignore 的檔案**。
 
@@ -70,10 +89,8 @@ def source_files():
     往「帶」的方向倒:多帶進來的暫存檔是吵鬧的(看得見、刪得掉),
     漏帶是靜默的。未追蹤的會在安裝輸出裡單獨列出來。
     """
-    _, tracked = run(["git", "ls-files"], SRC_ROOT)
-    _, untracked = run(["git", "ls-files", "--others", "--exclude-standard"], SRC_ROOT)
-    t = [l.strip() for l in tracked.splitlines() if l.strip()]
-    u = [l.strip() for l in untracked.splitlines() if l.strip()]
+    t = git_paths(["ls-files"], SRC_ROOT)
+    u = git_paths(["ls-files", "--others", "--exclude-standard"], SRC_ROOT)
     return t + u, u
 
 
@@ -179,9 +196,8 @@ def generate_legacy_list(target, go_live):
     g = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(g)
 
-    _, out = run(["git", "ls-tree", "-r", "--name-only", go_live], target)
-    files = sorted(p.strip() for p in out.splitlines()
-                   if p.strip().endswith(".py") and g.is_source_path(p.strip()))
+    files = sorted(p for p in git_paths(["ls-tree", "-r", "--name-only", go_live], target)
+                   if p.endswith(".py") and g.is_source_path(p))
     dst = os.path.join(target, ".agents", "legacy-no-redlight.txt")
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     with io.open(dst, "w", encoding="utf-8", newline="\n") as f:
@@ -289,9 +305,10 @@ def refuse_if_dirty(target):
     # 住在 submodule 自己的 index,父 repo 的 `git add -A` 碰不到、吞不走 ——
     # 它不是這道檢查要防的危險。**指標移動**(` M`)才會被 add -A 提交進安裝 commit,
     # 那個仍會被抓到。把「髒」定義成「add -A 吞得走的東西」,而不是 status 的預設髒。
-    rc, out = run(["git", "status", "--porcelain", "--ignore-submodules=dirty"],
-                  target, check=False)
-    changes = [l for l in out.splitlines() if l.strip()]
+    # 這裡的路徑是**要給人看的**(「你的工作區有這些未提交變更」)——
+    # C-quoted 的話使用者認不出自己的檔案,所以同樣走 -z。
+    changes = git_paths(["status", "--porcelain", "--ignore-submodules=dirty"],
+                        target, check=False)
     if changes:
         listed = "\n".join("    " + c for c in changes[:20])
         more = ("\n    …(還有 %d 個)" % (len(changes) - 20)) if len(changes) > 20 else ""
