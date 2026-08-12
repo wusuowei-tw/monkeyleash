@@ -90,6 +90,14 @@ Local markdown under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
 
 Single-context — `CONTEXT.md` + `docs/adr/` at repo root. See `docs/agents/domain.md`.
 
+### Friction log 發號
+
+`docs/agents/friction-log.md` 在 portable-manifest 裡標 `copy`,**整份跟著裝進每個 repo**,
+所以編號不是本地的事。`F-` 屬於框架(agent-gates 發號);
+**每個安裝的 repo 用自己的三字母前綴,且前綴進號碼本身**(`TSA-001`,不是「F-001(影音)」)。
+專案發現的框架層事實回 agent-gates 開票,落地才給 `F-` 號;專案那則不刪不改號,原地加一行指過去。
+判準:**這一則搬到另一個專案還成立嗎?** 成立就是框架層。完整規則寫在 friction-log.md 開頭。
+
 <!-- FRAMEWORK:END -->
 
 ## 這個專案自己的規範
