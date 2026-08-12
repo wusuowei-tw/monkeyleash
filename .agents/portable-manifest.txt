@@ -44,6 +44,7 @@ tests/test_install_defaults.py  copy
 tests/test_cjk_git_paths.py     copy
 tests/test_research_stage.py    copy
 tests/test_shadow.py            copy
+tests/test_edit_result.py       copy
 
 # ── 專案自己的測試,住在同一個目錄但不是框架的 ──────────────
 # 「沒被提到」不是合法狀態:tests/ 是框架與專案混居的地方,

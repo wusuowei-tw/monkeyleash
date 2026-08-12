@@ -343,6 +343,21 @@ def _under_research(rel_path):
     return r == RESEARCH_ROOT or r.startswith(RESEARCH_ROOT + "/")
 
 
+def parses_as_python(content):
+    """這段內容是不是合法 Python。
+
+    `imports_research()` 對解析失敗一律回 True(fail-closed),那個方向是對的,
+    但**它讓兩件事說不出差別**:「你 import 了 research」與「我看不懂這段碼」。
+    擋下時把後者說成前者,會讓人去檢查一個根本沒問題的地方 ——
+    誤導的訊息比沒有訊息貴,那是票 07 列的第一項代價。
+    """
+    try:
+        ast.parse(content or "")
+        return True
+    except Exception:
+        return False
+
+
 def imports_research(content):
     """這段 Python 有沒有 import research/(頂層套件 `research`)。
 
@@ -367,6 +382,78 @@ def imports_research(content):
             if node.module and node.module.split(".")[0] == RESEARCH_ROOT:
                 return True
     return False
+
+
+# 解碼順序。`latin-1` 永不失敗,所以最後一關保證有東西可判。
+# 要找的東西(import 敘述、code 圍籬)全是 ASCII,亂碼不影響它們的可見性。
+TEXT_ENCODINGS = ("utf-8-sig", "utf-8", "cp950", "cp1252", "latin-1")
+
+
+def read_text_or_none(abs_path):
+    """讀成文字:**先拿位元組,再依序解碼**。
+
+    只用 `io.open(..., encoding="utf-8")` 的話,zh-TW Windows 上以 cp950 存的 .py
+    會丟 UnicodeDecodeError,而上游把它接成「跳過」或「空字串」——
+    **整支檔案對規則隱形**。cp950 是那台機器的預設編碼,不是假想情況。
+    F-042 / F-064 是同一個編碼假設的前幾次現身,這是同一家族。
+
+    連位元組都拿不到(權限、路徑不存在)回傳 None —— 那是「**這個問題沒有答案**」,
+    呼叫端必須 fail-closed。不得翻譯成「檔案是空的」:空檔案什麼都沒 import,
+    而那正好是最鬆的答案。
+    """
+    try:
+        with io.open(abs_path, "rb") as f:
+            raw = f.read()
+    except Exception:
+        return None
+    for enc in TEXT_ENCODINGS:
+        try:
+            return raw.decode(enc)
+        except Exception:
+            continue
+    return raw.decode("latin-1", "replace")
+
+
+def content_after_edit(path, tool_input):
+    """這次寫入之後,檔案**會有的內容**。算不出來時回傳 None。
+
+    規則問的是「檔案最終內容」的性質,而 Edit 的 `new_string` 是**片段**。
+    片段的語法完整性跟那個問題沒有任何關係:函式內部每一行都是縮排的,
+    所以「改一個函式裡的一行」在 .py 上幾乎必然 IndentationError,
+    再乘上 `imports_research()` 的 fail-closed,得到的判定是
+    **「片段不是合法 Python」⇒「它 import 了 research」**(票 07 / F-046)。
+
+    **fail-closed 只保證失敗的方向,不保證問對了問題。**
+
+    回傳 None 的語意是「算不出結果」,不是「沒事」:呼叫端退回磁碟現況,
+    而磁碟也讀不到時各規則自己 fail-closed。**不得退回片段** ——
+    退回片段就是把這個缺陷原地保留。
+
+    套不上(anchor 不符或不唯一)也回 None:那次編輯本來就會失敗,
+    不是規則該處理的情況。
+    """
+    ti = tool_input or {}
+    if ti.get("content") is not None:
+        return ti["content"]                      # Write:本來就是整檔內容
+
+    edits = ti.get("edits")                       # MultiEdit
+    if not isinstance(edits, list):
+        if ti.get("new_string") is None:
+            return None                           # 不是編輯形狀(NotebookEdit 等)
+        edits = [ti]                              # Edit
+
+    body = read_text_or_none(os.path.abspath(path))
+    if body is None:
+        return None
+    for e in edits:
+        if not isinstance(e, dict):
+            return None
+        old, new = e.get("old_string"), e.get("new_string")
+        if old is None or new is None or old == "" or old not in body:
+            return None
+        body = (body.replace(old, new) if e.get("replace_all")
+                else body.replace(old, new, 1))
+    return body
 
 
 RULE_CODE_RE = re.compile(r"\[(R\d+)(?:/[^\]]*)?\]")
@@ -909,13 +996,26 @@ def check(path, content, at_commit=False, trace=None):
         # 反方向放行(research 可 import 生產資料層),所以只擋生產這一側。
         # **邊界比對**:研究套件是 `research`,不是 `research_utils`(F-051,在 imports_research 裡)。
         if not _under_research(r):
+            # 判定對象是**套用編輯後的整檔結果**,不是編輯片段(票 07 / F-046)。
+            # content 為 None = 呼叫端算不出結果(提交時、或 anchor 套不上),
+            # 退回磁碟現況;連磁碟都讀不到才是真的沒有答案。
             body = content
             if body is None:
-                try:
-                    with io.open(os.path.join(ROOT, r), encoding="utf-8") as f:
-                        body = f.read()
-                except Exception:
-                    body = ""
+                body = read_text_or_none(os.path.join(ROOT, r))
+            if body is None:
+                # 原本這裡是 `body = ""` —— 讀不到被翻譯成「檔案是空的」,
+                # 而空檔案什麼都沒 import,正好是最鬆的答案:一個靜默的 fail-open。
+                # 訊息要說「讀不到」,不是「你 import 了 research」:
+                # 誤導的訊息比沒有訊息貴,它讓人去檢查一個根本沒問題的地方。
+                return ("[R8/fail-closed] %s:讀不到內容,無法判定它有沒有 import research/。\n"
+                        "     閘門壞掉時只能更嚴,不能更鬆。" % r)
+            if not parses_as_python(body):
+                # 擋,但說對原因。fail-closed 的方向不變,變的是它承認自己
+                # 看不懂 —— 而不是把「看不懂」講成「你 import 了 research」。
+                return ("[R8/fail-closed] %s:編輯後的結果不是合法 Python,"
+                        "無法判定它有沒有 import research/。\n"
+                        "     先把語法修好 —— 這不是 import 違規,是這一份結果本身解不開。\n"
+                        "     (看不懂這段碼時閘門只能更嚴,不能更鬆。)" % r)
             if imports_research(body):
                 return ("[R8] %s:生產程式碼不得 import research/。\n"
                         "     research/ 是探索區,可以被丟棄;生產碼依賴它,"
@@ -1102,6 +1202,9 @@ def mode_hook():
     `Invalid \\escape`,而原本的 `except: return 0` 把它吞成放行 ——
     **整個前哨層因此靜默失效,一整輪沒有擋過任何東西**,而測試全綠、
     pre-commit 照常擋,沒有任何跡象。見 F-042。
+
+    餵給規則的是 `content_after_edit()` 算出的**編輯後整檔結果**,不是
+    `new_string` 那個片段(票 07 / F-046)。那一行是那張票的根因所在。
     """
     try:
         payload = parse_hook_payload(sys.stdin.buffer.read())
@@ -1135,7 +1238,9 @@ def mode_hook():
     path = ti.get("file_path") or ti.get("notebook_path") or ""
     if not path:
         return 0
-    content = ti.get("content") or ti.get("new_string") or ""
+    # 片段 -> 編輯後的整檔結果。算不出來時是 None(不是空字串):
+    # 各規則自己退回磁碟現況,讀不到才 fail-closed。
+    content = content_after_edit(path, ti)
     mounts = mount_violations_cached()
     if mounts:
         _err("[六站閘門/前哨] skill 掛載點有問題,先修好再繼續 —— "
