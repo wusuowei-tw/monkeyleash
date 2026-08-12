@@ -46,6 +46,7 @@ tests/test_research_stage.py    copy
 tests/test_shadow.py            copy
 tests/test_edit_result.py       copy
 tests/test_scanner.py           copy
+tests/test_sync.py              copy
 
 # ── 專案自己的測試,住在同一個目錄但不是框架的 ──────────────
 # 「沒被提到」不是合法狀態:tests/ 是框架與專案混居的地方,
@@ -75,6 +76,11 @@ docs/agents/domain.md           copy
 # 摩擦記錄是這個 repo 走出來的歷史,但那些判準是這套東西**最可攜的資產**,
 # 比任何一支程式碼都通用 —— 整份帶走,不再每次安裝都問。
 docs/agents/friction-log.md     copy
+# 專案自己的摩擦記錄(TSA- / TSI- 等前綴)。**永不覆蓋** ——
+# 它與上面那份的邊界就是發號規則畫的那條:框架層 vs 專案層。
+# 標 generate 不標 skip:skip 的語意是「框架不管它」,而這個檔是框架**要求**
+# 每個 repo 都有的(發號規則靠它成立),只是內容各自產生。
+docs/agents/friction-local.md   generate
 # 只帶 FRAMEWORK 界線之間那一段;專案段留在原地(票 04)
 CLAUDE.md                       generate
 
