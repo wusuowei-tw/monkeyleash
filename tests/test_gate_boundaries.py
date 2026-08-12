@@ -71,8 +71,11 @@ class TestExceptionsNeverAllow:
         monkeypatch.setattr(gate, "EXEMPTION_LOG", str(tmp_path / "nodir" / "x.jsonl"))
         monkeypatch.setattr(gate, "_append_jsonl",
                             lambda *a, **k: (_ for _ in ()).throw(IOError("磁碟滿了")))
+        # 記帳搬到強制點(票 08),fail-closed 跟著搬 —— 保證不變,寫的人變了。
+        used = [{"file": "macro_audit/x.py", "module": "x", "ticket": "01",
+                 "declared_in": "票 01", "reason": "ticket-declared"}]
         with pytest.raises(SystemExit):
-            gate.log_exemption("macro_audit/x.py", "x", "01", "票 01")
+            gate.log_exemptions(used, verdict=None, at_commit=False, content="x")
 
 
 class TestCrossProcessEncodingIsExplicit:

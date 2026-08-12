@@ -837,24 +837,87 @@ def is_bare_package_marker(rel_path, content):
     return not re.search(r"^\s*(def|class)\s", body or "", re.M)
 
 
-def log_exemption(path, base, ticket, declared_in, reason="ticket-declared"):
-    """每授予一次豁免記一筆,供 code-review 的 Standards 軸逐筆比對。
+def note_exemption(bucket, path, base, ticket, declared_in,
+                   reason="ticket-declared"):
+    """把「這次判定用到了一個豁免」收進 bucket。**不寫檔。**
 
-    reason 區分豁免來源:票宣告的接縫、或閘門自我修改。
-    搶修是罕見事件 —— 某一輪出現十筆 gate-self-modification 就不是搶修,
-    是把後門當日常通道,審查時看得出來。
+    原本這裡直接寫帳本,而且寫在**判決之前** —— 於是:
+      - 被後面的規則擋下的嘗試照樣記一筆(沒有人走成後門,帳上卻有一筆)
+      - `check()` 有了副作用,**跑一次測試就多一筆**(測試自己會呼叫它)
+    兩者相乘,19 筆 gate-self 對上零位元組變更。帳本從頭到尾沒觀測過任何寫入。
+
+    判定與記錄因此分家:`check()` 只回答問題,強制點(mode_hook /
+    mode_pre_commit)才知道「真的有人要寫」,記錄屬於那裡(票 08)。
     """
-    rec = {"file": path, "module": base, "ticket": ticket,
-           "declared_in": declared_in, "reason": reason}
+    if bucket is None:
+        return
+    bucket.append({"file": path, "module": base, "ticket": ticket,
+                   "declared_in": declared_in, "reason": reason})
+
+
+def _hash_bytes(raw):
+    """與紅燈紀錄同一個雜湊定義(行尾正規化),兩邊才比得起來(F-058)。"""
     try:
-        _append_jsonl(EXEMPTION_LOG, rec)
-    except Exception as e:
-        # 豁免的正當性建立在「它被記錄下來、可被逐筆對帳」上面(ADR 0004/0006)。
-        # 記錄失敗還照給,等於給了一個**沒有人看得到**的豁免 —— 原本這裡是 pass。
-        _err("[閘門/fail-closed] 豁免無法記帳(%s):%s\n"
-             "     記不下來的豁免不算數 —— 對帳看不到它,等於它沒發生過。\n"
-             % (rel(EXEMPTION_LOG), e))
-        raise SystemExit(2)
+        return _redlight().content_hash(raw)
+    except Exception:
+        return None
+
+
+def exemption_record(ex, verdict, at_commit, stage, ticket, content, tool=None):
+    """組出一筆帳本紀錄。
+
+    `outcome` 把「豁免真的被用掉」與「嘗試被後面的規則擋下」分開 ——
+    ADR 0004 的「某一輪十筆就是把後門當日常通道」只該算 granted。
+
+    `changes_bytes` 回答本票的原始問題:19 筆豁免對上零位元組變更。
+    **None 不是 False** —— None 是「不知道有沒有變」(提交時、或 anchor 套不上,
+    算不出結果內容),False 是「確定沒變」。把前者寫成後者,對帳會看到
+    一串「都沒改」而其實是「都不知道」。
+    """
+    before = None
+    try:
+        with io.open(os.path.join(ROOT, ex["file"]), "rb") as f:
+            before = _hash_bytes(f.read())
+    except Exception:
+        before = None
+    after = _hash_bytes(content.encode("utf-8")) if content is not None else None
+    changed = None if (before is None or after is None) else (before != after)
+    return {
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "file": ex["file"], "module": ex["module"],
+        "ticket": ex.get("ticket") if ex.get("ticket") is not None else ticket,
+        "stage": stage,
+        "declared_in": ex["declared_in"], "reason": ex["reason"],
+        # gate.py 不看 tool_name(判定一律 fail-closed,不退回白名單),
+        # 擋住 Read 的只有 settings.json 的 matcher。帳本要說得出來源,
+        # 否則「有幾筆」又是一個解釋不了的數字。
+        "tool": tool,
+        "outcome": "blocked" if verdict else "granted",
+        "blocked_by": rule_of(verdict) if verdict else None,
+        "at_commit": bool(at_commit),
+        "content_hash": before, "result_hash": after, "changes_bytes": changed,
+    }
+
+
+def log_exemptions(bucket, verdict, at_commit, content=None, tool=None):
+    """在**強制點**把這一次判定用到的豁免寫進帳本。
+
+    記錄失敗仍然 fail-closed:豁免的正當性建立在「它被記錄下來、可被逐筆對帳」
+    上面(ADR 0004/0006)。記不下來還照給,等於給了一個沒有人看得到的豁免。
+    """
+    if not bucket:
+        return
+    stage, ticket = load_stage()
+    for ex in bucket:
+        rec = exemption_record(ex, verdict, at_commit, stage, ticket, content,
+                               tool=tool)
+        try:
+            _append_jsonl(EXEMPTION_LOG, rec)
+        except Exception as e:
+            _err("[閘門/fail-closed] 豁免無法記帳(%s):%s\n"
+                 "     記不下來的豁免不算數 —— 對帳看不到它,等於它沒發生過。\n"
+                 % (rel(EXEMPTION_LOG), e))
+            raise SystemExit(2)
 
 
 def _append_jsonl(path, rec):
@@ -873,8 +936,12 @@ def self_modification_note(rel_path):
             "     R3 沒有例外:寫測試不需要先解鎖任何東西。" % rel_path)
 
 
-def check(path, content, at_commit=False, trace=None):
+def check(path, content, at_commit=False, trace=None, exemptions=None):
     """回傳 None(放行)或違規訊息字串。content 為 None 時從磁碟讀。
+
+    **本函式是純判定,不寫任何檔案。** 用到的豁免收進 `exemptions`(呼叫端傳入的
+    串列),由強制點決定要不要記帳 —— 因為只有強制點知道「真的有人要寫」。
+    原本這裡直接寫帳本,於是跑一次測試就多一筆豁免紀錄(票 08)。
 
     at_commit 改變 R2 的問題,不是放寬它:
       寫入時問「現在這一站可以寫原始碼嗎」—— 防的是還沒談清楚就開始寫。
@@ -924,9 +991,9 @@ def check(path, content, at_commit=False, trace=None):
     # 閘門自身:R2 豁免(死鎖),R3 不豁免。放行但**不靜默** —— 記帳並回報。
     gate_self = r in GATE_SELF
     if gate_self:
-        log_exemption(r, os.path.splitext(os.path.basename(r))[0], ticket,
-                      "docs/adr/0004-gate-self-modification.md",
-                      reason="gate-self-modification")
+        note_exemption(exemptions, r, os.path.splitext(os.path.basename(r))[0],
+                       ticket, "docs/adr/0004-gate-self-modification.md",
+                       reason="gate-self-modification")
         _err(self_modification_note(r) + "\n")
 
     # R2-fc fail-closed:定義讀不到就不知道哪站可寫 —— 一律不放行
@@ -1051,7 +1118,7 @@ def check(path, content, at_commit=False, trace=None):
 
         untested, declared_in = ticket_untested_modules(load_feature(), ticket)
         if base in untested:
-            log_exemption(r, base, ticket, declared_in)
+            note_exemption(exemptions, r, base, ticket, declared_in)
             return None
 
         # commit 時 ticket_id 已清空,改查紀錄並回頭驗票(見 logged_exemption_backed)
@@ -1249,13 +1316,21 @@ def mode_hook():
             _err("  %s\n" % m)
         return 2
 
-    msg = check(path, content)
+    # 豁免在**判決之後**才記帳,而且只在強制點記 —— 這裡才有「真的有人要寫」
+    # 這個事件。content 一併帶進去,讓「這次寫入到底改不改得動位元組」
+    # 在帳本裡看得見(票 08)。
+    used = []
+    msg = check(path, content, exemptions=used)
     if msg:
         if shadow_active():
             log_shadow(msg, at_commit=False)
             return 0
+        log_exemptions(used, verdict=msg, at_commit=False, content=content,
+                       tool=payload.get("tool_name"))
         _err("[六站閘門/前哨] %s\n%s\n" % (tag_enforce(msg), sentinel_footer()))
         return 2
+    log_exemptions(used, verdict=None, at_commit=False, content=content,
+                   tool=payload.get("tool_name"))
 
     # 沒被擋也要有機會發現權威層不在 —— 只在擋下時才講的話,
     # 一個從來沒違規的 repo 永遠學不到它只有一道防線。每 session 至多一次。
@@ -1520,8 +1595,16 @@ def mode_pre_commit():
     except Exception as e:
         _err("[六站閘門] 無法取得 staged 檔案:%s\n" % e)
         return 1
-    violations = [m for m in (check(f, None, at_commit=True)
-                              for f in staged) if m]
+    violations = []
+    for f in staged:
+        used = []
+        m = check(f, None, at_commit=True, exemptions=used)
+        # 提交時 content 未知(檔案已經寫進去了),所以 changes_bytes 記 None ——
+        # 「不知道有沒有變」不得寫成「確定沒變」。
+        log_exemptions(used, verdict=m, at_commit=True, content=None,
+                       tool="pre-commit")
+        if m:
+            violations.append(m)
     violations += check_skill_copies()
     violations += check_third_axis_mount()
     violations += check_to_spec_override()

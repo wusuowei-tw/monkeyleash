@@ -511,10 +511,19 @@ class TestGateSelfModification:
         assert "自我修改豁免" in note and "已記錄" in note
 
     def test_gate_exemption_is_recorded_with_its_reason(self, monkeypatch, tmp_path):
+        """**記帳搬到強制點了,所以這條也跟著搬**(票 08)。
+
+        原本是 `check()` 自己寫,那個副作用讓每一次評估(含跑測試)都記一筆。
+        現在 `check()` 把用到的豁免交出來,由強制點寫 —— 保證沒有變弱,
+        變的是誰負責寫,以及什麼時候寫。
+        """
         log = tmp_path / "gate-exemptions.jsonl"
         monkeypatch.setattr(gate, "EXEMPTION_LOG", str(log))
         monkeypatch.setattr(gate, "load_stage", lambda: ("spec", None))
-        gate.check(".claude/hooks/gate.py", "x = 1", at_commit=False)
+        used = []
+        gate.check(".claude/hooks/gate.py", "x = 1", at_commit=False,
+                   exemptions=used)
+        gate.log_exemptions(used, verdict=None, at_commit=False, content="x = 1")
         records = [json.loads(l) for l in io.open(log, encoding="utf-8") if l.strip()]
         assert any(r.get("reason") == "gate-self-modification" for r in records), records
 
@@ -1047,3 +1056,151 @@ class TestRedlightJudgesTheImplementationNotTheFile:
         src = io.open(ROOT / ".claude" / "hooks" / "gate.py", encoding="utf-8").read()
         assert "impl_rel=" in src and "ticket=ticket" in src, \
             "check() 沒有把實作路徑與當前票傳進 redlight_missing"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 08 —— 豁免帳本記的是「評估事件」,不是「寫入」
+#
+# 實測:19 筆 gate-self-modification,而 gate.py 對 HEAD 位元組不變。
+# 原因是 log_exemption() 在 check() 裡、在**判決之前**被呼叫:被擋下的嘗試
+# 照樣記,而且 **check() 有副作用** —— 跑一次測試就多一筆(測試自己會呼叫它)。
+#
+# ADR 0004 的「某一輪十筆就是把後門當日常通道」假設一筆 = 一次修改。
+# 一筆其實 = 一次評估,所以那個門檻的刻度是錯的。
+# 先補欄位而不動記錄單位,只會讓刻度錯誤的訊號看起來更嚴謹(F-031)。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestTheLedgerRecordsWritesNotEvaluations:
+
+    @pytest.fixture()
+    def led(self, tmp_path, monkeypatch):
+        p = tmp_path / "gate-exemptions.jsonl"
+        monkeypatch.setattr(gate, "EXEMPTION_LOG", str(p))
+        return p
+
+    def _rows(self, led):
+        if not led.exists():
+            return []
+        return [json.loads(l) for l in io.open(str(led), encoding="utf-8")
+                if l.strip()]
+
+    def test_check_is_pure_and_writes_nothing(self, led, monkeypatch):
+        """**判定函式不得有副作用。**
+
+        那個副作用正是「跑一次測試就多一筆」的來源:測試呼叫 check() 是為了
+        問它的判斷,不是因為有人要寫檔案。記錄屬於強制點,不屬於判定。
+        """
+        monkeypatch.setattr(gate, "load_stage", lambda: ("implement", "08"))
+        gate.check(".claude/hooks/gate.py", "x = 1")
+        gate.check(".claude/hooks/gate.py", "x = 2", at_commit=True)
+        assert self._rows(led) == [], \
+            "check() 仍在寫帳本 —— 每一次評估都被記成一次豁免"
+
+    def test_a_granted_exemption_is_recorded_at_the_enforcement_point(
+            self, led, monkeypatch):
+        ex = []
+        monkeypatch.setattr(gate, "load_stage", lambda: ("implement", "08"))
+        gate.check(".claude/hooks/gate.py", "x = 1", exemptions=ex)
+        assert ex, "check() 沒有把用到的豁免交出來"
+        assert ex[0]["reason"] == "gate-self-modification"
+
+    def test_a_blocked_attempt_is_not_counted_as_granted(self, led, monkeypatch):
+        """豁免只有在寫入**真的成立**時才算被用掉。
+
+        被 R3 擋下的嘗試不該與「後門真的被走了一次」記成同一件事 ——
+        ADR 0004 的門檻只算 granted。
+        """
+        rec = gate.exemption_record(
+            {"file": ".claude/hooks/gate.py", "module": "gate",
+             "reason": "gate-self-modification", "declared_in": "x"},
+            verdict="[R3/紅燈] 擋", at_commit=False, stage="implement",
+            ticket="08", content=None)
+        assert rec["outcome"] == "blocked"
+        assert rec["blocked_by"] == "R3"
+
+    def test_the_record_carries_the_new_fields(self, led, monkeypatch, tmp_path):
+        rec = gate.exemption_record(
+            {"file": ".claude/hooks/gate.py", "module": "gate",
+             "reason": "gate-self-modification", "declared_in": "x"},
+            verdict=None, at_commit=False, stage="implement", ticket="08",
+            content=None)
+        for f in ("ts", "stage", "ticket", "outcome", "content_hash",
+                  "result_hash", "changes_bytes", "at_commit"):
+            assert f in rec, "帳本缺欄位 %s:%r" % (f, rec)
+        assert rec["outcome"] == "granted"
+        assert rec["stage"] == "implement" and rec["ticket"] == "08"
+
+    def test_a_write_that_changes_nothing_says_so(self, led, monkeypatch, tmp_path):
+        """**這是本票的原始問題。** 19 筆豁免、零位元組變更,
+        帳本必須自己講得出這件事,而不是靠事後推論。"""
+        monkeypatch.setattr(gate, "ROOT", str(tmp_path))
+        io.open(tmp_path / "same.py", "w", encoding="utf-8",
+                newline="\n").write("x = 1\n")
+        rec = gate.exemption_record(
+            {"file": "same.py", "module": "same", "reason": "gate-self-modification",
+             "declared_in": "x"},
+            verdict=None, at_commit=False, stage="implement", ticket="08",
+            content="x = 1\n")
+        assert rec["changes_bytes"] is False, rec
+        assert rec["content_hash"] == rec["result_hash"]
+
+    def test_a_write_that_does_change_bytes_says_so(self, led, monkeypatch, tmp_path):
+        """反控:真的改了東西要記成 True —— 少了它,「一律 False」也會讓上面那條過。"""
+        monkeypatch.setattr(gate, "ROOT", str(tmp_path))
+        io.open(tmp_path / "diff.py", "w", encoding="utf-8",
+                newline="\n").write("x = 1\n")
+        rec = gate.exemption_record(
+            {"file": "diff.py", "module": "diff", "reason": "gate-self-modification",
+             "declared_in": "x"},
+            verdict=None, at_commit=False, stage="implement", ticket="08",
+            content="x = 2\n")
+        assert rec["changes_bytes"] is True, rec
+        assert rec["content_hash"] != rec["result_hash"]
+
+    def test_the_record_says_which_tool_it_came_from(self, led, monkeypatch,
+                                                     tmp_path):
+        """**gate.py 不看 tool_name** —— 擋住 Read 的只有 settings.json 的 matcher。
+
+        判定保持 fail-closed(有東西進來就判)是對的,不改成白名單。
+        但帳本必須說得出這一筆是什麼工具來的,否則「有幾筆」又變成一個
+        解釋不了的數字 —— 那正是這張票要修的東西。
+        """
+        rec = gate.exemption_record(
+            {"file": ".claude/hooks/gate.py", "module": "gate",
+             "reason": "gate-self-modification", "declared_in": "x"},
+            verdict=None, at_commit=False, stage="implement", ticket="08",
+            content=None, tool="Read")
+        assert rec["tool"] == "Read"
+
+    def test_an_unknown_result_is_none_not_false(self, led, monkeypatch, tmp_path):
+        """算不出結果(提交時、anchor 套不上)-> None,**不是 False**。
+
+        None 是「不知道有沒有變」,False 是「確定沒變」。把前者寫成後者,
+        對帳時會看到一串「都沒改」而其實是「都不知道」。
+        """
+        monkeypatch.setattr(gate, "ROOT", str(tmp_path))
+        io.open(tmp_path / "u.py", "w", encoding="utf-8", newline="\n").write("x\n")
+        rec = gate.exemption_record(
+            {"file": "u.py", "module": "u", "reason": "gate-self-modification",
+             "declared_in": "x"},
+            verdict=None, at_commit=True, stage="review", ticket=None, content=None)
+        assert rec["changes_bytes"] is None and rec["result_hash"] is None, rec
+
+
+class TestTheSuiteItselfLeavesNoTrace:
+    """整輪測試跑完,正式帳本不得增加任何一筆 —— 這是票 08 的驗收條件之一。
+
+    這條測的是**本測試檔以外**的東西:任何一條測試若在正式帳本留下痕跡,
+    帳本就再也回答不了「有幾次真的走了後門」。
+    """
+
+    def test_the_real_ledger_is_untouched_by_calling_check(self, monkeypatch):
+        real = pathlib.Path(gate.EXEMPTION_LOG)
+        before = len(io.open(str(real), encoding="utf-8").readlines()) \
+            if real.exists() else 0
+        monkeypatch.setattr(gate, "load_stage", lambda: ("implement", "08"))
+        for _ in range(3):
+            gate.check(".claude/hooks/gate.py", "x = 1")
+        after = len(io.open(str(real), encoding="utf-8").readlines()) \
+            if real.exists() else 0
+        assert after == before, "呼叫 check() 污染了正式帳本(%d -> %d)" % (before, after)
