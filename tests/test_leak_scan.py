@@ -113,6 +113,106 @@ def test_the_scanner_skips_itself(tmp_path):
     assert ls.should_skip(".claude/portable/leak_scan.py")
 
 
+def _write_named(tmp_path, name, text, mode="w"):
+    p = tmp_path / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if mode == "wb":
+        io.open(p, "wb").write(text)
+    else:
+        io.open(p, "w", encoding="utf-8", newline="\n").write(text)
+    return str(p)
+
+
+_TOK = "ghp" + "_" + ("A" * 24)          # 組裝:本檔自己也被掃
+
+
+class TestUnreadableIsNotAPass:
+    """讀不動的檔案原本是 `except: continue` —— **靜默跳過**。
+
+    下游的 cookie_ban 早就修成 fail-closed,上游沒修,於是同一件事兩個方向。
+    合一時若以 leak_scan 為基準,會把這個洞一起合進去。
+    """
+
+    def test_a_cp950_file_with_a_secret_is_caught(self, tmp_path):
+        """正控:cp950 的 .ps1 裡寫著金鑰要抓得到。
+
+        zh-TW Windows 上 cp950 是預設編碼,這不是假想情況。
+        """
+        raw = (u"# 設定檔\ntoken=" + _TOK + u"\n").encode("cp950")
+        assert ls.scan([_write_named(tmp_path, "conf.ps1", raw, "wb")]) == 1
+
+    def test_a_clean_cp950_file_passes(self, tmp_path):
+        """**反控**:cp950 的乾淨檔案要放行。
+
+        少了這條,「讀不動一律當違規」的實作也會讓正控過 ——
+        正控單獨看分不出「抓到了」與「全部都擋」。
+        """
+        raw = u"# 註解:這裡沒有秘密\nvalue = 1\n".encode("cp950")
+        assert ls.scan([_write_named(tmp_path, "clean.ps1", raw, "wb")]) == 0
+
+    def test_a_file_whose_bytes_cannot_be_read_is_a_violation(self, tmp_path):
+        """連位元組都拿不到 -> 計為違規。已知的二進位在 SKIP_SUFFIX 就濾掉了,
+        走到這裡還讀不動的是意料外的東西。"""
+        assert ls.scan([str(tmp_path / "does_not_exist.py")]) == 1
+
+
+class TestSelfSkipIsPathBoundNotNameBound:
+    """**基本檔名版本的豁免鑰匙握在要規避的人手上。**"""
+
+    def test_the_real_scanner_is_still_skipped(self, tmp_path):
+        assert ls.scan([str(ROOT / ".claude" / "portable" / "leak_scan.py")]) == 0
+        assert ls.scan([str(ROOT / ".claude" / "portable" / "leak-patterns.txt")]) == 0
+
+    def test_a_same_named_file_elsewhere_is_scanned(self, tmp_path):
+        """任何目錄放一個叫 leak_scan.py 的檔就免掃 —— 那個檔名誰都造得出來。"""
+        p = _write_named(tmp_path, "elsewhere/leak_scan.py", "token=" + _TOK)
+        assert ls.scan([p]) == 1, "同名檔在別的目錄被當成掃描器自己"
+
+
+class TestProseIsNotExemptForSecrets:
+    """**這條釘的是合一時不得引入的東西。**
+
+    下游 cookie_ban 有 DOC_SUFFIX(.md/.rst/.adoc 不掃),理由是
+    「規則的說明本身必須寫得出來」—— 那對**選項名**成立,對**金鑰**完全不成立:
+    .md 裡的金鑰就是外洩的金鑰。合一若把散文豁免套到全部 pattern,
+    就是把差異壓平,而壓平的方向是 fail-open。
+    """
+
+    def test_a_secret_in_markdown_is_caught(self, tmp_path):
+        assert ls.scan([_write_named(tmp_path, "notes.md", "token=" + _TOK)]) == 1
+
+    def test_a_secret_in_rst_is_caught(self, tmp_path):
+        assert ls.scan([_write_named(tmp_path, "notes.rst", "token=" + _TOK)]) == 1
+
+
+class TestStagedListingFailureIsNotAnEmptyList:
+
+    def test_a_failed_git_call_returns_mechanism_error(self, monkeypatch):
+        """git 壞掉 -> stdout 空 -> 清單空 -> main 回 0 -> pre-commit 放行。
+        「沒有檔案要掃」與「問不到有哪些檔案」是兩件事。"""
+        class _R:
+            returncode = 128
+            stdout = b""
+            stderr = b"fatal: not a git repository"
+        monkeypatch.setattr(ls.subprocess, "run", lambda *a, **k: _R())
+        assert ls.main(["--staged"]) == 2
+
+
+class TestPatternFileEncoding:
+
+    def test_a_bom_does_not_corrupt_the_first_pattern(self, tmp_path, monkeypatch):
+        """PowerShell 的 `Set-Content -Encoding utf8` 寫的是**帶 BOM** 的 UTF-8。
+
+        用 `utf-8` 讀的話 BOM 會變成第一條 pattern 的一部分,那條 pattern
+        從此永遠不命中 —— 少了一條規則,而且完全無聲。
+        """
+        pf = tmp_path / "pat.txt"
+        io.open(pf, "wb").write(u"﻿\\bghp_[A-Za-z0-9]{20,}\n".encode("utf-8"))
+        monkeypatch.setattr(ls, "PATTERNS_FILE", str(pf))
+        monkeypatch.setattr(ls, "LOCAL_PATTERNS_FILE", str(tmp_path / "none.txt"))
+        assert ls.scan([_write_named(tmp_path, "a.py", "token=" + _TOK)]) == 1
+
+
 def test_the_shipped_tree_is_clean():
     """**發布來源自己必須乾淨** —— 持續的機器保證,不是一次性人工斷言。
 

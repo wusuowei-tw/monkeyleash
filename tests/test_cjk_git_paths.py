@@ -66,10 +66,16 @@ class TestPathsComeBackIntact:
         assert not any('\\' in p or p.startswith('"') for p in got), \
             "路徑帶引號或反斜線 escape:%r" % got
 
-    def test_leak_scan_reads_staged_paths_intact(self, repo):
-        ls = _load("ls_cjk", ".claude/portable/leak_scan.py")
-        got = ls.staged_files(cwd=str(repo))
-        assert CJK_DOC in got, "leak_scan 取到的 staged 路徑不是原樣:%r" % got
+    def test_the_scanner_skeleton_reads_staged_paths_intact(self, repo):
+        """staged 清單的取得已合一到 scanner.py —— 兩支掃描器共用同一份。
+
+        **保證搬家了,守它的測試就得跟著搬**,否則它變成沒有人守的保證:
+        原本這條測 leak_scan.staged_files,那個函式現在不存在了,
+        而「測試找不到函式」與「保證不見了」在紅燈上長得一樣。
+        """
+        sc = _load("sc_cjk", ".claude/portable/scanner.py")
+        got = sc.staged_paths(cwd=str(repo))
+        assert CJK_DOC in got, "掃描器骨架取到的 staged 路徑不是原樣:%r" % got
         assert not any('\\' in p or p.startswith('"') for p in got)
 
     def test_install_lists_cjk_files(self, repo):
@@ -110,7 +116,7 @@ class TestNulSeparatedNotQuotePath:
 
     @pytest.mark.parametrize("rel", [
         ".claude/hooks/gate.py",
-        ".claude/portable/leak_scan.py",
+        ".claude/portable/scanner.py",     # leak_scan 的 staged 取得已合一到這裡
         ".claude/portable/install.py",
     ])
     def test_uses_nul_separator(self, rel):
