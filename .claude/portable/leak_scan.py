@@ -45,6 +45,13 @@ SKIP_PARTS = (".git/", ".claude/skills/", "skills/", "__pycache__/",
               ".pytest_cache/", ".cache/", ".dev/")
 SELF = {"leak-patterns.txt", "leak_scan.py", ".gitignore"}
 
+# 憑證/金鑰檔:**依副檔名擋,不掃內容**。二進位憑證(.pfx/.p12/.jks/...)
+# utf-8 解不開會被 scan() 的 except 跳過 —— 掃內容永遠漏,而檔名是確定的。
+# F-062 紅燈:260-byte 二進位 .pfx 進 staged,leak_scan 舊版回 0(沒擋)。
+# 這一層與 leak-patterns.txt 的 \.pfx\b 內容 pattern 互補:那條擋文字檔裡
+# 提到憑證路徑,這條擋憑證檔本身進 commit。
+CERT_EXT = (".pfx", ".p12", ".pem", ".key", ".jks", ".keystore")
+
 
 def _read_patterns(path, required):
     """讀一個 pattern 檔。required 且讀不到 → 丟例外(fail-closed);
@@ -108,6 +115,10 @@ def scan(paths):
     hits = []
     for p in paths:
         if should_skip(p):
+            continue
+        if p.replace("\\", "/").lower().endswith(CERT_EXT):
+            # 副檔名即判定,不讀內容 —— 二進位憑證檔的唯一可靠攔截點。
+            hits.append((p, 0, "<憑證副檔名>", "(依副檔名擋,不掃內容)"))
             continue
         try:
             text = io.open(p, encoding="utf-8").read()

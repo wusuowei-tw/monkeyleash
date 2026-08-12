@@ -139,3 +139,28 @@ def test_gitignore_content_is_not_scanned(tmp_path):
     g = tmp_path / ".gitignore"
     g.write_text("*." + "pfx" + "\n*." + "pem" + "\n", encoding="utf-8")
     assert ls.scan([str(g)]) == 0
+
+
+def test_a_binary_cert_is_caught_by_extension(tmp_path):
+    """二進位憑證檔掃內容永遠漏(utf-8 解不開被跳過)——依副檔名擋。
+    副檔名組裝而不寫死:本測試檔會被 shipped-tree 掃描(F-062)。"""
+    import os
+    for ext in ("pfx", "p12", "jks", "keystore"):
+        f = tmp_path / ("cert." + ext)
+        f.write_bytes(b"\x30\x82\x04\x00" + os.urandom(128))  # 二進位,非 utf-8
+        assert ls.scan([str(f)]) == 1, "%s 副檔名沒被擋" % ext
+
+
+def test_a_text_pem_key_is_caught_by_extension(tmp_path):
+    """文字型憑證副檔名即使內容看似無害,副檔名本身就該擋(字面副檔名避寫,見上)。"""
+    for ext in ("pem", "key"):
+        f = tmp_path / ("server." + ext)
+        f.write_text("not actually a key but named like one\n", encoding="utf-8")
+        assert ls.scan([str(f)]) == 1, "%s 副檔名沒被擋" % ext
+
+
+def test_a_non_cert_extension_still_passes(tmp_path):
+    """正控:名字相近但非憑證副檔名的乾淨檔案照常放行。"""
+    f = tmp_path / "notes.keys.md"  # 含 'key' 但副檔名是 .md
+    f.write_text("my thoughts on keys\n", encoding="utf-8")
+    assert ls.scan([str(f)]) == 0
