@@ -22,6 +22,36 @@ from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RUN_LOG = os.path.join(ROOT, ".dev", "test-runs.jsonl")
+PIPELINE = os.path.join(ROOT, ".dev", "pipeline.json")   # 紅燈發生時是哪一張票
+
+
+def content_hash(raw):
+    """實作內容的雜湊。**行尾先正規化再算。**
+
+    這個值要拿去跟 git blob 的內容比對(R3 判「紅燈是不是對著改動前的碼發生的」),
+    而工作樹與 blob 的行尾未必相同:`core.autocrlf=true` 的 Windows 上,
+    工作樹是 CRLF、blob 是 LF。本 repo 目前靠 `.gitattributes` 的 `*.py text eol=lf`
+    讓兩者相同 —— 但那個檔案**不在 portable-manifest 裡**,不保證跟著裝到別的 repo。
+    少了它,兩邊 hash 永遠對不上,R3 對每一支既有檔案無條件擋:方向是 fail-closed,
+    擋的卻是做對事的人,而那種規則最後會被整條關掉。
+
+    判準不掛在一個沒被宣告帶走的檔案上 —— 正規化之後,行尾設定怎麼變都不影響判定。
+    """
+    norm = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(norm).hexdigest()
+
+
+def current_ticket():
+    """紅燈發生當下的票號。讀不到回 None。
+
+    **讀不到就是 None,不猜。** 猜一個票號的話,猜中的那次會靜默解鎖
+    一個根本沒有紅燈的修改 —— 而那正是這個欄位要防的事。
+    """
+    try:
+        with io.open(PIPELINE, encoding="utf-8") as f:
+            return json.load(f).get("ticket_id")
+    except Exception:
+        return None
 
 # 測試檔名對應到實作檔名的搜尋範圍。與 R3 反向:R3 由實作找測試,這裡由測試找實作。
 #
@@ -59,7 +89,7 @@ def record_run(test_file, passed, failed_tests):
     digest = None
     if exists:
         try:
-            digest = hashlib.sha256(io.open(impl_path, "rb").read()).hexdigest()
+            digest = content_hash(io.open(impl_path, "rb").read())
         except Exception:
             digest = None
 
@@ -72,6 +102,10 @@ def record_run(test_file, passed, failed_tests):
         "impl_file": impl,
         "impl_exists": exists,
         "impl_hash": digest,
+        # 紅燈屬於**某一張票**,不是屬於某個檔案。少了這個欄位,
+        # 「hash 對得上改動前的碼」單獨用會把 R3 從「永遠不合格」翻成「永遠合格」:
+        # 一筆舊紅燈只要該檔案之後沒被提交過,就永久解鎖後續每一次修改。
+        "ticket_id": current_ticket(),
     }
     try:
         os.makedirs(os.path.dirname(RUN_LOG), exist_ok=True)

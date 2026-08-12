@@ -17,5 +17,11 @@ __pycache__/
 # 安裝目標 repo 才有的狀態與證據 —— 本 repo 是發布來源,不是工作 repo
 /.dev/
 
+# 紅燈豁免清單:manifest 標 generate,**綁死產生它的那個 repo**(go-live sha +
+# 路徑清單)。跟著發布來源走的話,下游拿到一個在自己 repo 不存在的 commit 去驗
+# 每一筆,check_legacy_list fail-closed → 目標 repo 的每一次 commit 當場全擋。
+# 與 /.dev/ 同一類:per-repo 狀態,不是框架內容。
+/.agents/legacy-no-redlight.txt
+
 # 工作階段暫存(票已搬進版控的 docs/tickets/;.scratch 只留真正的暫存物)
 /.scratch/

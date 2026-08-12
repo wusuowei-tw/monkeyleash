@@ -74,6 +74,13 @@ RULE_DIVERGENCE = {
         "why": "寫入時問『現在這一站可以寫原始碼嗎』;提交時問『你是不是還停在前置站』。"
                "實作完成後站別本來就會往 review / idle 走,拿寫入時的問題去問提交會擋掉每一次合法提交。",
     },
+    "R3": {
+        "adr": "docs/adr/0013-r3-redlight-judges-the-implementation.md",
+        "why": "紅燈的**票號歸屬**只在前哨問得出來 —— 提交時 ticket_id 已清空"
+               "(一輪做完站別會往前走),拿寫入時的問題去問提交會擋掉每一次合法提交。"
+               "實質保證不變:兩個時點都要求『紅燈發生在這次改動之前』(HEAD 雜湊那一半),"
+               "提交時少的只是『屬於哪一張票』這個歸屬,不是紅燈本身。",
+    },
     "R7": {
         "adr": "docs/adr/0008-r7-is-sentinel-only.md",
         "why": "R7 管的是**工具呼叫**,而 commit 只看得到 staged 檔案內容 —— "
@@ -565,8 +572,54 @@ def check_legacy_list():
     return out
 
 
-def redlight_missing(base, also_accept=()):
-    """R3 的另一半:這個模組的測試曾經在**實作還不存在時**紅過嗎?
+_REDLIGHT_MOD = []
+
+
+def _redlight():
+    """載入同目錄的 redlight.py。**用路徑載入,不用 `import redlight`。**
+
+    gate.py 被測試以 spec_from_file_location 載入時,`.claude/hooks/` 不在
+    sys.path 上,`import redlight` 會 ImportError —— 而那個失敗會讓
+    head_content_hash 一律回 None,於是既有檔案那條路徑**永遠不合格**,
+    規則看起來還在、實際上退回修改前的行為。靜默,而且測試環境與正式環境不同調。
+    """
+    if _REDLIGHT_MOD:
+        return _REDLIGHT_MOD[0]
+    import importlib.util
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "redlight.py")
+    spec = importlib.util.spec_from_file_location("_redlight_for_gate", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _REDLIGHT_MOD.append(mod)
+    return mod
+
+
+def head_content_hash(rel_path):
+    """這支檔案**在 HEAD 的內容**的雜湊。不在 HEAD 或問不到時回 None。
+
+    錨定 HEAD 而不是磁碟現況,是因為判準必須**時點不變**:
+    前哨評估時檔案還沒被寫,提交時已經被寫 —— 拿磁碟現況當錨,同一條紀錄
+    在兩個時點會得到相反的答案,而權威層比前哨鬆就是缺陷(F-017 的形狀)。
+    HEAD 在這兩個時點都沒動。
+
+    回 None 一律由呼叫端當作「不合格」處理(fail-closed),不區分
+    「不在 HEAD」與「git 壞掉」—— 兩者都代表這個問題沒有答案。
+    """
+    try:
+        out = subprocess.run(["git", "cat-file", "blob", "HEAD:" + rel_path],
+                             cwd=ROOT, capture_output=True)
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None                      # 不在 HEAD(新建未提交)或 git 不可用
+    try:
+        return _redlight().content_hash(out.stdout)   # 雜湊定義只有一份(F-058)
+    except Exception:
+        return None
+
+
+def redlight_missing(base, also_accept=(), impl_rel=None, ticket=None):
+    """R3 的另一半:這個模組的測試曾經在**這次的實作寫之前**紅過嗎?
 
     also_accept:除 tests/test_<base>.py 外同樣算數的測試檔位置。兩半必須接受
     同一組位置 —— 只認 tests/ 的話,pkg/foo.py 配 pkg/test_foo.py 會通過前半、
@@ -574,8 +627,25 @@ def redlight_missing(base, also_accept=()):
 
     回 None 表示有合格紀錄;回訊息表示沒有 —— 呼叫端據此擋下。
 
-    判準不比較任何時間戳。要問的不是「檔案何時出現」,而是「紅燈發生時實作存不存在」,
-    而那件事在紅燈那一刻已由紀錄自己宣告(見 .claude/hooks/redlight.py)。
+    **判定的對象是「實作」,不是「檔案」。** 原本只認 `impl_exists is False`,
+    那量的是「這個**檔案**當時存不存在」。新檔案兩者重合,既有檔案永遠分岔:
+    檔案還在就永遠產不出那種紀錄,於是每一支既有 .py 的紅燈先行**在機制上
+    寫不出來**,唯一出口是 legacy 豁免清單 —— 也就是把 R3 從最需要它的檔案上
+    整條移開。這與 F-046 是同一個形狀(fail-closed 的方向對了,判定的對象錯了)。
+
+    合格紀錄 = 紅燈 **且** 屬於當前這張票 **且**(實作當時不存在
+    **或** 紅燈是對著這支檔案在 HEAD 的內容發生的)。
+
+      - 票號:每張票要有自己的紅燈。少了它,一筆舊紅燈只要該檔案之後沒被提交過
+        就永久解鎖後續每一次修改 —— 方向會從「永遠不合格」翻成「永遠合格」。
+      - HEAD 雜湊:證明紅燈發生在改動**之前**。先寫實作再補跑紅燈的話,
+        那筆紀錄的 impl_hash 是改動後的內容,對不上 HEAD,擋 ——
+        這是本判準唯一可能被自我服務的路徑,而它被關住了。
+
+    `ticket` 為 None 時**不比對票號**(提交時票號已清空,見 RULE_DIVERGENCE["R3"])。
+    此時 HEAD 雜湊這一半照常成立,實質保證不變,少的只是票號歸屬。
+
+    判準仍然不比較任何時間戳。
 
     **全程 fail-closed**:紀錄檔不存在、讀不動、格式不對、欄位缺漏,一律當作沒有紀錄。
     讀不到就放行是 F-001 的形狀,在這裡不重演。
@@ -586,7 +656,12 @@ def redlight_missing(base, also_accept=()):
         return ("找不到紅燈紀錄檔 %s —— 無法證明測試曾經紅過。\n"
                 "     跑一次測試讓紀錄長出來;讀不到紀錄一律不放行。"
                 % rel(RUN_LOG))
+
+    # 只算一次:HEAD 內容與這一輪的每一筆紀錄比對,與紀錄無關。
+    head = head_content_hash(impl_rel) if impl_rel else None
+
     saw_any = False
+    saw_ticket_mismatch = False
     try:
         for line in io.open(RUN_LOG, encoding="utf-8"):
             line = line.strip()
@@ -598,14 +673,27 @@ def redlight_missing(base, also_accept=()):
             saw_any = True
             if "impl_exists" not in rec:    # 欄位缺漏也算格式不對
                 return ("紅燈紀錄缺 impl_exists 欄位(%s),格式不對即不放行。" % want)
-            if rec.get("result") == "red" and rec["impl_exists"] is False:
-                return None
+            if rec.get("result") != "red":
+                continue
+            if ticket is not None and rec.get("ticket_id") != ticket:
+                saw_ticket_mismatch = True
+                continue
+            if rec["impl_exists"] is False:
+                return None                 # 新檔案:紅燈時實作不存在
+            if head is not None and rec.get("impl_hash") == head:
+                return None                 # 既有檔案:紅燈對著改動前的碼發生
     except Exception as e:
         return ("紅燈紀錄無法解析(%s):%s —— 格式不對一律不放行。" % (rel(RUN_LOG), e))
 
+    if saw_ticket_mismatch:
+        return ("%s 有紅燈紀錄,但沒有一筆屬於當前票 %s。\n"
+                "     舊票的紅燈不解鎖後續修改 —— 每張票要有自己的紅燈。"
+                % (want, ticket))
     if saw_any:
-        return ("%s 有執行紀錄,但沒有任何一筆是「紅燈且當時實作不存在」。\n"
-                "     那代表實作先於測試存在 —— 是補測試,不是紅綠燈。" % want)
+        return ("%s 有執行紀錄,但沒有任何一筆是「紅燈,且發生在這次改動之前」。\n"
+                "     合格的形狀:實作當時不存在,或紅燈是對著這支檔案在 HEAD 的\n"
+                "     內容跑出來的。先寫實作再補跑紅燈不算 —— 那是補測試,不是紅綠燈。"
+                % want)
     return ("%s 沒有任何執行紀錄 —— 無法證明它曾經紅過。" % want)
 
 
@@ -882,7 +970,8 @@ def check(path, content, at_commit=False, trace=None):
             # 後半接受的位置必須與前半的 cands 完全相同,否則會出現通過前半、
             # 卡死後半、且無合法解法的死路。
             why = redlight_missing(base, [os.path.relpath(c, ROOT).replace(os.sep, "/")
-                                          for c in cands])
+                                          for c in cands],
+                                   impl_rel=r, ticket=ticket)
             if why:
                 return ("[R3/紅燈] %s:測試檔存在,但沒有合格的紅燈紀錄。\n"
                         "     %s\n"

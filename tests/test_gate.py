@@ -913,3 +913,137 @@ class TestAuthoritativeLayerDetection:
     def test_the_sentinel_still_says_so_when_it_is_true(self, monkeypatch):
         monkeypatch.setattr(gate, "authoritative_layer", lambda root=None: (True, "裝好了"))
         assert "commit" in gate.sentinel_footer()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R3 紅燈半的判定對象 —— 「檔案存不存在」 vs 「實作寫了沒」
+#
+# 由來(2026-08-12 實測):`redlight_missing("gate")` 對 gate.py 永遠不合格,
+# 而 `redlight_missing("edit_result")` 在同一次執行、同一份紀錄檔下合格。
+# 差別只在 find_implementation 找不找得到實作檔:
+#
+#   規則要問的是「**這個實作**寫之前,測試紅過嗎」
+#   它量的是「**這個檔案**當時存不存在」
+#
+# 新檔案兩者重合;既有檔案永遠分岔 —— 於是每一支既有 .py 的紅燈先行
+# **在機制上寫不出來**,而唯一出口是 legacy 豁免清單,也就是把 R3 從
+# 最需要它的檔案上整條移開。這與 F-046 是同一個形狀(fail-closed 的方向對了,
+# 判定的對象錯了),同一輪撞到第二次。
+#
+# 修法:紅燈紀錄宣告的 impl_hash 若等於**這支檔案在 HEAD 的內容**,
+# 那就是「對著改動前的碼紅過」= 既有檔案的紅燈先行。
+# 錨定 HEAD 而不是磁碟現況,是因為判準必須**時點不變**:
+# 前哨評估時檔案還沒被寫,提交時已經被寫,而 HEAD 在這兩個時點都沒動。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRedlightJudgesTheImplementationNotTheFile:
+
+    @pytest.fixture()
+    def repo(self, tmp_path, monkeypatch):
+        """真的 git repo —— HEAD 錨點只能對著真的物件庫驗。"""
+        def git(*a):
+            return subprocess.run(["git"] + list(a), cwd=str(tmp_path),
+                                  capture_output=True)
+        git("init", "-q")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        (tmp_path / "pkg").mkdir()
+        io.open(tmp_path / "pkg" / "thing.py", "w", encoding="utf-8",
+                newline="\n").write("def f():\n    return 1\n")
+        (tmp_path / "tests").mkdir()
+        io.open(tmp_path / "tests" / "test_thing.py", "w",
+                encoding="utf-8").write("x\n")
+        git("add", "-A")
+        git("commit", "-qm", "go-live")
+        monkeypatch.setattr(gate, "ROOT", str(tmp_path))
+        monkeypatch.setattr(gate, "RUN_LOG", str(tmp_path / ".dev" / "test-runs.jsonl"))
+        monkeypatch.chdir(tmp_path)
+        return tmp_path
+
+    def _log(self, repo, *recs):
+        d = repo / ".dev"
+        d.mkdir(exist_ok=True)
+        with io.open(d / "test-runs.jsonl", "w", encoding="utf-8") as f:
+            for r in recs:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    def _head_hash(self, repo):
+        import hashlib
+        blob = subprocess.run(["git", "cat-file", "blob", "HEAD:pkg/thing.py"],
+                              cwd=str(repo), capture_output=True).stdout
+        norm = blob.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        return hashlib.sha256(norm).hexdigest()
+
+    def _red(self, **kw):
+        rec = {"test_file": "tests/test_thing.py", "result": "red",
+               "failed_tests": ["test_a"], "impl_file": "pkg/thing.py",
+               "impl_exists": True, "impl_hash": None, "ticket_id": "07"}
+        rec.update(kw)
+        return rec
+
+    # ── 正控 ──────────────────────────────────────────────────────────────
+
+    def test_a_red_against_the_head_version_unlocks_an_existing_file(self, repo):
+        """**本單元的主張**:既有檔案第一次做得到紅燈先行。
+
+        當前票有一條紅燈,而且它是對著**改動前的碼**紅的 -> 放行。
+        """
+        self._log(repo, self._red(impl_hash=self._head_hash(repo)))
+        assert gate.redlight_missing("thing", impl_rel="pkg/thing.py",
+                                     ticket="07") is None
+
+    def test_a_new_file_redlight_still_passes(self, repo):
+        """舊行為不得回歸:實作不存在時紅過的紀錄照樣算數。"""
+        self._log(repo, self._red(impl_file=None, impl_exists=False, impl_hash=None))
+        assert gate.redlight_missing("thing", impl_rel="pkg/thing.py",
+                                     ticket="07") is None
+
+    # ── 負控 ──────────────────────────────────────────────────────────────
+
+    def test_no_redlight_under_the_current_ticket_is_blocked(self, repo):
+        self._log(repo)
+        assert gate.redlight_missing("thing", impl_rel="pkg/thing.py",
+                                     ticket="07") is not None
+
+    def test_only_an_older_tickets_redlight_is_blocked(self, repo):
+        """**時效**:一筆舊票的紅燈不得永久解鎖這支檔案。
+
+        少了這條,「impl_hash 與 HEAD 相同」單獨用會把方向從「永遠不合格」
+        翻成「永遠合格」—— 只要檔案自那次紅燈後沒被提交過就一直成立。
+        每張票要有自己的紅燈。
+        """
+        self._log(repo, self._red(ticket_id="06", impl_hash=self._head_hash(repo)))
+        assert gate.redlight_missing("thing", impl_rel="pkg/thing.py",
+                                     ticket="07") is not None, \
+            "舊票的紅燈解鎖了當前票的修改"
+
+    def test_a_new_file_without_any_redlight_is_blocked(self, repo):
+        self._log(repo, self._red(result="green", impl_exists=False, impl_hash=None))
+        assert gate.redlight_missing("thing", impl_rel="pkg/thing.py",
+                                     ticket="07") is not None
+
+    def test_a_red_against_an_already_modified_implementation_is_blocked(self, repo):
+        """紅燈發生在實作寫完之後 -> 不是紅燈先行。
+
+        這是本修法唯一可能被拿來自我服務的路徑:先寫實作、再跑紅燈。
+        hash 錨在 HEAD,所以那種紀錄的 impl_hash 對不上,擋。
+        """
+        self._log(repo, self._red(impl_hash="0" * 64))
+        assert gate.redlight_missing("thing", impl_rel="pkg/thing.py",
+                                     ticket="07") is not None
+
+    def test_an_untracked_implementation_falls_back_to_existence(self, repo):
+        """檔案不在 HEAD(新建、未提交)-> 只認 impl_exists=False 那條路。"""
+        io.open(repo / "pkg" / "fresh.py", "w", encoding="utf-8").write("x = 1\n")
+        self._log(repo, self._red(test_file="tests/test_fresh.py",
+                                  impl_file="pkg/fresh.py", impl_hash="a" * 64))
+        assert gate.redlight_missing("fresh", impl_rel="pkg/fresh.py",
+                                     ticket="07") is not None
+
+    # ── 接線 ──────────────────────────────────────────────────────────────
+
+    def test_check_actually_passes_the_ticket_and_path_through(self):
+        """漏傳參數會靜默走回寬鬆分支 —— 接線要測(F-044)。"""
+        src = io.open(ROOT / ".claude" / "hooks" / "gate.py", encoding="utf-8").read()
+        assert "impl_rel=" in src and "ticket=ticket" in src, \
+            "check() 沒有把實作路徑與當前票傳進 redlight_missing"

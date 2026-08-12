@@ -98,6 +98,72 @@ def test_implementation_path_is_derived_from_the_test_file_name(tmp_path, monkey
     assert found and found.endswith("foo.py")
 
 
+class TestTheRecordCarriesTheTicketItBelongsTo:
+    """紅燈屬於**某一張票**,不是屬於某個檔案。
+
+    少了這個欄位,「impl_hash 對得上改動前的碼」單獨用會把 R3 的方向
+    從「永遠不合格」翻成「永遠合格」:一筆三個月前的紅燈,只要該檔案
+    自那次之後沒被提交過,就永久解鎖後續每一次修改。每張票要有自己的紅燈。
+    """
+
+    def _pipeline(self, root, **kw):
+        (root / ".dev").mkdir(exist_ok=True)
+        io.open(root / ".dev" / "pipeline.json", "w", encoding="utf-8").write(
+            json.dumps(kw, ensure_ascii=False))
+
+    def test_the_record_states_the_ticket_that_was_current(
+            self, log, tmp_path, monkeypatch):
+        monkeypatch.setattr(redlight, "ROOT", str(tmp_path))
+        monkeypatch.setattr(redlight, "PIPELINE",
+                            str(tmp_path / ".dev" / "pipeline.json"))
+        self._pipeline(tmp_path, current_stage="implement", ticket_id="07")
+        rec = redlight.record_run("tests/test_thing.py", passed=False,
+                                  failed_tests=["test_a"])
+        assert rec["ticket_id"] == "07"
+
+    def test_an_unreadable_pipeline_records_no_ticket_rather_than_guessing(
+            self, log, tmp_path, monkeypatch):
+        """讀不到就是 None。**猜一個票號比沒有票號危險** ——
+        猜中的那次會靜默解鎖一個沒有紅燈的修改。"""
+        monkeypatch.setattr(redlight, "ROOT", str(tmp_path))
+        monkeypatch.setattr(redlight, "PIPELINE", str(tmp_path / "nope.json"))
+        rec = redlight.record_run("tests/test_thing.py", passed=False,
+                                  failed_tests=["test_a"])
+        assert rec["ticket_id"] is None
+
+
+class TestTheHashDoesNotDependOnLineEndings:
+    """hash 要拿來跟 **git blob** 比對,而工作樹與 blob 的行尾可能不同。
+
+    本 repo 目前靠 `.gitattributes` 的 `*.py text eol=lf` 讓兩者位元組相同 ——
+    但那個檔案**不在 portable-manifest 裡**,裝到別的 repo 不保證跟著走。
+    在 `core.autocrlf=true` 的 Windows 上,少了它工作樹是 CRLF、blob 是 LF,
+    兩邊 hash 永遠對不上,於是 R3 對每一支既有檔案無條件擋 ——
+    fail-closed 的方向,但擋的是做對事的人。判準不該掛在一個沒被宣告帶走的檔案上。
+    """
+
+    def test_crlf_and_lf_content_hash_the_same(self):
+        assert (redlight.content_hash(b"def f():\r\n    return 1\r\n")
+                == redlight.content_hash(b"def f():\n    return 1\n"))
+
+    def test_a_real_difference_still_changes_the_hash(self):
+        """正規化不得把不同的內容抹成相同 —— 那會讓 hash 停止做事。"""
+        assert (redlight.content_hash(b"return 1\n")
+                != redlight.content_hash(b"return 2\n"))
+
+    def test_the_recorded_hash_goes_through_the_same_function(
+            self, log, tmp_path, monkeypatch):
+        """紀錄端與判定端必須是同一個函式 —— 兩份實作就是 F-058 的形狀。"""
+        monkeypatch.setattr(redlight, "ROOT", str(tmp_path))
+        monkeypatch.setattr(redlight, "PIPELINE", str(tmp_path / "nope.json"))
+        (tmp_path / "pkg").mkdir()
+        raw = b"def f():\r\n    return 1\r\n"
+        io.open(tmp_path / "pkg" / "thing.py", "wb").write(raw)
+        rec = redlight.record_run("tests/test_thing.py", passed=False,
+                                  failed_tests=["a"])
+        assert rec["impl_hash"] == redlight.content_hash(raw)
+
+
 class TestTheRecorderCannotKillTheRunner:
     """紀錄器崩潰比 fail-open 更糟:它讓整個測試執行器停擺(INTERNALERROR),
     連綠燈都跑不完 —— 而 R3 的判定完全建立在「測試真的跑過」上面。
