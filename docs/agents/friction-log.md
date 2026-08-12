@@ -1015,3 +1015,23 @@
   2. 非 ASCII 語料要進測試常備語料庫。只用 ASCII 測,這族缺陷永遠不現身(F-042 原文已寫過一次,
      這次證明「寫過」不等於「做到」—— 新寫的 git 呼叫沒有人拿中文檔名測過)。
   3. 失效方向要逐位置問:同一個壞路徑,在閘門是誤擋(吵),在掃描器是靜默放行(致命)。
+
+## F-065 「照上游同款」在 self-governance 例外處會裝出一個靜默缺口
+
+- **場景**:裝進新專案時補 `bootstrap.sh`(理由:沒有它,重 clone 後洩漏 hook 不接線,F-055 白學)。
+  直覺做法是「照 agent-gates 同款」複製 `.githooks/pre-commit`。
+- **陷阱**:`bootstrap.sh` 設 `core.hooksPath=.githooks` 之後,**`.git/hooks/` 被 git 整個忽略**。
+  而 agent-gates 的 `.githooks/pre-commit` **只跑 leak_scan** —— 因為 ADR 0010 裁決它
+  **不自管**(選項 B),六站權威層本來就不該在它自己身上跑。
+- **後果(若照抄)**:目標 repo 的 `.git/hooks/pre-commit`(install.py 寫的、含 gate)被
+  hooksPath 蓋過 → **跑過 bootstrap.sh 的那一刻六站權威層靜默消失**。
+  前哨照跑、測試照綠、install 的驗證早就跑完了 —— 沒有任何東西會說它不在。
+- **處置**:目標 repo 的 `.githooks/pre-commit` **兩層都掛**(leak_scan 先、gate 後)。
+- **可複用**:**上游檔案帶著上游的例外一起過來。** 複製一個檔案時要問的不是
+  「上游長怎樣」,而是「上游為什麼長那樣、那個理由在這裡成不成立」。
+  self-governance 例外(這個 repo 刻意不管自己)是最容易被照抄成缺口的一類 ——
+  它在來源端是正確的,在目的端是洞。
+- **框架待辦(未做,待裁決)**:`install.py` 應該直接產生目標 repo 的
+  `.githooks/pre-commit`(兩層)+ `bootstrap.sh`,讓權威層跟著 clone 走 ——
+  那會**部分關掉 ADR 0007 說的那個缺口**(clone 下來直接手動 commit 的人)。
+  現在是人工補的,下一個安裝的人不會知道要補。
