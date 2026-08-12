@@ -33,7 +33,7 @@ sync = _load()
 
 MANIFEST = (
     ".claude/hooks/          copy\n"
-    ".agents/portable-manifest.txt  copy\n"
+    ".agents/portable-manifest.txt  ask\n"
     "docs/agents/friction-log.md    copy\n"
     "docs/agents/friction-local.md  generate\n"
     ".agents/legacy-no-redlight.txt generate\n"
@@ -124,14 +124,33 @@ class TestOnlyTheCopyBucketMoves:
         assert _h(dst, rel) == before, "%s 被動到了" % rel
 
     def test_the_manifest_itself_is_never_copied(self, pair):
-        """桶標未裁決(票 10)—— 在裁決之前一律跳過。
+        """manifest 標 `ask` —— 它列著各 repo 自己的測試歸類,copy 會刪掉那些。
 
-        它列著各 repo 自己的測試,blind-copy 會把那些歸類刪掉。
+        擋住它的是**桶標本身**,不是工具裡另一份寫死的清單:
+        兩份真相會分岔(F-058),而桶標才是這件事的定義來源。
         """
         src, dst = pair
         before = _h(dst, ".agents/portable-manifest.txt")
         sync.update(str(src), str(dst), apply=True)
         assert _h(dst, ".agents/portable-manifest.txt") == before
+
+    def test_a_differing_ask_file_is_reported_not_silently_skipped(self, pair):
+        """`ask` 桶有差異時要**說出來**。
+
+        靜默跳過的話,manifest 的漂移永遠沒有人看得到 —— 而「兩邊不一致
+        而沒有人知道」正是這條更新路徑要消滅的東西(ticket 01)。
+        跳過是對的,不出聲不對。
+        """
+        src, dst = pair
+        plan = sync.update(str(src), str(dst))
+        assert ".agents/portable-manifest.txt" in plan.needs_decision, plan
+
+
+class TestTheShippedManifestSaysSo:
+    def test_the_manifest_marks_itself_ask(self):
+        """裁決要落在檔案裡,不是只落在對話裡。"""
+        marks = sync.load_manifest(str(ROOT))
+        assert sync.mark_for(".agents/portable-manifest.txt", marks) == "ask"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

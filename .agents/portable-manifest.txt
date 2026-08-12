@@ -22,7 +22,12 @@
 .claude/settings.json           copy
 .agents/pipeline-stages.yaml    copy
 .agents/skills/                 copy
-.agents/portable-manifest.txt   copy
+# **ask,不是 copy。** 它同時裝著兩種東西:框架檔的桶標(框架的事實)
+# 與各 repo 自己的測試歸類(專案的判斷)。copy 會刪掉後者;
+# generate 需要把兩邊合起來,而「這個測試屬於框架還是專案」推導不出來 ——
+# 那就是合併,而合併是逐次判斷、覆蓋是每次都跑,一個會出錯的合併比較糟。
+# 代價:框架每新增一個檔案,各目標 repo 要人手動補一行。接受。
+.agents/portable-manifest.txt   ask
 scripts/skills-update.sh        copy
 
 # ── 綁死這個 repo,必須重新產生 ────────────────────────────────

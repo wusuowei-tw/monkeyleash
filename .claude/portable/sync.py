@@ -26,10 +26,6 @@ import re
 import subprocess
 import sys
 
-# 桶標未裁決之前一律跳過(票 10)。它列著各 repo 自己的測試歸類,
-# blind-copy 會把那些刪掉 —— 而「哪個測試屬於哪一邊」是判斷,不是可推導的事實。
-NEVER_COPY = (".agents/portable-manifest.txt",)
-
 FRICTION = "docs/agents/friction-log.md"
 FRICTION_LOCAL = "docs/agents/friction-local.md"
 
@@ -41,19 +37,22 @@ class Refused(Exception):
 
 
 class Plan(object):
-    __slots__ = ("changed", "added", "skipped", "verified", "untouched")
+    __slots__ = ("changed", "added", "needs_decision", "verified", "untouched")
 
     def __init__(self):
         self.changed = []
         self.added = []
-        self.skipped = []
+        # `ask` 桶裡兩邊不一樣的檔案。**跳過是對的,不出聲不對** ——
+        # 靜默跳過的話,那些檔案的漂移永遠沒有人看得到,而
+        # 「兩邊不一致而沒有人知道」正是這條路徑要消滅的東西(ticket 01)。
+        self.needs_decision = []
         self.untouched = {}
         self.verified = False
 
     def __repr__(self):
-        return ("Plan(changed=%d, added=%d, skipped=%d, verified=%s)"
-                % (len(self.changed), len(self.added), len(self.skipped),
-                   self.verified))
+        return ("Plan(changed=%d, added=%d, needs_decision=%d, verified=%s)"
+                % (len(self.changed), len(self.added),
+                   len(self.needs_decision), self.verified))
 
 
 def _norm(raw):
@@ -171,10 +170,14 @@ def update(src, target, apply=False):
                 os.path.join(target, rel.replace("/", os.sep)))
 
     for rel in sorted(tracked(src)):
-        if mark_for(rel, marks) != "copy":
-            continue
-        if rel in NEVER_COPY:
-            plan.skipped.append(rel)
+        mark = mark_for(rel, marks)
+        if mark != "copy":
+            # `ask` 桶:不自動搬,但兩邊不一樣就要說出來。
+            if mark == "ask":
+                sp = os.path.join(src, rel.replace("/", os.sep))
+                tp = os.path.join(target, rel.replace("/", os.sep))
+                if file_hash(sp) != file_hash(tp):
+                    plan.needs_decision.append(rel)
             continue
         sp = os.path.join(src, rel.replace("/", os.sep))
         tp = os.path.join(target, rel.replace("/", os.sep))
@@ -222,14 +225,14 @@ def main(argv):
         sys.stderr.buffer.write((u"[更新/拒絕] %s\n" % e).encode("utf-8"))
         return 1
     out = [u"來源:%s" % src, u"目標:%s" % os.path.abspath(target), u""]
-    out.append(u"內容不同 %d / 新增 %d / 跳過 %d"
-               % (len(plan.changed), len(plan.added), len(plan.skipped)))
+    out.append(u"內容不同 %d / 新增 %d / 要人決定 %d"
+               % (len(plan.changed), len(plan.added), len(plan.needs_decision)))
     for rel in plan.changed:
         out.append(u"  M %s" % rel)
     for rel in plan.added:
         out.append(u"  + %s" % rel)
-    for rel in plan.skipped:
-        out.append(u"  - %s(桶標未裁決,跳過)" % rel)
+    for rel in plan.needs_decision:
+        out.append(u"  ? %s(ask 桶:兩邊不同,不自動搬,要人決定帶哪些)" % rel)
     out.append(u"")
     out.append(u"寫入並通過 hash 重驗" if plan.verified
                else u"(dry-run,沒有寫任何東西;要實際更新加 --apply)")
