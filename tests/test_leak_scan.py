@@ -169,3 +169,29 @@ def test_a_non_cert_extension_still_passes(tmp_path):
     f = tmp_path / "notes.keys.md"  # 含 'key' 但副檔名是 .md
     f.write_text("my thoughts on keys\n", encoding="utf-8")
     assert ls.scan([str(f)]) == 0
+
+
+def test_the_matched_secret_is_not_printed(tmp_path, capsys):
+    """掃描器的輸出本身是外流面:擋下的那一刻,秘密會被印進終端機、CI log、
+    對話紀錄 —— 剛好是最多眼睛在看的時候。命中的那一段必須遮掉(F-066)。"""
+    secret = "AIza" + "Z" * 35
+    f = _write(tmp_path, "k = " + secret)
+    assert ls.scan([f]) == 1
+    err = capsys.readouterr().err
+    assert secret not in err, "命中的秘密被原樣印出來了"
+    assert "已遮罩" in err
+    assert "k = " in err, "遮罩過頭 —— 前後文要留得住,否則定位不了"
+
+
+def test_personal_pattern_text_is_not_printed(tmp_path, capsys, monkeypatch):
+    """個人 pattern 本身往往就是秘密(使用者名稱、往來對象、金鑰字面),
+    印出 pattern 等於在報告裡再洩一次。"""
+    personal = tmp_path / "local.txt"
+    tok = "MySecret" + "Employer"
+    personal.write_text(tok + "\n", encoding="utf-8")
+    monkeypatch.setattr(ls, "LOCAL_PATTERNS_FILE", str(personal))
+    f = _write(tmp_path, "company = " + tok)
+    assert ls.scan([f]) == 1
+    err = capsys.readouterr().err
+    assert tok not in err, "個人 pattern 的內容被印出來了"
+    assert "個人 pattern #" in err

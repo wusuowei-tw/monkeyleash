@@ -63,7 +63,7 @@ def _read_patterns(path, required):
         line = line.rstrip("\n")
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        out.append((line, re.compile(line)))
+        out.append((line, re.compile(line), bool(required)))
     return out
 
 
@@ -112,6 +112,25 @@ def should_skip(rel):
         any(r.startswith(p) for p in SKIP_PARTS)
 
 
+def _redact(text, matched):
+    """把命中的那一段換掉再輸出。
+
+    **掃描器的輸出本身是外流面。** 擋下 commit 的那一刻,原本要防的秘密會被
+    原樣印進終端機、CI log、agent 對話紀錄 —— 剛好是最多眼睛在看的時候。
+    保留行號與前後文足夠定位;完整值使用者本來就知道,不需要它再說一次(F-066)。
+    """
+    if not matched:
+        return text
+    return text.replace(matched, "***已遮罩 %d 字***" % len(matched))
+
+
+def _label(raw, is_generic, index):
+    """pattern 標籤。**個人 pattern 不印原文** —— 它們本身往往就是秘密
+    (使用者名稱、往來對象、甚至金鑰字面),印出來等於在報告裡再洩一次。
+    通用 pattern 是公開清單裡的形狀,印全文有助於定位。"""
+    return raw if is_generic else "個人 pattern #%d(不顯示內容)" % index
+
+
 def scan(paths):
     try:
         patterns = load_patterns()
@@ -132,9 +151,11 @@ def scan(paths):
         except Exception:
             continue  # 讀不動(二進位等)不是洩漏
         for i, line in enumerate(text.split("\n"), 1):
-            for raw, rx in patterns:
-                if rx.search(line):
-                    hits.append((p, i, raw, line.strip()[:100]))
+            for n, (raw, rx, is_generic) in enumerate(patterns, 1):
+                m = rx.search(line)
+                if m:
+                    hits.append((p, i, _label(raw, is_generic, n),
+                                 _redact(line.strip()[:100], m.group(0))))
     if hits:
         _err("\n[洩漏偵測] 這些檔案含個人身分或機密,擋下 commit:\n\n")
         for f, i, raw, ctx in hits:
