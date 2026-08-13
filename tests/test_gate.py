@@ -742,6 +742,11 @@ class TestTheListItselfIsGuarded:
         # sha 取自本 repo 自己的清單,不寫死 —— 寫死的話換個 repo 就紅(票 07)
         go_live = gate.read_go_live()
         sample = self._a_path_actually_in(go_live, ROOT) if go_live else None
+        # **意圖要明說。** 取不到樣本時 `sample` 是 None,寫進清單變成字串
+        # "None",而 "None" 碰巧不在任何樹裡 —— 於是測試仍然會紅,
+        # 但紅的理由是「湊巧」而不是「我們檢查了」。
+        # 靠巧合成立的斷言,下次條件一變就靜默改變意義。
+        assert sample, "go-live 樹裡取不到任何路徑 —— 沒有有效樣本,這條測不了"
         lst.write_text("# go-live: %s\n%s\nnot/in/the/tree.py\n"
                        % (go_live, sample), encoding="utf-8")
         monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
@@ -773,6 +778,7 @@ class TestTheListItselfIsGuarded:
 
         lst = repo / "legacy.txt"
         sample = self._a_path_actually_in(sha, repo)
+        assert sample, "構造出來的 go-live 樹是空的 —— 這條測不了"
         io.open(lst, "w", encoding="utf-8").write(
             "# go-live: %s\n%s\n" % (sha, sample))
         monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
