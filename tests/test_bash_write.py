@@ -94,3 +94,59 @@ def test_every_exception_carries_a_reason():
 def test_the_rule_is_enumerated_like_every_other_rule():
     """R7 要進 rule_codes,否則 verify_gates 不會替它準備情境 —— 規則存在卻沒被證明擋得住。"""
     assert "R7" in gate.rule_codes()
+
+
+class TestEveryWriteTargetMustBeAllowed:
+    """**「提到一個許可目標」不等於「每個寫入目標都被許可」。**
+
+    原本的檢查是 `if target in cmd: return None` —— 只要指令**字串裡出現**
+    任何一個許可目標,整條就免檢。於是在任何指令後面加 `2>/dev/null`
+    就整條免檢,而抑制 stderr 是每個人本來就有的習慣:
+    **這不是要刻意繞才踩得到的洞,是日常寫法會誤觸的洞**,
+    只是誤觸的方向是「被放行」,所以沒有人會發現。
+
+    判錯對象第七例(票 19)。
+    """
+
+    @pytest.mark.parametrize("cmd,named", [
+        ("python x.py > out.txt 2>/dev/null", "out.txt"),
+        ("python x.py >out.txt 2>/dev/null", "out.txt"),
+        ("cat a > b.txt 2>/dev/null", "b.txt"),
+    ])
+    def test_a_suppressed_stderr_does_not_whitelist_a_real_write(self, cmd, named):
+        msg = gate.bash_write_violation(cmd)
+        assert msg, "加了 2>/dev/null 就免檢:%r" % cmd
+        assert named in msg, "沒有點名真正的寫入目標(%s):%s" % (named, msg)
+
+    @pytest.mark.parametrize("cmd", [
+        "rm -rf important_dir >/dev/null",
+        "cp secret.env backup.env 2>/dev/null",
+        "mv a.txt b.txt >/dev/null",
+        "tee gate.py < evil 2>/dev/null",
+    ])
+    def test_a_write_command_is_not_rescued_by_dev_null(self, cmd):
+        assert gate.bash_write_violation(cmd), "寫入指令被 /dev/null 救了:%r" % cmd
+
+    # ── 正控:不得回歸 ────────────────────────────────────────────────
+    @pytest.mark.parametrize("cmd", [
+        "ls >/dev/null",
+        "ls > /dev/null",
+        "ls >/dev/null 2>&1",
+        "python -m pytest -q > /dev/null 2>&1",
+        "grep -c foo bar >/dev/null",
+    ])
+    def test_writing_only_to_dev_null_is_still_allowed(self, cmd):
+        assert gate.bash_write_violation(cmd) is None, cmd
+
+    @pytest.mark.parametrize("cmd", [
+        "python x.py > /tmp/out.txt",
+        "rm -rf /tmp/scratch",
+        "python x.py > C:/x/scratchpad/out.txt",
+    ])
+    def test_allowed_targets_still_pass(self, cmd):
+        assert gate.bash_write_violation(cmd) is None, cmd
+
+    def test_an_unparseable_write_is_blocked(self):
+        """解析不出目標 → 擋。**半套的解析器比零涵蓋更危險**,
+        所以不確定時往嚴的倒(ADR 0008 的同一句話)。"""
+        assert gate.bash_write_violation("Set-Content -Path (Join-Path $a $b) -Value x")

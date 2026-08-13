@@ -304,6 +304,48 @@ def in_commit(root, commit, rel):
                           capture_output=True).returncode == 0
 
 
+def identical_copy_files(src, target, marks):
+    """`copy` 桶裡**與上游逐位元組相同**的檔案。
+
+    判準是「它與上游一致」,不是「我這輪寫了它」。原本只替 `changed + added`
+    發證,於是**從未需要更新的檔案永遠拿不到證** —— 量化的 `g1_verify.py`、
+    `shadow_review.py` 一直與上游相同,每一輪都不在那個集合裡,
+    R3 一醒就紅而且永遠不會自己好(票 19)。
+
+    「與上游那個 commit 的物件逐位元組相同 ⇒ 紅燈責任在上游」才是 R3 問的
+    問題(ADR F-0014),而那與「這輪有沒有寫過」無關。
+    """
+    out = []
+    for rel in sorted(tracked(src)):
+        if manifest.explicit_mark(rel, marks) != "copy":
+            continue
+        sp = os.path.join(src, rel.replace("/", os.sep))
+        tp = os.path.join(target, rel.replace("/", os.sep))
+        if file_hash(sp) is not None and file_hash(sp) == file_hash(tp):
+            out.append(rel)
+    return out
+
+
+def certify(src, target):
+    """**補證模式**:只發 provenance,不寫任何 repo 內容。
+
+    要解的死循環:發證原本要求淨樹,而下游需要**在把東西納入管理之前**先補證
+    —— 發證與淨樹互為前提(票 19)。
+
+    `refuse_if_dirty` 對這條路徑不適用,理由是那道檢查的**理由**:
+    「在未提交的變更上覆寫,出事時分不出是誰改的」。補證什麼都不覆寫,
+    所以那個風險不存在。**判準完全不放寬**:仍然是「與上游逐位元組相同」,
+    漂移的檔案照樣不發證 —— **髒樹不會換來假證**。
+
+    回傳實際發出的紀錄。
+    """
+    src, target = os.path.abspath(src), os.path.abspath(target)
+    marks = load_manifest(src)
+    refuse_if_unclassified(src, marks)
+    rels = identical_copy_files(src, target, marks)
+    return write_provenance(src, target, rels, head_commit(src))
+
+
 def write_provenance(src, target, rels, commit):
     """替同步進來的檔案產 provenance:上游 commit + 路徑。
 
@@ -410,7 +452,11 @@ def update(src, target, apply=False):
                       % (len(moved), "\n  ".join(moved)))
     # provenance 在 hash 重驗**之後**才寫 —— 驗證沒過就不該有憑證,
     # 否則帳面上會出現一張替沒寫成功的檔案背書的憑證。
-    write_provenance(src, target, plan.changed + plan.added, head_commit(src))
+    #
+    # 發給**所有與上游一致的 copy 檔**,不只這輪寫過的:判準是
+    # 「它與上游一致」,不是「我寫了它」(票 19)。
+    write_provenance(src, target, identical_copy_files(src, target, marks),
+                     head_commit(src))
     plan.verified = True
     return plan
 
@@ -421,6 +467,19 @@ def main(argv):
         return 2
     target = argv[0]
     apply = "--apply" in argv
+    if "--certify" in argv:
+        src = os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))))
+        try:
+            issued = certify(src, target)
+        except Refused as e:
+            sys.stderr.buffer.write((u"[補證/拒絕] %s\n" % e).encode("utf-8"))
+            return 1
+        sys.stdout.buffer.write(
+            (u"補證完成:%d 個檔案與上游逐位元組相同,已發 provenance。\n"
+             u"(只寫 .dev/provenance.jsonl,repo 內容一個位元組都沒動;"
+             u"漂移的檔案不發證。)\n" % len(issued)).encode("utf-8"))
+        return 0
     src = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     try:
         plan = update(src, target, apply=apply)

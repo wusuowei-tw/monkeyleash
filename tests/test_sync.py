@@ -486,6 +486,103 @@ class TestDuplicateFrictionHeadingsAreRefused:
         sync.update(str(src), str(dst), apply=True)
 
 
+class TestProvenanceCertifiesIdentityNotWrites:
+    """**判準是「它與上游一致」,不是「我寫了它」。**
+
+    原本只替 `changed + added` 發證,於是**從未需要更新的檔案永遠拿不到證**:
+    量化的 `g1_verify.py`、`shadow_review.py` 一直與上游相同,
+    每一輪同步都不在那個集合裡,R3 一醒就紅而且永遠不會自己好。
+    `verify_gates.py` 那輪是綠的,那是**巧合** —— 它剛好有變。
+    一個靠「剛好有改」才成立的保證,不是保證。
+
+    「與上游逐位元組相同」才是 R3 要問的(ADR F-0014)。
+    """
+
+    def test_a_file_never_written_by_sync_still_gets_a_record(self, pair):
+        """量化的實際情境:`g1_verify.py` 同步**之前**就已經與上游相同,
+        所以每一輪都不在 `changed + added` 裡,從來沒拿到過證。"""
+        src, dst = pair
+        _w(src, ".claude/hooks/steady.py", "# 從來不用更新\n")
+        _git(src, "add", "-A")
+        _git(src, "commit", "-qm", "steady")
+        _w(dst, ".claude/hooks/steady.py", "# 從來不用更新\n")   # 目標已經一樣
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "already有")
+
+        plan = sync.update(str(src), str(dst), apply=True)
+        assert ".claude/hooks/steady.py" not in plan.changed + plan.added, \
+            "這個檔案根本沒被寫過 —— 測試的前提垮了"
+        recs = [json.loads(l) for l in
+                io.open(dst / ".dev" / "provenance.jsonl", encoding="utf-8")
+                if l.strip()]
+        assert any(r["path"] == ".claude/hooks/steady.py" for r in recs), \
+            "沒被寫過但與上游相同的檔案拿不到證 —— R3 一醒就紅:%r" % recs
+
+    def test_a_locally_drifted_file_gets_no_record(self, pair):
+        """**負控**:本地改過的 copy 檔不發證 —— 它已經不是「上游的成品」。"""
+        src, dst = pair
+        sync.update(str(src), str(dst), apply=True)
+        _w(dst, ".claude/hooks/gate.py", "# 本地亂改\n")
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "drift")
+        os.remove(str(dst / ".dev" / "provenance.jsonl"))
+        sync.update(str(src), str(dst), apply=False)
+        sync.certify(str(src), str(dst))
+        recs = [json.loads(l) for l in
+                io.open(dst / ".dev" / "provenance.jsonl", encoding="utf-8")
+                if l.strip()] if (dst / ".dev" / "provenance.jsonl").exists() else []
+        assert not [r for r in recs if r["path"] == ".claude/hooks/gate.py"], recs
+
+
+class TestCertifyRunsOnADirtyTree:
+    """**發證與淨樹互為前提是死循環。**
+
+    量化需要在「把東西納入管理」之前先補證,而發證原本要求淨樹。
+    補證模式只寫 `.dev/provenance.jsonl`,**不寫任何 repo 內容** ——
+    `refuse_if_dirty` 的理由是「在未提交的變更上覆寫,出事時分不出是誰改的」,
+    而補證什麼都不覆寫,那道檢查對它不適用。
+
+    判準不放寬:仍然是「與上游逐位元組相同」,漂移的檔案照樣不發證。
+    **髒樹不會換來假證。**
+    """
+
+    def test_it_works_with_a_dirty_tree(self, pair):
+        src, dst = pair
+        sync.update(str(src), str(dst), apply=True)
+        _w(dst, "untracked_mess.txt", "髒\n")
+        os.remove(str(dst / ".dev" / "provenance.jsonl"))
+        issued = sync.certify(str(src), str(dst))          # 不得丟 Refused
+        assert issued, "髒樹上補證什麼都沒發"
+
+    def test_it_writes_nothing_but_provenance(self, pair):
+        """逐位元組驗:除了 provenance,repo 內容一個位元組都不能動。"""
+        src, dst = pair
+        sync.update(str(src), str(dst), apply=True)
+        _w(dst, "untracked_mess.txt", "髒\n")
+        before = {}
+        for root_dir, _dirs, files in os.walk(str(dst)):
+            if ".git" in root_dir:
+                continue
+            for f in files:
+                p = os.path.join(root_dir, f)
+                if p.endswith("provenance.jsonl"):
+                    continue
+                before[p] = hashlib.sha256(io.open(p, "rb").read()).hexdigest()
+        sync.certify(str(src), str(dst))
+        for p, digest in before.items():
+            assert hashlib.sha256(io.open(p, "rb").read()).hexdigest() == digest, p
+
+    def test_a_dirty_tree_still_yields_no_fake_certificate(self, pair):
+        """**負控**:髒樹 + 漂移的檔案 -> 那個檔案仍然不發證。"""
+        src, dst = pair
+        sync.update(str(src), str(dst), apply=True)
+        _w(dst, ".claude/hooks/gate.py", "# 漂移\n")
+        _w(dst, "untracked_mess.txt", "髒\n")
+        os.remove(str(dst / ".dev" / "provenance.jsonl"))
+        issued = sync.certify(str(src), str(dst))
+        assert ".claude/hooks/gate.py" not in [r["path"] for r in issued], issued
+
+
 class TestGenerateIsNeverOverwritten:
     """`generate` 的語意是**缺才建、有就不碰**。
 

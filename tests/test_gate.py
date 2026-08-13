@@ -408,6 +408,32 @@ class TestMountCheckCache:
         assert gate.mode_hook_would_block_on_mounts() is True
 
 
+class TestUnallowedWriteTargets:
+    """R7 的目標抽取 —— gate.py 的公開判定,所以釘在 gate 自己的測試檔。
+
+    行為層的正負控在 tests/test_bash_write.py;這裡驗的是**抽出來的東西對不對**。
+    兩層都要:只驗行為的話,「碰巧擋對了」與「真的看懂了目標」分不開。
+    """
+
+    def test_it_lists_every_redirect_target(self):
+        got = gate.unallowed_write_targets("python x.py > out.txt 2>/dev/null")
+        assert got == ["out.txt"], got
+
+    def test_dev_null_alone_yields_nothing(self):
+        assert gate.unallowed_write_targets("ls >/dev/null 2>&1") == []
+
+    def test_a_write_command_operand_counts_as_a_target(self):
+        got = gate.unallowed_write_targets("rm -rf important_dir >/dev/null")
+        assert "important_dir" in got, got
+
+    def test_flags_are_not_mistaken_for_targets(self):
+        got = gate.unallowed_write_targets("rm -rf important_dir")
+        assert got == ["important_dir"], got
+
+    def test_an_allowed_operand_is_not_listed(self):
+        assert gate.unallowed_write_targets("rm -rf /tmp/scratch") == []
+
+
 class TestStateFileClassification:
     """票 04 — 狀態檔分類。判準是**這個檔案壞掉或消失時,正確行為是什麼**。
 

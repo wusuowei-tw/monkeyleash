@@ -304,6 +304,92 @@ BASH_ALLOWED_TARGETS = {
 }
 
 
+# 會寫檔的指令。與 WRITE_CONSTRUCT 的第一段同一份名單,寫成集合是為了
+# 逐 token 比對 —— 正規表示式找得到「有沒有」,找不到「寫到哪」。
+WRITE_COMMANDS = {"tee", "cp", "mv", "touch", "mkdir", "install", "rm", "rmdir",
+                  "dd", "truncate"}
+
+# 包裝器:真正的指令在它們後面一格。少了這個,`sudo rm -rf x` 的 rm
+# 不在指令位置,運算元就掃不到。
+WRAPPERS = {"sudo", "env", "time", "nohup", "xargs", "command"}
+
+# `>` / `>>` / `2>` 後面那一段就是重導向目標。`2>&1` 不算(fd 重導向,不落地)。
+REDIRECT_RE = re.compile(r"(?<!\d)(?<!&)>>?\s*([^\s;&|>]+)")
+
+
+def _target_allowed(token):
+    tok = token.strip().strip('"').strip("'")
+    return any(t in tok for t in BASH_ALLOWED_TARGETS)
+
+
+def unallowed_write_targets(command):
+    """這條指令會寫到哪些**沒有被許可**的位置。回空串列 = 每個目標都許可。
+
+    要問的是「**每一個**寫入目標都被許可嗎」,不是
+    「指令字串裡有沒有出現過一個許可目標」。後者是原本的寫法,
+    而它讓 `2>/dev/null` 變成萬用通行證:`rm -rf x >/dev/null`、
+    `tee gate.py < evil 2>/dev/null` 全部放行(票 19)。
+
+    兩類目標:
+      重導向     `>` / `>>` 後面那一段
+      寫入指令   `rm` / `cp` / `mv` / `tee` / … 的路徑運算元(旗標不算)
+
+    **解析不出來時回一個佔位項(= 擋)**:半套的解析器比零涵蓋更危險,
+    所以不確定往嚴的倒(ADR 0008 的同一句話)。
+    """
+    bad = []
+    # **先按分隔符切段再解析。** 不切的話,運算元會一路吃過 `;` 吃到下一段:
+    # `rm -rf x; cd y && ls` 會把 `cd`、`y`、`ls` 全當成 rm 的目標。
+    # 分隔符還可能**黏在 token 上**(`fresh9;`),所以用切的,不是比對 token。
+    segments = [s for s in re.split(r"&&|\|\||;|\|", command) if s.strip()]
+    saw_construct = False
+    for seg in segments:
+        for m in REDIRECT_RE.finditer(seg):
+            saw_construct = True
+            if not _target_allowed(m.group(1)):
+                bad.append(m.group(1).strip('"').strip("'"))
+
+        tokens = seg.replace("\t", " ").split()
+        # **只認指令位置的 token。** `rm` / `cp` / `install` 是不是寫入指令,
+        # 取決於它在不在指令位置 —— `echo "install exit=$?"` 裡的 `install`
+        # 是散文,`python x.py install` 裡的是參數。
+        # 不分位置的話,一個字出現在引號裡就會觸發整套運算元掃描(F-078 家族)。
+        i = 0
+        while i < len(tokens) and (
+                "=" in tokens[i] and not tokens[i].startswith("-")
+                and "/" not in tokens[i].split("=", 1)[0]
+                or os.path.basename(tokens[i]).lower() in WRAPPERS):
+            i += 1                       # 跳過 FOO=bar 前綴與 sudo/env/time 之類
+        if i < len(tokens) and \
+                os.path.basename(tokens[i].strip('"').strip("'")).lower() \
+                in WRITE_COMMANDS:
+            saw_construct = True
+            i += 1
+            while i < len(tokens):
+                tok = tokens[i]
+                if tok.startswith("-") or tok.startswith(">") or "<" in tok:
+                    i += 1
+                    continue
+                if REDIRECT_RE.match(tok):
+                    i += 1
+                    continue
+                if not _target_allowed(tok):
+                    bad.append(tok.strip('"').strip("'"))
+                i += 1
+
+    if not bad and not saw_construct:
+        # WRITE_CONSTRUCT 說有寫入,而這裡一個目標都抽不出來
+        # (PowerShell cmdlet、heredoc、sed -i 之類)-> 看不懂就擋。
+        bad.append("(解析不出寫入目標)")
+    # 去重但保留順序 —— 訊息要好讀,而重複的目標名沒有多給資訊
+    seen, out = set(), []
+    for b in bad:
+        if b not in seen:
+            seen.add(b)
+            out.append(b)
+    return out
+
+
 def bash_write_violation(command):
     """R7:這個 Bash 指令會不會寫入 repo。回 None(放行)或訊息。"""
     if not command or not command.strip():
@@ -321,10 +407,18 @@ def bash_write_violation(command):
         return None
 
     # 「確定在 repo 外」與「不知道寫到哪」是兩件事:前者可以放行(repo 外是 G1 的事),
-    # 後者必須擋。只放行前者。
-    for target, _why in BASH_ALLOWED_TARGETS.items():
-        if target in cmd:
-            return None
+    # 後者必須擋。只放行前者 —— 而判準是**每一個寫入目標**都被許可,
+    # 不是「指令字串裡出現過一個許可目標」(票 19,判錯對象第七例)。
+    bad = unallowed_write_targets(cmd)
+    if not bad:
+        return None
+    return ("[R7] 這個 Bash 指令會寫到沒有被許可的位置(%s),請改用 Write / Edit。\n"
+            "     理由不是風格:從指令字串解析『寫到哪』解不完,而半套的解析器\n"
+            "     比零涵蓋更危險 —— 零涵蓋你知道它是零。所以入口收成一個,\n"
+            "     走檔案工具的話 R1–R6 全部適用。\n"
+            "     例外(附理由)在 gate.py 的 BASH_ALLOWED_CMDS / BASH_ALLOWED_TARGETS。\n"
+            "     指令裡出現 /dev/null **不會**讓其他寫入一起免檢。"
+            % "、".join(bad))
 
     return ("[R7] 這個 Bash 指令會寫入檔案,請改用 Write / Edit。\n"
             "     理由不是風格:從指令字串解析『寫到哪』解不完,而半套的解析器\n"
