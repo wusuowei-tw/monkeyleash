@@ -137,19 +137,132 @@ def tracked(root):
             if p.strip()]
 
 
+def _sha_at(target, ref, path):
+    """`ref` 那一版裡這條路徑記的 sha。取不到回 None。"""
+    out = subprocess.run(["git", "-C", target, "rev-parse", "%s:%s" % (ref, path)],
+                         capture_output=True)
+    if out.returncode != 0:
+        return None
+    return out.stdout.decode("utf-8", "replace").strip()
+
+
+def gitlink_paths(target):
+    """index 裡 mode 為 160000 的路徑 —— 內嵌 repo(submodule 或裸 gitlink)。"""
+    out = subprocess.run(["git", "-C", target, "ls-files", "-s", "-z"],
+                         capture_output=True)
+    if out.returncode != 0:
+        raise Refused("問不到 %s 的 index" % target)
+    paths = []
+    for rec in out.stdout.decode("utf-8", "replace").split("\0"):
+        if not rec.strip():
+            continue
+        meta, _, path = rec.partition("\t")
+        if meta.split()[0] == "160000":
+            paths.append(path)
+    return paths
+
+
+def gitlink_unsettled(target):
+    """**外層**對這些 gitlink 的記錄還沒塵埃落定的清單。
+
+    要問的是「我的寫入會不會壓到未提交的變更」,而內嵌 repo 的**內部**狀態
+    在 sync 的寫入面之外 —— sync 從不寫那條路徑底下的東西。
+    量化 repo 的 `data_collector` 就是這樣被永久拒絕的(判錯對象第六例,票 17)。
+
+    **不靠 `--ignore-submodules=dirty`。** 本機實測(git 2.53)那個旗標行為正確,
+    量化那台卻永久拒絕 —— 代表它的語意隨版本/組態變。
+    一道護欄的正確性掛在「哪個 git 版本」上,那個依賴本身就是缺陷:
+    它會在別人的機器上安靜地翻面,而在我的機器上永遠測不到。
+    所以這裡自己比對 sha,版本無關:
+
+      HEAD 記的 sha != index 的 sha  -> 已 stage 未提交的 bump
+      index 的 sha  != 內部 HEAD     -> 內部前進、外層未記錄
+
+    兩者都是**外層**的未落定狀態。內部 modified / untracked 不進入判定。
+
+    **fail-closed**:內嵌 repo 讀不到(不是 git repo、權限問題)一律當髒 ——
+    問不出來不等於乾淨。
+    """
+    out = []
+    for path in gitlink_paths(target):
+        head_sha = _sha_at(target, "HEAD", path)
+        index_sha = _sha_at(target, "", path)      # `:path` = index
+        inner = subprocess.run(
+            ["git", "-C", os.path.join(target, path.replace("/", os.sep)),
+             "rev-parse", "HEAD"], capture_output=True)
+        if inner.returncode != 0:
+            out.append("%s:讀不到內嵌 repo 的 HEAD —— 問不出來不等於乾淨" % path)
+            continue
+        inner_sha = inner.stdout.decode("utf-8", "replace").strip()
+        if index_sha is None:
+            out.append("%s:讀不到 index 裡記的 sha" % path)
+        elif head_sha is not None and head_sha != index_sha:
+            out.append("%s:gitlink 已 stage 但未提交(HEAD %s / index %s)"
+                       % (path, (head_sha or "")[:8], index_sha[:8]))
+        elif index_sha != inner_sha:
+            out.append("%s:內嵌 repo 已前進但外層未記錄(記的 %s / 實際 %s)"
+                       % (path, index_sha[:8], inner_sha[:8]))
+    return out
+
+
 def refuse_if_dirty(target):
+    """外層樹必須乾淨。**內嵌 repo 的內部狀態不算**(見 `gitlink_unsettled`)。"""
     out = subprocess.run(["git", "status", "--porcelain",
-                          "--ignore-submodules=dirty"],
+                          "--ignore-submodules=all"],
                          cwd=target, capture_output=True)
     if out.returncode != 0:
         raise Refused("問不到 %s 的工作樹狀態" % target)
     dirty = [l for l in out.stdout.decode("utf-8", "replace").splitlines()
              if l.strip()]
+    dirty += gitlink_unsettled(target)
     if dirty:
         raise Refused(
-            "目標工作樹不乾淨(%d 項),先清乾淨再更新 —— "
-            "在未提交的變更上覆寫,出事時分不出是誰改的:\n  %s"
+            "目標**外層**工作樹不乾淨(%d 項),先清乾淨再更新 —— "
+            "在未提交的變更上覆寫,出事時分不出是誰改的。\n"
+            "     (內嵌 repo 的內部 modified / untracked **不算** ——\n"
+            "      那在 sync 的寫入面之外,sync 從不寫它底下的東西。)\n  %s"
             % (len(dirty), "\n  ".join(dirty[:10])))
+
+
+def _headings(path):
+    """回 [(號碼, 行號), ...]。**保留重複**,不是集合。"""
+    out = []
+    for lineno, line in enumerate(io.open(path, encoding="utf-8"), 1):
+        m = HEADING.match(line)
+        if m:
+            out.append((m.group(1), lineno))
+    return out
+
+
+def refuse_if_duplicate_headings(path, whose):
+    """同一個號碼出現多次就拒絕,並點名號碼與**每一處行號**。
+
+    由來:量化本地有兩則 `## F-046`(本地的 hook-session 那則 + 上游同號那則)。
+    原本的差集用集合,兩則塌成一員,`th - sh` 把 F-046 整個消掉 ——
+    於是 sync 放行,並**靜默刪掉本地那則**。
+
+    **撞號正是這道護欄的獵物,而它被撞號打穿。**
+    這道護欄存在的唯一理由就是「本地條目不能被覆蓋刪掉」,
+    而它用的資料結構恰好對「同號多則」不可見。
+
+    不自動判斷「哪一則該搬」:同號的兩則是**兩件不同的事**,
+    分辨它們要讀內容,那是人的判斷。護欄的職責是讓它現形,不是替人決定。
+    """
+    seen = {}
+    for token, lineno in _headings(path):
+        seen.setdefault(token, []).append(lineno)
+    dup = {t: ls for t, ls in seen.items() if len(ls) > 1}
+    if dup:
+        detail = "\n     ".join(
+            "%s 出現 %d 次,在第 %s 行"
+            % (t, len(ls), "、".join(str(x) for x in ls))
+            for t, ls in sorted(dup.items()))
+        raise Refused(
+            "%s 的 %s 有重複的條目號碼,這份表無法用來判斷哪些是本地條目。\n"
+            "     缺的前提是**號碼唯一**:差集看不見同號多則,\n"
+            "     於是本地那一則會被靜默刪掉(票 17)。\n"
+            "     同號的兩則是兩件不同的事,要分辨它們得讀內容 —— 那是人的判斷。\n"
+            "     %s" % (whose, FRICTION, detail))
 
 
 def unmigrated_friction(src, target):
@@ -163,8 +276,15 @@ def unmigrated_friction(src, target):
     if not os.path.exists(b):
         return []
     try:
-        sh = set(HEADING.findall(io.open(a, encoding="utf-8").read()))
-        th = set(HEADING.findall(io.open(b, encoding="utf-8").read()))
+        # **先驗號碼唯一,再做差集。** 順序不能反:差集本身對同號多則是盲的,
+        # 先做差集就等於在一份不可信的表上下結論。
+        if os.path.exists(a):
+            refuse_if_duplicate_headings(a, "來源")
+        refuse_if_duplicate_headings(b, "目標")
+        sh = set(t for t, _ in _headings(a)) if os.path.exists(a) else set()
+        th = set(t for t, _ in _headings(b))
+    except Refused:
+        raise
     except Exception as e:
         raise Refused("讀不到 friction-log,無法判定有沒有本地條目:%s" % e)
     return sorted(th - sh)

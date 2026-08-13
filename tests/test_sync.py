@@ -323,6 +323,169 @@ class TestUnclassifiedIsRefusedNotCopied:
     # 見 tests/test_upstream_manifest.py,那個檔案標 skip、不出貨。
 
 
+class TestDirtinessIsAboutTheOuterTree:
+    """**規則要問「我的寫入會不會壓到未提交的變更」,不是「整棵樹有沒有髒」。**
+
+    量化 repo 的 `data_collector` 是內嵌 git repo(gitlink,無 `.gitmodules`)。
+    它內部的髒在 sync 的寫入面之外 —— sync 從不寫那條路徑底下的東西 ——
+    卻讓 sync 永久拒絕。判錯對象的第六例。
+
+    不靠 `--ignore-submodules=dirty`:本機實測那個旗標行為正確,
+    量化那邊卻永久拒絕,代表它的語意在不同 git 版本/組態下不一致。
+    **一道護欄的正確性掛在「哪個 git 版本」上,那個依賴本身就是缺陷** ——
+    它會在別人的機器上安靜地翻面。
+    """
+
+    @pytest.fixture()
+    def embedded(self, pair):
+        """外層 repo 裡放一個內嵌 git repo(gitlink,不寫 .gitmodules)。"""
+        src, dst = pair
+        inner = dst / "data_collector"
+        inner.mkdir()
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            subprocess.run(["git"] + c.split(), cwd=str(inner), capture_output=True)
+        _w(inner, "collect.py", "x = 1\n")
+        _git(inner, "add", "-A")
+        _git(inner, "commit", "-qm", "inner1")
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "embed")
+        return src, dst, inner
+
+    def test_internal_dirt_does_not_block(self, embedded):
+        """**主張**:內嵌 repo 內部髒 + 外層乾淨 → 放行。"""
+        src, dst, inner = embedded
+        _w(inner, "collect.py", "x = 2\n")          # modified content
+        _w(inner, "scratch.tmp", "untracked\n")     # untracked content
+        sync.update(str(src), str(dst), apply=True)   # 不得丟 Refused
+
+    def test_sync_never_writes_inside_the_embedded_repo(self, embedded):
+        """證明「在寫入面之外」不是宣稱:內嵌 repo 的內容逐位元組不變。"""
+        src, dst, inner = embedded
+        _w(inner, "collect.py", "x = 2\n")
+        before = _h(inner, "collect.py")
+        plan = sync.update(str(src), str(dst), apply=True)
+        assert _h(inner, "collect.py") == before
+        assert not [r for r in plan.changed + plan.added
+                    if r.startswith("data_collector/")], plan
+
+    def test_an_unrecorded_gitlink_advance_still_blocks(self, embedded):
+        """內部前進、外層未記錄 → 那是**外層**的未落定狀態 → 擋。"""
+        src, dst, inner = embedded
+        _w(inner, "collect.py", "x = 3\n")
+        _git(inner, "add", "-A")
+        _git(inner, "commit", "-qm", "inner2")
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=True)
+
+    def test_a_staged_but_uncommitted_gitlink_bump_blocks(self, embedded):
+        """已 stage 未提交的 bump 也是外層的未落定狀態 → 擋。"""
+        src, dst, inner = embedded
+        _w(inner, "collect.py", "x = 4\n")
+        _git(inner, "add", "-A")
+        _git(inner, "commit", "-qm", "inner3")
+        _git(dst, "add", "data_collector")
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=True)
+
+    def test_outer_dirt_still_blocks(self, embedded):
+        """**負控**:外層髒照樣拒絕。少了它,「一律放行」也會讓上面幾條過。"""
+        src, dst, inner = embedded
+        _w(dst, "untracked_outer.txt", "x\n")
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=True)
+
+    # ── 判定不得掛在 git 旗標的語意上 ────────────────────────────────
+    #
+    # 上面那幾條在本機 git(2.53)是綠的 —— 因為這個版本的
+    # `--ignore-submodules=dirty` 行為正確。**量化那台不是**,
+    # 而我在這台機器上重現不出來。
+    # 所以真正要釘的不是「行為對不對」,是「**判定有沒有依賴那個旗標**」:
+    # 依賴它的話,同一份程式碼在兩台機器上會給出相反的答案,
+    # 而那種缺陷在本機永遠測不到。
+
+    def test_the_gitlink_check_is_explicit_not_flag_dependent(self, embedded):
+        """gitlink 的判定要自己比對 sha,不靠 git 幫忙過濾。"""
+        src, dst, inner = embedded
+        assert hasattr(sync, "gitlink_unsettled"), \
+            "沒有明確的 gitlink 比對 —— 判定還掛在 --ignore-submodules 的語意上"
+        assert sync.gitlink_unsettled(str(dst)) == []
+
+    def test_gitlink_unsettled_ignores_internal_dirt(self, embedded):
+        src, dst, inner = embedded
+        _w(inner, "collect.py", "x = 9\n")
+        _w(inner, "junk.tmp", "u\n")
+        assert sync.gitlink_unsettled(str(dst)) == []
+
+    def test_gitlink_unsettled_reports_an_advanced_inner_repo(self, embedded):
+        src, dst, inner = embedded
+        _w(inner, "collect.py", "x = 9\n")
+        _git(inner, "add", "-A")
+        _git(inner, "commit", "-qm", "advance")
+        out = sync.gitlink_unsettled(str(dst))
+        assert out and "data_collector" in out[0], out
+
+    def test_an_unreadable_embedded_repo_fails_closed(self, embedded):
+        """讀不到內嵌 repo(不是 git repo、權限問題)-> 當髒。
+        問不出來不等於乾淨。"""
+        src, dst, inner = embedded
+        import shutil
+        shutil.rmtree(str(inner / ".git"), ignore_errors=True)
+        out = sync.gitlink_unsettled(str(dst))
+        assert out, "內嵌 repo 讀不到卻回報乾淨(fail-open)"
+
+
+class TestDuplicateFrictionHeadingsAreRefused:
+    """**撞號正是這道護欄的獵物,而它被撞號打穿。**
+
+    現行實作用集合差:目標若有**兩則** `## F-046`(本地一則 + 上游同號一則),
+    集合把兩則塌成一員,`th - sh` 把 F-046 整個消掉 ——
+    於是 sync 放行,並靜默刪掉本地那則。
+
+    這道護欄存在的唯一理由就是「本地條目不能被覆蓋刪掉」,
+    而它用的資料結構恰好對「同號多則」不可見。
+    """
+
+    def _log(self, root, body):
+        _w(root, "docs/agents/friction-log.md", body)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "log")
+
+    def test_duplicate_headings_in_the_target_are_refused(self, pair):
+        src, dst = pair
+        self._log(dst, "# Friction\n\n## F-001 一\n## F-046 本地的 hook-session\n"
+                       "## F-047 別的\n## F-046 上游同號那則\n")
+        self._log(src, "# Friction\n\n## F-001 一\n## F-002 二\n## F-046 上游同號那則\n")
+        with pytest.raises(sync.Refused) as e:
+            sync.update(str(src), str(dst), apply=True)
+        assert "F-046" in str(e.value), e.value
+
+    def test_the_refusal_names_both_line_numbers(self, pair):
+        """票 13 判準:說出是哪一個前提沒滿足 —— 這裡是「哪個號碼、在哪兩行」。"""
+        src, dst = pair
+        self._log(dst, "# Friction\n\n## F-046 甲\n## F-047 乙\n## F-046 丙\n")
+        self._log(src, "# Friction\n\n## F-046 甲\n")
+        with pytest.raises(sync.Refused) as e:
+            sync.update(str(src), str(dst), apply=True)
+        msg = str(e.value)
+        assert "3" in msg and "5" in msg, "沒有點名兩處行號:%s" % msg
+
+    def test_duplicates_on_the_source_side_are_refused_too(self, pair):
+        """兩側都驗:上游自己撞號同樣是「這份表不可信」。"""
+        src, dst = pair
+        self._log(src, "# Friction\n\n## F-050 甲\n## F-050 乙\n")
+        self._log(dst, "# Friction\n\n## F-050 甲\n")
+        with pytest.raises(sync.Refused) as e:
+            sync.update(str(src), str(dst), apply=True)
+        assert "F-050" in str(e.value), e.value
+
+    def test_no_duplicates_still_passes(self, pair):
+        """**負控**:沒有撞號時照舊放行,不是一律拒絕。"""
+        src, dst = pair
+        self._log(src, "# Friction\n\n## F-001 一\n## F-002 二\n")
+        self._log(dst, "# Friction\n\n## F-001 一\n")
+        sync.update(str(src), str(dst), apply=True)
+
+
 class TestGenerateIsNeverOverwritten:
     """`generate` 的語意是**缺才建、有就不碰**。
 
