@@ -8,6 +8,7 @@
 把 R3 在提交時整個跳過,權威層反而比前哨鬆。當時沒有任何東西發現。
 """
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -1204,3 +1205,169 @@ class TestTheSuiteItselfLeavesNoTrace:
         after = len(io.open(str(real), encoding="utf-8").readlines()) \
             if real.exists() else 0
         assert after == before, "呼叫 check() 污染了正式帳本(%d -> %d)" % (before, after)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R3 × provenance —— 同步來的成品,紅燈責任在上游
+#
+# 下游 repo 收到 sync 帶進來的實作時,R3 要求本地紅燈紀錄,而**紅綠燈迴圈在上游**:
+# 下游拿到的是成品,它從來沒有機會讓那些測試在實作不存在時紅過。
+# legacy 名單只減不增,正確地不是出路(那是給機制上線前的既有碼,不是給新收到的成品)。
+#
+# 判準:**與上游那個 commit 的物件逐位元組相同 ⇒ 紅燈責任在上游。**
+#
+# **provenance 是控制,不是證據,所以不得可自助。**
+# 驗證一律對到上游的 git 物件(`git show <commit>:<path>` 取內容自己算 hash),
+# **不採信 provenance 檔案裡宣稱的 hash** —— 那個欄位是給人看的,不是判定依據。
+# 手寫一筆 provenance 造不出一個上游沒有的 blob,所以偽造需要改上游,不是改本地檔案。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestR3AcceptsUpstreamProvenance:
+
+    @pytest.fixture()
+    def world(self, tmp_path, monkeypatch):
+        """上游(框架)與下游(已裝 repo),兩個真的 git repo。
+
+        上游必須是真的 git 物件庫 —— 判定要對到 `git show`,
+        用假的字串替身會讓「偽造不了」這個性質整條測不到。
+        """
+        up, down = tmp_path / "up", tmp_path / "down"
+        for r in (up, down):
+            r.mkdir()
+            for c in ("init -q", "config user.email t@t", "config user.name t"):
+                subprocess.run(["git"] + c.split(), cwd=str(r), capture_output=True)
+
+        (up / "pkg").mkdir()
+        io.open(up / "pkg" / "thing.py", "w", encoding="utf-8",
+                newline="\n").write("def f():\n    return 1\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(up), capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "up"], cwd=str(up),
+                       capture_output=True)
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(up),
+                             capture_output=True).stdout.decode().strip()
+
+        (down / "pkg").mkdir()
+        (down / "tests").mkdir()
+        io.open(down / "tests" / "test_thing.py", "w",
+                encoding="utf-8").write("x = 1\n")
+        monkeypatch.setattr(gate, "ROOT", str(down))
+        monkeypatch.setattr(gate, "RUN_LOG", str(down / ".dev" / "test-runs.jsonl"))
+        monkeypatch.setattr(gate, "PROVENANCE", str(down / ".dev" / "provenance.jsonl"))
+        monkeypatch.setattr(gate, "EXEMPTION_LOG",
+                            str(down / ".dev" / "gate-exemptions.jsonl"))
+        monkeypatch.setattr(gate, "load_stage", lambda: ("implement", "11"))
+        monkeypatch.chdir(down)
+        return up, down, sha
+
+    def _sync_in(self, down, text="def f():\n    return 1\n"):
+        io.open(down / "pkg" / "thing.py", "w", encoding="utf-8",
+                newline="\n").write(text)
+
+    def _prov(self, down, **kw):
+        rec = {"path": "pkg/thing.py", "upstream_path": "pkg/thing.py"}
+        rec.update(kw)
+        d = down / ".dev"
+        d.mkdir(exist_ok=True)
+        with io.open(d / "provenance.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    # ── 正控 ──────────────────────────────────────────────────────────────
+
+    def test_a_file_matching_the_upstream_object_needs_no_local_redlight(self, world):
+        """**本節的主張**:內容與上游該 commit 的物件相同 -> R3 紅燈半不適用。"""
+        up, down, sha = world
+        self._sync_in(down)
+        self._prov(down, upstream_root=str(up), upstream_commit=sha)
+        msg = gate.check("pkg/thing.py", "def f():\n    return 2\n")
+        assert not (msg and "R3/紅燈" in msg), msg
+
+    def test_the_exemption_is_collected_with_its_own_reason(self, world):
+        """豁免要逐筆記帳,而且要與 gate-self 分得開 ——
+        混在一起對帳時又會得到一個解釋不了的數字(票 08)。
+
+        斷言的是 `check()` 收進 bucket,不是它寫檔:票 08 之後判定是純函式,
+        寫帳本屬於強制點(只有那裡知道「真的有人要寫」)。
+        """
+        up, down, sha = world
+        self._sync_in(down)
+        self._prov(down, upstream_root=str(up), upstream_commit=sha)
+        used = []
+        gate.check("pkg/thing.py", "def f():\n    return 2\n", exemptions=used)
+        assert any(e.get("reason") == "upstream-provenance" for e in used), used
+
+    def test_the_judgement_stays_pure(self, world):
+        """provenance 這條路徑不得把副作用帶回 `check()` —— 票 08 剛拆掉的東西。"""
+        up, down, sha = world
+        self._sync_in(down)
+        self._prov(down, upstream_root=str(up), upstream_commit=sha)
+        ledger = down / ".dev" / "gate-exemptions.jsonl"
+        before = ledger.exists() and len(io.open(str(ledger), encoding="utf-8").readlines())
+        gate.check("pkg/thing.py", "def f():\n    return 2\n")
+        after = ledger.exists() and len(io.open(str(ledger), encoding="utf-8").readlines())
+        assert after == before, "check() 又開始寫帳本了(票 08 的回歸)"
+
+    # ── 負控:自助偽造的每一條路 ──────────────────────────────────────────
+
+    def test_a_hand_written_provenance_for_a_local_file_is_refused(self, world):
+        """**必備負控**:自己寫一筆 provenance 給一個上游沒有的新檔案 -> 擋。
+
+        手寫 provenance 造不出一個上游沒有的 blob;`git show` 直接失敗。
+        偽造要改上游,不是改本地檔案 —— 這就是「不得可自助」的意思。
+        """
+        up, down, sha = world
+        io.open(down / "pkg" / "mine.py", "w", encoding="utf-8",
+                newline="\n").write("def mine():\n    return 9\n")
+        io.open(down / "tests" / "test_mine.py", "w",
+                encoding="utf-8").write("x = 1\n")
+        self._prov(down, path="pkg/mine.py", upstream_path="pkg/mine.py",
+                   upstream_root=str(up), upstream_commit=sha)
+        msg = gate.check("pkg/mine.py", "def mine():\n    return 8\n")
+        assert msg and "R3" in msg, "手寫 provenance 就換到了 R3 豁免:%r" % msg
+
+    def test_a_claimed_hash_is_not_trusted(self, world):
+        """**判定不得只驗 provenance 裡宣稱的 hash。**
+
+        這筆紀錄宣稱的 hash 與本地檔案完全相符,但上游那個物件的內容不同 ——
+        採信宣稱值的實作會放行,對到 git 物件的實作會擋。
+        兩種實作在別的測試上表現一樣,只有這條分得開它們。
+        """
+        up, down, sha = world
+        self._sync_in(down, "def f():\n    return 999\n")     # 與上游不同
+        local = hashlib.sha256(b"def f():\n    return 999\n").hexdigest()
+        self._prov(down, upstream_root=str(up), upstream_commit=sha,
+                   content_hash=local)
+        msg = gate.check("pkg/thing.py", "def f():\n    return 998\n")
+        assert msg and "R3" in msg, "採信了 provenance 自己宣稱的 hash:%r" % msg
+
+    def test_content_that_drifted_from_upstream_is_refused(self, world):
+        """本地被改過 -> 不再是「上游的成品」-> 紅燈責任回到本地。"""
+        up, down, sha = world
+        self._sync_in(down, "def f():\n    return 1\n# 本地加的\n")
+        self._prov(down, upstream_root=str(up), upstream_commit=sha)
+        msg = gate.check("pkg/thing.py", "def f():\n    return 3\n")
+        assert msg and "R3" in msg, msg
+
+    def test_an_unreachable_upstream_is_refused(self, world):
+        """上游問不到 -> **fail-closed**。問不到不等於相同。"""
+        up, down, sha = world
+        self._sync_in(down)
+        self._prov(down, upstream_root=str(down / "no_such_repo"),
+                   upstream_commit=sha)
+        msg = gate.check("pkg/thing.py", "def f():\n    return 2\n")
+        assert msg and "R3" in msg, msg
+
+    def test_no_provenance_at_all_is_refused(self, world):
+        up, down, sha = world
+        self._sync_in(down)
+        msg = gate.check("pkg/thing.py", "def f():\n    return 2\n")
+        assert msg and "R3" in msg, msg
+
+    def test_provenance_does_not_exempt_r2(self, world, monkeypatch):
+        """**只豁免 R3。** R2 的窗口問題是票 10 的事,兩者不得互相代勞 ——
+        一個豁免同時鬆兩條規則,爆炸半徑就不再是它宣稱的那個。"""
+        up, down, sha = world
+        monkeypatch.setattr(gate, "load_stage", lambda: ("review", "11"))
+        self._sync_in(down)
+        self._prov(down, upstream_root=str(up), upstream_commit=sha)
+        msg = gate.check("pkg/thing.py", "def f():\n    return 2\n")
+        assert msg and "R2" in msg, "provenance 順手把 R2 也豁免了:%r" % msg

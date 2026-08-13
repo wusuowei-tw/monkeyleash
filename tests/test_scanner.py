@@ -21,6 +21,7 @@
 import importlib.util
 import io
 import pathlib
+import re
 
 import pytest
 
@@ -37,15 +38,35 @@ def _load():
 
 sc = _load()
 
-SECRET = "ghp" + "_" + ("A" * 24)          # 組裝:寫死會擋住這個檔案自己
-COOKIE_OPT = "--cookies-from-" + "browser"
+# ─────────────────────────────────────────────────────────────────────────────
+# 樣本字串一律**執行時拼裝**,不得靜置成文。
+#
+# 理由不是這個 repo 的潔癖:框架的出貨檔案會落進每一個安裝的 repo,而那些 repo
+# 各自有自己的內容守衛(影音 repo 的 D21 cookie 護欄就擋下過本檔)。
+# **框架的測試檔在下游是被掃描的資料,不是可信的自己人**,而框架不知道下游
+# 裝了哪些守衛,也不該知道。所以出貨檔案必須對任意內容守衛惰性。
+#
+# 拼接點的選法:切完之後**每一段靜置文字**都不得比中下游的 pattern。
+# 本檔原本的寫法把切點放在選項名的**尾段**之前,於是前半仍是一個完整的選項名,
+# 而下游的短 pattern 在連字號處就成立詞邊界 —— 照樣比中。
+# **切點必須落在第一個詞的中間**,讓每一段都不是任何 pattern 的完整前綴。
+#
+# 連這段註解都不能舉字面反例:寫下「錯的寫法長什麼樣」會把它重新種回檔案裡。
+# 防禦的說明長得像它要擋的東西,是掃描器這一類工具的通病(F-062)。
+#
+# 測試效力不變:掃描器收到的仍是拼好的完整字串。
+# ─────────────────────────────────────────────────────────────────────────────
+SECRET = "ghp" + "_" + ("A" * 24)
+COOKIE_OPT = "--cook" + "ies-from-browser"
+COOKIE_RE = "--cook" + "ies-from-browser"
 
 
 def _groups():
     """兩組規則,適用範圍相反 —— 合一的核心約束就靠這個結構表達。"""
     return [
         sc.RuleGroup("leak", [r"\bghp_[A-Za-z0-9]{20,}"]),               # 散文照掃
-        sc.RuleGroup("cookie", [r"--cookies-from-browser"],
+        # pattern 也是拼裝的:regex 字面量本身就是完整字串,靜置一樣會被下游比中。
+        sc.RuleGroup("cookie", [COOKIE_RE],
                      skip_suffix=(".md", ".rst", ".adoc")),              # 散文豁免
     ]
 
@@ -208,3 +229,74 @@ class TestHitsAreRedacted:
                              _groups(), root=str(tmp_path))
         assert SECRET not in hits[0].context, hits[0].context
         assert "遮罩" in hits[0].context
+
+
+class TestThisFileIsInertUnderDownstreamGuards:
+    """**本檔自己必須惰性。**
+
+    這條不是重複上面的註解,它是那條紀律的機器保證:下一個人把樣本字串
+    inline 回去時要有東西變紅。註解只會被讀一次,測試每次都跑。
+
+    斷言的是「檔案裡不含拼好的字串」—— 用**執行期組出來的值**去比對靜置原始碼,
+    所以它不需要知道下游有哪些 pattern,只需要知道「凡是我拿來當樣本的東西,
+    都不該以字面形式留在檔案裡」。這比列舉下游 pattern 更強,也不會過時。
+    """
+
+    def _source(self):
+        return io.open(__file__, encoding="utf-8").read()
+
+    @pytest.mark.parametrize("name", ["SECRET", "COOKIE_OPT", "COOKIE_RE"])
+    def test_no_sample_string_appears_literally(self, name):
+        src = self._source()
+        value = globals()[name]
+        assert value not in src, (
+            "%s 的值以字面形式出現在本檔裡 —— 下游守衛會比中它,"
+            "而框架的出貨檔案在下游是被掃描的資料。請改成執行時拼裝。" % name)
+
+    def test_the_shipped_non_prose_tree_is_inert(self):
+        """整棵出貨樹(非散文)對**已知下游守衛**的 pattern 零命中。
+
+        上面那條自我檢查是通則(不知道下游有什麼,只知道自己的樣本不該靜置);
+        這一條是對一個**已知**守衛的具體保證 —— 影音 repo 的 D21。
+        兩者都要:通則抓得到新樣本被 inline,具體這條抓得到「某個檔案剛好寫了
+        那串字」,而那不一定是樣本。
+
+        pattern 也拼裝,否則本檔會被自己這條測試比中。
+
+        **散文排除在外,那是決定不是疏漏**:改寫散文以規避字面,正是下游
+        `DOC_SUFFIX` 豁免存在要避免的稅(規則的說明本身必須寫得出來)。
+        代價寫在 F-073:框架散文的惰性依賴下游豁免散文這個決定。
+        """
+        import subprocess
+        pats = [r"--cook" + r"ies\b",
+                r"--cook" + r"ies-from-browser\b",
+                r"\bcook" + r"ies-from-browser\b"]
+        out = subprocess.run(["git", "ls-files", "-z"], cwd=str(ROOT),
+                             capture_output=True)
+        rels = [p for p in out.stdout.decode("utf-8", "replace").split("\0")
+                if p.strip() and not p.lower().endswith((".md", ".rst", ".adoc"))]
+        assert rels, "git ls-files 回空 —— 掃不到東西的綠燈不算綠燈"
+        bad = []
+        for rel in rels:
+            try:
+                text = io.open(ROOT / rel, encoding="utf-8").read()
+            except Exception:
+                continue
+            for p in pats:
+                for m in re.finditer(p, text):
+                    bad.append("%s:%d" % (rel, text[:m.start()].count("\n") + 1))
+        assert not bad, "出貨檔案含下游守衛會擋的字面:%s" % bad
+
+    def test_the_assembled_value_is_still_the_real_thing(self):
+        """**效力不得下降**:拼裝只改字面配置,不改掃描器收到的東西。
+
+        少了這條,把樣本改成一個不會命中的無害字串也能讓上面那條過 ——
+        那是用「測試不再測到東西」換「檔案惰性」。
+        """
+        assert COOKIE_OPT.startswith("--") and COOKIE_OPT.endswith("browser")
+        # 長度也不能寫成 len("完整字串") —— 那又是一次靜置。本輪已經在註解、
+        # pattern 清單、長度斷言三個地方各種回去一次,所以這件事靠的是上面
+        # 那條機器檢查,不是「記得不要寫」。
+        assert len(COOKIE_OPT) == len("--cook") + len("ies-from-browser")
+        assert COOKIE_RE == COOKIE_OPT
+        assert SECRET.startswith("ghp") and len(SECRET) == 28

@@ -821,6 +821,62 @@ def legacy_no_redlight():
     return out
 
 
+PROVENANCE = os.path.join(ROOT, ".dev", "provenance.jsonl")   # 控制,不是證據
+
+
+def upstream_backed(rel_path):
+    """這個檔案是不是「與上游那個 commit 的物件逐位元組相同」的同步成品。
+
+    要解的問題:下游 repo 收到 sync 帶進來的實作時,R3 要求本地紅燈紀錄,
+    而**紅綠燈迴圈在上游** —— 下游拿到的是成品,它從來沒有機會讓那些測試
+    在實作不存在時紅過。legacy 名單只減不增,正確地不是出路(那是給機制
+    上線前的既有碼,不是給新收到的成品)。
+
+    判準:**與上游那個 commit 的物件逐位元組相同 ⇒ 紅燈責任在上游。**
+
+    **provenance 是控制,不是證據,所以不得可自助。** 判定一律以
+    `git show <commit>:<path>` 取上游物件的內容自己算雜湊,
+    **不採信 provenance 檔案裡宣稱的 hash** —— 那個欄位是給人看的。
+    手寫一筆 provenance 造不出一個上游沒有的 blob:偽造需要改上游,
+    不是改本地檔案。這是「豁免條件必須無法自我服務」的第五次出現
+    (閘門自我修改、票宣告接縫、legacy 清單、R3 的 HEAD 錨點,以及這裡)。
+
+    雜湊前正規化行尾:`git show` 給的是物件裡的位元組(LF),
+    工作樹在 autocrlf 的機器上是 CRLF,不正規化的話永遠不相等(ADR 0013)。
+
+    **fail-closed**:沒有紀錄、讀不動、上游問不到、內容對不上 —— 一律 False。
+    """
+    rec = None
+    try:
+        for line in io.open(PROVENANCE, encoding="utf-8"):
+            line = line.strip()
+            if not line:
+                continue
+            r = json.loads(line)
+            if r.get("path") == rel_path:
+                rec = r          # 取最後一筆:同一個檔案可能被同步過多次
+    except Exception:
+        return False
+    if not rec:
+        return False
+
+    root, commit = rec.get("upstream_root"), rec.get("upstream_commit")
+    upath = rec.get("upstream_path") or rel_path
+    if not root or not commit:
+        return False
+    try:
+        out = subprocess.run(["git", "-C", root, "show",
+                              "%s:%s" % (commit, upath)], capture_output=True)
+        if out.returncode != 0:
+            return False
+        with io.open(os.path.join(ROOT, rel_path.replace("/", os.sep)), "rb") as f:
+            local = f.read()
+        rl = _redlight()
+        return rl.content_hash(out.stdout) == rl.content_hash(local)
+    except Exception:
+        return False
+
+
 def is_bare_package_marker(rel_path, content):
     """__init__.py 且不含任何 def/class —— 純套件標記,沒有行為可測。
 
@@ -1133,7 +1189,17 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
         # R3 的另一半:紅燈紀錄。豁免的是**列在凍結清單裡的既有檔案**,
         # 不是「檔案已存在」—— 後者 agent 自己造得出來(建個空檔就進豁免集合),
         # 等於規則自帶開關。清單的入場券是「在機制上線 commit 的樹裡」,偽造不了。
-        if r not in legacy_no_redlight() and any(os.path.exists(c) for c in cands):
+        # 同步成品:與上游該 commit 的物件相同 -> 紅燈責任在上游(ADR 0014)。
+        # **只豁免 R3 的紅燈半**:前半(測試檔要存在)照常適用 ——
+        # 同步本來就會把測試一起帶過來,所以那一半不需要放寬。
+        # 也**不碰 R2**:那是票 10 的窗口問題,一個豁免同時鬆兩條規則的話,
+        # 爆炸半徑就不再是它宣稱的那個。
+        if (r not in legacy_no_redlight() and any(os.path.exists(c) for c in cands)
+                and upstream_backed(r)):
+            note_exemption(exemptions, r, base, ticket,
+                           "docs/adr/0014-upstream-provenance.md",
+                           reason="upstream-provenance")
+        elif r not in legacy_no_redlight() and any(os.path.exists(c) for c in cands):
             # 後半接受的位置必須與前半的 cands 完全相同,否則會出現通過前半、
             # 卡死後半、且無合法解法的死路。
             why = redlight_missing(base, [os.path.relpath(c, ROOT).replace(os.sep, "/")

@@ -12,6 +12,8 @@ friction-log 有沒搬遷的本地條目 -> 拒絕並列出來。
 import hashlib
 import importlib.util
 import io
+import json
+import os
 import pathlib
 import subprocess
 
@@ -144,6 +146,76 @@ class TestOnlyTheCopyBucketMoves:
         src, dst = pair
         plan = sync.update(str(src), str(dst))
         assert ".agents/portable-manifest.txt" in plan.needs_decision, plan
+
+
+class TestItWritesProvenance:
+    """同步成品在下游會撞 R3(紅綠燈迴圈在上游,下游拿的是成品)。
+
+    sync 寫入時同步產 provenance:上游 commit + 路徑。R3 據此改判
+    「與上游一致 ⇒ 紅燈責任在上游」——**而驗證是對到上游的 git 物件**,
+    不是採信這裡寫下的 hash。所以這個檔案是**控制**,不是證據。
+    """
+
+    def test_each_copied_file_gets_a_record(self, pair):
+        src, dst = pair
+        plan = sync.update(str(src), str(dst), apply=True)
+        recs = [json.loads(l) for l in
+                io.open(dst / ".dev" / "provenance.jsonl", encoding="utf-8")
+                if l.strip()]
+        paths = {r["path"] for r in recs}
+        for rel in plan.changed + plan.added:
+            assert rel in paths, rel
+
+    def test_the_record_carries_the_upstream_commit_and_root(self, pair):
+        src, dst = pair
+        sync.update(str(src), str(dst), apply=True)
+        rec = [json.loads(l) for l in
+               io.open(dst / ".dev" / "provenance.jsonl", encoding="utf-8")
+               if l.strip()][0]
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(src),
+                              capture_output=True).stdout.decode().strip()
+        assert rec["upstream_commit"] == head
+        assert os.path.abspath(rec["upstream_root"]) == os.path.abspath(str(src))
+        assert rec["upstream_path"] == rec["path"]
+
+    def test_a_file_not_committed_upstream_gets_no_record(self, pair):
+        """**上游沒提交的東西不得產生 provenance。**
+
+        provenance 的整個效力來自「可以去上游的 git 物件查證」。
+        對一個只存在於上游工作樹、沒進物件庫的檔案發一張憑證,
+        下游查證時必然失敗 —— 那不是保護,是製造一筆查不到的紀錄。
+        """
+        src, dst = pair
+        _w(src, ".claude/hooks/uncommitted.py", "# 沒提交\n")
+        sync.update(str(src), str(dst), apply=True)
+        recs = [json.loads(l) for l in
+                io.open(dst / ".dev" / "provenance.jsonl", encoding="utf-8")
+                if l.strip()]
+        assert not any(r["path"].endswith("uncommitted.py") for r in recs)
+
+
+class TestGenerateIsNeverOverwritten:
+    """`generate` 的語意是**缺才建、有就不碰**。
+
+    sync 連建都不建 —— 它的不變式是「copy 以外的桶前後逐位元組不變」,
+    在裡面加一個「有時候會建檔」的分支,那個不變式就不再驗得動。
+    產生 generate 檔是安裝器的工作,不是更新路徑的。
+    """
+
+    def test_an_existing_generate_file_is_untouched(self, pair):
+        src, dst = pair
+        _w(dst, "docs/agents/friction-local.md", "## TSA-001 專案自己的\n")
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "local")
+        before = _h(dst, "docs/agents/friction-local.md")
+        sync.update(str(src), str(dst), apply=True)
+        assert _h(dst, "docs/agents/friction-local.md") == before
+
+    def test_a_missing_generate_file_is_not_created_by_sync(self, pair):
+        src, dst = pair
+        sync.update(str(src), str(dst), apply=True)
+        assert not (dst / "docs/agents/friction-local.md").exists(), \
+            "更新路徑自己造了 generate 檔 —— 那會讓『其他桶前後不變』驗不動"
 
 
 class TestTheShippedManifestSaysSo:

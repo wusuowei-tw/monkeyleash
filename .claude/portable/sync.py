@@ -21,12 +21,14 @@
 
 import hashlib
 import io
+import json
 import os
 import re
 import subprocess
 import sys
 
 FRICTION = "docs/agents/friction-log.md"
+PROVENANCE = ".dev/provenance.jsonl"
 FRICTION_LOCAL = "docs/agents/friction-local.md"
 
 HEADING = re.compile(r"^## (\S+)", re.M)
@@ -147,6 +149,57 @@ def unmigrated_friction(src, target):
     return sorted(th - sh)
 
 
+def head_commit(root):
+    out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True)
+    if out.returncode != 0:
+        raise Refused("問不到 %s 的 HEAD" % root)
+    return out.stdout.decode("utf-8", "replace").strip()
+
+
+def in_commit(root, commit, rel):
+    """這個路徑在那個 commit 的樹裡嗎。"""
+    return subprocess.run(["git", "-C", root, "cat-file", "-e",
+                           "%s:%s" % (commit, rel)],
+                          capture_output=True).returncode == 0
+
+
+def write_provenance(src, target, rels, commit):
+    """替同步進來的檔案產 provenance:上游 commit + 路徑。
+
+    下游的 R3 據此改判「與上游一致 ⇒ 紅燈責任在上游」——
+    紅綠燈迴圈在上游,下游拿到的是成品,它從來沒有機會讓那些測試紅過。
+
+    **這個檔案是控制,不是證據,所以寫的東西要能被獨立查證。**
+    `content_hash` 只是給人看的;下游驗證一律拿 `git show <commit>:<path>`
+    自己算,不採信這裡宣稱的值 —— 否則手寫一筆就換得到豁免。
+
+    **上游沒提交的檔案不發憑證**:provenance 的效力全部來自「查得到那個 git 物件」,
+    對一個不在物件庫裡的檔案發憑證,下游查證時必然失敗 ——
+    那不是保護,是製造一筆查不到的紀錄。
+    """
+    out = []
+    for rel in rels:
+        if not in_commit(src, commit, rel):
+            continue
+        out.append({
+            "path": rel,
+            "upstream_path": rel,
+            "upstream_root": src,
+            "upstream_commit": commit,
+            "content_hash": file_hash(os.path.join(src, rel.replace("/", os.sep))),
+        })
+    if not out:
+        return []
+    p = os.path.join(target, PROVENANCE.replace("/", os.sep))
+    d = os.path.dirname(p)
+    if d and not os.path.isdir(d):
+        os.makedirs(d)
+    with io.open(p, "a", encoding="utf-8", newline="\n") as f:
+        for rec in out:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return out
+
+
 def update(src, target, apply=False):
     """回傳 `Plan`。`apply=False`(預設)不寫任何東西。"""
     src, target = os.path.abspath(src), os.path.abspath(target)
@@ -208,6 +261,9 @@ def update(src, target, apply=False):
     if moved:
         raise Refused("不該被動到的桶變了(%d 個檔案)—— 這是缺陷,不是設定:\n  %s"
                       % (len(moved), "\n  ".join(moved)))
+    # provenance 在 hash 重驗**之後**才寫 —— 驗證沒過就不該有憑證,
+    # 否則帳面上會出現一張替沒寫成功的檔案背書的憑證。
+    write_provenance(src, target, plan.changed + plan.added, head_commit(src))
     plan.verified = True
     return plan
 
