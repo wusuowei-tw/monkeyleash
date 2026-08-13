@@ -416,7 +416,21 @@ class TestStateFileClassification:
     """
 
     def test_evidence_files_live_under_dev(self):
-        for p in (gate.PIPELINE, gate.EXEMPTION_LOG):
+        """驗的是**正式**路徑,所以要拿一份沒被隔離 fixture 蓋過的 gate。
+
+        conftest 的 autouse fixture 把證據路徑指到 tmp(票 18:測試不得寫進
+        宿主的真實證據檔),它在 setup 時走訪已載入的模組 ——
+        **在測試函式內部才載的這一份蓋不到**,正好是這裡要的。
+
+        兩者不衝突,是同一個設計的兩面:平常一律隔離,
+        要驗「正式路徑長什麼樣」時自己拿一份乾淨的。
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "gate_unpatched_for_paths", ROOT / ".claude" / "hooks" / "gate.py")
+        fresh = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fresh)
+        for p in (fresh.PIPELINE, fresh.EXEMPTION_LOG):
             assert "/.dev/" in p.replace("\\", "/"), p
 
     def test_cache_files_live_under_cache_dir(self):

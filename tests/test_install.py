@@ -80,6 +80,82 @@ class TestInstallerDefaults:
             "__pycache__/", ".cache/", "/.claude/skills/", "/skills/")
 
 
+class TestEnumerationDoesNotLoseFilesToGitignore:
+    """`--exclude-standard` 把 **ignored** 排除在外 —— 補了 untracked,少了這半。
+
+    `source_files()` 的 docstring **描述了同一個病**:
+    「只取 `git ls-files` 的話,還沒 commit 的框架檔會靜默漏帶:
+    安裝照樣成功、閘門照樣擋、輸出全綠。」它修好了 untracked 那半就停了。
+
+    量化實測:`.claude/` 被 gitignore → 框架檔完全不進列舉 →
+    裝出**沒有閘門的 repo** → `verify_gates` 崩潰。而安裝本身是成功的、安靜的。
+    """
+
+    def test_ignored_framework_files_are_enumerated(self, install_mod, tmp_path,
+                                                    monkeypatch):
+        import subprocess
+        root = tmp_path / "src"
+        (root / ".claude" / "hooks").mkdir(parents=True)
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            subprocess.run(["git"] + c.split(), cwd=str(root), capture_output=True)
+        open(str(root / ".claude" / "hooks" / "gate.py"), "w").write("x = 1\n")
+        open(str(root / ".gitignore"), "w").write(".claude/\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(root), capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "b"], cwd=str(root),
+                       capture_output=True)
+        monkeypatch.setattr(install_mod, "SRC_ROOT", str(root))
+
+        all_files, _ = install_mod.source_files()
+        assert ".claude/hooks/gate.py" in all_files, (
+            "被 gitignore 蓋住的框架檔沒有進列舉 —— 會裝出沒有閘門的 repo:%s"
+            % all_files)
+
+    def test_it_says_so_when_framework_files_were_hidden(self, install_mod,
+                                                        tmp_path, monkeypatch):
+        """**被 gitignore 蓋住的框架檔本身是個怪狀態,所以不只帶,還要出聲。**
+
+        少了這句,下一個人不會知道他的 .gitignore 正在對抗安裝器。
+        """
+        import subprocess
+        root = tmp_path / "src2"
+        (root / ".claude" / "hooks").mkdir(parents=True)
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            subprocess.run(["git"] + c.split(), cwd=str(root), capture_output=True)
+        open(str(root / ".claude" / "hooks" / "gate.py"), "w").write("x = 1\n")
+        open(str(root / ".gitignore"), "w").write(".claude/\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(root), capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "b"], cwd=str(root),
+                       capture_output=True)
+        monkeypatch.setattr(install_mod, "SRC_ROOT", str(root))
+        assert hasattr(install_mod, "ignored_framework_files")
+        assert ".claude/hooks/gate.py" in install_mod.ignored_framework_files()
+
+    def test_mirrors_and_bytecode_are_not_dragged_in(self, install_mod, tmp_path,
+                                                     monkeypatch):
+        """**負控**:不是「所有 ignored 都帶」。
+
+        鏡像(`.claude/skills/`)不在任何框架前綴底下,`in_scope` 為假;
+        `__pycache__` 在 `.claude/hooks/` 底下但標 `skip`,標記表擋住。
+        少了這條,「一律帶」也會讓上面兩條過 —— 而那會把鏡像與位元碼裝進新 repo。
+        """
+        import subprocess
+        root = tmp_path / "src3"
+        (root / ".claude" / "skills" / "tdd").mkdir(parents=True)
+        (root / ".claude" / "hooks" / "__pycache__").mkdir(parents=True)
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            subprocess.run(["git"] + c.split(), cwd=str(root), capture_output=True)
+        open(str(root / ".claude" / "skills" / "tdd" / "SKILL.md"), "w").write("x\n")
+        open(str(root / ".claude" / "hooks" / "__pycache__" / "g.pyc"), "w").write("x")
+        open(str(root / ".gitignore"), "w").write(".claude/\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(root), capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "b"], cwd=str(root),
+                       capture_output=True)
+        monkeypatch.setattr(install_mod, "SRC_ROOT", str(root))
+        hidden = install_mod.ignored_framework_files()
+        assert not [p for p in hidden if "/skills/" in p], hidden
+        assert not [p for p in hidden if "__pycache__" in p], hidden
+
+
 class TestTheInstallerProducesAManifest:
     """標記表自己標 `ask`,所以**不會被 copy 桶帶過去** —— 安裝器必須產它。
 

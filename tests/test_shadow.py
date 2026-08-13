@@ -109,6 +109,55 @@ class TestLogShadow:
         assert rec["verdict"] == "would-block"
 
 
+class TestTheSameBlockInBothModes:
+    """**同一組行為的兩面。** 影子開 → 放行且記一筆;影子關 → 真的擋。
+
+    由來:量化那邊有兩條測試在**影子開啟**的 repo 永久紅 ——
+    它們斷言「會被擋」,而影子模式下正確答案是「放行 + 記一筆 would-block」。
+    永久紅是萬能鑰匙(F-071),而且會訓練人忽略訊號(F-031)。
+
+    根因是測試的行為取決於**宿主 repo 的活體閘門狀態**。
+    conftest 的隔離讓影子在測試中恆為關、結果可決定;
+    影子開的那一面由這裡自己開,不再靠宿主碰巧是什麼狀態。
+
+    兩條寫在一起而不是分兩個 class:它們是**同一個判定的兩個時態**,
+    分開放的話,下一個人改其中一邊時看不到另一邊該跟著動。
+    """
+
+    def _shadow_on(self, tmp_path, monkeypatch):
+        state = tmp_path / "shadow.json"
+        io.open(state, "w", encoding="utf-8", newline="\n").write(
+            json.dumps({"enabled": True, "until": "2099-01-01"}))
+        monkeypatch.setattr(gate, "SHADOW_STATE", str(state))
+        monkeypatch.setattr(gate, "SHADOW_LOG", str(tmp_path / "log.jsonl"))
+        monkeypatch.setattr(gate, "read_shadow_clamp",
+                            lambda: datetime.date(2099, 1, 1))
+
+    def test_shadow_off_actually_blocks(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(gate, "SHADOW_STATE", str(tmp_path / "absent.json"))
+        assert gate.shadow_active() is False
+
+    def test_shadow_on_records_instead_of_blocking(self, tmp_path, monkeypatch):
+        self._shadow_on(tmp_path, monkeypatch)
+        assert gate.shadow_active() is True
+        rec = gate.log_shadow("[R3] foo.py:找不到對應測試", at_commit=False)
+        assert rec["verdict"] == "would-block"
+        logged = [json.loads(l) for l in
+                  io.open(tmp_path / "log.jsonl", encoding="utf-8") if l.strip()]
+        assert len(logged) == 1 and logged[0]["rule"] == "R3"
+
+    def test_the_shadow_log_written_is_never_the_hosts(self, tmp_path, monkeypatch):
+        """**證據隔離要驗得出來。** 測試寫的那個檔案必須在 tmp,不在 repo 裡。
+
+        少了這條,conftest 的隔離壞掉時沒有東西會出聲 ——
+        而它壞掉的樣子是「宿主的 shadow-log 多了幾筆」,沒有人會看。
+        """
+        self._shadow_on(tmp_path, monkeypatch)
+        gate.log_shadow("[R2] x.py:idle", at_commit=False)
+        assert str(tmp_path) in gate.SHADOW_LOG
+        assert ".dev" not in gate.SHADOW_LOG.replace(str(tmp_path), "")
+
+
 class TestEnforceTag:
     """正式擋下的訊息要帶 `[enforce]` 狀態標示 —— 從任何一次攔截訊息就能讀出
     『現在是影子還是正式』,不必查 .dev/。影子側靠 shadow-log 的 verdict,

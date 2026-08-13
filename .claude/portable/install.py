@@ -88,10 +88,38 @@ def source_files():
 
     往「帶」的方向倒:多帶進來的暫存檔是吵鬧的(看得見、刪得掉),
     漏帶是靜默的。未追蹤的會在安裝輸出裡單獨列出來。
+
+    **`--exclude-standard` 把 ignored 也排除了 —— 那是同一個病的另一半。**
+    上面那段描述了「還沒 commit 的框架檔會靜默漏帶」,修好 untracked 那半就停了。
+    量化實測:`.claude/` 被 gitignore → 框架檔完全不進列舉 →
+    裝出**沒有閘門的 repo** → `verify_gates` 崩潰,而安裝本身成功且安靜(票 18)。
     """
     t = git_paths(["ls-files"], SRC_ROOT)
     u = git_paths(["ls-files", "--others", "--exclude-standard"], SRC_ROOT)
-    return t + u, u
+    return t + u + ignored_framework_files(), u
+
+
+def ignored_framework_files():
+    """被 `.gitignore` 蓋住、但**落在框架範圍內**的檔案。
+
+    契約是「**本來會帶、卻被 gitignore 藏起來的**」,所以兩道過濾都要:
+
+      `in_scope()` 為假   -> 不是框架的東西(鏡像 `.claude/skills/`、`skills/`)
+      標記是 `skip`       -> 框架範圍內但本來就不帶(`__pycache__`)
+
+    只過 `in_scope` 不夠:`__pycache__` 在 `.claude/hooks/` 底下,`in_scope` 為真,
+    最後會被標記表擋在複製之外 —— 但它會混進**廣播清單**裡。
+    每次安裝都報一串位元碼檔案,那是噪音,而噪音會訓練人忽略那句提醒(F-031)。
+    出聲的東西必須全部值得看。
+
+    「被 gitignore 蓋住的框架檔」本身是個怪狀態,所以**不只帶,還要出聲**
+    (呼叫端會列出來)—— 少了那句,下一個人不會知道他的 `.gitignore`
+    正在對抗安裝器。
+    """
+    ig = git_paths(["ls-files", "--others", "--ignored", "--exclude-standard"],
+                   SRC_ROOT)
+    return [p for p in ig
+            if manifest.in_scope(p) and manifest.mark_for(p) != "skip"]
 
 
 def classify(paths):
@@ -393,6 +421,15 @@ def main(target):
     if carried_untracked:
         print("\n帶過去了但來源 repo 還沒把它們進版控 —— 確認不是暫存檔:")
         for p in carried_untracked:
+            print("    %s" % p)
+    # 被 .gitignore 蓋住的框架檔:帶了,但要說。
+    # 不說的話,下一個人不會知道他的 .gitignore 正在對抗安裝器 ——
+    # 而那個狀態的後果是「裝出沒有閘門的 repo」,且安裝過程安靜又成功(票 18)。
+    hidden = ignored_framework_files()
+    if hidden:
+        print("\n**來源的 .gitignore 蓋住了這些框架檔**,已強制帶過去 ——"
+              "請確認那是刻意的:")
+        for p in hidden:
             print("    %s" % p)
     # ask / 未涵蓋鄰居 / 未進版控 —— **落地成檔案**,不只印終端機。
     # 印出來沒人看等於沒列;寫成 decisions-pending.md,人回頭找得到,也進得了版控。

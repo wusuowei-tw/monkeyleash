@@ -35,6 +35,70 @@ def _dummy_api_keys(monkeypatch):
         monkeypatch.setenv(env_var, os.environ.get(env_var, "placeholder"))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_live_gate_state(tmp_path, monkeypatch):
+    """把**每一個**已載入的 gate 模組的證據路徑指到 tmp。
+
+    由來(量化實測):框架測試把合成的 fixture 條目寫進宿主真實的
+    `shadow-log`(4 筆變 13 筆)。證據檔是**閘門的判定依據** ——
+    shadow-log 決定影子要不要晉升,test-runs.jsonl 決定 R3 的紅燈半。
+    往裡面寫測試造的假紀錄,等於讓測試去改變閘門之後的判斷。
+
+    **不靠「每條測試記得 monkeypatch」**:那是紀律,而紀律會漏 ——
+    上游的 test_shadow.py 兩處都有 patch,漏掉的是**間接**走到
+    `log_shadow()` 的那些(影子開著時,任何 check 被擋都會寫一筆)。
+    所以改成機制:autouse,而且走訪 `sys.modules` ——
+    各測試檔用 `spec_from_file_location` 各載一份 gate,只改一個沒有用。
+
+    **同時修掉「測試假設影子是關的」**:`SHADOW_STATE` 指到 tmp 的不存在路徑,
+    影子在測試中因此恆為關、可決定。影子開的那個方向由**成對的**測試
+    自己開(見 tests/test_shadow.py),不再靠宿主 repo 碰巧是什麼狀態。
+
+    `test-runs.jsonl` **不在這裡改**:紅燈紀錄是由 conftest 的紀錄器在
+    每次真實執行後追加的,那是機制的正常產出,不是污染。
+    """
+    fields = {
+        "SHADOW_LOG": tmp_path / "shadow-log.jsonl",
+        "SHADOW_STATE": tmp_path / "shadow.json",
+        "EXEMPTION_LOG": tmp_path / "gate-exemptions.jsonl",
+        "PROVENANCE": tmp_path / "provenance.jsonl",
+    }
+    for mod in _loaded_gate_modules():
+        for name, path in fields.items():
+            if hasattr(mod, name):
+                monkeypatch.setattr(mod, name, str(path))
+
+
+def _loaded_gate_modules():
+    """找出所有已載入的 gate 模組實例。
+
+    **不能只走訪 `sys.modules`**:各測試檔用
+    `importlib.util.module_from_spec()` + `exec_module()` 載入,
+    那條路徑**不會把模組註冊進 `sys.modules`** ——
+    第一版的隔離 fixture 因此是空轉的,而且完全無聲。
+    (抓到它的是本檔配套的接線測試,不是我。)
+
+    改成從**測試模組的屬性**去找:每個測試檔都把載進來的 gate 綁在模組層變數上
+    (`gate = _load()`),所以走訪 tests/ 底下的模組、看它們持有什麼就找得到。
+    新增的測試檔不必做任何事就會被涵蓋 —— 這是機制,不是紀律。
+
+    限制(誠實寫出來):在**測試函式內部**才載入的那份蓋不到,
+    因為 fixture 在 setup 時就跑完了。所以測試檔要在模組層載 gate。
+    """
+    import sys as _sys
+    out, seen = [], set()
+    for mod in list(_sys.modules.values()):
+        f = (getattr(mod, "__file__", None) or "").replace("\\", "/")
+        if "/tests/" not in f:
+            continue
+        for attr in vars(mod).values():
+            gf = (getattr(attr, "__file__", None) or "").replace("\\", "/")
+            if gf.endswith(".claude/hooks/gate.py") and id(attr) not in seen:
+                seen.add(id(attr))
+                out.append(attr)
+    return out
+
+
 @pytest.fixture()
 def mock_llm_client():
     client = MagicMock()
