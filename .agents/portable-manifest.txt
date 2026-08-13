@@ -69,6 +69,10 @@ tests/test_shadow.py            copy
 tests/test_edit_result.py       copy
 tests/test_scanner.py           copy
 tests/test_sync.py              copy
+# **不出貨**:「每一筆追蹤檔案都要有標記」是上游的性質,不是每個 repo 的。
+# 出貨的話,任何有自己專案檔案的 repo 都天生帶紅 —— 而出生即紅會訓練人
+# 忽略訊號(F-031),被訓練出來的習慣下次會濾掉一條真的紅。
+tests/test_upstream_manifest.py skip
 
 # ── 專案自己的測試,住在同一個目錄但不是框架的 ──────────────
 # 「沒被提到」不是合法狀態:tests/ 是框架與專案混居的地方,

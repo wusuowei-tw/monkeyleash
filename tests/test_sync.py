@@ -316,27 +316,11 @@ class TestUnclassifiedIsRefusedNotCopied:
         sync.update(str(src), str(dst), apply=True)
         assert _h(dst, "README.md") == before, "標了 skip 還是被覆蓋"
 
-    def test_the_shipped_manifest_classifies_everything(self):
-        """**上游自己不得有任何未分類檔案。**
-
-        這條守的是「下一個人新增檔案卻忘了分類」——
-        而忘記分類的後果不是漏帶,是**覆蓋下游的同名檔**。
-        我自己在批次二就漏了一個(`docs/agents/adr-numbering.md`)。
-        """
-        m = self._manifest_mod() if hasattr(self, "_manifest_mod") else None
-        spec = importlib.util.spec_from_file_location(
-            "manifest_for_coverage", ROOT / ".claude" / "portable" / "manifest.py")
-        m = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(m)
-        table = m.load_table(str(ROOT / ".agents" / "portable-manifest.txt"))
-        out = subprocess.run(["git", "ls-files", "-z"], cwd=str(ROOT),
-                             capture_output=True)
-        rels = [p for p in out.stdout.decode("utf-8", "replace").split("\0")
-                if p.strip()]
-        unclassified = [p for p in rels if m.explicit_mark(p, table) is None]
-        assert not unclassified, (
-            "這些檔案沒有標記,更新路徑會拿它們去覆蓋下游的同名檔:\n  %s"
-            % "\n  ".join(unclassified))
+    # 「上游每一筆追蹤檔案都要有標記」那條**不在這裡** ——
+    # 它是**上游**的性質,不是每個 repo 的性質,而本檔會隨框架出貨。
+    # 放在這裡的話,任何裝了框架、又有自己專案檔案的 repo 都天生帶紅
+    # (實測:先有 myapp/core.py 的 repo 裝完立刻紅)。
+    # 見 tests/test_upstream_manifest.py,那個檔案標 skip、不出貨。
 
 
 class TestGenerateIsNeverOverwritten:
