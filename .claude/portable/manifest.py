@@ -81,9 +81,30 @@ def load_table(path):
     return out
 
 
+def explicit_mark(rel_path, table):
+    """**沒有預設的查詢**:回傳標記,未命中任何前綴回 `None`。
+
+    `mark_for` / `mark_in` 帶著 `DEFAULT_MARK`,那是**安裝器的**語意,
+    而它在安裝器安全是因為有兩道護欄:`in_scope()` 先濾掉範圍外的檔案,
+    未涵蓋的鄰居會被列出來讓人確認。
+
+    更新路徑(`sync`)兩道都沒有,而它的寫入對象是**別人 repo 裡已經存在的
+    檔案** —— 同一個預設在那裡的意思是「覆蓋」。實際後果(影音第三輪 dry-run):
+    目標的 `.githooks/pre-commit` 會從三層掛載降成只剩 leak_scan,
+    **權威層靜默消失**,而整個過程看起來像一次成功的更新。
+
+    所以預設不再藏在查詢裡:查詢只回答「有沒有標記、標的是什麼」,
+    **要不要有預設,由各呼叫端明確選**(票 15)。
+    """
+    return _best_entry(rel_path, table)[1]
+
+
 def mark_in(rel_path, table):
-    """在**給定的表**裡查標記。優先序與 `mark_for` 完全同一個實作。"""
-    return _best_entry(rel_path, table)[1] or DEFAULT_MARK
+    """在**給定的表**裡查標記,未命中回 `DEFAULT_MARK`。
+
+    帶預設的那一支 —— 安裝器用。更新路徑用 `explicit_mark`。
+    """
+    return explicit_mark(rel_path, table) or DEFAULT_MARK
 
 
 def rel(path):

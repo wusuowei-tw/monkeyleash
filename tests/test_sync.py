@@ -251,6 +251,94 @@ class TestPrecedenceHasOneImplementation:
         assert got[0] == got[1] == ("ask", "skip"), got
 
 
+class TestUnclassifiedIsRefusedNotCopied:
+    """**「未標記 → copy」在安裝器是對的,在更新路徑是災難。**
+
+    下游第三輪 dry-run 攔到:sync 要覆蓋目標的六個根目錄檔,其中
+    `.githooks/pre-commit` 會從三層掛載降成只剩 leak_scan ——
+    **權威層靜默消失**。hook 還在、還會跑、還會擋洩漏,只是不再呼叫
+    `gate.py --pre-commit`,而整個過程看起來像一次成功的更新。
+
+    安裝器有兩道護欄讓那個預設安全:`in_scope()` 先濾掉範圍外的檔案,
+    未涵蓋的鄰居會被列出來讓人確認。更新路徑**兩道都沒有**,
+    而它的寫入對象是別人 repo 裡已經存在的檔案。
+    同一個預設,兩邊的風險方向相反:安裝器裡「多帶」是吵鬧的(空 repo),
+    更新路徑裡「多帶」是**覆蓋**,而覆蓋是靜默的。
+    """
+
+    def test_an_unclassified_source_file_is_refused(self, pair):
+        src, dst = pair
+        _w(src, "README.md", "上游自己的 README\n")
+        _git(src, "add", "-A")
+        _git(src, "commit", "-qm", "add readme")
+        with pytest.raises(sync.Refused) as e:
+            sync.update(str(src), str(dst), apply=True)
+        assert "README.md" in str(e.value), "拒絕了但沒點名是哪個檔:%s" % e.value
+
+    def test_the_refusal_names_the_missing_premise(self, pair):
+        """票 13 的判準:fail-closed 的訊息要說出**是哪一個前提沒滿足**。
+
+        只說「拒絕」的話,人會去找權限、找路徑、找 git 狀態 ——
+        而現場是「這個檔案沒有標記」。
+        """
+        src, dst = pair
+        _w(src, "README.md", "x\n")
+        _git(src, "add", "-A")
+        _git(src, "commit", "-qm", "add readme")
+        with pytest.raises(sync.Refused) as e:
+            sync.update(str(src), str(dst), apply=True)
+        assert "標記" in str(e.value), e.value
+
+    def test_dry_run_refuses_too(self, pair):
+        """dry-run 也要擋 —— 它的用途是「看看會動到什麼」,
+        而一份把未分類檔案列成「將覆蓋」的清單本身就是錯的答案。"""
+        src, dst = pair
+        _w(src, "README.md", "x\n")
+        _git(src, "add", "-A")
+        _git(src, "commit", "-qm", "add readme")
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst))
+
+    def test_an_explicitly_skipped_file_is_left_alone(self, pair):
+        """**負控**:明列 skip 之後放行,而且目標的同名檔逐位元組不變。
+
+        少了這條,「一律拒絕」也會讓上面三條過 —— 那是另一種壞掉,只是吵。
+        """
+        src, dst = pair
+        _w(src, "README.md", "上游自己的 README\n")
+        _w(src, ".agents/portable-manifest.txt", MANIFEST + "README.md  skip\n")
+        _git(src, "add", "-A")
+        _git(src, "commit", "-qm", "mark readme skip")
+        _w(dst, "README.md", "目標自己的 README\n")
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "dst readme")
+        before = _h(dst, "README.md")
+        sync.update(str(src), str(dst), apply=True)
+        assert _h(dst, "README.md") == before, "標了 skip 還是被覆蓋"
+
+    def test_the_shipped_manifest_classifies_everything(self):
+        """**上游自己不得有任何未分類檔案。**
+
+        這條守的是「下一個人新增檔案卻忘了分類」——
+        而忘記分類的後果不是漏帶,是**覆蓋下游的同名檔**。
+        我自己在批次二就漏了一個(`docs/agents/adr-numbering.md`)。
+        """
+        m = self._manifest_mod() if hasattr(self, "_manifest_mod") else None
+        spec = importlib.util.spec_from_file_location(
+            "manifest_for_coverage", ROOT / ".claude" / "portable" / "manifest.py")
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        table = m.load_table(str(ROOT / ".agents" / "portable-manifest.txt"))
+        out = subprocess.run(["git", "ls-files", "-z"], cwd=str(ROOT),
+                             capture_output=True)
+        rels = [p for p in out.stdout.decode("utf-8", "replace").split("\0")
+                if p.strip()]
+        unclassified = [p for p in rels if m.explicit_mark(p, table) is None]
+        assert not unclassified, (
+            "這些檔案沒有標記,更新路徑會拿它們去覆蓋下游的同名檔:\n  %s"
+            % "\n  ".join(unclassified))
+
+
 class TestGenerateIsNeverOverwritten:
     """`generate` 的語意是**缺才建、有就不碰**。
 

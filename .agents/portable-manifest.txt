@@ -15,6 +15,23 @@
 # 代價不對稱:多帶是吵鬧的(到了新專案馬上發現不對),
 # 少帶是靜默的(沒人知道少了一條規則)。所以預設偏向多帶。
 
+# ── 各 repo 自己的根目錄檔 ────────────────────────────────────
+# **上游的同名檔只屬於上游自己。** 這六筆每個 repo 都有一份,
+# 內容是那個 repo 的事實(它的說明、它的相依、它的忽略規則、它的 hook)。
+#
+# 為什麼特別要緊:`.githooks/pre-commit` 在下游是**三層掛載**,
+# 上游這一份只有 leak_scan(ADR 0010 不自管)。照抄過去等於把權威層拆掉,
+# 而拆掉的動作看起來像一次成功的更新 —— 影音第三輪 dry-run 攔到(票 15)。
+#
+# `.gitattributes` 標 skip 的已知後果:框架的 `*.py text eol=lf` 保證不隨安裝走。
+# 那是 F-0013 已記載的殘留,雜湊比對因此做行尾正規化,不構成回歸。
+README.md                       skip
+pyproject.toml                  skip
+.gitignore                      skip
+.gitattributes                  skip
+bootstrap.sh                    skip
+.githooks/pre-commit            skip
+
 # ── 判定邏輯與定義 ────────────────────────────────────────────
 .claude/hooks/                  copy
 .claude/portable/               copy
@@ -85,6 +102,11 @@ docs/agents/domain.md           copy
 # 摩擦記錄是這個 repo 走出來的歷史,但那些判準是這套東西**最可攜的資產**,
 # 比任何一支程式碼都通用 —— 整份帶走,不再每次安裝都問。
 docs/agents/friction-log.md     copy
+# 發號規則與機器初始化清單:框架知識,會旅行。
+# adr-numbering.md 是我在批次二新增卻忘了分類的那一筆 —— 漏分類的後果
+# 不是漏帶,是**覆蓋下游的同名檔**(票 15)。
+docs/agents/adr-numbering.md    copy
+docs/machine-init.md            copy
 # 專案自己的摩擦記錄(TSA- / TSI- 等前綴)。**永不覆蓋** ——
 # 它與上面那份的邊界就是發號規則畫的那條:框架層 vs 專案層。
 # 標 generate 不標 skip:skip 的語意是「框架不管它」,而這個檔是框架**要求**

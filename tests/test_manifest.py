@@ -149,6 +149,23 @@ def test_the_precedence_survives_reordering(table):
         "換個排法就換個行為 —— 優先序是讀取順序決定的,不是最長前綴:%r vs %r" % (a, b)
 
 
+def test_explicit_mark_has_no_default(table):
+    """**沒有預設的查詢。** 未命中回 None,不回 `copy`。
+
+    `mark_for` / `mark_in` 帶 `DEFAULT_MARK` 是安裝器的語意,而它在安裝器
+    安全的理由是兩道護欄(`in_scope` 先濾、未涵蓋的鄰居列給人確認)。
+    更新路徑兩道都沒有,同一個預設在那裡是「覆蓋別人 repo 的既有檔案」。
+
+    所以預設不再藏在查詢裡:查詢只回答「有沒有標記、標的是什麼」,
+    **要不要有預設由呼叫端明確選**。
+    """
+    _write(table, "pkg/  copy\n")
+    assert manifest.explicit_mark("pkg/a.py", manifest._table()) == "copy"
+    assert manifest.explicit_mark("README.md", manifest._table()) is None
+    # 對照:帶預設的那支照舊回 copy,安裝器的語意不變
+    assert manifest.mark_for("README.md") == "copy"
+
+
 def test_load_table_reads_an_arbitrary_location(tmp_path):
     """更新路徑讀的是**來源 repo** 的表,不是自己這一份。"""
     p = tmp_path / "other-manifest.txt"

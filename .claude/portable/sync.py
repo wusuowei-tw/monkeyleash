@@ -97,8 +97,36 @@ def load_manifest(src):
 
 
 def mark_for(rel, marks):
-    """這個檔案哪個桶。判定在 `manifest.mark_in`,本函式只是轉呼叫。"""
-    return manifest.mark_in(rel, marks)
+    """這個檔案哪個桶。**未分類回 None,不套預設。**
+
+    用 `explicit_mark` 而不是 `mark_in`:後者的預設是 `copy`,
+    那是安裝器的語意,在更新路徑上的意思是「覆蓋別人 repo 的既有檔案」。
+    批次二把兩份實作合一時,搬了分類器卻沒搬讓它安全的那兩道護欄
+    (`in_scope` 過濾、未涵蓋鄰居列給人確認),於是預設從「跳過」翻成「覆蓋」。
+    """
+    return manifest.explicit_mark(rel, marks)
+
+
+def refuse_if_unclassified(src, marks):
+    """來源有任何未分類的檔案就拒絕,並點名是哪些、缺的是哪個前提。
+
+    **不是跳過,是拒絕。** 跳過的話,下一個人新增檔案忘了分類時,
+    那個檔案會從更新路徑上無聲消失 —— 而「沒帶到」與「不該帶」在
+    綠燈上長得一樣。拒絕會讓漏分類在第一次同步就現形。
+
+    訊息要說出**是哪一個前提沒滿足**(票 13 的判準):
+    只說「拒絕」的話,人會去找權限、找路徑、找 git 狀態。
+    """
+    bad = [rel for rel in tracked(src) if manifest.explicit_mark(rel, marks) is None]
+    if bad:
+        raise Refused(
+            "來源有 %d 個檔案沒有標記,更新路徑不知道該不該搬它們。\n"
+            "     缺的前提是**標記**:每個檔案都要在 "
+            ".agents/portable-manifest.txt 裡有一筆。\n"
+            "     未分類**不會**被當成 copy —— 那個預設是安裝器的,\n"
+            "     在這裡的意思是覆蓋你 repo 裡已經存在的同名檔案。\n"
+            "     %s"
+            % (len(bad), "\n     ".join(bad)))
 
 
 def tracked(root):
@@ -200,6 +228,10 @@ def update(src, target, apply=False):
     src, target = os.path.abspath(src), os.path.abspath(target)
     marks = load_manifest(src)
     plan = Plan()
+
+    # **dry-run 也要擋。** dry-run 的用途是「看看會動到什麼」,
+    # 而一份把未分類檔案列成「將覆蓋」的清單本身就是錯的答案。
+    refuse_if_unclassified(src, marks)
 
     if apply:
         refuse_if_dirty(target)
