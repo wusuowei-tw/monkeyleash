@@ -1325,17 +1325,28 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
         # R3 的另一半:紅燈紀錄。豁免的是**列在凍結清單裡的既有檔案**,
         # 不是「檔案已存在」—— 後者 agent 自己造得出來(建個空檔就進豁免集合),
         # 等於規則自帶開關。清單的入場券是「在機制上線 commit 的樹裡」,偽造不了。
-        # 同步成品:與上游該 commit 的物件相同 -> 紅燈責任在上游(ADR F-0014)。
-        # **只豁免 R3 的紅燈半**:前半(測試檔要存在)照常適用 ——
-        # 同步本來就會把測試一起帶過來,所以那一半不需要放寬。
-        # 也**不碰 R2**:那是票 10 的窗口問題,一個豁免同時鬆兩條規則的話,
-        # 爆炸半徑就不再是它宣稱的那個。
-        if (r not in legacy_no_redlight() and any(os.path.exists(c) for c in cands)
-                and upstream_backed(r)):
+        # 同步成品:與上游該 commit 的物件逐位元組相同 -> **R3 整條**責任在上游
+        # (ADR F-0014、票 20)。
+        #
+        # 原本只豁免紅燈半,前半的正當性寫著「同步本來就會把測試一起帶過來」——
+        # **那個前提對上游自己不出貨測試的檔案為假**:`g1_verify.py`、
+        # `shadow_review.py`、`verify_gates.py` 在上游 `tests/` 就沒有對應檔案,
+        # 再同步幾次都一樣。而下游沒有合法解:legacy 只減不增、
+        # 自己補測試與「責任在上游」相衝、手寫豁免是自助。
+        #
+        # 判準是責任歸屬,不是方便:
+        # **下游不得對進口成品要求比上游對自己更多的紀律。**
+        # 而且這個窗會自己關 —— 上游哪天補了測試,sync 就把它帶下去,
+        # 下游的 R3 前半自然成立,零下游動作。
+        #
+        # 邊界不變:漂移一個位元組就兩半都回來;沒有證的本地碼完全照舊;
+        # **不碰 R2**(票 10);**不碰 R8**(它在前面,進口成品 import research 照樣擋)。
+        if upstream_backed(r):
             note_exemption(exemptions, r, base, ticket,
                            "docs/adr/F-0014-upstream-provenance.md",
                            reason="upstream-provenance")
-        elif r not in legacy_no_redlight() and any(os.path.exists(c) for c in cands):
+            return None
+        if r not in legacy_no_redlight() and any(os.path.exists(c) for c in cands):
             # 後半接受的位置必須與前半的 cands 完全相同,否則會出現通過前半、
             # 卡死後半、且無合法解法的死路。
             why = redlight_missing(base, [os.path.relpath(c, ROOT).replace(os.sep, "/")

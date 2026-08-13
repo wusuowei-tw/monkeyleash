@@ -1475,6 +1475,54 @@ class TestR3AcceptsUpstreamProvenance:
         assert not (msg and "R3/紅燈" in msg), \
             "判定讀了紀錄裡的 upstream_root,而不是指標檔:%r" % msg
 
+    # ── 豁免的是 R3 **兩半**,不只紅燈半(票 20)────────────────────────
+
+    def test_a_certified_file_with_no_test_file_is_not_blocked(self, world):
+        """**本節的主張**:上游自己不出貨測試的檔案,下游拿到後 R3 完全不擋。
+
+        原本只豁免紅燈半,前半的正當性寫著「同步本來就會把測試一起帶過來」——
+        而那個前提對 `g1_verify.py` / `shadow_review.py` / `verify_gates.py`
+        為假:上游 `tests/` 根本沒有對應檔案,再同步幾次都一樣。
+
+        下游也沒有合法解:legacy 只減不增、自己補測試與 F-0014 的責任歸屬相衝、
+        手寫豁免是自助。所以責任整個歸上游 ——
+        **下游不得對進口成品要求比上游對自己更多的紀律。**
+        """
+        up, down, sha = world
+        io.open(up / "pkg" / "notested.py", "w", encoding="utf-8",
+                newline="\n").write("def g():\n    return 1\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(up), capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "no test upstream"],
+                       cwd=str(up), capture_output=True)
+        sha2 = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(up),
+                              capture_output=True).stdout.decode().strip()
+        io.open(down / "pkg" / "notested.py", "w", encoding="utf-8",
+                newline="\n").write("def g():\n    return 1\n")
+        self._prov(down, path="pkg/notested.py", upstream_path="pkg/notested.py",
+                   upstream_commit=sha2)
+        assert not (down / "tests" / "test_notested.py").exists()
+        msg = gate.check("pkg/notested.py", "def g():\n    return 2\n")
+        assert msg is None or "R3" not in msg, \
+            "有證但上游沒測試檔的成品仍被 R3 擋:%r" % msg
+
+    def test_a_drifted_file_gets_both_halves_back(self, world):
+        """**負控**:本地改一個位元組就不再是「上游的成品」,兩半都回來。"""
+        up, down, sha = world
+        io.open(down / "pkg" / "mine2.py", "w", encoding="utf-8",
+                newline="\n").write("def h():\n    return 1\n")
+        self._prov(down, path="pkg/mine2.py", upstream_path="pkg/mine2.py",
+                   upstream_commit=sha)
+        msg = gate.check("pkg/mine2.py", "def h():\n    return 2\n")
+        assert msg and "R3" in msg, "漂移的檔案沒有被 R3 擋:%r" % msg
+
+    def test_a_local_file_without_provenance_is_still_blocked(self, world):
+        """**負控**:R3 對本地寫的碼完全不變。"""
+        up, down, sha = world
+        io.open(down / "pkg" / "fresh_local.py", "w", encoding="utf-8",
+                newline="\n").write("def k():\n    return 1\n")
+        msg = gate.check("pkg/fresh_local.py", "def k():\n    return 2\n")
+        assert msg and "R3" in msg, msg
+
     def test_provenance_does_not_exempt_r2(self, world, monkeypatch):
         """**只豁免 R3。** R2 的窗口問題是票 10 的事,兩者不得互相代勞 ——
         一個豁免同時鬆兩條規則,爆炸半徑就不再是它宣稱的那個。"""
