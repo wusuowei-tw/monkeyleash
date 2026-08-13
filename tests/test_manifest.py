@@ -124,6 +124,47 @@ def test_the_most_specific_entry_wins(table):
     assert manifest.mark_for("tests/test_dataflows_config.py") == "skip"  # 較長者勝
 
 
+def test_the_precedence_survives_reordering(table):
+    """**上一條證不到它自己宣稱的東西。**
+
+    上一條把單檔列寫在目錄列之後,於是「最長前綴勝」與「讀取順序後者勝」
+    給出完全一樣的答案 —— 一個順序決定的實作照樣全綠。
+    宣稱是「不是讀取順序決定」,而唯一能分開這兩種實作的對照組是**把順序反轉**。
+
+    這是本檔那句「換個排法就換個行為,那是隱形的」的機器保證:
+    沒有這條的話,那句話只是寫在 docstring 裡的願望。
+    """
+    rows = ["tests/  ask", "tests/test_dataflows_config.py  skip"]
+    forward = "\n".join(rows) + "\n"
+    reversed_ = "\n".join(reversed(rows)) + "\n"
+
+    _write(table, forward)
+    a = (manifest.mark_for("tests/test_gate.py"),
+         manifest.mark_for("tests/test_dataflows_config.py"))
+    _write(table, reversed_)
+    b = (manifest.mark_for("tests/test_gate.py"),
+         manifest.mark_for("tests/test_dataflows_config.py"))
+
+    assert a == b == ("ask", "skip"), \
+        "換個排法就換個行為 —— 優先序是讀取順序決定的,不是最長前綴:%r vs %r" % (a, b)
+
+
+def test_load_table_reads_an_arbitrary_location(tmp_path):
+    """更新路徑讀的是**來源 repo** 的表,不是自己這一份。"""
+    p = tmp_path / "other-manifest.txt"
+    io.open(p, "w", encoding="utf-8", newline="\n").write("pkg/  skip\n")
+    assert manifest.mark_in("pkg/a.py", manifest.load_table(str(p))) == "skip"
+
+
+def test_an_error_names_the_table_it_actually_read(tmp_path):
+    """讀來源 repo 的表卻報自己的檔名,會把人指去改一個沒問題的檔案。"""
+    p = tmp_path / "broken-manifest.txt"
+    io.open(p, "w", encoding="utf-8", newline="\n").write("pkg/  nonsense\n")
+    with pytest.raises(ValueError) as e:
+        manifest.load_table(str(p))
+    assert "broken-manifest" in str(e.value), e.value
+
+
 def test_a_path_outside_every_root_is_not_in_scope(table):
     """範圍之外的檔案不是「未標記所以 copy」,是**根本不是框架的東西**。
 

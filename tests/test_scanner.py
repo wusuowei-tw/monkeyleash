@@ -253,13 +253,37 @@ class TestThisFileIsInertUnderDownstreamGuards:
             "%s 的值以字面形式出現在本檔裡 —— 下游守衛會比中它,"
             "而框架的出貨檔案在下游是被掃描的資料。請改成執行時拼裝。" % name)
 
-    def test_the_shipped_non_prose_tree_is_inert(self):
-        """整棵出貨樹(非散文)對**已知下游守衛**的 pattern 零命中。
+    def _shipping_set(self):
+        """**出貨集合 = manifest 的 copy 桶**,不是 `git ls-files` 的全部。
+
+        判定的對象是「會被搬到下游的檔案」。用 ls-files 等於問
+        「這個 repo 裡有什麼」—— 那是另一個問題,而且答案包含
+        **本 repo 自己的東西**(票、專案測試、將來還有守衛的 pattern 定義檔)。
+        下游守衛的 pattern 檔本來就寫著要偵測的字樣;把它算進出貨集合,
+        規則會要求一個**永遠不可能滿足**的條件,而那種規則最後會被整條關掉。
+
+        這是「規則判錯對象」的第四例(F-046 R8 判片段、
+        ADR 0013 R3 判檔案存在、F-074 R3 在下游要上游的證據,以及這裡)。
+        """
+        import subprocess
+        spec = importlib.util.spec_from_file_location(
+            "manifest_for_inert_test", ROOT / ".claude" / "portable" / "manifest.py")
+        mf = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mf)
+        table = mf.load_table(str(ROOT / ".agents" / "portable-manifest.txt"))
+        out = subprocess.run(["git", "ls-files", "-z"], cwd=str(ROOT),
+                             capture_output=True)
+        rels = [p for p in out.stdout.decode("utf-8", "replace").split("\0")
+                if p.strip()]
+        return [p for p in rels if mf.mark_in(p, table) == "copy"]
+
+    def test_the_shipping_set_is_inert(self):
+        """**出貨集合**(非散文)對已知下游守衛的 pattern 零命中。
 
         上面那條自我檢查是通則(不知道下游有什麼,只知道自己的樣本不該靜置);
         這一條是對一個**已知**守衛的具體保證 —— 影音 repo 的 D21。
-        兩者都要:通則抓得到新樣本被 inline,具體這條抓得到「某個檔案剛好寫了
-        那串字」,而那不一定是樣本。
+        兩者都要:通則抓得到新樣本被 inline,具體這條抓得到「某個出貨檔案
+        剛好寫了那串字」,而那不一定是樣本。
 
         pattern 也拼裝,否則本檔會被自己這條測試比中。
 
@@ -267,15 +291,12 @@ class TestThisFileIsInertUnderDownstreamGuards:
         `DOC_SUFFIX` 豁免存在要避免的稅(規則的說明本身必須寫得出來)。
         代價寫在 F-073:框架散文的惰性依賴下游豁免散文這個決定。
         """
-        import subprocess
         pats = [r"--cook" + r"ies\b",
                 r"--cook" + r"ies-from-browser\b",
                 r"\bcook" + r"ies-from-browser\b"]
-        out = subprocess.run(["git", "ls-files", "-z"], cwd=str(ROOT),
-                             capture_output=True)
-        rels = [p for p in out.stdout.decode("utf-8", "replace").split("\0")
-                if p.strip() and not p.lower().endswith((".md", ".rst", ".adoc"))]
-        assert rels, "git ls-files 回空 —— 掃不到東西的綠燈不算綠燈"
+        rels = [p for p in self._shipping_set()
+                if not p.lower().endswith((".md", ".rst", ".adoc"))]
+        assert rels, "出貨集合是空的 —— 掃不到東西的綠燈不算綠燈"
         bad = []
         for rel in rels:
             try:
@@ -286,6 +307,17 @@ class TestThisFileIsInertUnderDownstreamGuards:
                 for m in re.finditer(p, text):
                     bad.append("%s:%d" % (rel, text[:m.start()].count("\n") + 1))
         assert not bad, "出貨檔案含下游守衛會擋的字面:%s" % bad
+
+    def test_the_shipping_set_excludes_this_repos_own_files(self):
+        """判對象要驗得出來:本 repo 自己的東西不得落進出貨集合。
+
+        沒有這條的話,`_shipping_set()` 退化成「全部」也一樣綠 ——
+        而那正是這次要修的判錯對象。
+        """
+        ship = set(self._shipping_set())
+        assert not [p for p in ship if p.startswith("docs/tickets/")], \
+            "本 repo 的工作票被算進出貨集合"
+        assert ".claude/hooks/gate.py" in ship, "出貨集合連框架自己都沒涵蓋"
 
     def test_the_assembled_value_is_still_the_real_thing(self):
         """**效力不得下降**:拼裝只改字面配置,不改掃描器收到的東西。

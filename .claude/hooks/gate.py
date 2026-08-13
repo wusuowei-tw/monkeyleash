@@ -823,6 +823,44 @@ def legacy_no_redlight():
 
 PROVENANCE = os.path.join(ROOT, ".dev", "provenance.jsonl")   # 控制,不是證據
 
+# 上游 repo 在**這台機器上**的位置。住使用者層、由人維護、gate 唯讀,
+# 與 SHADOW_MAX 的安全閥同款(ADR 0012 的乙案形狀)。
+#
+# **不寫進 provenance.jsonl** 有兩個各自獨立的理由:
+#   去識別化 —— 那是本機設定,不該跟著 commit 送進版控
+#   不可自助 —— 欄位一旦可寫,指向一個自己控制的 repo 就能造出任意「上游物件」,
+#               控制就不再是控制。放進 G1 保護清單之後 agent 改不動它。
+UPSTREAM_ROOTS = os.path.join(os.path.expanduser("~"), ".claude",
+                              "upstream-roots.txt")
+
+
+def read_upstream_root():
+    """讀上游指標。回傳路徑或 None。**任何問題一律 None(= 沒有豁免)。**
+
+    格式:恰好一行 `UPSTREAM_ROOT=<絕對路徑>`;`#` 註解與空行忽略。
+    多行、少行、認不得的行 -> None。與 `read_shadow_clamp()` 同一套紀律。
+
+    用 `utf-8-sig`:PowerShell 的 `Set-Content -Encoding utf8` 寫的是帶 BOM 的
+    UTF-8,BOM 黏上鍵名就解析失敗 —— 而 fail-closed 系統的故障是隱形的,
+    輸入端的坑要在進門前排掉。
+    """
+    try:
+        lines = io.open(UPSTREAM_ROOTS, encoding="utf-8-sig").read().splitlines()
+    except Exception:
+        return None
+    vals = []
+    for line in lines:
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("UPSTREAM_ROOT="):
+            v = line.split("=", 1)[1].strip()
+            if v:
+                vals.append(v)
+        else:
+            return None          # 不認得的行 -> 壞掉 -> fail-closed
+    return vals[0] if len(vals) == 1 else None
+
 
 def upstream_backed(rel_path):
     """這個檔案是不是「與上游那個 commit 的物件逐位元組相同」的同步成品。
@@ -860,7 +898,11 @@ def upstream_backed(rel_path):
     if not rec:
         return False
 
-    root, commit = rec.get("upstream_root"), rec.get("upstream_commit")
+    # **位置一律取自指標檔,不看紀錄裡的 upstream_root。**
+    # 紀錄是可寫的;判定要走一個 agent 動不了的來源,否則指向一個自己控制的
+    # repo 就能造出任意「上游物件」——「宣稱的 hash 不採信」是同一個原則。
+    root = read_upstream_root()
+    commit = rec.get("upstream_commit")
     upath = rec.get("upstream_path") or rel_path
     if not root or not commit:
         return False

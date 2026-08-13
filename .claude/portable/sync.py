@@ -27,6 +27,9 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import manifest                                             # noqa: E402
+
 FRICTION = "docs/agents/friction-log.md"
 PROVENANCE = ".dev/provenance.jsonl"
 FRICTION_LOCAL = "docs/agents/friction-local.md"
@@ -83,29 +86,19 @@ def _write_bytes(path, raw):
 
 
 def load_manifest(src):
-    out = []
-    p = os.path.join(src, ".agents", "portable-manifest.txt")
-    for line in io.open(p, encoding="utf-8-sig"):
-        line = line.split("#", 1)[0].strip()
-        if not line:
-            continue
-        parts = line.split()
-        if len(parts) >= 2:
-            out.append((parts[0].replace("\\", "/"), parts[1]))
-    return out
+    """讀來源 repo 的標記表。**解析與優先序都用 `manifest.py` 那一份實作。**
+
+    原本這裡有一份自己的:兩份會漂移,而漂移的那天不會有人發現 ——
+    一個把檔案搬過去、一個以為沒搬(F-058)。而且自己那份還漏掉了
+    重複標記與不認得標記的檢查,於是格式錯誤在更新路徑上會靜默退化成 copy。
+    """
+    return manifest.load_table(
+        os.path.join(src, ".agents", "portable-manifest.txt"))
 
 
 def mark_for(rel, marks):
-    """最長前綴者勝 —— **不是讀取順序**。順序決定的話,換個排法就換個行為,
-    而那是隱形的。"""
-    best, best_mark = "", None
-    for p, m in marks:
-        if p.endswith("/"):
-            if rel.startswith(p) and len(p) > len(best):
-                best, best_mark = p, m
-        elif rel == p and len(p) > len(best):
-            best, best_mark = p, m
-    return best_mark
+    """這個檔案哪個桶。判定在 `manifest.mark_in`,本函式只是轉呼叫。"""
+    return manifest.mark_in(rel, marks)
 
 
 def tracked(root):
@@ -181,10 +174,12 @@ def write_provenance(src, target, rels, commit):
     for rel in rels:
         if not in_commit(src, commit, rel):
             continue
+        # **不寫 upstream_root。** 那是本機設定,不該跟著 commit 進版控
+        # (去識別化);而且欄位一旦可寫,指向一個自己控制的 repo 就能造出
+        # 任意「上游物件」。位置改住使用者層的 G1 保護指標檔,gate 唯讀。
         out.append({
             "path": rel,
             "upstream_path": rel,
-            "upstream_root": src,
             "upstream_commit": commit,
             "content_hash": file_hash(os.path.join(src, rel.replace("/", os.sep))),
         })

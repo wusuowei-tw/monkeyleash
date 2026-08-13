@@ -46,6 +46,7 @@ tests/test_gate_boundaries.py   copy
 tests/test_g1_guard.py          copy
 tests/test_leak_scan.py         copy
 tests/test_install_defaults.py  copy
+tests/test_install.py           copy
 tests/test_cjk_git_paths.py     copy
 tests/test_research_stage.py    copy
 tests/test_shadow.py            copy
@@ -76,6 +77,10 @@ tests/test_ticker_symbol_handling.py skip
 
 # ── 決策紀錄 ──────────────────────────────────────────────────
 docs/adr/                       copy
+# 框架更新的票是**這個 repo 的工作紀錄**,不是框架的一部分。
+# 明列而不是靠「沒被提到」—— 那句「沒被提到不是合法狀態」是這份表自己的規矩,
+# 對它自己一樣適用。
+docs/tickets/                   skip
 docs/agents/issue-tracker.md    copy
 docs/agents/domain.md           copy
 # 摩擦記錄是這個 repo 走出來的歷史,但那些判準是這套東西**最可攜的資產**,

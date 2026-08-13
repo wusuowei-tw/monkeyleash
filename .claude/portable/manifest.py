@@ -31,15 +31,28 @@ DEFAULT_MARK = "copy"
 
 
 def _table():
-    """讀標記表。回傳 {相對路徑: 標記}。
+    """讀本 repo 的標記表。"""
+    return load_table(MANIFEST)
+
+
+def load_table(path):
+    """讀**指定位置**的標記表。回傳 {相對路徑: 標記}。
+
+    要能指定位置,是因為更新路徑(sync)讀的是**來源 repo** 的那一份,
+    不是自己這一份。原本 sync 有一份自己的解析與優先序 —— 兩份實作會漂移,
+    而漂移的那天不會有人發現:一個把檔案搬過去,一個以為沒搬(F-058)。
+    同一件事只留一個實作,連「格式錯誤要吵」這件事也一起繼承。
 
     檔案不存在 -> 空表 -> 全部視為未標記 -> 全部 copy 且全部被列出來。
     這裡的 fail 方向是**吵鬧**,不是「什麼都不帶」:少帶才是危險的那一邊。
     """
     out = {}
-    if not os.path.exists(MANIFEST):
+    if not os.path.exists(path):
         return out
-    for lineno, raw in enumerate(io.open(MANIFEST, encoding="utf-8"), 1):
+    # 訊息指的是**這一次讀的那份表**,不是本 repo 的那份 —— 讀來源 repo 的表
+    # 卻報自己的檔名,會把人指去改一個沒問題的檔案。
+    where = rel(path)
+    for lineno, raw in enumerate(io.open(path, encoding="utf-8-sig"), 1):
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
@@ -49,23 +62,28 @@ def _table():
             raise ValueError(
                 "%s:%d 這一行沒有標記:%r\n"
                 "     格式是「路徑<空白>標記」,標記為 %s 之一。"
-                % (rel(MANIFEST), lineno, line, "/".join(sorted(MARKS))))
-        path, mark = parts[0].strip().replace("\\", "/"), parts[1]
+                % (where, lineno, line, "/".join(sorted(MARKS))))
+        entry, mark = parts[0].strip().replace("\\", "/"), parts[1]
         if mark not in MARKS:
             # 打錯字不得退化成預設。把一個該 generate 的檔案照抄進新專案
             # 看起來一切正常,實際上 R6 會拿別的 repo 的路徑去驗 —— 正是靜默壞掉。
             raise ValueError(
                 "%s:%d 不認得的標記 %r(路徑 %s)。\n"
                 "     只能是 %s。打錯字不會被當成未標記 —— 那會靜默退化成 copy。"
-                % (rel(MANIFEST), lineno, mark, path, "/".join(sorted(MARKS))))
-        if path in out:
+                % (where, lineno, mark, entry, "/".join(sorted(MARKS))))
+        if entry in out:
             # 同一路徑標兩次,行為就取決於讀取順序,而那是隱形的
             raise ValueError(
                 "%s:%d 重複標記:%s 已經標過 %r。\n"
                 "     同一路徑標兩次的話,結果取決於讀取順序 —— 那是隱形的,先刪掉一筆。"
-                % (rel(MANIFEST), lineno, path, out[path]))
-        out[path] = mark
+                % (where, lineno, entry, out[entry]))
+        out[entry] = mark
     return out
+
+
+def mark_in(rel_path, table):
+    """在**給定的表**裡查標記。優先序與 `mark_for` 完全同一個實作。"""
+    return _best_entry(rel_path, table)[1] or DEFAULT_MARK
 
 
 def rel(path):

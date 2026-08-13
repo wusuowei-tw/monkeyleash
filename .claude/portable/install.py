@@ -181,6 +181,39 @@ def install_hook(target):
     return path
 
 
+def generate_manifest(target):
+    """把標記表產進目標 repo。
+
+    **它自己標 `ask`,所以不在 copy 桶裡** —— 沒有這一步,裝出來的 repo
+    一張標記表都沒有:`_table()` 回空 → 每個檔案退化成預設 `copy`、
+    `in_scope` 跟著失真。而那個狀態是**靜默**的:安裝成功、hook 裝好、
+    大部分測試照樣綠,只有兩條會紅,而且紅得像是那兩條測試自己的問題
+    (淨室安裝實測,2026-08-13)。
+
+    產出的內容就是來源那一份:表裡的框架列是**框架的事實**,跟著走才對。
+    來源 host repo 自己的 `skip` 列一起帶過去是**刻意**的 ——
+    它們指向新 repo 不存在的檔案,永遠不會命中,而代價不對稱:
+    多帶一列是吵鬧的(看得到、可以刪),漏帶一列是靜默的。
+
+    新 repo 自己的檔案由人補:`tests/` 底下每個檔案都要有標記,缺一個就紅。
+    那條紅燈是**要**它紅 —— 分類是決定,不是安裝器推導得出來的事實。
+    """
+    src = os.path.join(SRC_ROOT, ".agents", "portable-manifest.txt")
+    dst = os.path.join(target, ".agents", "portable-manifest.txt")
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    body = io.open(src, encoding="utf-8-sig").read()
+    with io.open(dst, "w", encoding="utf-8", newline="\n") as f:
+        f.write(body)
+        if not body.endswith("\n"):
+            f.write("\n")
+        f.write(
+            "\n# ── 本 repo 自己的檔案 ────────────────────────────────────\n"
+            "# 安裝器產到框架列為止,底下由人補。\n"
+            "# tests/ 底下每個檔案都要有標記,缺一個就紅 —— 那條紅燈是要它紅:\n"
+            "# 「這個測試屬於框架還是專案」沒有任何機器答得出來。\n")
+    return dst
+
+
 def generate_legacy_list(target, go_live):
     """既有 .py 的紅燈豁免清單 —— 在目標 repo 重新產生,絕不照抄。
 
@@ -334,6 +367,7 @@ def main(target):
     carried_untracked = [p for p in untracked if manifest.in_scope(p)]
     copy_into(target, buckets["copy"])
     mirrors = build_mirrors(target)
+    generate_manifest(target)     # 它標 ask,copy 桶帶不過去 —— 得自己產
     generate_state(target)
     hook = install_hook(target)
 

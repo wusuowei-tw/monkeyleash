@@ -175,8 +175,20 @@ class TestItWritesProvenance:
         head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(src),
                               capture_output=True).stdout.decode().strip()
         assert rec["upstream_commit"] == head
-        assert os.path.abspath(rec["upstream_root"]) == os.path.abspath(str(src))
         assert rec["upstream_path"] == rec["path"]
+
+    def test_the_record_does_not_carry_a_local_path(self, pair):
+        """**去識別化**:上游位置是本機設定,不該跟著 commit 進版控。
+
+        同時也是控制強度的問題:欄位可寫的話,指向一個自己控制的 repo
+        就能造出任意「上游物件」。位置住使用者層的 G1 保護指標檔。
+        """
+        src, dst = pair
+        sync.update(str(src), str(dst), apply=True)
+        text = io.open(dst / ".dev" / "provenance.jsonl", encoding="utf-8").read()
+        assert "upstream_root" not in text, text
+        assert str(src).replace("\\", "/") not in text.replace("\\", "/"), \
+            "provenance 裡出現了本機絕對路徑"
 
     def test_a_file_not_committed_upstream_gets_no_record(self, pair):
         """**上游沒提交的東西不得產生 provenance。**
@@ -192,6 +204,51 @@ class TestItWritesProvenance:
                 io.open(dst / ".dev" / "provenance.jsonl", encoding="utf-8")
                 if l.strip()]
         assert not any(r["path"].endswith("uncommitted.py") for r in recs)
+
+
+class TestPrecedenceHasOneImplementation:
+    """**同一件事只有一個實作。**
+
+    更新路徑與安裝器都要回答「這個檔案哪個桶」。兩份實作會漂移,而漂移的那天
+    不會有人發現:一個把檔案搬過去、一個以為沒搬(F-058 的形狀)。
+    sync 原本有自己的一份,而且漏掉了重複標記與不認得標記的檢查 ——
+    於是格式錯誤在更新路徑上會靜默退化成 copy。
+    """
+
+    def _manifest_mod(self):
+        spec = importlib.util.spec_from_file_location(
+            "manifest_for_sync_test", ROOT / ".claude" / "portable" / "manifest.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_sync_delegates_to_the_manifest_module(self):
+        assert getattr(sync, "manifest", None) is not None, \
+            "sync 沒有用 manifest 的判定 —— 它自己有一份"
+
+    def test_an_unknown_mark_is_refused_not_defaulted(self, tmp_path):
+        """打錯的標記不得靜默退化成 copy —— 那會把該 generate 的檔案照抄過去。
+
+        這條是「借用同一個實作」帶來的:sync 自己那份沒有這個檢查。
+        """
+        p = tmp_path / "m.txt"
+        io.open(p, "w", encoding="utf-8", newline="\n").write("pkg/  copyy\n")
+        with pytest.raises(ValueError):
+            self._manifest_mod().load_table(str(p))
+
+    def test_precedence_is_longest_prefix_not_read_order(self, tmp_path):
+        """把兩行對調,結果必須不變 —— 這是唯一分得開兩種實作的對照組。"""
+        m = self._manifest_mod()
+        rows = ["tests/  ask", "tests/test_mine.py  skip"]
+        got = []
+        for order in (rows, list(reversed(rows))):
+            p = tmp_path / ("m%d.txt" % len(got))
+            io.open(p, "w", encoding="utf-8", newline="\n").write(
+                "\n".join(order) + "\n")
+            t = m.load_table(str(p))
+            got.append((m.mark_in("tests/test_gate.py", t),
+                        m.mark_in("tests/test_mine.py", t)))
+        assert got[0] == got[1] == ("ask", "skip"), got
 
 
 class TestGenerateIsNeverOverwritten:
