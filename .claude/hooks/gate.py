@@ -75,7 +75,7 @@ RULE_DIVERGENCE = {
                "實作完成後站別本來就會往 review / idle 走,拿寫入時的問題去問提交會擋掉每一次合法提交。",
     },
     "R3": {
-        "adr": "docs/adr/0013-r3-redlight-judges-the-implementation.md",
+        "adr": "docs/adr/F-0013-r3-redlight-judges-the-implementation.md",
         "why": "紅燈的**票號歸屬**只在前哨問得出來 —— 提交時 ticket_id 已清空"
                "(一輪做完站別會往前走),拿寫入時的問題去問提交會擋掉每一次合法提交。"
                "實質保證不變:兩個時點都要求『紅燈發生在這次改動之前』(HEAD 雜湊那一半),"
@@ -880,7 +880,7 @@ def upstream_backed(rel_path):
     (閘門自我修改、票宣告接縫、legacy 清單、R3 的 HEAD 錨點,以及這裡)。
 
     雜湊前正規化行尾:`git show` 給的是物件裡的位元組(LF),
-    工作樹在 autocrlf 的機器上是 CRLF,不正規化的話永遠不相等(ADR 0013)。
+    工作樹在 autocrlf 的機器上是 CRLF,不正規化的話永遠不相等(ADR F-0013)。
 
     **fail-closed**:沒有紀錄、讀不動、上游問不到、內容對不上 —— 一律 False。
     """
@@ -1231,7 +1231,7 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
         # R3 的另一半:紅燈紀錄。豁免的是**列在凍結清單裡的既有檔案**,
         # 不是「檔案已存在」—— 後者 agent 自己造得出來(建個空檔就進豁免集合),
         # 等於規則自帶開關。清單的入場券是「在機制上線 commit 的樹裡」,偽造不了。
-        # 同步成品:與上游該 commit 的物件相同 -> 紅燈責任在上游(ADR 0014)。
+        # 同步成品:與上游該 commit 的物件相同 -> 紅燈責任在上游(ADR F-0014)。
         # **只豁免 R3 的紅燈半**:前半(測試檔要存在)照常適用 ——
         # 同步本來就會把測試一起帶過來,所以那一半不需要放寬。
         # 也**不碰 R2**:那是票 10 的窗口問題,一個豁免同時鬆兩條規則的話,
@@ -1239,7 +1239,7 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
         if (r not in legacy_no_redlight() and any(os.path.exists(c) for c in cands)
                 and upstream_backed(r)):
             note_exemption(exemptions, r, base, ticket,
-                           "docs/adr/0014-upstream-provenance.md",
+                           "docs/adr/F-0014-upstream-provenance.md",
                            reason="upstream-provenance")
         elif r not in legacy_no_redlight() and any(os.path.exists(c) for c in cands):
             # 後半接受的位置必須與前半的 cands 完全相同,否則會出現通過前半、

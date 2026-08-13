@@ -45,7 +45,6 @@ tests/test_bash_write.py        copy
 tests/test_gate_boundaries.py   copy
 tests/test_g1_guard.py          copy
 tests/test_leak_scan.py         copy
-tests/test_install_defaults.py  copy
 tests/test_install.py           copy
 tests/test_cjk_git_paths.py     copy
 tests/test_research_stage.py    copy

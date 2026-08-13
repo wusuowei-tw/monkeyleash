@@ -263,7 +263,7 @@ class TestThisFileIsInertUnderDownstreamGuards:
         規則會要求一個**永遠不可能滿足**的條件,而那種規則最後會被整條關掉。
 
         這是「規則判錯對象」的第四例(F-046 R8 判片段、
-        ADR 0013 R3 判檔案存在、F-074 R3 在下游要上游的證據,以及這裡)。
+        ADR F-0013 R3 判檔案存在、F-074 R3 在下游要上游的證據,以及這裡)。
         """
         import subprocess
         spec = importlib.util.spec_from_file_location(
