@@ -718,17 +718,90 @@ class TestTheListItselfIsGuarded:
     判定必須跟 R4/R5 同構 —— 進權威層(pre-commit)。
     """
 
+    @staticmethod
+    def _a_path_actually_in(tree_sha, root):
+        """**執行期查詢**一個真的在那棵樹裡的路徑。
+
+        原本硬寫 `.claude/hooks/gate.py`,註解宣稱「它必然在任何裝了本框架的
+        repo 的上線 commit 樹裡」。**那句話是假的**:量化 repo 的 go-live
+        (`df8867a`)正是把 `.claude/` 寫進 `.gitignore` 的那個提交,
+        所以 gate.py 不在它的樹裡,這條測試在那裡永久紅。
+
+        判錯對象:要的是「一個**在樹裡**的路徑」,拿到的是
+        「一個**我以為**在樹裡的路徑」。而「我以為」在別人的 repo 不成立。
+        """
+        out = subprocess.run(["git", "ls-tree", "-r", "--name-only", tree_sha],
+                             cwd=str(root), capture_output=True)
+        paths = [l.strip() for l in
+                 out.stdout.decode("utf-8", "replace").splitlines() if l.strip()]
+        return paths[0] if paths else None
+
     def test_an_entry_absent_from_the_go_live_tree_is_a_violation(
             self, tmp_path, monkeypatch):
         lst = tmp_path / "legacy.txt"
         # sha 取自本 repo 自己的清單,不寫死 —— 寫死的話換個 repo 就紅(票 07)
-        # 有效樣本取閘門自己:它必然在任何裝了本框架的 repo 的上線 commit 樹裡,
-        # 不像 macro_audit/classify.py 那樣只存在於宿主 repo。
-        lst.write_text("# go-live: %s\n.claude/hooks/gate.py\nnot/in/the/tree.py\n"
-                       % gate.read_go_live(), encoding="utf-8")
+        go_live = gate.read_go_live()
+        sample = self._a_path_actually_in(go_live, ROOT) if go_live else None
+        lst.write_text("# go-live: %s\n%s\nnot/in/the/tree.py\n"
+                       % (go_live, sample), encoding="utf-8")
         monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
         v = gate.check_legacy_list()
         assert len(v) == 1 and "not/in/the/tree.py" in v[0], v
+
+    def test_it_holds_when_the_gate_itself_is_absent_from_the_tree(
+            self, tmp_path, monkeypatch):
+        """**正控,直接構造量化的 repo 形狀**:go-live 那棵樹裡**沒有** gate.py。
+
+        不靠宿主 repo 碰巧長什麼樣 —— 那正是原本那條測試壞掉的原因。
+        """
+        repo = tmp_path / "quantish"
+        repo.mkdir()
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            subprocess.run(["git"] + c.split(), cwd=str(repo), capture_output=True)
+        (repo / "pkg").mkdir()
+        io.open(repo / "pkg" / "thing.py", "w", encoding="utf-8").write("x = 1\n")
+        io.open(repo / ".gitignore", "w", encoding="utf-8").write(".claude/\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "go-live(.claude 被 ignore)"],
+                       cwd=str(repo), capture_output=True)
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                             capture_output=True).stdout.decode().strip()
+        assert subprocess.run(["git", "cat-file", "-e",
+                               "%s:.claude/hooks/gate.py" % sha],
+                              cwd=str(repo), capture_output=True).returncode != 0, \
+            "測試的前提垮了:gate.py 竟然在這棵樹裡"
+
+        lst = repo / "legacy.txt"
+        sample = self._a_path_actually_in(sha, repo)
+        io.open(lst, "w", encoding="utf-8").write(
+            "# go-live: %s\n%s\n" % (sha, sample))
+        monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
+        monkeypatch.setattr(gate, "ROOT", str(repo))
+        assert gate.check_legacy_list() == [], "gate.py 不在樹裡的 repo 形狀下誤報"
+
+    def test_a_path_absent_from_that_tree_is_still_named(
+            self, tmp_path, monkeypatch):
+        """**負控**:同一個 repo 形狀下,不在樹裡的路徑仍要被 R6 點名。
+
+        少了它,「一律回空」也會讓上面那條正控過。
+        """
+        repo = tmp_path / "quantish2"
+        repo.mkdir()
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            subprocess.run(["git"] + c.split(), cwd=str(repo), capture_output=True)
+        io.open(repo / "a.py", "w", encoding="utf-8").write("x = 1\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=str(repo),
+                       capture_output=True)
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                             capture_output=True).stdout.decode().strip()
+        lst = repo / "legacy.txt"
+        io.open(lst, "w", encoding="utf-8").write(
+            "# go-live: %s\na.py\nnever/existed.py\n" % sha)
+        monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
+        monkeypatch.setattr(gate, "ROOT", str(repo))
+        v = gate.check_legacy_list()
+        assert len(v) == 1 and "never/existed.py" in v[0], v
 
     def test_the_shipped_list_is_clean(self):
         assert gate.check_legacy_list() == []
