@@ -126,6 +126,12 @@ winget install --id FiloSottile.age
 age --version          # 裝完必驗 —— 「裝了」與「叫得到」是兩件事
 ```
 
+> **若 `age --version` 說找不到指令:關閉並重開終端機,再驗一次。**
+> 安裝會更新 PATH,但**已經開著的視窗吃的是舊環境** —— 新視窗才生效。
+> 桌機實測過這一次:`winget list` 顯示 `age 1.3.1` 已裝,而兩個 shell 都叫不到。
+> 重開之後仍然找不到,才是真的沒裝好
+>(可查 `%LOCALAPPDATA%\Microsoft\WinGet\Packages\FiloSottile.age_*\age\age.exe`)。
+
 **公鑰(recipient)給法兩種,擇一:**
 
 ```
