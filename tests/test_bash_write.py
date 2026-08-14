@@ -150,3 +150,116 @@ class TestEveryWriteTargetMustBeAllowed:
         """解析不出目標 → 擋。**半套的解析器比零涵蓋更危險**,
         所以不確定時往嚴的倒(ADR 0008 的同一句話)。"""
         assert gate.bash_write_violation("Set-Content -Path (Join-Path $a $b) -Value x")
+
+
+class TestPowerShellVerbFamiliesAreCovered:
+    """票 29 —— R7 漏掉 PowerShell 的刪改動詞家族,而 G1 只管專案外。
+
+    `WRITE_CONSTRUCT` 收了寫入動詞(`Set-Content` / `Add-Content` / `Out-File` /
+    `New-Item` / `Clear-Content`),**漏掉 `Remove-Item` / `Move-Item` /
+    `Copy-Item` / `Rename-Item` 整個刪改家族**。
+    而 G1 第二級**刻意只管專案外**(專案內刪除放行是寫在 `g1_guard.py` 註解裡的設計)。
+    **兩層的空隙疊在一起:專案內 `Remove-Item` 同時穿過 R7 與 G1。**
+
+    漏掉的是**刪除**,方向特別差:寫入被漏還留著檔案可以事後看,
+    刪除被漏之後**沒有東西可以看** —— 與 G1 保護清單把備份排第一的不對稱同一條。
+
+    ## 實測發現的第二個缺口(票面只寫了第一個)
+
+    `WRITE_COMMANDS` 的註解寫著「**與 WRITE_CONSTRUCT 的第一段同一份名單**」,
+    而實測兩者的 PowerShell 交集是**空集合** —— 那五個動詞一個都不在 `WRITE_COMMANDS` 裡。
+
+    後果:`Set-Content foo.py` 偵測得到(擋下)、但**抽不出目標**,
+    訊息因此退化成「(解析不出寫入目標)」。**那正是卡點 #6b 那個沒用的訊息的來源。**
+
+    所以本票要修的是**兩份名單的一致性**,不是往其中一份加幾個字 ——
+    這是 F-083「收了一個入口就回頭問同類入口」在同一支檔案內的形式。
+    """
+
+    DELETE_FAMILY = ["Remove-Item", "Move-Item", "Copy-Item", "Rename-Item"]
+    WRITE_FAMILY = ["Set-Content", "Add-Content", "Out-File",
+                    "New-Item", "Clear-Content"]
+
+    @pytest.mark.parametrize("verb", DELETE_FAMILY)
+    def test_the_deletion_family_is_blocked(self, verb):
+        """**核心紅燈。** 現行 `WRITE_CONSTRUCT` 認不得這四個動詞,整條放行。"""
+        msg = gate.bash_write_violation("%s pkg/thing.py" % verb)
+        assert msg, "%s 在專案內動檔案卻整條放行 —— 它同時穿過 R7 與 G1" % verb
+        assert "R7" in msg, msg
+
+    @pytest.mark.parametrize("verb", DELETE_FAMILY + WRITE_FAMILY)
+    def test_the_message_names_the_target(self, verb):
+        """訊息要點名**目標**,不是退化成「解析不出寫入目標」。
+
+        票 13 的判準:訊息要說出是哪一個前提沒滿足。
+        而「(解析不出寫入目標)」連錯誤的具體都沒有 —— 人拿它做不了任何事。
+        """
+        msg = gate.bash_write_violation("%s pkg/thing.py" % verb)
+        assert msg, verb
+        assert "thing.py" in msg, (
+            "%s:訊息沒點名目標,退化成含糊句了:%r" % (verb, msg))
+
+    def test_the_two_lists_agree_on_powershell_verbs(self):
+        """**結構測試:兩份名單必須一致。**
+
+        `WRITE_COMMANDS` 的註解宣稱它與 `WRITE_CONSTRUCT` 的第一段是同一份名單,
+        而實測交集為空。**註解描述了一個不存在的同步** ——
+        與 machine-init 曾經承諾一個不存在的指令同一族。
+
+        這條測試存在的理由不是「現在對不對」,是**往後任何一邊加動詞時,
+        另一邊沒加會當場紅**。名單一致靠機制,不靠記性。
+        """
+        import re as _re
+        in_construct = {m.lower() for m in _re.findall(
+            r"[A-Z][a-z]+-[A-Z][a-z]+", gate.WRITE_CONSTRUCT.pattern)}
+        in_commands = {w.lower() for w in gate.WRITE_COMMANDS}
+        missing = sorted(in_construct - in_commands)
+        assert not missing, (
+            "這些動詞偵測得到卻抽不出目標(訊息會退化成含糊句):%s" % missing)
+
+    @pytest.mark.parametrize("cmd", [
+        "Get-ChildItem .",
+        "Test-Path pkg/thing.py",
+        "Get-Content pkg/thing.py",
+        "Select-String -Pattern x -Path pkg/thing.py",
+    ])
+    def test_read_only_powershell_still_passes(self, cmd):
+        """**反控。** 少了它,「一律擋含連字號動詞的指令」也會讓上面全綠 ——
+        而那會讓 R7 每天擋掉大量唯讀診斷,然後整條規則被關掉(F-031)。"""
+        assert gate.bash_write_violation(cmd) is None, cmd
+
+    @pytest.mark.parametrize("cmd", [
+        "rm pkg/thing.py",
+        "cp a.py b.py",
+        "echo x > notes.txt",
+    ])
+    def test_existing_posix_behaviour_is_unchanged(self, cmd):
+        """**反控。** 既有 POSIX 那半的行為零變化 —— 回歸網,不是宣稱。"""
+        msg = gate.bash_write_violation(cmd)
+        assert msg and "R7" in msg, cmd
+
+    def test_allowed_targets_still_win_for_the_new_verbs(self):
+        """新動詞也要吃許可清單 —— 否則 `.dev/` 之類的正當寫入會被誤擋。"""
+        assert gate.bash_write_violation("Remove-Item .cache/x.json") is None
+
+    def test_named_parameter_values_do_not_become_targets(self):
+        """**防止本票引進票 21 的病。**
+
+        PowerShell 用具名參數:`Set-Content foo.py -Value x -Encoding utf8`。
+        既有的運算元迴圈跳過 `-Xxx`,**但不跳過它後面那個值** ——
+        照搬到 PowerShell 會讓 `x`、`utf8` 全變成「寫入目標」。
+
+        那正是票 21 記的形狀:**具體而錯誤的訊息比含糊而誠實傷害更大**,
+        因為人會相信它,然後去找一個不存在的路徑。
+
+        所以本票的抽取只認**可列舉的位置**:動詞後面第一個運算元,
+        以及 `-Path` / `-LiteralPath` / `-Destination` / `-NewName` 後面那一個。
+        其餘一律不當目標 —— 抽不到就退回佔位項(擋),不亂猜。
+        """
+        msg = gate.bash_write_violation(
+            "Set-Content pkg/thing.py -Value hello -Encoding utf8")
+        assert msg and "thing.py" in msg, msg
+        for noise in ("hello", "utf8"):
+            assert noise not in msg, (
+                "具名參數的值被當成寫入目標了(%r)—— 那是票 21 的病:%r"
+                % (noise, msg))

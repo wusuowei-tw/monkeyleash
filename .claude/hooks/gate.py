@@ -284,12 +284,37 @@ def sentinel_footer():
 # 不假裝擋得住 —— 那正是拒絕解析器的同一個理由。
 # ─────────────────────────────────────────────────────────────────────────────
 
+# 會動到檔案的指令 —— **單一來源**,偵測(正則)與抽取(集合)都從這裡長出來。
+#
+# 票 29 之前是兩份各自維護的名單,而 `WRITE_COMMANDS` 的註解宣稱
+# 「與 WRITE_CONSTRUCT 的第一段同一份名單」—— 實測兩者的 PowerShell 交集是
+# **空集合**。註解描述了一個從未存在的同步,後果是那五個 cmdlet
+# 偵測得到卻抽不出目標,訊息退化成「(解析不出寫入目標)」。
+# 兩份會分岔,所以現在只有一份(ADR 0003 的同一句話)。
+POSIX_WRITE_COMMANDS = ("tee", "cp", "mv", "touch", "mkdir", "install",
+                        "rm", "rmdir", "dd", "truncate")
+
+# PowerShell 的動詞-名詞。**寫入與刪改是同一個家族,要一起收。**
+# 票 29 之前只收了寫入那半,於是**專案內 `Remove-Item` 同時穿過 R7 與 G1**
+#(G1 第二級刻意只管專案外,那是寫在 g1_guard.py 註解裡的設計)。
+# 漏掉刪除的方向特別差:寫入被漏還留著檔案可以事後看,刪除被漏之後沒有東西可以看。
+#
+# **列舉來源是 PowerShell 的動詞表,不是「我想得到的」**(F-083):
+# 想不到不等於不存在,所以往後要加的時候去查動詞表,不要憑印象。
+PS_WRITE_CMDLETS = ("Set-Content", "Add-Content", "Out-File",
+                    "New-Item", "Clear-Content",
+                    "Remove-Item", "Move-Item", "Copy-Item", "Rename-Item")
+
 WRITE_CONSTRUCT = re.compile(
-    r"(?:^|[\s;&|(])(?:tee|cp|mv|touch|mkdir|install|rm|rmdir|dd|truncate"
-    r"|Set-Content|Add-Content|Out-File|New-Item|Clear-Content)(?:\s|$)"
+    r"(?:^|[\s;&|(])(?:" + "|".join(POSIX_WRITE_COMMANDS + PS_WRITE_CMDLETS) + r")(?:\s|$)"
     r"|(?<![0-9])>>?(?!&)"          # > 與 >>,但排除 2>&1 這種 fd 重導
     r"|<<"                          # heredoc
     r"|sed\s+(?:-[a-zA-Z]*\s+)*-i", re.IGNORECASE)
+
+# PowerShell 具名參數裡**會是路徑**的那幾個。可列舉,所以列舉。
+# 其餘參數的值一律不當目標 —— `-Value hello` 的 `hello` 不是路徑,
+# 把它當目標就是票 21 那個「具體而錯誤」的訊息,而人會相信它然後去找一個不存在的路徑。
+PS_PATH_PARAMS = {"-path", "-literalpath", "-destination", "-newname", "-target"}
 
 BASH_ALLOWED_CMDS = {
     "git": "版控自己的寫入(索引、工作區、.git),逼它走檔案工具沒有意義",
@@ -313,10 +338,14 @@ BASH_ALLOWED_TARGETS = {
 }
 
 
-# 會寫檔的指令。與 WRITE_CONSTRUCT 的第一段同一份名單,寫成集合是為了
-# 逐 token 比對 —— 正規表示式找得到「有沒有」,找不到「寫到哪」。
-WRITE_COMMANDS = {"tee", "cp", "mv", "touch", "mkdir", "install", "rm", "rmdir",
-                  "dd", "truncate"}
+# 會寫檔的指令,**由上面那份單一來源長出來**,寫成集合是為了逐 token 比對 ——
+# 正規表示式找得到「有沒有」,找不到「寫到哪」。
+# 從同一份長出來之後,「兩邊要一致」不再是一句註解,是**構造上不可能不一致**
+#(而測試 `test_the_two_lists_agree_on_powershell_verbs` 守住往後有人拆開它)。
+WRITE_COMMANDS = {c.lower() for c in POSIX_WRITE_COMMANDS + PS_WRITE_CMDLETS}
+
+# 是不是 PowerShell 那半 —— 抽取規則不同(具名參數 vs 位置運算元)。
+PS_WRITE_LOWER = {c.lower() for c in PS_WRITE_CMDLETS}
 
 # 包裝器:真正的指令在它們後面一格。少了這個,`sudo rm -rf x` 的 rm
 # 不在指令位置,運算元就掃不到。
@@ -369,11 +398,39 @@ def unallowed_write_targets(command):
                 and "/" not in tokens[i].split("=", 1)[0]
                 or os.path.basename(tokens[i]).lower() in WRAPPERS):
             i += 1                       # 跳過 FOO=bar 前綴與 sudo/env/time 之類
-        if i < len(tokens) and \
-                os.path.basename(tokens[i].strip('"').strip("'")).lower() \
-                in WRITE_COMMANDS:
+        verb = (os.path.basename(tokens[i].strip('"').strip("'")).lower()
+                if i < len(tokens) else None)
+        if verb in WRITE_COMMANDS:
             saw_construct = True
             i += 1
+            if verb in PS_WRITE_LOWER:
+                # **PowerShell:只認可列舉的位置。** 動詞後面第一個運算元,
+                # 加上 `-Path` / `-Destination` / … 後面那一個。其餘一律不當目標。
+                #
+                # 不沿用下面那個「跳過 -Flag、其餘都是目標」的迴圈:PowerShell 的
+                # 具名參數帶值,`-Value hello -Encoding utf8` 會讓 `hello`、`utf8`
+                # 全變成「寫入目標」—— 那是票 21 的病(**具體而錯誤的訊息
+                # 比含糊而誠實傷害更大**,因為人會相信它然後去找一個不存在的路徑)。
+                # 抽不到就讓下面的佔位項接手:**擋照擋,只是不亂猜。**
+                first_operand_taken = False
+                while i < len(tokens):
+                    tok = tokens[i]
+                    if tok.lower() in PS_PATH_PARAMS and i + 1 < len(tokens):
+                        nxt = tokens[i + 1]
+                        if not nxt.startswith("-") and not _target_allowed(nxt):
+                            bad.append(nxt.strip('"').strip("'"))
+                        i += 2
+                        continue
+                    if tok.startswith("-"):
+                        i += 2 if (i + 1 < len(tokens)
+                                   and not tokens[i + 1].startswith("-")) else 1
+                        continue          # 具名參數連它的值一起跳過
+                    if not first_operand_taken:
+                        first_operand_taken = True
+                        if not _target_allowed(tok):
+                            bad.append(tok.strip('"').strip("'"))
+                    i += 1
+                continue
             while i < len(tokens):
                 tok = tokens[i]
                 if tok.startswith("-") or tok.startswith(">") or "<" in tok:
