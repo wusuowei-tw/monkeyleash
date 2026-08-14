@@ -83,6 +83,142 @@ def table(tmp_path):
     return ul.load_marks(str(p))
 
 
+class TestImportSideIsComplete:
+    """票 30 —— 匯入端補齊:解密回程、走訪看分類表、dry-run 措辭。
+
+    三件併一張,因為它們在同一條路徑上,而且**其中兩件會互相掩蓋**:
+    走訪不看分類表(#4)會把該解密的東西一起搬過去,
+    於是 #1 的缺席看起來像是「有搬到就好」。
+
+    ## 私鑰邊界:解密能力 ≠ 私鑰進自動流程
+
+    **公鑰與私鑰的處置刻意不對稱**,而那個不對稱要看得見:
+
+        公鑰(recipient)  不是祕密 -> 可以有預設檔案、可以自動讀、可以跟著匯出走
+        私鑰(identity)   是祕密   -> **每次明給,絕不自動搜尋,絕不跟著走**
+
+    `read_recipient` 有一個預設檔案位置;**私鑰不得照抄那個形狀**。
+    照抄的話,「密碼管理器 + 紙本」那條裁決就變成一句空話 ——
+    金鑰會安靜地住在磁碟上,而加密的價值等於私鑰的保密程度。
+    """
+
+    TABLE_D = """\
+upstream-roots.txt      export
+commands/               export
+settings.json           export!
+leak-patterns.local.txt age!
+g1-protected.txt        human!
+shadow-clamp.txt        human
+.credentials.json       never
+projects/               never
+"""
+
+    @pytest.fixture
+    def marks_d(self, tmp_path):
+        p = tmp_path / "marks-d.txt"
+        p.write_text(self.TABLE_D, encoding="utf-8")
+        return ul.load_marks(str(p))
+
+    def _exported(self, home, marks_d, tmp_path, name="dfx"):
+        dest = tmp_path / name
+        ul.export(str(home), str(dest), marks_d, apply=True,
+                  encrypt=lambda b: b"AGE:" + b)
+        return dest
+
+    def test_an_age_item_is_decrypted_on_import(self, home, marks_d, tmp_path):
+        """**#1 核心紅燈。** `age` 桶有去程沒回程 ——
+        `leak-patterns.local.txt` 落在新機器上是一坨密文,
+        而 `machine-init.md` 把它寫成一條來回路徑。**那條路只有去程。**
+        """
+        dest = self._exported(home, marks_d, tmp_path)
+        fresh = tmp_path / "nm1" / ".claude"
+        ul.import_(str(dest), str(fresh), marks_d, apply=True,
+                   decrypt=lambda b: b[len("AGE:"):] if b.startswith(b"AGE:") else b)
+        got = (fresh / "leak-patterns.local.txt").read_bytes()
+        assert got == (home / "leak-patterns.local.txt").read_bytes(), (
+            "age 項沒有被解密還原:%r" % got[:40])
+
+    def test_import_without_a_decryptor_refuses(self, home, marks_d, tmp_path):
+        """來源含 `age` 項而沒有解密器 → **拒絕,不寫半套**(與去程對稱)。"""
+        dest = self._exported(home, marks_d, tmp_path, "dfx2")
+        fresh = tmp_path / "nm2" / ".claude"
+        with pytest.raises(ul.Refused) as e:
+            ul.import_(str(dest), str(fresh), marks_d, apply=True)
+        assert "leak-patterns.local.txt" in str(e.value), e.value
+
+    def test_the_private_key_is_never_auto_discovered(self, home, marks_d,
+                                                      tmp_path):
+        """**驗收 2b —— 私鑰邊界的紅燈。**
+
+        在使用者層放一個**看起來就是私鑰**的檔案,然後不給 identity 就匯入。
+        腳本**必須照樣拒絕** —— 不得自動撈取。
+
+        公鑰有預設檔案是刻意的(它不是祕密);
+        **私鑰照抄那個形狀,就等於把金鑰放回自動流程裡**,
+        而「密碼管理器 + 紙本」那條裁決會變成一句空話。
+        """
+        dest = self._exported(home, marks_d, tmp_path, "dfx3")
+        for bait in ("age-key.txt", "age-identity.txt", "key.txt"):
+            (home / bait).write_text(
+                "AGE-SECRET-KEY-1FAKEFAKEFAKE\n", encoding="utf-8")
+        fresh = tmp_path / "nm3" / ".claude"
+        with pytest.raises(ul.Refused) as e:
+            ul.import_(str(dest), str(fresh), marks_d, apply=True)
+        blob = str(e.value)
+        assert "identity" in blob.lower() or "私鑰" in blob, (
+            "拒絕了但沒說缺的是什麼:%s" % blob)
+
+    def test_an_unclassified_directory_in_the_export_is_refused(
+            self, home, marks_d, tmp_path):
+        """**#4 核心紅燈。** `import_` 遞迴走 `_walk`,**完全不看分類表** ——
+        匯出目錄底下任何子目錄都會被原樣搬進 `~/.claude/`。
+
+        後果有兩層,第二層才貴:
+        搬進不該在使用者層的東西;而那些東西在分類表裡沒有標記,
+        **於是之後每一次匯出都會拒絕**(未分類 → 拒絕整次),
+        而失敗訊息指的是那些被搬進來的檔案,**不是真正的原因**。
+
+        **一次髒匯入變成持續的、看起來像別的問題的故障。**
+        """
+        dest = self._exported(home, marks_d, tmp_path, "dfx4")
+        (dest / "_excluded").mkdir()
+        (dest / "_excluded" / "junk.txt").write_text("x", encoding="utf-8")
+        fresh = tmp_path / "nm4" / ".claude"
+        with pytest.raises(ul.Refused) as e:
+            ul.import_(str(dest), str(fresh), marks_d, apply=True,
+                       decrypt=lambda b: b)
+        assert "_excluded" in str(e.value), e.value
+        assert not (fresh / "_excluded").exists(), "未分類的東西被搬進去了"
+
+    def test_a_clean_import_does_not_poison_the_next_export(
+            self, home, marks_d, tmp_path):
+        """**#4 的第二層做成可測**:匯入 → 匯出,兩步都成立才算修好。
+
+        單測匯入會漏掉「一次髒匯入讓之後每次匯出都失敗」那件事。
+        """
+        dest = self._exported(home, marks_d, tmp_path, "dfx5")
+        fresh = tmp_path / "nm5" / ".claude"
+        ul.import_(str(dest), str(fresh), marks_d, apply=True,
+                   decrypt=lambda b: b[len("AGE:"):] if b.startswith(b"AGE:") else b)
+        plan = ul.plan_export(str(fresh), marks_d)      # 不得丟 Refused
+        assert plan.take, "匯入之後再匯出,一項都帶不走"
+
+    def test_import_dry_run_does_not_claim_completion(self, home, marks_d,
+                                                      tmp_path, capsys):
+        """**#5。** dry-run 印「寫入 N 項…匯入完成」而一個位元組都沒寫。
+
+        與 `export` 的 dry-run 措辭不對稱(那邊明寫「沒有寫出任何東西」)。
+        **同一支腳本裡兩個方向的說法不一致,比兩邊都含糊更糟** ——
+        人會以為那個差異有意義。
+        """
+        dest = self._exported(home, marks_d, tmp_path, "dfx6")
+        fresh = tmp_path / "nm6" / ".claude"
+        result = ul.import_(str(dest), str(fresh), marks_d, apply=False,
+                            decrypt=lambda b: b)
+        assert not fresh.exists() or not any(fresh.iterdir()), "dry-run 寫了東西"
+        assert result.complete is False, "dry-run 卻回報完成"
+
+
 class TestMachineDependenceIsExpressible:
     """票 28 —— 分類表表達不了「機器相依的身分檔」。
 
@@ -144,7 +280,8 @@ projects/               never
         ul.export(str(home), str(dest), marks_m, apply=True,
                   encrypt=lambda b: b"AGE" + b)
         fresh = tmp_path / "new-m" / ".claude"
-        result = ul.import_(str(dest), str(fresh), marks_m, apply=True)
+        result = ul.import_(str(dest), str(fresh), marks_m, apply=True,
+                            decrypt=lambda b: b)
         joined = " ".join(result.pending)
         for item in ("leak-patterns.local.txt", "settings.json"):
             assert item in joined, (
@@ -161,7 +298,8 @@ projects/               never
         ul.export(str(home), str(dest), marks_m, apply=True,
                   encrypt=lambda b: b"AGE" + b)
         fresh = tmp_path / "new-w" / ".claude"
-        result = ul.import_(str(dest), str(fresh), marks_m, apply=True)
+        result = ul.import_(str(dest), str(fresh), marks_m, apply=True,
+                            decrypt=lambda b: b)
         line = [p for p in result.pending if "leak-patterns" in p]
         assert line, result.pending
         assert "機器" in line[0], "沒說出為什麼要覆核:%r" % line[0]
@@ -174,7 +312,8 @@ projects/               never
         ul.export(str(home), str(dest), marks_m, apply=True,
                   encrypt=lambda b: b"AGE" + b)
         fresh = tmp_path / "new-i" / ".claude"
-        result = ul.import_(str(dest), str(fresh), marks_m, apply=True)
+        result = ul.import_(str(dest), str(fresh), marks_m, apply=True,
+                            decrypt=lambda b: b)
         joined = " ".join(result.pending)
         assert "upstream-roots.txt" not in joined, (
             "機器無關的項目被誤標成要覆核:%s" % result.pending)
@@ -378,7 +517,8 @@ def test_import_does_not_report_success_while_human_steps_are_pending(
     dest = tmp_path / "dotfiles"
     ul.export(str(home), str(dest), table, apply=True, encrypt=lambda b: b"AGE" + b)
     fresh = tmp_path / "new_machine" / ".claude"
-    result = ul.import_(str(dest), str(fresh), table, apply=True)
+    result = ul.import_(str(dest), str(fresh), table, apply=True,
+                        decrypt=lambda b: b)
     assert result.complete is False, "人工步驟還沒做,卻回報安裝完成"
     assert result.pending, "沒說出還差什麼"
     joined = " ".join(result.pending)

@@ -166,9 +166,38 @@ python .claude/portable/user_layer.py export <匯出目錄>
 # 確認報告沒問題,再真的寫
 python .claude/portable/user_layer.py export <匯出目錄> --apply
 
-# 新機器
-python .claude/portable/user_layer.py import <匯出目錄> --apply
+# 新機器 —— 先看會發生什麼
+python .claude/portable/user_layer.py import <匯出目錄>
+
+# 真的寫(`age` 桶有東西時必須給私鑰)
+python .claude/portable/user_layer.py import <匯出目錄> --apply --identity <私鑰檔>
 ```
+
+### 解密的執行方式:**`age -o` 直寫,不走管線**
+
+若要手動解密(不經腳本):
+
+```
+age -d -i <私鑰檔> -o leak-patterns.local.txt leak-patterns.local.txt.age
+```
+
+> **不要用管線接 `Set-Content`。** PowerShell 5.1 的管線會弄壞 UTF-8 中文
+> (F-042 第五次現身),而這個檔案裡就是中文形狀。`-o` 直寫繞開整條管線。
+
+**順序:先驗貨,再燒鑰匙。**
+確認解密出來的內容是對的**之前**,不要銷毀任何一份來源 ——
+這是備份總方針「備份先於手術」在單檔層級的同一句話。
+
+### 私鑰只在這一步出現,而且只在這一步
+
+| | |
+|---|---|
+| **公鑰** | 有預設檔案 `~/.claude/age-recipient.txt`,腳本自動讀,跟著匯出走 |
+| **私鑰** | **每次用 `--identity` 明給**;腳本**不會**去任何預設位置找它 |
+
+**兩者的處置刻意不對稱。** 讓私鑰有一個預設檔案位置,就等於把金鑰放回自動流程裡 ——
+而「密碼管理器 + 紙本各一份」那條裁決會變成一句空話:
+金鑰會安靜地住在磁碟上,**而加密的價值等於私鑰的保密程度**。
 
 > **`export` 預設是 dry-run。** 先算、先報告,加 `--apply` 才寫 ——
 > 而報告的主體是**「未帶走」那一段**。

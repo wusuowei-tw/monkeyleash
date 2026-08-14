@@ -273,7 +273,8 @@ class ImportResult(object):
     """匯入結果。**`complete` 與「檔案有沒有寫成功」是兩件事。**"""
 
     def __init__(self):
-        self.written = []
+        self.written = []            # **真的寫出去的**
+        self.planned = []            # dry-run 算出來的,一個位元組都沒寫
         self.pending = []
 
     @property
@@ -283,16 +284,53 @@ class ImportResult(object):
         `machine-init.md` 第二節開頭那句「複製檔案不算裝好」,這裡用機器實現。
         回 True 的條件是「這台機器可以工作了」,不是「我寫完了我負責的部分」。
         """
+        # dry-run 什麼都沒寫,**不可能是完成**(票 30 / #5)。
+        # 原本 dry-run 會印「寫入 N 項…匯入完成」而一個位元組都沒寫,
+        # 與 export 那邊「沒有寫出任何東西」的措辭不對稱 ——
+        # **同一支腳本兩個方向的說法不一致,比兩邊都含糊更糟**:
+        # 人會以為那個差異有意義。
+        if self.planned and not self.written:
+            return False
         return not self.pending
 
 
-def import_(src, home, marks, apply=False):
+def import_(src, home, marks, apply=False, decrypt=None):
     """把匯出的內容放進新機器的 `~/.claude/`,並列出還差的人工步驟。
 
     **待辦只有這一個出口。** 機器相依的覆核也掛在這裡,不另開提醒管道 ——
     兩條管道會分岔,而分岔的那天不會有人發現(票 22 的同一句話)。
+
+    `decrypt` 是 age 解密器(吃 bytes 回 bytes)。**必須注入,不會自己去找** ——
+    見下方 `age_decryptor` 的私鑰邊界說明。
+
+    **先算後寫**:來源含未分類項、或 `age` 項沒有解密器 -> 整批拒絕,不寫半套。
     """
     result = ImportResult()
+
+    # **走訪要看分類表**(票 30 / #4)。原本遞迴走 `_walk` 完全不看標記,
+    # 於是匯出目錄底下**任何**子目錄都會被原樣搬進 `~/.claude/`。
+    # 第二層後果才貴:那些東西在分類表裡沒有標記,**之後每一次匯出都會拒絕**,
+    # 而失敗訊息指的是被搬進來的檔案,不是真正的原因 ——
+    # **一次髒匯入變成持續的、看起來像別的問題的故障。**
+    incoming = _walk(src) if os.path.isdir(src) else []
+    unclassified = [r for r in incoming if manifest.explicit_mark(r, marks) is None]
+    if unclassified:
+        raise Refused(
+            "匯出目錄裡有分類表沒有標記的東西,拒絕整次匯入:%s\n"
+            "     照搬進去的話,之後每一次**匯出**都會因為它們而拒絕,\n"
+            "     而那時的錯誤訊息會指向它們、不是指向這一步。"
+            % ", ".join(sorted(unclassified)))
+
+    age_incoming = [r for r in incoming
+                    if bucket_of(manifest.explicit_mark(r, marks) or "") == AGE]
+    if age_incoming and decrypt is None:
+        raise Refused(
+            "這些項目是加密帶過來的,但沒有給解密器(identity/私鑰):%s\n"
+            "     給法:--identity <age 私鑰檔路徑>\n"
+            "     **私鑰不會被自動搜尋** —— 公鑰可以有預設檔案(它不是祕密),\n"
+            "     私鑰每次明給。照抄公鑰那個形狀,等於把金鑰放回自動流程裡,\n"
+            "     而「密碼管理器 + 紙本」那條裁決會變成一句空話。"
+            % ", ".join(sorted(age_incoming)))
     for rel, raw_mark in sorted(_marks_items(marks)):
         mark = bucket_of(raw_mark)
         if mark == HUMAN:
@@ -306,11 +344,13 @@ def import_(src, home, marks, apply=False):
                 "%s —— **機器相依**:內容綁著舊機器(路徑、使用者名稱、"
                 "資料夾形狀),搬過來之後**逐條覆核它指的是不是這台機器**。"
                 "檔案是好的不等於它保護的是這台機器。" % rel)
-    for rel in _walk(src) if os.path.isdir(src) else []:
+    for rel in incoming:
         if not apply:
-            result.written.append(rel)
+            result.planned.append(rel)     # **dry-run 不算「寫入」**(票 30 / #5)
             continue
         raw = io.open(os.path.join(src, rel.replace("/", os.sep)), "rb").read()
+        if bucket_of(manifest.explicit_mark(rel, marks) or "") == AGE:
+            raw = decrypt(raw)             # **回程**:去程加密,這裡還原
         out = os.path.join(home, rel.replace("/", os.sep))
         d = os.path.dirname(out)
         if d and not os.path.isdir(d):
@@ -377,6 +417,41 @@ def age_encryptor(recipient):
     return _encrypt
 
 
+def age_decryptor(identity_path):
+    """回一個 bytes -> bytes 的解密器。
+
+    ## 私鑰邊界:**解密能力 ≠ 私鑰進自動流程**
+
+    `identity_path` **一定要明給**,本函式與呼叫端**都不會去任何預設位置找**。
+    這與 `read_recipient` 刻意不對稱:
+
+        公鑰(recipient)  不是祕密 -> 有預設檔案、自動讀、跟著匯出走
+        私鑰(identity)   是祕密   -> 每次明給、絕不自動搜尋、絕不跟著走
+
+    照抄公鑰那個形狀,等於把金鑰放回自動流程裡 ——
+    而「密碼管理器 + 紙本各一份」那條裁決會變成一句空話:
+    金鑰會安靜地住在磁碟上,**而加密的價值等於私鑰的保密程度**。
+    """
+    import subprocess
+
+    def _decrypt(raw):
+        try:
+            p = subprocess.run(["age", "-d", "-i", identity_path],
+                               input=raw, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE)
+        except OSError:
+            raise Refused(
+                "找不到 age 執行檔 —— 無法解密,因此不寫入任何東西。\n"
+                "     安裝:winget install --id FiloSottile.age\n"
+                "     裝完用 `age --version` 確認(找不到指令就開新終端機)。")
+        if p.returncode != 0:
+            raise Refused("age 解密失敗(退出碼 %d):%s"
+                          % (p.returncode, p.stderr.decode("utf-8", "replace")))
+        return p.stdout
+
+    return _decrypt
+
+
 def _write(stream, msg):
     """**明確走 utf-8。** 裸的 `stream.write()` 在 Windows 上用主控台編碼(cp950),
     這支的輸出幾乎全是中文 —— 演練時人在筆電上看到的會是亂碼。
@@ -403,7 +478,10 @@ def _err_out(msg):
 USAGE = """\
 用法:
   python user_layer.py export <目的地> [--apply] [--recipient <age 公鑰>]
-  python user_layer.py import <來源>   [--apply]
+  python user_layer.py import <來源>   [--apply] [--identity <age 私鑰檔>]
+
+`age` 桶有東西時,匯入**必須**給 `--identity` —— **私鑰不會被自動搜尋**。
+公鑰可以有預設檔案(它不是祕密),私鑰每次明給。
 
 共用選項:
   --home <路徑>    受管的使用者層(預設 ~/.claude)
@@ -492,7 +570,13 @@ def main(argv=None):
             plan = export(home, where, marks, apply=True, encrypt=enc)
             _out(report(plan))
             return 0
-        result = import_(where, home, marks, apply=apply)
+        identity = _opt("--identity")
+        dec = age_decryptor(identity) if identity else None
+        result = import_(where, home, marks, apply=apply, decrypt=dec)
+        if not apply:
+            _out("算出 %d 項可寫入。\n\n(dry-run —— **沒有寫出任何東西**。"
+                 "加 --apply 才寫。)\n" % len(result.planned))
+            return 1 if result.pending else 0
         _out("寫入 %d 項。\n" % len(result.written))
         if result.pending:
             _out("\n**尚未完成** —— 還差這些人工步驟:\n")
