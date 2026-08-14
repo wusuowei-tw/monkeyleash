@@ -397,10 +397,19 @@ def unallowed_write_targets(command):
     # `rm -rf x; cd y && ls` 會把 `cd`、`y`、`ls` 全當成 rm 的目標。
     # 分隔符還可能**黏在 token 上**(`fresh9;`),所以用切的,不是比對 token。
     segments = [s for s in re.split(r"&&|\|\||;|\|", command) if s.strip()]
+    # **兩個變數,不是一個**(票 36)。原本只有 `saw_construct`,於是
+    #   「有寫入構造」與「抽到了目標」混成同一件事 —— 而它們不是:
+    #   動詞認得(construct=True)但運算元全被跳過(target=False)時,
+    #   舊碼不補佔位項、回空串列,呼叫端看到空就放行 = **fail-open**。
+    # 實測穿過去的:`rm -- -weird.py`(`--` 後的檔名以 `-` 開頭被當旗標)、
+    # `Copy-Item .cache/x.json pkg/thing.py`(只取第一個運算元,而它剛好許可,
+    # 目的地從頭到尾沒被看過)。
     saw_construct = False
+    saw_target = False           # 有沒有**抽到任何目標**(不管許不許可)
     for seg in segments:
         for m in REDIRECT_RE.finditer(seg):
             saw_construct = True
+            saw_target = True
             if not _target_allowed(m.group(1)):
                 bad.append(m.group(1).strip('"').strip("'"))
 
@@ -429,23 +438,35 @@ def unallowed_write_targets(command):
                 # 全變成「寫入目標」—— 那是票 21 的病(**具體而錯誤的訊息
                 # 比含糊而誠實傷害更大**,因為人會相信它然後去找一個不存在的路徑)。
                 # 抽不到就讓下面的佔位項接手:**擋照擋,只是不亂猜。**
-                first_operand_taken = False
+                # **取所有位置運算元,不只第一個**(票 36)。
+                # 只取第一個的話,`Copy-Item A B` 抽到的是**來源** ——
+                # 而來源只被讀、目的地才被寫。來源剛好許可時,
+                # 目的地從頭到尾沒被看過 -> bad 空 -> 放行(實測穿過去)。
+                #
+                # 取全部**不會**把 `-Value hello` 的 `hello` 抓進來:
+                # 下面的 `-Flag` 分支已經連它的值一起跳過,
+                # 走到這裡的只有裸的位置運算元。
+                #
+                # 代價誠實寫出來:**抽取器分不出讀/寫方向**,
+                # 所以 `Copy-Item A B` 的 A 也會被點名,而 A 其實只被讀。
+                # 那是過度回報(fail-closed 方向),訊息的標注歸票 21。
                 while i < len(tokens):
                     tok = tokens[i]
                     if tok.lower() in PS_PATH_PARAMS and i + 1 < len(tokens):
                         nxt = tokens[i + 1]
-                        if not nxt.startswith("-") and not _target_allowed(nxt):
-                            bad.append(nxt.strip('"').strip("'"))
+                        if not nxt.startswith("-"):
+                            saw_target = True
+                            if not _target_allowed(nxt):
+                                bad.append(nxt.strip('"').strip("'"))
                         i += 2
                         continue
                     if tok.startswith("-"):
                         i += 2 if (i + 1 < len(tokens)
                                    and not tokens[i + 1].startswith("-")) else 1
                         continue          # 具名參數連它的值一起跳過
-                    if not first_operand_taken:
-                        first_operand_taken = True
-                        if not _target_allowed(tok):
-                            bad.append(tok.strip('"').strip("'"))
+                    saw_target = True
+                    if not _target_allowed(tok):
+                        bad.append(tok.strip('"').strip("'"))
                     i += 1
                 continue
             while i < len(tokens):
@@ -456,13 +477,23 @@ def unallowed_write_targets(command):
                 if REDIRECT_RE.match(tok):
                     i += 1
                     continue
+                saw_target = True
                 if not _target_allowed(tok):
                     bad.append(tok.strip('"').strip("'"))
                 i += 1
 
-    if not bad and not saw_construct:
-        # WRITE_CONSTRUCT 說有寫入,而這裡一個目標都抽不出來
-        # (PowerShell cmdlet、heredoc、sed -i 之類)-> 看不懂就擋。
+    # **三態,不是兩態**(票 36):
+    #   抽到目標、有不許可的  -> bad 非空,擋並點名
+    #   抽到目標、全部許可    -> bad 空且 saw_target -> **放行**
+    #   一個目標都沒抽到      -> **擋**,而且說出來是解析失敗
+    #
+    # 舊碼的條件是 `not bad and not saw_construct`,於是第三態被吃進第二態:
+    # 動詞認得(construct=True)但運算元全被跳過,回空串列 = 放行。
+    # 判準是**抽到了沒有**,不是**有沒有寫入構造** —— 那是兩件事,
+    # 混成一個變數就是這個洞的根(票 29 收窄抽取時沒有一起鋪底)。
+    if not saw_target:
+        # 看不懂就擋,而且**明說是看不懂** —— 絕不捏造一個看起來像路徑的東西。
+        # 票 21 的標題病正是憑空生出路徑;擋得住而說不出來,好過擋得住而說錯。
         bad.append("(解析不出寫入目標)")
     # 去重但保留順序 —— 訊息要好讀,而重複的目標名沒有多給資訊
     seen, out = set(), []

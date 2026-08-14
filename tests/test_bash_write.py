@@ -152,6 +152,71 @@ class TestEveryWriteTargetMustBeAllowed:
         assert gate.bash_write_violation("Set-Content -Path (Join-Path $a $b) -Value x")
 
 
+class TestExtractionFailureMustRefuse:
+    """票 36 —— 動詞認得、目標抽不到,現行是 **fail-open**。
+
+    `unallowed_write_targets` 只在 `not saw_construct` 時補佔位項。
+    動詞認得時 `saw_construct=True`,運算元全被跳過 → `bad` 為空 → 回 `[]` →
+    `bash_write_violation` 的 `if not bad: return None` → **放行**。
+
+    **這是票 29 的回歸。** 票 29 為避免票 21 的垃圾目標(`-Value hello`
+    被當成寫入目標),把 PowerShell 的抽取收窄成「只認可列舉的位置」。
+    收窄是對的,錯在**沒有配 fail-closed 的底** ——
+    收窄之後「抽不到」變成常態,而底層仍是「抽不到就放行」。
+
+    **具名教訓:收窄抽取必須同時鋪底,否則「不亂猜」退化成「不擋」。**
+    收窄的動機永遠是訊息品質(別報垃圾),代價落在涵蓋率 ——
+    兩者不在同一個人的注意力裡:改的時候在看訊息,而破的是攔截。
+
+    ## 三態,不是兩態
+
+        抽到目標,有不許可的   -> 擋,點名
+        抽到目標,全部許可     -> **放行**
+        一個目標都沒抽到       -> **擋(解析失敗)**   ← 現在是放行
+
+    所以要追蹤的是「有沒有抽到任何目標」,不是「`bad` 空不空」——
+    `saw_construct`(有沒有寫入構造)與 `saw_target`(有沒有抽到目標)
+    是兩件事,而現行把它們混成一個變數。**那個混同就是這個洞的根。**
+    """
+
+    @pytest.mark.parametrize("cmd", [
+        "rm -- -weird.py",
+        "rm -rf --preserve-root -- -x.py",
+        "Copy-Item .cache/x.json pkg/thing.py",
+        "Move-Item .cache/x.json pkg/thing.py",
+    ])
+    def test_an_extraction_failure_is_blocked(self, cmd):
+        """**核心紅燈。** 這四條現在全部放行,而它們都會動到 `pkg/` 底下的檔案。"""
+        assert gate.bash_write_violation(cmd), (
+            "%s 抽不到目標卻放行 —— 解析失敗的預設姿態必須是 refuse" % cmd)
+
+    def test_the_message_says_it_could_not_parse_rather_than_inventing_a_path(self):
+        """訊息要說**解析失敗**,不是捏造一個看起來像路徑的東西。
+
+        票 21 的標題病就是憑空生出路徑(`rm pkg/my\\ file.py` 生出一個
+        不存在的 `file.py`)。**擋得住而說不出來,好過擋得住而說錯。**
+        """
+        msg = gate.bash_write_violation("rm -- -weird.py")
+        assert msg, "沒擋"
+        assert "解析" in msg, "沒說出這是解析失敗:%r" % msg
+
+    @pytest.mark.parametrize("cmd", [
+        "rm -rf /tmp/scratch",
+        "python x.py > /dev/null",
+        "python x.py > C:/x/scratchpad/out.txt",
+        "Remove-Item .cache/x.json",
+    ])
+    def test_allowed_targets_still_pass(self, cmd):
+        """**反控,本票最容易做錯的地方。**
+
+        這四條是「抽到目標、而目標被許可」—— `bad` 同樣是空的。
+        若修法寫成「`bad` 空就擋」,它們會全部變成違規,
+        於是 R7 每天擋掉大量正當指令,然後整條規則被關掉(F-031)。
+        **把 fail-open 修成 fail-everything,不算修好。**
+        """
+        assert gate.bash_write_violation(cmd) is None, cmd
+
+
 class TestPowerShellVerbFamiliesAreCovered:
     """票 29 —— R7 漏掉 PowerShell 的刪改動詞家族,而 G1 只管專案外。
 
