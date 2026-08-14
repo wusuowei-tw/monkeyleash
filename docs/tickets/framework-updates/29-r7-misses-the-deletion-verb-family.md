@@ -113,6 +113,73 @@ $ Remove-Item pkg/thing.py
 **擋下了,而且訊息點名 `pkg/thing.py`** —— 兩個缺口都修好:
 從前這條整條放行,而同族的 `Set-Content` 擋得下來卻說不出目標。
 
+## 第三類調查(票面驗收項:「問了才算做完」)
+
+**方法照 F-083:列舉來源,不是「我想得到的」。** 跑了兩個軸:
+
+| 軸 | 查法 |
+|---|---|
+| **動詞軸** | `Get-Command \| Where Verb -in (Set/New/Remove/Export/Compress/…)`,再依名詞篩檔案相關 |
+| **參數軸** | `Where Parameters 含 OutFile / FilePath / DestinationPath / CatalogFilePath` |
+
+### 最值錢的一句:**兩個軸互相看不見對方**
+
+- 動詞軸**漏掉** `Invoke-WebRequest -OutFile` —— 動詞是 `Invoke`,語意上完全看不出在寫檔
+- 參數軸**漏掉** `Set-Item` —— 它用位置運算元,沒有具名輸出參數
+
+**一個軸的「查完了」是另一個軸的盲區。** 這句話比下面那張表本身值錢:
+F-083 說「去列舉來源」,而這一輪的教訓是**列舉軸也要列舉** ——
+只跑一個軸就宣布查完,結論會是自信而錯誤的。
+
+### 調查表
+
+| 動詞 | 會不會寫檔 | 調查前的 R7 | 處置 |
+|---|---|---|---|
+| `Set-Item` / `Clear-Item` | 會 | **放行** | 補(`*-Item` 家族第一輪沒收完) |
+| `Export-Csv` / `Export-Clixml` / `Export-Alias` | 會 | **放行** | 補 |
+| `Compress-Archive` / `Expand-Archive` | 會(**解壓也是寫**) | **放行** | 補 |
+| `New-FileCatalog` / `Update-ScriptFileInfo` | 會 | **放行** | 補 |
+| `Tee-Object` / `Start-Transcript` | 會 | **放行** | 補 |
+| `Save-Help` / `Trace-Command` / `Set-TraceSource` | 會 | **放行** | 補 |
+| `Import-Csv` / `Get-Content` | 不會(讀) | 放行 | 不動,反控 |
+| `Start-Job -FilePath` / `Invoke-Command -FilePath` | **不會**(那是輸入腳本) | 放行 | 不動,**反控** |
+
+新增的路徑參數:`-DestinationPath`、`-CatalogFilePath`、`-FilePath`、`-OutFile`。
+
+### `-FilePath` 的歧義,以及它為什麼安全
+
+`-FilePath` 在 `Tee-Object` 是**輸出**,在 `Start-Job` 是**輸入腳本** ——
+同一個參數名,相反方向。純參數比對會把後者誤判成寫入。
+
+**擋住那個誤判的是動詞閘**:路徑參數清單只在「動詞已經是已知寫入者」時才被查,
+所以 `Start-Job` 根本走不到那一層。**歧義由上一層解決,不是由這一層猜。**
+已立反控測試釘住這個中和 —— 往後有人把參數比對抽出來獨立用,誤擋會悄悄回來。
+
+## ⚠ 異構項:列出,**未收,等裁決**
+
+以下**確實會寫檔或改檔**,但與已收兩族**不同構**,依裁決規則列出停等:
+
+| 項 | 為什麼異構 |
+|---|---|
+| `Invoke-WebRequest -OutFile` / `Invoke-RestMethod -OutFile` | **動詞完全看不出在寫檔**。收它等於 R7 開始認「參數決定的寫入」,那是**另一個判定軸**;而 `Invoke-*` 家族極大,絕大多數不寫檔 —— 用動詞收會過度,用參數收會回到 `-FilePath` 那個歧義 |
+| `Set-ItemProperty` / `Clear-ItemProperty` / `*-ItemProperty` | 動的是**屬性**(唯讀旗標、登錄檔),不是檔案內容。而 R7 的建議出口是 Write / Edit,**那兩個工具做不到設屬性** —— 收它就是票 13 的「建議了一個不存在的出口」 |
+| `Set-Acl` | 同上,動的是**權限** |
+| `New-TemporaryFile` | 寫在 TEMP,**沒有路徑運算元**。收它只會產生「(解析不出寫入目標)」的無用訊息,而它本來就寫不進 repo |
+
+**前三項的共同形狀**:R7 的收口理由是「走檔案工具的話 R1–R6 全部適用」——
+而屬性、權限、任意 URL 下載,**檔案工具都覆蓋不到**。
+收它們會讓 R7 從「把寫入逼回受管道」變成「擋住一件沒有替代路徑的事」。
+
+## 落地紀錄(收尾輪)
+
+第三類補完:紅燈 **11 紅**(第三類全放行)→ 修完 `test_bash_write.py` **74 passed**、
+全套 **647 passed / 0 failed**(+13)。
+
+**中途自摔一次**:結構測試的正則寫成 `[A-Z][a-z]+-[A-Z][a-z]+`,
+把 `New-FileCatalog` 截成 `New-File`、`Update-ScriptFileInfo` 截成 `Update-Script`,
+於是**測試自己造出三個不存在的缺口**。與票 04 那條「邊界放在擷取處會砍長度」同族 ——
+截斷型的比對錯誤,方向剛好相反(那次是漏擋,這次是假警報)。已修,理由留在測試註解裡。
+
 ## 怎樣算做完
 
 - 上表六條各有測試,1–3 先紅

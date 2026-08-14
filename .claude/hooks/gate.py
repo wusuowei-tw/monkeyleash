@@ -301,9 +301,20 @@ POSIX_WRITE_COMMANDS = ("tee", "cp", "mv", "touch", "mkdir", "install",
 #
 # **列舉來源是 PowerShell 的動詞表,不是「我想得到的」**(F-083):
 # 想不到不等於不存在,所以往後要加的時候去查動詞表,不要憑印象。
-PS_WRITE_CMDLETS = ("Set-Content", "Add-Content", "Out-File",
-                    "New-Item", "Clear-Content",
-                    "Remove-Item", "Move-Item", "Copy-Item", "Rename-Item")
+PS_WRITE_CMDLETS = (
+    # *-Content
+    "Set-Content", "Add-Content", "Clear-Content", "Out-File",
+    # *-Item(檔案本體的增刪搬改)
+    "New-Item", "Remove-Item", "Move-Item", "Copy-Item", "Rename-Item",
+    "Set-Item", "Clear-Item",
+    # Export-*:把資料直接寫成檔
+    "Export-Csv", "Export-Clixml", "Export-Alias",
+    # 壓縮/解壓 —— **解壓也是寫**
+    "Compress-Archive", "Expand-Archive",
+    # 其餘寫檔者(第三類調查的產出)
+    "New-FileCatalog", "Update-ScriptFileInfo", "Tee-Object",
+    "Start-Transcript", "Save-Help", "Trace-Command", "Set-TraceSource",
+)
 
 WRITE_CONSTRUCT = re.compile(
     r"(?:^|[\s;&|(])(?:" + "|".join(POSIX_WRITE_COMMANDS + PS_WRITE_CMDLETS) + r")(?:\s|$)"
@@ -314,7 +325,13 @@ WRITE_CONSTRUCT = re.compile(
 # PowerShell 具名參數裡**會是路徑**的那幾個。可列舉,所以列舉。
 # 其餘參數的值一律不當目標 —— `-Value hello` 的 `hello` 不是路徑,
 # 把它當目標就是票 21 那個「具體而錯誤」的訊息,而人會相信它然後去找一個不存在的路徑。
-PS_PATH_PARAMS = {"-path", "-literalpath", "-destination", "-newname", "-target"}
+#
+# **參數名的歧義被動詞閘中和掉了。** `-FilePath` 在 `Tee-Object` 是輸出、
+# 在 `Start-Job` 是**輸入腳本** —— 同一個名字,相反方向。
+# 純參數比對會把後者誤判成寫入;而這份清單只在「動詞已經是已知寫入者」時才被查,
+# 所以 `Start-Job` 根本走不到這裡。**歧義由上一層解決,不是由這一層猜。**
+PS_PATH_PARAMS = {"-path", "-literalpath", "-destination", "-newname", "-target",
+                  "-destinationpath", "-catalogfilepath", "-filepath", "-outfile"}
 
 BASH_ALLOWED_CMDS = {
     "git": "版控自己的寫入(索引、工作區、.git),逼它走檔案工具沒有意義",

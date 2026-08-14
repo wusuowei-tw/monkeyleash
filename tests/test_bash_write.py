@@ -210,8 +210,12 @@ class TestPowerShellVerbFamiliesAreCovered:
         另一邊沒加會當場紅**。名單一致靠機制,不靠記性。
         """
         import re as _re
+        # 名詞可能是多個字(`New-FileCatalog`、`Update-ScriptFileInfo`)——
+        # 第一版寫成 `[A-Z][a-z]+-[A-Z][a-z]+`,把它們截成 `New-File`、
+        # `Update-Script`,於是**測試自己造出三個不存在的缺口**。
+        # 截斷型的比對錯誤與票 04 那條「邊界放在擷取處會砍長度」同族。
         in_construct = {m.lower() for m in _re.findall(
-            r"[A-Z][a-z]+-[A-Z][a-z]+", gate.WRITE_CONSTRUCT.pattern)}
+            r"[A-Z][a-z]+-[A-Za-z]+", gate.WRITE_CONSTRUCT.pattern)}
         in_commands = {w.lower() for w in gate.WRITE_COMMANDS}
         missing = sorted(in_construct - in_commands)
         assert not missing, (
@@ -241,6 +245,59 @@ class TestPowerShellVerbFamiliesAreCovered:
     def test_allowed_targets_still_win_for_the_new_verbs(self):
         """新動詞也要吃許可清單 —— 否則 `.dev/` 之類的正當寫入會被誤擋。"""
         assert gate.bash_write_violation("Remove-Item .cache/x.json") is None
+
+    THIRD_FAMILY = [
+        # *-Item 家族沒收完 —— 第一輪只收了五個
+        ("Set-Item pkg/thing.py -Value x", "thing.py"),
+        ("Clear-Item pkg/thing.py", "thing.py"),
+        # Export-*:直接把資料寫成檔
+        ("Export-Csv -Path pkg/out.csv -InputObject $x", "out.csv"),
+        ("Export-Clixml -Path pkg/out.xml -InputObject $x", "out.xml"),
+        ("Export-Alias pkg/aliases.txt", "aliases.txt"),
+        # 壓縮/解壓:解壓也是寫
+        ("Compress-Archive -Path pkg -DestinationPath pkg/out.zip", "out.zip"),
+        ("Expand-Archive -Path a.zip -DestinationPath pkg/x", "pkg/x"),
+        # 其餘寫檔者
+        ("New-FileCatalog -Path pkg -CatalogFilePath pkg/cat.cat", "cat.cat"),
+        ("Update-ScriptFileInfo pkg/x.ps1", "x.ps1"),
+        ("Tee-Object -FilePath pkg/thing.py", "thing.py"),
+        ("Start-Transcript -Path pkg/log.txt", "log.txt"),
+    ]
+
+    @pytest.mark.parametrize("cmd,target", THIRD_FAMILY)
+    def test_the_third_family_is_blocked_and_named(self, cmd, target):
+        """票 29 收尾 —— **第三類調查的紅燈**。
+
+        調查方法照 F-083:**列舉來源,不是「我想得到的」**。
+        跑了兩個軸,而**兩個軸互相看不見對方**:
+
+          動詞軸   `Get-Command | Where Verb -in (Set/New/Remove/Export/…)`
+          參數軸   `Where Parameters 含 OutFile / FilePath / DestinationPath`
+
+        動詞軸漏掉 `Invoke-WebRequest -OutFile`(動詞是 Invoke,完全看不出在寫);
+        參數軸漏掉 `Set-Item`(參數是位置運算元,沒有具名輸出參數)。
+        **一個軸的「查完了」是另一個軸的盲區** —— 這句話比這張表本身值錢。
+        """
+        msg = gate.bash_write_violation(cmd)
+        assert msg, "%s 會寫檔卻整條放行" % cmd
+        assert target in msg, "訊息沒點名目標 %s:%r" % (target, msg)
+
+    @pytest.mark.parametrize("cmd", [
+        "Start-Job -FilePath pkg/x.ps1",
+        "Invoke-Command -FilePath pkg/x.ps1",
+    ])
+    def test_filepath_as_an_input_is_not_a_write(self, cmd):
+        """**反控,而且是這一輪最重要的一條。**
+
+        `-FilePath` 在 `Tee-Object` 是**輸出**,在 `Start-Job` 是**輸入腳本** ——
+        同一個參數名,相反方向。純參數比對會把後者誤判成寫入。
+
+        擋住這個誤判的是**動詞閘**:抽取只在「動詞已經是已知寫入者」時才跑,
+        所以參數名的歧義**被動詞這一層中和掉了**。
+        這條測試釘的就是那個中和 —— 少了它,往後有人把參數比對抽出來獨立用,
+        誤擋會悄悄回來。
+        """
+        assert gate.bash_write_violation(cmd) is None, cmd
 
     def test_named_parameter_values_do_not_become_targets(self):
         """**防止本票引進票 21 的病。**
