@@ -1,7 +1,17 @@
 #!/bin/sh
-# 洩漏偵測 pre-commit —— **進版控**,靠 core.hooksPath 啟用(見 bootstrap.sh)。
+# 六站閘門 — 洩漏偵測 + 權威判定。邏輯不在這裡,只呼叫共用腳本。
+# 洩漏偵測在前:秘密一旦進了歷史,擋下 commit 是唯一便宜的時點。
 #
-# .git/hooks/ 不進版控,clone 不會帶走它(ADR 0007)。所以 hook 放在
-# 版控裡的 .githooks/,用 `git config core.hooksPath .githooks` 指過來 ——
-# hook 跟著 clone 走,啟用只要一行 config(零接觸不可能,git 刻意如此)。
-exec python "$(git rev-parse --show-toplevel)/.claude/portable/leak_scan.py" --staged
+# **進版控**,靠 core.hooksPath 啟用(見 bootstrap.sh)。
+# .git/hooks/ 不進版控,clone 不會帶走它(ADR 0007),所以 hook 住在這裡,
+# 用 `git config core.hooksPath .githooks` 指過來 —— hook 跟著 clone 走,
+# 啟用只要一行 config(零接觸不可能,git 刻意如此)。
+#
+# **三層都要接**(票 27)。這一支原本只有 leak_scan,而 manifest.py 已經
+# 記載過同一個形狀是缺陷:「目標的 .githooks/pre-commit 會從三層掛載降成
+# 只剩 leak_scan,**權威層靜默消失**,而整個過程看起來像一次成功的更新。」
+# agent-gates 自己就處在那個降級狀態,40 個 commit 沒有人發現 ——
+# 因為 core.hooksPath 根本沒設定,這一支從頭到尾沒被執行過。
+root="$(git rev-parse --show-toplevel)"
+python "$root/.claude/portable/leak_scan.py" --staged || exit 1
+exec python "$root/.claude/hooks/gate.py" --pre-commit

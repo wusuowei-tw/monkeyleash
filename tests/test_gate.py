@@ -1611,3 +1611,106 @@ class TestR3AcceptsUpstreamProvenance:
         self._prov(down, upstream_commit=sha)
         msg = gate.check("pkg/thing.py", "def f():\n    return 2\n")
         assert msg and "R2" in msg, "provenance 順手把 R2 也豁免了:%r" % msg
+
+
+class TestAuthorityLayerIsWired:
+    """票 27 — 權威層沒接上 git 時,必須**大聲失敗**。
+
+    CLAUDE.md 早就寫著這個缺陷:「`.git/hooks/` 不進版控,clone 不會帶走它,
+    而且**完全靜默** —— 前哨照跑、測試照綠,沒有東西會說權威層不在。」
+    agent-gates 自己就處在那個狀態,40 個 commit 都沒有人發現。
+    **「已知」不等於「有東西會說」**,這個 class 就是那個「會說」。
+
+    一句話教訓(票 27):**手動呼叫一支檢查,不等於那支檢查在通行路上。**
+    所以這條檢查刻意**不**掛在 `mode_pre_commit` 裡 —— 掛在那裡的話,
+    權威層沒接上時它根本不會被呼叫,而那正是它要偵測的情況。同一個遞迴。
+    它住在測試裡,因為測試是這個 repo 目前唯一**會被強制跑到**的路徑。
+    """
+
+    def _repo(self, tmp_path, name):
+        repo = tmp_path / name
+        repo.mkdir()
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            subprocess.run(["git"] + c.split(), cwd=str(repo), capture_output=True)
+        return repo
+
+    def _hook(self, path, body):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        io.open(path, "w", encoding="utf-8", newline="\n").write(body)
+
+    LEAK_ONLY = ('#!/bin/sh\nexec python "$(git rev-parse --show-toplevel)'
+                 '/.claude/portable/leak_scan.py" --staged\n')
+    WIRED = ('#!/bin/sh\nroot="$(git rev-parse --show-toplevel)"\n'
+             'python "$root/.claude/portable/leak_scan.py" --staged || exit 1\n'
+             'exec python "$root/.claude/hooks/gate.py" --pre-commit\n')
+
+    def test_a_repo_with_no_hook_at_all_is_reported(self, tmp_path):
+        """沒有 pre-commit 檔 —— 訊息要說出是**這一種**沒滿足。"""
+        repo = self._repo(tmp_path, "nohook")
+        msg = gate.authority_hook_missing(str(repo))
+        assert msg, "完全沒有 hook 卻判為已接上 —— 這正是 fail-open"
+        assert "沒有" in msg or "不存在" in msg, msg
+
+    def test_a_hook_without_the_gate_call_is_reported(self, tmp_path):
+        """有 hook、只接 leak_scan —— **agent-gates 自己就是這個形狀**。
+
+        訊息必須與「沒有 hook」分得開:兩者的修法不同
+        (一個是裝 hook,一個是把權威層加進既有 hook)。
+        """
+        repo = self._repo(tmp_path, "leakonly")
+        self._hook(repo / ".git" / "hooks" / "pre-commit", self.LEAK_ONLY)
+        msg = gate.authority_hook_missing(str(repo))
+        assert msg, "hook 存在但沒接權威層,卻判為已接上"
+        assert "gate.py" in msg, "訊息沒說出缺的是什麼:%r" % msg
+        assert "沒有" not in msg.split("\n")[0] or "gate" in msg.split("\n")[0], msg
+
+    def test_a_wired_hook_passes(self, tmp_path):
+        """**反控。** 少了它,「一律回報未接上」的實作也會讓前兩條過。"""
+        repo = self._repo(tmp_path, "wired")
+        self._hook(repo / ".git" / "hooks" / "pre-commit", self.WIRED)
+        assert gate.authority_hook_missing(str(repo)) is None
+
+    def test_the_check_follows_core_hookspath(self, tmp_path):
+        """**核心形狀:驗的是 git 實際會執行的那一支,不是某個路徑上的檔案。**
+
+        構造:`.git/hooks/pre-commit` 接得好好的,但 `core.hooksPath` 指到
+        另一個目錄,而那裡的 hook 只有 leak_scan。git 會執行後者。
+        只看 `.git/hooks/` 的實作會在這裡給出綠燈 —— 而那個綠燈是假的。
+
+        這不是假想:agent-gates 的 `bootstrap.sh` 宣稱用 `core.hooksPath`
+        指向版控裡的 `.githooks/`,而實測 `core.hooksPath` 根本沒設定。
+        兩條掛載路徑並存,所以「哪一支會跑」必須問 git,不能假設。
+        """
+        repo = self._repo(tmp_path, "hookspath")
+        self._hook(repo / ".git" / "hooks" / "pre-commit", self.WIRED)
+        self._hook(repo / ".githooks" / "pre-commit", self.LEAK_ONLY)
+        subprocess.run(["git", "config", "core.hooksPath", ".githooks"],
+                       cwd=str(repo), capture_output=True)
+        msg = gate.authority_hook_missing(str(repo))
+        assert msg, ("core.hooksPath 指到的那支沒接權威層,卻因為 .git/hooks/ "
+                     "裡有一支接好的而放行 —— 綠燈的原因不對")
+
+    def test_the_reported_path_is_the_one_git_would_run(self, tmp_path):
+        """訊息要指名**那一支**,否則人會去修錯的檔案(票 13 判準)。"""
+        repo = self._repo(tmp_path, "whichpath")
+        self._hook(repo / ".githooks" / "pre-commit", self.LEAK_ONLY)
+        subprocess.run(["git", "config", "core.hooksPath", ".githooks"],
+                       cwd=str(repo), capture_output=True)
+        msg = gate.authority_hook_missing(str(repo))
+        assert msg and ".githooks" in msg, "訊息沒指名實際會跑的那一支:%r" % msg
+
+    def test_a_broken_git_is_not_a_pass(self, tmp_path):
+        """**fail-closed。** 問不到 git 就當作沒接上 ——
+        「問不到」與「接上了」是兩件事(與 R3 紅燈紀錄同一條判準)。"""
+        notrepo = tmp_path / "notarepo"
+        notrepo.mkdir()
+        assert gate.authority_hook_missing(str(notrepo)) is not None
+
+    def test_this_repo_itself_is_wired(self):
+        """**活體金絲雀。** 上面五條都是構造出來的形狀;這一條問的是
+        「**現在、這台機器上、這個 repo**,權威層真的接上了嗎」。
+
+        缺席必須出聲 —— 而在票 27 落地之前,它出的聲就是這條紅燈。
+        """
+        msg = gate.authority_hook_missing(str(ROOT))
+        assert msg is None, msg
