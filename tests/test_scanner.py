@@ -18,7 +18,7 @@
 不寫死任何敏感字面。
 """
 
-import importlib.util
+import importlib.util  # noqa: F401  (下方 _load 用)
 import io
 import pathlib
 import re
@@ -332,3 +332,90 @@ class TestThisFileIsInertUnderDownstreamGuards:
         assert len(COOKIE_OPT) == len("--cook") + len("ies-from-browser")
         assert COOKIE_RE == COOKIE_OPT
         assert SECRET.startswith("ghp") and len(SECRET) == 28
+
+
+class TestMultiHitLinesCannotBeReassembled:
+    """票 32 —— 一行命中多條 pattern 時,**分段遮罩可以拼回完整祕密**。
+
+    ## 共同形狀:**防護的單位小於攻擊者能取得的單位**
+
+    F-067 立的規矩是「掃描器的輸出本身是外流面」,而它解的是**一次命中**。
+    現行的遮罩是**逐命中**做的:`scan_paths` 對每個 (行, 規則組, pattern)
+    各產生一個 `Hit`,每個 `Hit` 的 `context` 只遮**自己那一段**。
+
+    於是同一行的兩份報告,**各自洩漏對方遮掉的那一半**:
+
+        行 N  pattern A   ***已遮罩***  yyyy
+        行 N  pattern B   aaaa  ***已遮罩***
+
+    **每一行單獨看都合格。** 而讀報告的人拿到的是全部。
+
+    與票 21 是結構上的親戚:那邊是逐 token 抽取對上整段語意,
+    這邊是逐命中遮罩對上整行洩漏 —— **單位對不上**。
+
+    同族:分頁 API 每頁各自過濾敏感欄位而併頁可還原;
+    日誌逐條脫敏而多條的交集反推出身分。
+    """
+
+    def _group(self, patterns):
+        return sc.RuleGroup("測試", patterns)
+
+    def test_two_patterns_on_one_line_cannot_be_reassembled(self, tmp_path):
+        """**核心紅燈。** 兩份報告行**併讀**不得還原原始行。
+
+        斷言必須跨行做 —— 單行斷言會給假綠,而假綠正是本票要修的東西。
+        """
+        left, right = "AAAA" + "1111", "BBBB" + "2222"
+        line = "k = %s and %s" % (left, right)
+        p = tmp_path / "sample.txt"
+        io.open(p, "w", encoding="utf-8", newline="\n").write(line + "\n")
+
+        hits = sc.scan_paths([str(p)], [self._group([left, right])],
+                             root=str(tmp_path))
+        assert len(hits) >= 1, "沒有命中,測試前提不成立"
+        joined = " ".join(h.context for h in hits)
+        for secret in (left, right):
+            assert secret not in joined, (
+                "併讀兩份報告還原出了 %s —— 遮罩的單位小於洩漏的單位" % secret)
+
+    def test_three_patterns_on_one_line_are_also_safe(self, tmp_path):
+        """兩條特例不算解決 —— 三條以上同樣不得拼回。"""
+        parts = ["AAAA" + "1111", "BBBB" + "2222", "CCCC" + "3333"]
+        line = "a=%s b=%s c=%s" % tuple(parts)
+        p = tmp_path / "s3.txt"
+        io.open(p, "w", encoding="utf-8", newline="\n").write(line + "\n")
+
+        hits = sc.scan_paths([str(p)], [self._group(parts)], root=str(tmp_path))
+        joined = " ".join(h.context for h in hits)
+        for secret in parts:
+            assert secret not in joined, "三條命中仍可拼回 %s" % secret
+
+    def test_a_single_hit_keeps_f067_behaviour(self, tmp_path):
+        """**反控 —— F-067 不得被推翻。**
+
+        單一命中的遮罩行為與訊息品質**不變**:遮掉命中那一段、
+        **前後文要留得住**(F-067 的原話:「遮罩過頭 —— 前後文要留得住,
+        否則定位不了」)。
+
+        少了這條,「一律整行遮」也會讓上面兩條全綠,而那等於把 F-067 拆掉。
+        """
+        secret = "AAAA" + "1111"
+        line = "token = %s  # 註解" % secret
+        p = tmp_path / "one.txt"
+        io.open(p, "w", encoding="utf-8", newline="\n").write(line + "\n")
+
+        hits = sc.scan_paths([str(p)], [self._group([secret])], root=str(tmp_path))
+        assert len(hits) == 1, hits
+        ctx = hits[0].context
+        assert secret not in ctx, "單一命中沒遮到"
+        assert "已遮罩" in ctx, "遮罩標記不見了"
+        assert "token" in ctx, "前後文被遮掉了 —— F-067 說定位得留得住"
+
+    def test_the_line_number_still_locates_the_hit(self, tmp_path):
+        """整行遮蔽之後,**行號仍然是定位手段** —— 那是最後一道可讀性。"""
+        parts = ["AAAA" + "1111", "BBBB" + "2222"]
+        p = tmp_path / "loc.txt"
+        io.open(p, "w", encoding="utf-8", newline="\n").write(
+            "first\n" + "x=%s y=%s\n" % tuple(parts))
+        hits = sc.scan_paths([str(p)], [self._group(parts)], root=str(tmp_path))
+        assert hits and all(h.line == 2 for h in hits), [h.line for h in hits]

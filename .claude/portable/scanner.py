@@ -196,10 +196,35 @@ def scan_paths(paths, groups, root=".", self_paths=(),
             continue
 
         for i, line in enumerate(text.split("\n"), 1):
+            # **先收齊這一行的所有命中,再決定怎麼遮**(票 32)。
+            #
+            # 原本是逐命中各自產生一個 Hit、各自只遮**自己那一段**,
+            # 於是同一行的兩份報告**各自洩漏對方遮掉的那一半** ——
+            # 每一行單獨看都合格,而讀報告的人拿到的是全部。
+            #
+            # **防護的單位(一次命中)小於洩漏的單位(一整行)。**
+            # F-067 解的是「一次命中」,這裡補的是它的多命中形式。
+            line_hits = []
             for g in active:
                 for n, (raw, rx) in enumerate(g.patterns, 1):
                     m = rx.search(line)
                     if m:
-                        hits.append(Hit(rel, i, g.name, g.label(raw, n),
-                                        redact(line.strip()[:100], m.group(0))))
+                        line_hits.append((g, raw, n, m))
+            if not line_hits:
+                continue
+            snippet = line.strip()[:100]
+            if len(line_hits) == 1:
+                # 單一命中維持 F-067 的形狀:遮命中那一段,**前後文留得住**
+                #(「遮罩過頭 —— 前後文要留得住,否則定位不了」)。
+                g, raw, n, m = line_hits[0]
+                hits.append(Hit(rel, i, g.name, g.label(raw, n),
+                                redact(snippet, m.group(0))))
+            else:
+                # 多命中 -> **整行遮**。前後文在這一行上不可能安全保留:
+                # 任何留下來的片段都是別份報告遮掉的那一半。
+                # 定位改靠**路徑 + 行號**,那兩個本來就在 Hit 裡。
+                masked = "***整行已遮罩(同一行 %d 條命中,分段遮罩可拼回)***" \
+                    % len(line_hits)
+                for g, raw, n, _m in line_hits:
+                    hits.append(Hit(rel, i, g.name, g.label(raw, n), masked))
     return hits
