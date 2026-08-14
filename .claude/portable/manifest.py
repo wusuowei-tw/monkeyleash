@@ -35,7 +35,7 @@ def _table():
     return load_table(MANIFEST)
 
 
-def load_table(path):
+def load_table(path, allowed=None):
     """讀**指定位置**的標記表。回傳 {相對路徑: 標記}。
 
     要能指定位置,是因為更新路徑(sync)讀的是**來源 repo** 的那一份,
@@ -43,9 +43,17 @@ def load_table(path):
     而漂移的那天不會有人發現:一個把檔案搬過去,一個以為沒搬(F-058)。
     同一件事只留一個實作,連「格式錯誤要吵」這件事也一起繼承。
 
-    檔案不存在 -> 空表 -> 全部視為未標記 -> 全部 copy 且全部被列出來。
-    這裡的 fail 方向是**吵鬧**,不是「什麼都不帶」:少帶才是危險的那一邊。
+    `allowed` 讓**別的標記詞彙**共用這個解析器(票 22:使用者層的四個桶是
+    `export`/`age`/`human`/`never`)。預設 `None` = 用框架自己的 `MARKS`,
+    既有呼叫端行為完全不變。
+    **參數化的是詞彙,不是「要不要驗」** —— 打錯字照樣吵,那條不可協商。
+    複製一份 parser 出去會違反上一段自己寫的理由。
+
+    檔案不存在 -> 空表 -> 全部視為未標記。
+    **未標記之後怎麼辦由呼叫端決定**:框架這邊是 copy 且全部被列出來
+    (少帶才是危險的那一邊);使用者層那邊是拒絕(多帶才是危險的那一邊)。
     """
+    vocab = MARKS if allowed is None else allowed
     out = {}
     if not os.path.exists(path):
         return out
@@ -62,15 +70,15 @@ def load_table(path):
             raise ValueError(
                 "%s:%d 這一行沒有標記:%r\n"
                 "     格式是「路徑<空白>標記」,標記為 %s 之一。"
-                % (where, lineno, line, "/".join(sorted(MARKS))))
+                % (where, lineno, line, "/".join(sorted(vocab))))
         entry, mark = parts[0].strip().replace("\\", "/"), parts[1]
-        if mark not in MARKS:
+        if mark not in vocab:
             # 打錯字不得退化成預設。把一個該 generate 的檔案照抄進新專案
             # 看起來一切正常,實際上 R6 會拿別的 repo 的路徑去驗 —— 正是靜默壞掉。
             raise ValueError(
                 "%s:%d 不認得的標記 %r(路徑 %s)。\n"
                 "     只能是 %s。打錯字不會被當成未標記 —— 那會靜默退化成 copy。"
-                % (where, lineno, mark, entry, "/".join(sorted(MARKS))))
+                % (where, lineno, mark, entry, "/".join(sorted(vocab))))
         if entry in out:
             # 同一路徑標兩次,行為就取決於讀取順序,而那是隱形的
             raise ValueError(

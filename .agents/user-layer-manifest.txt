@@ -1,0 +1,72 @@
+# 使用者層分類表 —— `~/.claude/` 底下的東西,哪些走匯出腳本、怎麼走。
+#
+# 格式:路徑<空白>標記。以 / 結尾的是目錄,涵蓋底下所有東西。最長前綴者勝
+# (不是讀取順序 —— 順序決定的話換個排法就換個行為,那是隱形的)。
+# 解析器與 `portable-manifest.txt` 共用同一支(manifest.load_table),
+# 只換標記詞彙;「打錯字照樣吵」那條原封不動繼承。
+#
+# 標記:
+#   export  腳本帶走
+#   age     加密後才帶走(裸的祕密永遠不上任何雲端、不進任何 repo)
+#   human   **腳本不碰** —— 人工複製 + sha 核對(R4)。G1 會擋腳本讀它們
+#   never   永不經本腳本匯出
+#
+# ── 兩件必須先講清楚的事 ────────────────────────────────────────
+#
+# **一、沒有預設。未分類 = 拒絕整次匯出。**
+# `portable-manifest.txt` 的預設是 copy,理由是它自己表頭寫的:
+# 「多帶是吵鬧的、少帶是靜默的」。**這裡的不對稱是反過來的**:
+#     多帶 -> 把憑證推上雲端,靜默而且不可逆
+#     少帶 -> 換機器當場發現少東西,吵鬧
+# 同一個預設值,搬到相反的不對稱上就變成缺陷。所以這裡選「沒有預設」。
+#
+# **二、`never` = 不走這條門,**不等於**不備份。**
+# 這句放在表頭而不是只寫在票裡,因為讀這張表的人正是會問
+# 「那它到底有沒有被備份」的那個人。每一條 never 都要註明它的備份通道,
+# 沒有通道的才是真的沒備份。
+
+# ── 框架必需的小設定(合計 < 20 KB,這幾條是換機器真正要帶的)──
+upstream-roots.txt              export
+settings.json                   export
+commands/                       export
+
+# ── 加密後才帶走 ─────────────────────────────────────────────
+# 內容本身就是秘密(使用者名稱、往來機構、資料夾名),
+# 明文進私有 repo 等於把「要防的東西」列成一張清單。
+leak-patterns.local.txt         age
+
+# ── 腳本不碰:R4,人工 + sha ──────────────────────────────────
+# 這兩個檔在 G1 保護清單裡,第一級無豁免、不分讀寫 —— 腳本去讀就會被擋。
+# 它們必須**本來就不去讀**,而不是讀了以後決定不用。
+# 步驟與 sha 核對指令寫在 docs/machine-init.md。
+# 另外:保護清單是**照該機器實際存在的路徑**寫的,兩台機器本來就不該相同,
+# 所以這一項連「複製」都要人工覆核,不是無腦覆蓋。
+g1-protected.txt                human
+shadow-clamp.txt                human
+
+# ── 永不經本腳本匯出(每條都註明備份通道)────────────────────────
+# 有效憑證。進了版控就留在歷史裡,而歷史改不掉。備份通道:重新登入。
+.credentials.json               never
+.claude.json                    never
+backups/                        never
+# 對話逐字稿(數百 MB)。**不經本腳本匯出;備份走獨立封存通道**
+# (R3 裁決:帶日期 zip -> 雙雲端,週級)。
+projects/                       never
+# 編輯歷史。復原開發環境不需要它;要留的話走與 projects/ 同一條封存通道。
+file-history/                   never
+# 證據檔。TSI-002:代理人不清理、不還原、不搬移證據檔。
+g1-trace.log                    never
+# 執行期產物,可重建 —— 重裝就有,不必帶。
+cache/                          never
+debug/                          never
+sessions/                       never
+session-env/                    never
+shell-snapshots/                never
+ide/                            never
+downloads/                      never
+plugins/                        never
+.last-cleanup                   never
+.oauth_refresh.lock             never
+# G1 hook 本體:正本在 repo 的 .claude/portable/g1_guard.py,
+# 由 ADR 0009 的三步流程覆蓋過去,不走這條門。
+hooks/                          never
