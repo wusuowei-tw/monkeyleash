@@ -671,32 +671,90 @@ def load_feature():
         return None
 
 
+# 票住哪裡:兩個位置都算。**做事的是「已 commit」那個條件,不是資料夾名字。**
+# 實測(票 24):agent-gates 的票在進版控的 docs/tickets/,而 .scratch/ 被 gitignore;
+# 三個下游 repo 反而把 .scratch/ 進版控。同一個豁免位置,上游不受審查、下游受審查。
+# 綁死任一邊都會在另一邊失效,而失效的方向是「找不到宣告 = 不豁免」——
+# fail-closed,但擋的是做對事的人,那種規則最後會被整條關掉(F-031)。
+TICKET_DIRS = (".scratch/%s/issues", "docs/tickets/%s")
+
+_UNTESTED_PREFIX = "**Untested by decision:**"
+
+
+def declared_untested(text):
+    """從票的內容取出宣告的模組名。沒有宣告回 None。
+
+    抽出來是因為前哨與提交兩條路徑都要解析它,而**原本各有一份副本** ——
+    兩份會分岔,而分岔在豁免判定裡的後果是一邊放行一邊擋(ADR 0003)。
+    """
+    for line in text.splitlines():
+        if line.startswith(_UNTESTED_PREFIX):
+            raw = line.split(":**", 1)[1]
+            return {m.strip() for m in raw.replace("、", ",").split(",") if m.strip()}
+    return None
+
+
+def head_blob(rel_path):
+    """這支檔案**在 HEAD 的內容**(bytes)。不在 HEAD 或問不到回 None。
+
+    「在不在 HEAD」與「內容是什麼」是同一次查詢,所以只有一個入口 ——
+    `head_content_hash` 與豁免宣告的判定共用它,不各自呼叫一次 git(F-080)。
+    """
+    try:
+        out = subprocess.run(["git", "cat-file", "blob", "HEAD:" + rel_path],
+                             cwd=ROOT, capture_output=True)
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None                      # 不在 HEAD(新建未提交)或 git 不可用
+    return out.stdout
+
+
+def committed_declaration(rel_path):
+    """票**在 HEAD 的那一版**宣告了哪些模組。票不在 HEAD 回 None。
+
+    **讀的是已提交的內容,不是工作樹的內容。** 兩者的差別就是這條規則的全部:
+    工作樹的檔案是代理人在被擋當下造得出來的,HEAD 的內容不是
+    (要改它得產生一個 commit,而 commit 會出現在 diff、review 與 clone 裡)。
+
+    只驗「路徑有沒有被 commit 過」不夠 —— 那樣可以先 commit 一張空票,
+    再把宣告加在工作樹上。**條件是「這一行宣告已經在 HEAD 裡」。**
+    """
+    raw = head_blob(rel_path)
+    if raw is None:
+        return None
+    return declared_untested(raw.decode("utf-8", "replace"))
+
+
 def ticket_untested_modules(feature, ticket_id):
     """讀票裡「**Untested by decision:**」宣告的模組名。
 
     豁免不是 gate.py 自己開的後門 —— 它去讀一個**前一站產物裡已經存在的決定**。
-    要新增豁免必須回頭改票,那是看得見、會被審查的動作;
-    在被擋住的當下加豁免會留下票的修改痕跡,對得起來。
-    宣告不存在 = 不豁免(fail-closed)。
+    要新增豁免必須回頭改票,那是看得見、會被審查的動作。
+
+    **「看得見」的定義是「已經 commit」,不是「檔案存在」**(票 24)。
+    原本用 `os.path.exists()`,於是被擋住的當下建一個檔、寫一行宣告,豁免就到手 ——
+    不會出現在任何 diff、任何 review、任何 clone 裡。理由與實作對不上。
+    改成綁 HEAD 之後,那條路要先產生一個 commit,而那正是「會被審查」的意思。
+    形狀抄 `check_legacy_list`(綁 go-live 樹),理由同一個:**無法自我服務**。
+
+    宣告不存在、或票還沒 commit = 不豁免(fail-closed)。
     """
     if not feature or not ticket_id:
         return set(), None
-    d = os.path.join(ROOT, ".scratch", feature, "issues")
-    if not os.path.isdir(d):
-        return set(), None
-    for name in sorted(os.listdir(d)):
-        if not name.startswith(str(ticket_id)):
+    for tmpl in TICKET_DIRS:
+        d = tmpl % feature
+        abs_d = os.path.join(ROOT, d.replace("/", os.sep))
+        if not os.path.isdir(abs_d):
             continue
-        p = os.path.join(d, name)
-        try:
-            for line in io.open(p, encoding="utf-8"):
-                if line.startswith("**Untested by decision:**"):
-                    raw = line.split(":**", 1)[1]
-                    mods = {m.strip() for m in raw.replace("、", ",").split(",") if m.strip()}
-                    return mods, ".scratch/%s/issues/%s" % (feature, name)
-        except Exception:
-            return set(), None
-        return set(), ".scratch/%s/issues/%s" % (feature, name)
+        for name in sorted(os.listdir(abs_d)):
+            if not name.startswith(str(ticket_id)):
+                continue
+            rel = "%s/%s" % (d, name)
+            mods = committed_declaration(rel)
+            # 票在磁碟上但不在 HEAD、或在 HEAD 但沒有宣告 —— 兩者都不豁免。
+            # 仍然回傳票的路徑,訊息才說得出「看的是哪一張票」。
+            return (mods or set()), rel
     return set(), None
 
 
@@ -705,6 +763,10 @@ def logged_exemption_backed(rel_path, base):
 
     但**不採信紀錄本身** —— 回頭打開它指名的票,確認那張票真的列了這個模組。
     紀錄只是索引,票才是決定。這樣偽造一行紀錄沒有用,票對不上就擋。
+
+    **票也必須在 HEAD 裡**(票 24)。只修前哨那一半沒有用 ——
+    留著這一半就是留一條繞道:在被擋當下造一張票、再讓提交時來認它。
+    豁免的兩個時點要綁同一個條件,否則鬆的那一邊定義了整條規則。
     """
     log = os.path.join(ROOT, ".dev", "gate-exemptions.jsonl")
     if not os.path.exists(log):
@@ -719,15 +781,9 @@ def logged_exemption_backed(rel_path, base):
             continue
         if rec.get("file") != rel_path or rec.get("module") != base:
             continue
-        p = os.path.join(ROOT, (rec.get("declared_in") or "").replace("/", os.sep))
-        if not os.path.exists(p):
-            continue
-        for l in io.open(p, encoding="utf-8"):
-            if l.startswith("**Untested by decision:**"):
-                mods = {m.strip() for m in
-                        l.split(":**", 1)[1].replace("、", ",").split(",") if m.strip()}
-                if base in mods:
-                    return True
+        mods = committed_declaration(rec.get("declared_in") or "")
+        if mods and base in mods:
+            return True
     return False
 
 
@@ -795,15 +851,11 @@ def head_content_hash(rel_path):
     回 None 一律由呼叫端當作「不合格」處理(fail-closed),不區分
     「不在 HEAD」與「git 壞掉」—— 兩者都代表這個問題沒有答案。
     """
-    try:
-        out = subprocess.run(["git", "cat-file", "blob", "HEAD:" + rel_path],
-                             cwd=ROOT, capture_output=True)
-    except Exception:
+    raw = head_blob(rel_path)            # 取 HEAD 內容只有一個入口(F-080)
+    if raw is None:
         return None
-    if out.returncode != 0:
-        return None                      # 不在 HEAD(新建未提交)或 git 不可用
     try:
-        return _redlight().content_hash(out.stdout)   # 雜湊定義只有一份(F-058)
+        return _redlight().content_hash(raw)          # 雜湊定義只有一份(F-058)
     except Exception:
         return None
 

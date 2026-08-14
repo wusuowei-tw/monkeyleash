@@ -1613,6 +1613,133 @@ class TestR3AcceptsUpstreamProvenance:
         assert msg and "R2" in msg, "provenance 順手把 R2 也豁免了:%r" % msg
 
 
+class TestUntestedByDecisionCannotBeSelfServed:
+    """票 24 — R3 的「Untested by decision」豁免必須是**無法自我服務**的。
+
+    那段程式碼自己寫下的理由是:
+
+        豁免不是 gate.py 自己開的後門 —— 它去讀一個**前一站產物裡已經存在的決定**。
+        要新增豁免必須回頭改票,**那是看得見、會被審查的動作**。
+
+    而判定實際做的是 `os.path.exists()`,**完全不碰 git**。
+    被 R3 擋住的當下,建一個檔、寫一行宣告,豁免就到手了 ——
+    不會出現在任何 diff、任何 review、任何 clone 裡。理由與實作對不上。
+
+    **同一份檔案裡已經有解對的先例**:`check_legacy_list` 把凍結清單綁到
+    go-live 樹,並且把理由寫死了 ——
+
+        被 R3 擋下的人只要在末尾加一行就豁免到手 —— 完全不必碰 git 歷史,
+        而「無法自我服務」正是選這個設計的**唯一**理由。
+        「有一條測試會抓到」不算守住:沒有機制強制那條測試被跑。
+
+    選型判準因此不是「哪個好寫」,是:**被擋住的代理人,能不能靠自己
+    造出一個滿足這個判定的東西?** 能,就還沒修完。
+    位置搬到哪裡都不解決這件事 —— 未追蹤的新檔在哪個目錄都一樣好造。
+    **要綁的是「已經 commit」,不是「在哪個資料夾」。**
+    """
+
+    def _repo(self, tmp_path, monkeypatch):
+        repo = tmp_path
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            subprocess.run(["git"] + c.split(), cwd=str(repo), capture_output=True)
+        (repo / "pkg").mkdir()
+        (repo / "pkg" / "thing.py").write_text("x = 1\n", encoding="utf-8")
+        (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "seed"], cwd=str(repo),
+                       capture_output=True)
+        monkeypatch.setattr(gate, "ROOT", str(repo))
+        return repo
+
+    DECL = "**Untested by decision:** thing\n"
+
+    def _write_decl(self, repo, rel, commit):
+        p = repo / rel.replace("/", os.sep)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# 票\n\n" + self.DECL, encoding="utf-8")
+        if commit:
+            subprocess.run(["git", "add", "-A"], cwd=str(repo), capture_output=True)
+            subprocess.run(["git", "commit", "-qm", "宣告"], cwd=str(repo),
+                           capture_output=True)
+        return p
+
+    def test_an_uncommitted_declaration_does_not_grant_the_exemption(
+            self, tmp_path, monkeypatch):
+        """**核心紅燈。** 未追蹤的宣告 = 代理人在被擋當下自己造出來的東西。
+
+        這正是那段 docstring 說「看得見、會被審查」時排除掉的情況,
+        而現行實作(`os.path.exists`)會吃下去。
+        """
+        repo = self._repo(tmp_path, monkeypatch)
+        self._write_decl(repo, ".scratch/f/issues/01-x.md", commit=False)
+        mods, declared_in = gate.ticket_untested_modules("f", "01")
+        assert "thing" not in mods, (
+            "未 commit 的宣告被吃進去了 —— 被 R3 擋住的代理人可以自己造一個,"
+            "而且不會留下任何版控痕跡:%s" % declared_in)
+
+    def test_a_committed_declaration_still_grants_the_exemption(
+            self, tmp_path, monkeypatch):
+        """**反控。** 少了它,「一律不豁免」的實作也會讓上一條過 ——
+        那是把功能拿掉,不是修好。"""
+        repo = self._repo(tmp_path, monkeypatch)
+        self._write_decl(repo, ".scratch/f/issues/01-x.md", commit=True)
+        mods, declared_in = gate.ticket_untested_modules("f", "01")
+        assert "thing" in mods, "已 commit 的合法宣告被拒:%s" % declared_in
+
+    def test_a_committed_declaration_under_docs_tickets_is_found(
+            self, tmp_path, monkeypatch):
+        """宣告位置不能綁死 `.scratch/`。
+
+        實測:agent-gates 的票住在**進版控**的 `docs/tickets/<feature>/`,
+        而 `.scratch/` 被 gitignore(0 個追蹤檔);
+        三個下游 repo 反而把 `.scratch/` 進版控(31 / 21 / 3 個追蹤檔)。
+        **同一個豁免位置,上游不受審查、下游受審查** —— 方向剛好反了。
+
+        所以要找的是「**已 commit 的票**」,兩個位置都算;
+        真正做事的是 commit 這個條件,不是資料夾名字。
+        """
+        repo = self._repo(tmp_path, monkeypatch)
+        self._write_decl(repo, "docs/tickets/f/01-x.md", commit=True)
+        mods, declared_in = gate.ticket_untested_modules("f", "01")
+        assert "thing" in mods, "進版控的票位置找不到宣告:%s" % declared_in
+
+    def test_no_declaration_at_all_is_still_fail_closed(self, tmp_path, monkeypatch):
+        """既有行為的釘子:沒有宣告 = 不豁免。修的時候不能把這個方向弄反。"""
+        repo = self._repo(tmp_path, monkeypatch)
+        mods, declared_in = gate.ticket_untested_modules("f", "01")
+        assert mods == set() and declared_in is None
+
+    def test_the_commit_time_check_does_not_accept_an_uncommitted_ticket(
+            self, tmp_path, monkeypatch):
+        """`logged_exemption_backed` 是提交時那一半,同一個洞。
+
+        它**不採信紀錄本身**、會回頭打開紀錄指名的票 —— 判準是對的,
+        但「打開」用的是 `os.path.exists()`,所以未追蹤的票一樣過關。
+        兩半都要綁 commit,只修一半等於沒修(繞道走另一半)。
+        """
+        repo = self._repo(tmp_path, monkeypatch)
+        self._write_decl(repo, ".scratch/f/issues/01-x.md", commit=False)
+        (repo / ".dev").mkdir(exist_ok=True)
+        (repo / ".dev" / "gate-exemptions.jsonl").write_text(
+            json.dumps({"file": "pkg/thing.py", "module": "thing",
+                        "declared_in": ".scratch/f/issues/01-x.md"},
+                       ensure_ascii=False) + "\n", encoding="utf-8")
+        assert gate.logged_exemption_backed("pkg/thing.py", "thing") is False, (
+            "提交時採信了一張未 commit 的票 —— 紀錄可以偽造,票也可以現造")
+
+    def test_the_commit_time_check_accepts_a_committed_ticket(
+            self, tmp_path, monkeypatch):
+        """**反控**,同上:合法的那條路要留著。"""
+        repo = self._repo(tmp_path, monkeypatch)
+        self._write_decl(repo, ".scratch/f/issues/01-x.md", commit=True)
+        (repo / ".dev").mkdir(exist_ok=True)
+        (repo / ".dev" / "gate-exemptions.jsonl").write_text(
+            json.dumps({"file": "pkg/thing.py", "module": "thing",
+                        "declared_in": ".scratch/f/issues/01-x.md"},
+                       ensure_ascii=False) + "\n", encoding="utf-8")
+        assert gate.logged_exemption_backed("pkg/thing.py", "thing") is True
+
+
 class TestAuthorityLayerIsWired:
     """票 27 — 權威層有沒有**真的接上 git**。
 
