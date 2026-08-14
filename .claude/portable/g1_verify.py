@@ -31,6 +31,7 @@ G1 是 fail-fast(ADR 0009 第 4 步)。本檔每個 payload 只含一個受測�
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -108,6 +109,26 @@ def main(guard):
         print("清單少於 3 條 —— 驗收沒有實質對象,先確認清單存在。")
         return 1
     failures = []
+
+    # 票 25:磁碟根目錄條目(`D:\` 之類)**這支腳本以前會給它假綠**。
+    # as_probe() 產出 `touch "D:\g1_verify_probe.txt"`,而那條剛好走
+    # `d:` —— 磁碟根條目唯一生效的變體 —— 於是命中、斷言通過,
+    # 而真正該擔心的 `/d/...` 形態一路放行。**綠的原因不是保護生效了。**
+    # 現在 guard 會 fail-closed 拒絕這種條目,所以清單裡不該再有;
+    # 這一段是驗收側的對應修改:行為改了,驗收也要改,
+    # 否則陷阱只是從 guard 換到這裡(F-032:綠的原因不是你以為的)。
+    drive_roots = [i + 1 for i, e in enumerate(entries)
+                   if re.match(r"^(?:[A-Za-z]:[\\/]?|/[A-Za-z]/?)$", e.strip())]
+    print("=== 磁碟根目錄條目(票 25:守不住的寫法)===")
+    if drive_roots:
+        print("  第 %s 條是磁碟根目錄 —— guard 會 fail-closed 拒絕整份清單。"
+              % ", ".join(str(n) for n in drive_roots))
+        print("  改法:把要保護的東西逐條列出來。**不印路徑本身**,序號自己去對。")
+        failures.append("磁碟根目錄條目(第 %s 條)"
+                        % ", ".join(str(n) for n in drive_roots))
+    else:
+        print("  無 ✓")
+    print()
 
     print("=== 第一級:清單每一條各斷言【命中的是哪一條】 ===")
     for p in entries:

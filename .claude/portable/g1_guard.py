@@ -96,17 +96,53 @@ def variants(path):
     return [v.lower() for v in out if v]
 
 
+# 磁碟根目錄條目 —— `D:\` / `D:/` / `d:` / `/d/`。**一律拒絕,不是支援。**
+#
+# 寫一條 `D:\` 看起來是「整顆磁碟都保護」,實際上 variants() 只產出 `['d:']`:
+# rstrip("\\/") 把它削成 `D:`,而 git bash 分支的正則要求磁碟代號後面有分隔符。
+# 於是**兩個方向同時錯,而且方向相反**:
+#   太寬  `d:` 命中該磁碟上的任何路徑 —— 一條進去整顆磁碟全擋
+#   又漏  `/d/...`(git bash 形態、本專案 Bash 工具實際用的形態)放行
+# 誤擋不會有人抱怨(整顆磁碟本來就少碰),漏擋不會有人發現(沒有訊號)——
+# 兩者互相掩護,而 g1_verify 對它給假綠(探針恰好踩中唯一生效的那個變體)。
+#
+# **為什麼拒絕而不是修好 variants():守衛不得接受一種自己守不住的寫法。**
+# 整顆磁碟保護的真實需求已裁決不採(憑證改用逐檔條目),
+# 支援它等於維護一個沒有使用者的語意,而那個語意的每一種寫法都要再驗一次。
+_DRIVE_ROOT_RE = re.compile(r"^(?:[A-Za-z]:[\\/]?|/[A-Za-z]/?)$")
+
+
+def is_drive_root(raw):
+    """這一行是不是磁碟根目錄條目。四種寫法都要認得。"""
+    return bool(_DRIVE_ROOT_RE.match((raw or "").strip()))
+
+
 def protected_entries():
-    """讀保護清單。**fail-closed**:讀不到就回 None,呼叫端一律擋。
+    """讀保護清單。**fail-closed**:讀不到、或有不支援的條目,就回 None,呼叫端一律擋。
 
     讀不到時放行的話,刪掉清單就等於關掉整個防護 —— 那是最廉價的繞法。
+
+    **磁碟根目錄條目也走 fail-closed,而且自己出聲點名那一行**(票 25)。
+    回 None 不夠 —— 呼叫端只會說「讀不到清單」,而清單明明讀得到,
+    人會去查檔案權限、編碼、路徑,查不到問題在哪。訊息要說出是**哪一個前提**
+    沒滿足(票 13),清單三十幾行的時候尤其如此。
     """
     try:
         out = []
-        for line in io.open(PROTECTED_LIST, encoding="utf-8"):
-            line = line.split("#", 1)[0].strip()
-            if line:
-                out.append(line)
+        for n, line in enumerate(io.open(PROTECTED_LIST, encoding="utf-8"), 1):
+            raw = line.split("#", 1)[0].strip()
+            if not raw:
+                continue
+            if is_drive_root(raw):
+                _err(
+                    "[G1/fail-closed] 保護清單第 %d 行是磁碟根目錄條目:%s\n"
+                    "     這種寫法**守不住**:它只產出一個變體,\n"
+                    "     git bash 形態(/x/...)會直接放行,而整顆磁碟會被誤擋 ——\n"
+                    "     看起來保護最多,實際上有洞。守衛不接受自己守不住的寫法。\n"
+                    "     改法:把要保護的東西逐條列出來(目錄或檔案都可以)。\n"
+                    "     清單:%s\n" % (n, raw, PROTECTED_LIST))
+                return None
+            out.append(raw)
         return out or None
     except Exception:
         return None

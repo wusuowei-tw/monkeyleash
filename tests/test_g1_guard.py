@@ -47,6 +47,79 @@ PROTECTED = [
 ]
 
 
+class TestDriveRootEntriesAreRejectedLoudly:
+    """票 25 — 磁碟根目錄條目(`D:\\`)是**假保護陷阱**,必須大聲拒絕。
+
+    寫一條 `D:\\` 看起來是「整顆磁碟都保護」。實際上 `variants()` 只產出
+    `['d:']` 一個變體,因為 `rstrip("\\\\/")` 把它削成 `D:`,
+    而 git bash 分支的正則 `^([A-Za-z]):[\\\\/](.*)$` 要求磁碟代號後面有分隔符。
+
+    後果是**兩個方向同時錯,而且方向相反**:
+
+      太寬  `d:` 會命中該磁碟上的任何路徑 —— 一條進去整顆磁碟全擋
+      又漏  `/d/...`(git bash 形態)不在變體裡 —— 而那正是本專案 Bash 工具用的形態
+
+    誤擋不會有人抱怨(整顆磁碟本來就少碰),漏擋不會有人發現(沒有訊號),
+    兩者剛好互相掩護。**而 `g1_verify` 對它給假綠**:探針
+    `touch "D:\\g1_verify_probe.txt"` 剛好走 `d:` 那個唯一生效的變體。
+
+    選型:**大聲拒絕**,不是「正確支援」。理由 ——
+    守衛不得接受一種**自己守不住**的條目寫法;而整顆磁碟保護的真實需求
+    先前已裁決不採(憑證改用逐檔條目,收攏另議)。
+    支援它等於維護一個沒有使用者的語意,而那個語意的每一種寫法都要再驗一次。
+    """
+
+    def test_variants_of_a_drive_root_lose_the_git_bash_form(self):
+        """**這條是拒絕的理由,不是願望。** 釘住現行行為:磁碟根條目產不出 `/d/`。
+
+        修法不改 `variants()`(見 class docstring),所以這條在修完之後**仍然綠** ——
+        它存在的目的是讓「為什麼要拒絕」有機器可讀的證據,
+        而不是留在票裡當一句宣稱。
+        """
+        got = g1.variants("D:\\")
+        assert not any(v.startswith("/d/") for v in got), (
+            "如果哪天 variants 真的支援了磁碟根,拒絕的理由就該重新檢討:%s" % got)
+        assert "d:" in got, got
+
+    def test_a_drive_root_entry_is_detected(self):
+        """`D:\\` / `D:/` / `d:` / `/d/` 都是磁碟根,四種寫法都要認得。"""
+        for raw in ("D:\\", "D:/", "d:", "/d/", "C:\\", "  E:\\  "):
+            assert g1.is_drive_root(raw), "沒認出磁碟根條目:%r" % raw
+
+    def test_a_normal_entry_is_not_mistaken_for_a_drive_root(self):
+        """**反控。** 少了它,「一律拒絕」的實作也會讓上一條過 ——
+        而那會把整份清單擋掉,誤擋成本從近乎零變成全部。"""
+        for raw in (r"D:\datastore", r"C:\db_backups", r"D:\保管庫",
+                    "/d/datastore", r"C:\Users\fake_user\Backups\vault"):
+            assert not g1.is_drive_root(raw), "正常條目被當成磁碟根:%r" % raw
+
+    def test_a_list_containing_a_drive_root_fails_closed(self, tmp_path,
+                                                         monkeypatch, capsys):
+        """讀到磁碟根條目 -> **回 None(fail-closed)**,而且訊息**點名那一行**。
+
+        點名是票 13 的判準:訊息要說出是哪一個前提沒滿足。
+        只說「清單有問題」的話,人得自己逐行找 —— 而清單可能有三十幾行。
+        """
+        lst = tmp_path / "g1-protected.txt"
+        lst.write_text("# 註解\n%s\nD:\\\n%s\n" % (r"C:\db_backups", r"D:\datastore"),
+                       encoding="utf-8")
+        monkeypatch.setattr(g1, "PROTECTED_LIST", str(lst))
+        assert g1.protected_entries() is None, (
+            "清單含磁碟根條目卻照常回傳 —— 那條目守不住 /d/ 形態,"
+            "而使用者以為整顆磁碟都保護了")
+        err = capsys.readouterr().err
+        assert "3" in err, "訊息沒點出是第幾行:%r" % err
+        assert "D:\\" in err or "d:" in err.lower(), "訊息沒點名那一行的內容:%r" % err
+
+    def test_a_clean_list_still_loads(self, tmp_path, monkeypatch):
+        """**反控。** 正常清單照常讀得到,而且筆數不變。"""
+        lst = tmp_path / "g1-protected.txt"
+        lst.write_text("# 註解\n%s\n%s\n" % (r"C:\db_backups", r"D:\datastore"),
+                       encoding="utf-8")
+        monkeypatch.setattr(g1, "PROTECTED_LIST", str(lst))
+        assert g1.protected_entries() == [r"C:\db_backups", r"D:\datastore"]
+
+
 class TestPrefixMatchingCoversSubdirectories:
     @pytest.mark.parametrize("cmd,expect", [
         (r'touch "D:\保管庫\probe.txt"', r"D:\保管庫"),
