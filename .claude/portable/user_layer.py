@@ -50,12 +50,95 @@ NEVER_ALWAYS = (".credentials.json", ".claude.json")
 NEVER_ALWAYS_PREFIX = ("backups/",)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 機器相依旗標 `!`(票 28)
+#
+# 四個桶說的是**怎麼搬**,不是**搬過去還準不準**。
+# `g1-protected.txt` 標 human(要逐條覆核)、`leak-patterns.local.txt` 標 age
+#(腳本照搬)—— **而兩者的機器相依性完全相同**:都會在新機器上指向不存在的東西。
+#
+# 演練實測:匯入後 16 條個人 pattern 全是舊機器形狀、本機身分一條都沒涵蓋,
+# 而**警告不響、pattern 全數編譯成功、掃描回 0** ——
+# 三個綠燈疊在一起而涵蓋率是零。**檔案是好的 ≠ 它保護的是這台機器。**
+#
+# **為什麼是旗標不是第五個桶**:機器相依與「怎麼搬」**正交**。
+# 塞進同一個欄位當第五個值,就得為每個組合造一個桶(age-review、human-review…),
+# 那是笛卡兒積。`!` 只回答一件事:搬完之後這一項要不要人回頭看。
+MACHINE_DEP_SUFFIX = "!"
+
 BUCKET_REASONS = {
     EXPORT: "腳本帶走",
     AGE: "加密後才帶走(裸的祕密永遠不上雲端、不進 repo)",
     HUMAN: "腳本不碰,人工複製 + sha 核對(R4)",
     NEVER: "永不匯出 —— **不走這條門,不等於不備份**",
 }
+
+# 解析器吃的詞彙表 = 四個桶 × {有旗標, 無旗標}。**列舉,不是拼字規則** ——
+# 打錯字照樣吵那條原封不動繼承(manifest.load_table 的 allowed 參數)。
+MARK_VOCAB = dict(BUCKET_REASONS)
+for _b, _why in list(BUCKET_REASONS.items()):
+    if _b != NEVER:                      # never 不匯出,沒有「搬完要覆核」可言
+        MARK_VOCAB[_b + MACHINE_DEP_SUFFIX] = _why + ";**機器相依,匯入後須人工覆核**"
+
+
+def bucket_of(mark):
+    """標記的桶(去掉機器相依旗標)。"""
+    return mark[:-1] if mark.endswith(MACHINE_DEP_SUFFIX) else mark
+
+
+def machine_dependent(mark):
+    """這個標記有沒有帶機器相依旗標。"""
+    return mark.endswith(MACHINE_DEP_SUFFIX)
+
+
+def foreign_paths(text, this_home):
+    """文字裡有哪些**不屬於這台機器**的絕對路徑。
+
+    #2:匯出的 `settings.json` 帶著舊機家目錄(G1 掛載寫的是絕對路徑)。
+    原樣匯入 = 掛載指向一個不存在的路徑 = **G1 整層靜默失效**,
+    而檔案在、格式對、`settings.json` 讀得動。
+
+    **擷取重用 `g1_guard.ABS_PATH`**,不自己再寫一個 ——
+    那條正則是票 04/05 打磨出來的(邊界放在擷取處會砍長度、
+    `/etc-backup` 被截成 `/etc`…)。再寫一個就是重蹈同一族的覆轍(F-080)。
+    """
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(
+        "_g1_for_paths", os.path.join(here, "g1_guard.py"))
+    g1 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(g1)
+
+    mine = this_home.replace("\\", "/").rstrip("/").lower()
+    out = []
+    for raw in g1.ABS_PATH.findall(text):
+        p = raw.replace("\\", "/").rstrip("/").lower()
+        if p == mine or p.startswith(mine + "/"):
+            continue
+        if raw not in out:
+            out.append(raw)
+    return out
+
+
+def patterns_cover_nothing(patterns, identity_surface):
+    """這份 pattern 清單**一條都沒打到這台機器的身分**嗎?
+
+    #13 的核心觀測:三個綠燈(警告不響、編譯成功、掃描回 0)疊在一起,
+    而涵蓋率是零。
+
+    **可測的形狀不是「掃描結果為空」** —— 乾淨的機器本來就該是空的,
+    那個訊號分不出「保護得很好」與「保護錯了機器」。
+    可判的是:**pattern 清單裡的具體形狀,一個都不出現在本機的身分面上。**
+    """
+    import re as _re
+    for pat in patterns:
+        try:
+            rx = _re.compile(pat)
+        except Exception:
+            continue                     # 編不起來的 pattern 是另一個問題
+        if any(rx.search(s) for s in identity_surface):
+            return False
+    return True
 
 
 def load_marks(path):
@@ -65,7 +148,7 @@ def load_marks(path):
     (「同一件事只留一個實作,連『格式錯誤要吵』這件事也一起繼承」)。
     換掉的只有標記詞彙,**「打錯字照樣吵」那條原封不動繼承**。
     """
-    return manifest.load_table(path, allowed=BUCKET_REASONS)
+    return manifest.load_table(path, allowed=MARK_VOCAB)
 
 
 def _forced_never(rel):
@@ -117,7 +200,8 @@ def plan_export(home, marks):
     plan = ExportPlan()
     unclassified = []
     for rel in _walk(home):
-        mark = manifest.explicit_mark(rel, marks)   # **沒有預設的查詢**
+        raw_mark = manifest.explicit_mark(rel, marks)   # **沒有預設的查詢**
+        mark = bucket_of(raw_mark) if raw_mark else raw_mark
         if _forced_never(rel):
             if mark in (EXPORT, AGE):
                 raise Refused(
@@ -203,14 +287,25 @@ class ImportResult(object):
 
 
 def import_(src, home, marks, apply=False):
-    """把匯出的內容放進新機器的 `~/.claude/`,並列出還差的人工步驟。"""
+    """把匯出的內容放進新機器的 `~/.claude/`,並列出還差的人工步驟。
+
+    **待辦只有這一個出口。** 機器相依的覆核也掛在這裡,不另開提醒管道 ——
+    兩條管道會分岔,而分岔的那天不會有人發現(票 22 的同一句話)。
+    """
     result = ImportResult()
-    for rel, mark in sorted(_marks_items(marks)):
+    for rel, raw_mark in sorted(_marks_items(marks)):
+        mark = bucket_of(raw_mark)
         if mark == HUMAN:
             target = os.path.join(home, rel.replace("/", os.sep))
             if not os.path.exists(target):
                 result.pending.append(
                     "%s —— 人工複製 + sha 核對(R4:腳本不碰)" % rel)
+        if machine_dependent(raw_mark) and mark != NEVER:
+            # **為什麼要覆核**也要說(票 13):只點名的話,人不知道要看什麼。
+            result.pending.append(
+                "%s —— **機器相依**:內容綁著舊機器(路徑、使用者名稱、"
+                "資料夾形狀),搬過來之後**逐條覆核它指的是不是這台機器**。"
+                "檔案是好的不等於它保護的是這台機器。" % rel)
     for rel in _walk(src) if os.path.isdir(src) else []:
         if not apply:
             result.written.append(rel)

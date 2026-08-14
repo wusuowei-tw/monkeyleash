@@ -83,6 +83,138 @@ def table(tmp_path):
     return ul.load_marks(str(p))
 
 
+class TestMachineDependenceIsExpressible:
+    """票 28 —— 分類表表達不了「機器相依的身分檔」。
+
+    **標題句:檔案是好的 ≠ 它保護的是這台機器。**
+
+    四個桶說的是**怎麼搬**,不是**搬過去還準不準**:
+    `g1-protected.txt` 標 `human`(要逐條覆核)、
+    `leak-patterns.local.txt` 標 `age`(腳本照搬),
+    **而兩者的機器相依性完全相同** —— 都會在新機器上指向不存在的東西。
+
+    演練實測:匯入後 16 條個人 pattern **全是舊機器形狀,本機身分一條都沒涵蓋**,
+    而且**警告不響、pattern 全數編譯成功、掃描回 0** ——
+    三個綠燈疊在一起而涵蓋率是零。與票 25 的假保護、票 26 的假綠同一族:
+    每一層都在問「格式對不對」,沒有一層在問「**它保護的是誰**」。
+
+    ## 為什麼是旗標而不是第五個桶
+
+    `leak-patterns.local.txt` 需要 `age`(加密)**且**需要覆核;
+    `g1-protected.txt` 需要 `human`(人工)**且**需要覆核。
+    **機器相依是與「怎麼搬」正交的性質** —— 塞進同一個欄位當第五個值,
+    就得為每個組合造一個桶(`age-review`、`human-review`…),那是笛卡兒積。
+
+    所以用**標記字尾 `!`**:`age!`、`human!`、`export!`。
+    桶還是四個,`!` 只回答一件事 ——「搬完之後這一項要不要人回頭看」。
+    """
+
+    TABLE_M = """\
+upstream-roots.txt      export
+settings.json           export!
+commands/               export
+leak-patterns.local.txt age!
+g1-protected.txt        human!
+shadow-clamp.txt        human
+.credentials.json       never
+projects/               never
+"""
+
+    @pytest.fixture
+    def marks_m(self, tmp_path):
+        p = tmp_path / "marks-m.txt"
+        p.write_text(self.TABLE_M, encoding="utf-8")
+        return ul.load_marks(str(p))
+
+    def test_the_bang_suffix_parses_as_a_bucket_plus_a_flag(self, marks_m):
+        """`age!` 要解析成「桶 = age、機器相依 = 真」,不是一個叫 `age!` 的新桶。"""
+        assert ul.bucket_of(marks_m["leak-patterns.local.txt"]) == ul.AGE
+        assert ul.machine_dependent(marks_m["leak-patterns.local.txt"]) is True
+        assert ul.bucket_of(marks_m["shadow-clamp.txt"]) == ul.HUMAN
+        assert ul.machine_dependent(marks_m["shadow-clamp.txt"]) is False
+
+    def test_machine_dependent_items_land_in_the_import_todo(
+            self, home, marks_m, tmp_path):
+        """**核心紅燈。** 標了 `!` 的項目匯入後必須出現在待辦清單裡。
+
+        掛在 `import_` 既有的 `pending` 出口,**不另開一條提醒管道** ——
+        兩條提醒管道會分岔,而分岔的那天不會有人發現(票 22 的同一句話)。
+        """
+        dest = tmp_path / "dotfiles-m"
+        ul.export(str(home), str(dest), marks_m, apply=True,
+                  encrypt=lambda b: b"AGE" + b)
+        fresh = tmp_path / "new-m" / ".claude"
+        result = ul.import_(str(dest), str(fresh), marks_m, apply=True)
+        joined = " ".join(result.pending)
+        for item in ("leak-patterns.local.txt", "settings.json"):
+            assert item in joined, (
+                "%s 標了機器相依卻沒進待辦 —— 它會靜默地保護錯的機器:%s"
+                % (item, result.pending))
+
+    def test_the_todo_says_why_not_just_what(self, home, marks_m, tmp_path):
+        """待辦要說**為什麼要覆核**,不是只點名(票 13 判準)。
+
+        「請覆核 leak-patterns.local.txt」這種話,人看完不知道要看什麼;
+        而這一項要看的是「裡面的 token 是不是這台機器的形狀」。
+        """
+        dest = tmp_path / "dotfiles-w"
+        ul.export(str(home), str(dest), marks_m, apply=True,
+                  encrypt=lambda b: b"AGE" + b)
+        fresh = tmp_path / "new-w" / ".claude"
+        result = ul.import_(str(dest), str(fresh), marks_m, apply=True)
+        line = [p for p in result.pending if "leak-patterns" in p]
+        assert line, result.pending
+        assert "機器" in line[0], "沒說出為什麼要覆核:%r" % line[0]
+
+    def test_a_machine_independent_item_is_not_flagged(self, home, marks_m,
+                                                       tmp_path):
+        """**反控。** 少了它,「全部都要覆核」也會讓上面兩條全綠 ——
+        而那等於沒有分類:待辦一長,人就不看了(F-031)。"""
+        dest = tmp_path / "dotfiles-i"
+        ul.export(str(home), str(dest), marks_m, apply=True,
+                  encrypt=lambda b: b"AGE" + b)
+        fresh = tmp_path / "new-i" / ".claude"
+        result = ul.import_(str(dest), str(fresh), marks_m, apply=True)
+        joined = " ".join(result.pending)
+        assert "upstream-roots.txt" not in joined, (
+            "機器無關的項目被誤標成要覆核:%s" % result.pending)
+
+    def test_foreign_absolute_paths_in_settings_are_reported(self, tmp_path):
+        """#2 —— 匯出的 `settings.json` 帶著**舊機家目錄**的絕對路徑。
+
+        原樣匯入 = G1 掛載指向一個不存在的路徑 = **整層靜默失效**,
+        而檔案在、格式對、`settings.json` 讀得動。
+
+        路徑擷取**重用 `g1_guard.ABS_PATH`**(票 04/05 打磨過邊界處理)——
+        自己再寫一個會重蹈「邊界放在擷取處會砍長度」那一族的覆轍(F-080)。
+        """
+        text = ('{"hooks":{"PreToolUse":[{"hooks":[{"command":'
+                '"python \\"C:/Users/olduser/.claude/hooks/g1_guard.py\\""}]}]}}')
+        foreign = ul.foreign_paths(text, this_home=r"C:\Users\newuser")
+        assert foreign, "帶著別台機器家目錄的絕對路徑卻沒被標出來"
+        assert any("olduser" in f for f in foreign), foreign
+
+    def test_paths_under_this_machine_are_not_foreign(self, tmp_path):
+        """**反控。** 本機自己的路徑不得被當成外來的 ——
+        否則每次匯入都報一整頁,而那等於沒報。"""
+        text = 'python "C:/Users/newuser/.claude/hooks/g1_guard.py"'
+        assert ul.foreign_paths(text, this_home=r"C:\Users\newuser") == []
+
+    def test_a_pattern_list_that_covers_nothing_on_this_machine_speaks_up(self):
+        """#13 的核心觀測 —— **三個綠燈疊在一起而涵蓋率是零**。
+
+        可測的形狀不是「掃描結果為空」(乾淨的機器本來就該是空的),
+        而是「**pattern 清單裡的具體 token,一個都不出現在本機的身分面上**」。
+        後者可以判,前者不能 —— 這一條的紅燈怎麼寫,是本票最需要想清楚的地方。
+        """
+        old_patterns = ["(?i)olduser", "OldCorp", "D:/OldBackup"]
+        identity = [r"C:\Users\newuser", "newuser", r"E:\NewData"]
+        assert ul.patterns_cover_nothing(old_patterns, identity) is True
+
+        mixed = ["(?i)newuser", "SomeCorp"]
+        assert ul.patterns_cover_nothing(mixed, identity) is False
+
+
 class TestTheDocumentedCommandActuallyRuns:
     """票 22 Phase 3 前置 —— **文件承諾的指令必須跑得起來。**
 
