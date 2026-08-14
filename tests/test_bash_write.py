@@ -152,6 +152,70 @@ class TestEveryWriteTargetMustBeAllowed:
         assert gate.bash_write_violation("Set-Content -Path (Join-Path $a $b) -Value x")
 
 
+class TestRedirectsInsideQuotesAreNotTargets:
+    """票 21 標本 3(最後一塊)—— `REDIRECT_RE` 命中**引號內**的 `>`。
+
+    `sed 's/[A-Za-z]:/<路徑>/g' file.txt` 的引號**成對且乾淨**,
+    所以 E/F 的訊號打不到它;垃圾目標 `/g` 來自 `REDIRECT_RE`
+    把引號裡的 `>` 當成 shell 重導向。這是 F-078 的核心。
+
+    ## 選型論證:**上層收口讓下層原本危險的做法變成良定義**
+
+    原本拒絕「先剝掉引號內容」的理由是:
+    shell 引號規則有轉義、巢狀、`$(...)`,**半套的解析器比零涵蓋更危險**。
+
+    **E/F 落地之後那個前提變了**:引號一旦不成對、或有跳脫空白,
+    **整段已經先被 refuse 掉**。走到這一步的段落,引號**必然成對且無跳脫** ——
+    在那個前提下遮蔽成對引號是**良定義的,不是猜**。
+
+    這是本票最可攜的結構性收穫:
+    **一個上層的收口,可以把下層原本危險的做法變成安全的。**
+    順序不能反 —— 先做遮蔽、後做 refuse,遮蔽仍然是猜。
+
+    ## 遮蔽只用於「找目標」,不用於「判斷有沒有在寫」
+
+    `WRITE_CONSTRUCT` 仍然跑在**原字串**上。理由:引號裡的東西**可能被執行**
+    (`sh -c "rm -rf x"`、`powershell -Command "Remove-Item x"`),
+    而那件事從字串本身判斷不出來。**偵測要過度涵蓋,抽取才要誠實** ——
+    把遮蔽用在偵測上,就是把誤擋換成漏擋,而那個方向更糟。
+    """
+
+    def test_a_redirect_inside_quotes_is_not_reported_as_a_target(self):
+        """**核心紅燈。** 引號內的 `>` 不得變成寫入目標。"""
+        msg = gate.bash_write_violation(
+            "sed 's/[A-Za-z]:/<x>/g' file.txt")
+        assert msg, "仍應擋(偵測跑在原字串上,保守)"
+        assert "/g" not in msg, "引號內的 > 生出了垃圾目標 /g:%r" % msg
+        assert "解析不出寫入目標" in msg, "沒退回誠實訊息:%r" % msg
+
+    @pytest.mark.parametrize("cmd,target", [
+        ("python x.py > out.txt", "out.txt"),
+        ("python x.py >> docs/log.txt", "docs/log.txt"),
+        ('echo "a -> b" > out.txt', "out.txt"),
+    ])
+    def test_real_redirects_outside_quotes_are_still_caught(self, cmd, target):
+        """**驗收 3a,反控 —— 本票最危險的一條。**
+
+        遮蔽**不得**把真的重導向一起遮掉。第三個案例是關鍵:
+        同一條指令裡**同時有**引號內的 `->` 與引號外的真重導向,
+        遮蔽必須只吃掉前者。
+
+        誤擋變漏擋,方向比誤擋更糟 —— 誤擋會被抱怨,漏擋不會有人發現。
+        """
+        msg = gate.bash_write_violation(cmd)
+        assert msg, "%s 的真重導向沒擋到 —— 遮蔽把它一起遮掉了" % cmd
+        assert target in msg, "重導向目標沒被點名:%r" % msg
+
+    def test_a_quoted_redirect_target_is_still_named(self):
+        """重導向目標本身被引號包住時,仍要點名它的**原文**。
+
+        遮蔽保長度,所以偏移量對得回原字串 —— 這條釘住那個對應關係。
+        """
+        msg = gate.bash_write_violation('python x.py > "out file.txt"')
+        assert msg, "沒擋"
+        assert "out file.txt" in msg, "引號內的重導向目標沒被還原:%r" % msg
+
+
 class TestAmbiguousQuotingRefusesInsteadOfInventing:
     """票 21 E/F —— 引號碎裂與跳脫空格:**切不乾淨就 refuse,絕不捏造路徑**。
 

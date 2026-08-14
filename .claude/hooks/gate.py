@@ -423,6 +423,32 @@ def _quoting_is_ambiguous(seg):
     return False
 
 
+def _mask_quoted(seg):
+    """把**成對引號內部**的字元遮成 `\\x00`,**長度不變**。
+
+    只用來讓 `REDIRECT_RE` 看不見引號裡的 `>` ——
+    長度不變是為了讓比對到的偏移量能對回原字串取原文
+    (重導向目標本身可能就在引號裡:`> "out file.txt"`)。
+
+    **前提是引號成對且無跳脫空白**,而那是 `_quoting_is_ambiguous`
+    先擋掉的 —— 走到這裡的段落必然滿足。**順序不能反**:
+    先遮蔽、後 refuse 的話,遮蔽仍然是猜(票 21 的選型論證)。
+
+    引號字元本身不遮 —— 它們是邊界,遮掉的話 token 化會走樣。
+    """
+    out = list(seg)
+    quote = None
+    for i, ch in enumerate(seg):
+        if quote is None:
+            if ch in ('"', "'"):
+                quote = ch
+        elif ch == quote:
+            quote = None
+        else:
+            out[i] = "\x00"
+    return "".join(out)
+
+
 def _target_allowed(token):
     tok = token.strip().strip('"').strip("'")
     return any(t in tok for t in BASH_ALLOWED_TARGETS)
@@ -459,19 +485,37 @@ def unallowed_write_targets(command):
     saw_target = False           # 有沒有**抽到任何目標**(不管許不許可)
     for seg in segments:
         if _quoting_is_ambiguous(seg):
-            # 切不乾淨 -> **整段 refuse,不抽任何目標**(票 21 E/F)。
-            # 抽了才是禍:現行會從 `rm pkg/my\ file.py` 生出一個
+            # 切不乾淨 -> **不抽運算元**(票 21 E/F)。
+            # 抽了才是禍:舊碼會從 `rm pkg/my\ file.py` 生出一個
             # **指令裡根本沒有**的 `file.py`,而人會相信它。
+            #
+            # **但引號外的真重導向照樣要抓。** `echo "a -> b" > out.txt`
+            # 的引號內有 `->`(讓這一段變模糊),而 `> out.txt` 是真的在寫檔 ——
+            # 因為模糊就整段放過,等於**把誤擋換成漏擋**,而那個方向更糟:
+            # 誤擋會被抱怨,漏擋不會有人發現。
             saw_construct = True
             saw_target = True            # 已經有結論,不要再落到「解析不出」那句
+            for m in REDIRECT_RE.finditer(_mask_quoted(seg)):
+                raw_target = seg[m.start(1):m.end(1)]
+                if not _target_allowed(raw_target):
+                    tgt = raw_target.strip('"').strip("'")
+                    if tgt not in bad:
+                        bad.append(tgt)
             if AMBIGUOUS_QUOTING not in bad:
                 bad.append(AMBIGUOUS_QUOTING)
             continue
-        for m in REDIRECT_RE.finditer(seg):
+        # **重導向只在引號外算數**(票 21 標本 3)。
+        # `sed 's/…/<x>/g'` 的 `>` 在引號裡,它不是 shell 重導向 ——
+        # 舊碼把它當成重導向,於是生出 `/g` 這種垃圾目標。
+        # 遮蔽保長度,所以比對到的偏移量可以回原字串取**原文**
+        #(重導向目標本身可能就在引號裡:`> "out file.txt"`)。
+        masked = _mask_quoted(seg)
+        for m in REDIRECT_RE.finditer(masked):
             saw_construct = True
             saw_target = True
-            if not _target_allowed(m.group(1)):
-                bad.append(m.group(1).strip('"').strip("'"))
+            raw_target = seg[m.start(1):m.end(1)]
+            if not _target_allowed(raw_target):
+                bad.append(raw_target.strip('"').strip("'"))
 
         tokens = seg.replace("\t", " ").split()
         # **只認指令位置的 token。** `rm` / `cp` / `install` 是不是寫入指令,
