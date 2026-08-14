@@ -372,6 +372,57 @@ WRAPPERS = {"sudo", "env", "time", "nohup", "xargs", "command"}
 REDIRECT_RE = re.compile(r"(?<!\d)(?<!&)>>?\s*([^\s;&|>]+)")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 「切不乾淨」的字元層級訊號(票 21 E/F)
+#
+# **不造 tokenizer。** shlex 兩個模式都量過,兩個都不能用:
+#   posix=True   E/F 切得完美,但 `rm C:\Users\fake\thing.py`
+#                -> `C:Usersfakething.py`(反斜線被當跳脫,Windows 路徑毀了)
+#   posix=False  Windows 路徑正確,但 E 裂成 `"pkg"` + `/"thing.py"`(比現行更糟)
+#
+# **posix=True 那條是「半套解析比零解析危險」的直接證據**:它產生一個
+# 看起來像路徑、實際不存在的字串,然後那個字串會被拿去比對許可清單。
+# 零解析至少知道自己是零。
+#
+# 所以改成偵測**可列舉的模糊訊號**,命中就 refuse ——
+# 不解析、不猜、不報路徑。修掉的正是本票的標題病:
+# `rm pkg/my\ file.py` 從「捏造一個不存在的 file.py」變成「說我切不動」。
+_ESCAPED_SPACE_RE = re.compile(r"\\[ \t]")
+
+# 訊息用的佔位項。**與「(解析不出寫入目標)」分開** —— 兩者的處置不同:
+# 這一個是「引號寫法讓切分有多種讀法」,人可以改寫指令;
+# 那一個是「動詞認得但運算元掃空」,通常要換工具。
+AMBIGUOUS_QUOTING = "(引號或跳脫使目標無法可靠切分)"
+
+
+def _quoting_is_ambiguous(seg):
+    """這一段的引號/跳脫,能不能可靠地切成 token?
+
+    兩個訊號,都是字元層級的,**不需要理解語法**:
+
+      跳脫空白   反斜線後面接空白 -> 那個空白到底是分隔符還是檔名的一部分,
+                 從字串本身答不出來
+      引號殘留   剝掉成對的外層引號之後,token 裡**還有**引號 ->
+                 引號不在兩端,切分就不只一種讀法
+
+    `"pkg/thing.py"` 剝完乾淨 -> 不命中(單純引號照樣正常運作)。
+    `C:\\Users\\fake\\thing.py` 沒有引號、反斜線後面接的是字母 -> 不命中。
+    """
+    if _ESCAPED_SPACE_RE.search(seg):
+        return True
+    for tok in seg.split():
+        if '"' not in tok and "'" not in tok:
+            continue
+        core = tok
+        for q in ('"', "'"):
+            if len(core) >= 2 and core[0] == q and core[-1] == q:
+                core = core[1:-1]
+                break
+        if '"' in core or "'" in core:
+            return True
+    return False
+
+
 def _target_allowed(token):
     tok = token.strip().strip('"').strip("'")
     return any(t in tok for t in BASH_ALLOWED_TARGETS)
@@ -407,6 +458,15 @@ def unallowed_write_targets(command):
     saw_construct = False
     saw_target = False           # 有沒有**抽到任何目標**(不管許不許可)
     for seg in segments:
+        if _quoting_is_ambiguous(seg):
+            # 切不乾淨 -> **整段 refuse,不抽任何目標**(票 21 E/F)。
+            # 抽了才是禍:現行會從 `rm pkg/my\ file.py` 生出一個
+            # **指令裡根本沒有**的 `file.py`,而人會相信它。
+            saw_construct = True
+            saw_target = True            # 已經有結論,不要再落到「解析不出」那句
+            if AMBIGUOUS_QUOTING not in bad:
+                bad.append(AMBIGUOUS_QUOTING)
+            continue
         for m in REDIRECT_RE.finditer(seg):
             saw_construct = True
             saw_target = True

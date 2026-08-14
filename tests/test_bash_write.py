@@ -152,6 +152,96 @@ class TestEveryWriteTargetMustBeAllowed:
         assert gate.bash_write_violation("Set-Content -Path (Join-Path $a $b) -Value x")
 
 
+class TestAmbiguousQuotingRefusesInsteadOfInventing:
+    """票 21 E/F —— 引號碎裂與跳脫空格:**切不乾淨就 refuse,絕不捏造路徑**。
+
+    本票的標題病:`rm pkg/my\\ file.py` 現行會生出**兩個**目標,
+    其中 `file.py` 是**憑空捏造的路徑** —— 指令裡根本沒有那個檔案。
+    「具體而錯誤」比「含糊而誠實」傷害更大,因為人會相信它然後去找一個不存在的檔案。
+
+    ## 為什麼不造 tokenizer(量測結果,不是偏好)
+
+    `shlex` 兩個模式都不能用:
+
+        posix=True   E/F 切得完美,但 `rm C:\\Users\\fake\\thing.py`
+                     -> `C:Usersfakething.py`  **反斜線被當跳脫,Windows 路徑毀了**
+        posix=False  Windows 路徑正確,但 E 裂成 `"pkg"` + `/"thing.py"`(比現行更糟),
+                     F 的反斜線接空格照樣裂
+
+    **`posix=True` 那條是「半套解析比零解析危險」的直接證據**:
+    它產生一個**看起來像路徑、實際不存在**的字串,然後那個字串會被拿去比對許可清單。
+    零解析至少知道自己是零。
+
+    所以改成:**偵測「切不乾淨」的字元層級訊號,命中就 refuse** ——
+    不需要任何解析器,只需要兩個可列舉的訊號。
+    """
+
+    @pytest.mark.parametrize("cmd", [
+        'rm "pkg"/"thing.py"',                 # E:引號碎裂
+        "rm 'pkg'/thing.py",                   # E:單引號碎裂
+        'Remove-Item "pkg"/thing.py',          # E:PowerShell 版
+        "rm pkg/my\\ file.py",                 # F:跳脫空格
+        'rm "my file.py"',                     # F:引號內空白(現行裂成兩個)
+        'Remove-Item "my file.py"',            # F:PowerShell 版
+    ])
+    def test_ambiguous_quoting_is_refused_without_naming_a_path(self, cmd):
+        """**核心紅燈。** 擋下,而且**不報任何路徑**。"""
+        msg = gate.bash_write_violation(cmd)
+        assert msg, "%s 沒擋" % cmd
+        assert "無法可靠切分" in msg, "沒說出是切不乾淨:%r" % msg
+        assert "file.py" not in msg.replace("無法可靠切分", ""), (
+            "訊息裡出現了路徑碎片 —— 本票的標題病就是捏造路徑:%r" % msg)
+
+    @pytest.mark.parametrize("cmd", [
+        'rm "unbalanced.py',
+        "rm 'unbalanced.py",
+        'Set-Content "unbalanced.py -Value x',
+    ])
+    def test_unclosed_quotes_take_the_same_refuse_path(self, cmd):
+        """**驗收 2a。** 引號未閉合(shlex 會 ValueError 那類)走同一條路 ——
+        擋下、同樣不報路徑。
+
+        不同的失敗形狀走不同的訊息,人得學兩套;而它們的處置完全一樣。
+        """
+        msg = gate.bash_write_violation(cmd)
+        assert msg, "%s 沒擋" % cmd
+        assert "無法可靠切分" in msg, "沒走同一條 refuse 路徑:%r" % msg
+
+    @pytest.mark.parametrize("cmd,target", [
+        ('rm "pkg/thing.py"', "pkg/thing.py"),
+        ("rm 'pkg/thing.py'", "pkg/thing.py"),
+        ('Remove-Item "pkg/thing.py"', "pkg/thing.py"),
+        ('Set-Content "pkg/thing.py" -Value x', "pkg/thing.py"),
+    ])
+    def test_simple_quoting_still_gets_a_clean_message(self, cmd, target):
+        """**驗收 2b,反控。** 單純的頭尾引號**不得**被新訊號誤傷 ——
+        訊息要照樣點名正確目標。
+
+        新訊號只認「剝掉成對外層引號之後**還有**引號」,
+        `"pkg/thing.py"` 剝完是乾淨的,所以不命中。
+        """
+        msg = gate.bash_write_violation(cmd)
+        assert msg, cmd
+        assert target in msg, "單純引號被誤傷,訊息不再點名目標:%r" % msg
+        assert "無法可靠切分" not in msg, "單純引號被當成切不乾淨:%r" % msg
+
+    @pytest.mark.parametrize("cmd,target", [
+        (r"rm C:\Users\fake\thing.py", r"C:\Users\fake\thing.py"),
+        (r"Remove-Item C:\Users\fake\thing.py", r"C:\Users\fake\thing.py"),
+    ])
+    def test_windows_paths_keep_working(self, cmd, target):
+        """**驗收 2c,反控。** Windows 路徑滿是反斜線,不得被 F 的訊號誤傷。
+
+        F 認的是**反斜線接空白**,而 `C:\\Users\\fake` 的反斜線後面是字母。
+        這條同時釘住「不要改用 shlex posix=True」—— 那個模式會把這條路徑
+        吃成 `C:Usersfakething.py`。
+        """
+        msg = gate.bash_write_violation(cmd)
+        assert msg, cmd
+        assert target in msg, "Windows 路徑被吃掉或誤判:%r" % msg
+        assert "無法可靠切分" not in msg, "Windows 路徑被當成切不乾淨:%r" % msg
+
+
 class TestExtractionFailureMustRefuse:
     """票 36 —— 動詞認得、目標抽不到,現行是 **fail-open**。
 
