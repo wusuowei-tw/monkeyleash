@@ -39,6 +39,11 @@ bootstrap.sh                    skip
 .claude/settings.json           copy
 .agents/pipeline-stages.yaml    copy
 .agents/skills/                 copy
+# 使用者層分類表(票 22 Phase 2)。**copy 而不是 generate**:它列的是
+# `~/.claude/` 底下的相對路徑,那一層跟著**人**走、不跟著 repo 走,
+# 所以每台機器上內容相同。generate 是給「內容綁這個 repo」的東西用的,
+# 這一份綁的是使用者,不是 repo。
+.agents/user-layer-manifest.txt copy
 # **ask,不是 copy。** 它同時裝著兩種東西:框架檔的桶標(框架的事實)
 # 與各 repo 自己的測試歸類(專案的判斷)。copy 會刪掉後者;
 # generate 需要把兩邊合起來,而「這個測試屬於框架還是專案」推導不出來 ——
