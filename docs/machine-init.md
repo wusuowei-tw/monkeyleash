@@ -12,6 +12,70 @@
 
 ---
 
+## 零、先決條件 —— 這台機器要先有的東西
+
+**這一節原本不存在,而下面每一節的驗收都踩在它上面。** 2026-08-14 的換機器演練
+在第一綠就撞停:`machine-init.md` 與 `README.md` 全文 `pip install` 出現 **0 次**。
+
+### 0-1. Python 相依
+
+`pyproject.toml` 要求 `>=3.10`。兩個套件缺一不可,而**缺席後果不同**:
+
+| 套件 | 缺席時 |
+|---|---|
+| `pyyaml` | **`gate.py` 的硬相依。** `load_stage_defs()` 的 `import yaml` 失敗 → `stages` 空 + `err` → R2 fail-closed **擋掉所有原始碼寫入**。`pyproject.toml` 自己的註解寫得最準:「少了它閘門不是壞掉,是**把人鎖在外面**」。方向是對的、會出聲,但那個 repo 在裝好之前寫不了任何碼。 |
+| `pytest` | 第二之一節的金絲雀與第三節的 `verify_gates` 全部跑不起來(`No module named pytest`)。 |
+
+```
+python -m pip install "pyyaml>=6.0" "pytest>=8.0"
+```
+
+> **`pytest>=8.0` 沒有上限。** 新機器會拿到當下的最新版(演練那台拿到 9.1.1),
+> 於是兩台機器跑的不是同一個測試執行器。目前實測 9.x 全綠,但出現非預期紅時
+> **先排除版本嫌疑再定性**。
+
+### 0-2. ⚠ 要裝進 **hook 實際呼叫的那支** python,而那不一定是你以為的那支
+
+掛載寫的是 `python "…/g1_guard.py"` —— **由 PATH 解析**。Windows 上
+`where.exe python` 常常回兩支以上(第二支多半是 Microsoft Store 的轉接殼)。
+裝錯直譯器的話,檔案都在、`pip list` 也對,而 hook 依然吃不到套件。
+
+**別用推論,用一條零副作用的探針**(`gate.check()` 是純判定,不寫任何檔案,
+所以擋下時磁碟上不會留下東西):
+
+1. 裝之前,對一個源碼路徑用 **Write / Edit** 試寫一次,看 hook 回報的**原因**:
+   ```
+   [R2/fail-closed] …:站別定義不可用,原始碼寫入一律擋下。
+        原因:無法載入 yaml 套件(No module named 'yaml')
+   ```
+2. `python -m pip install …`(用 `python -m pip`,保證裝進 `python` 解析到的那支)。
+3. **同一條探針再試一次。** 訊息應翻成:
+   ```
+        原因:讀不到流程狀態(.dev/pipeline.json)
+   ```
+
+**訊息翻面 = 證明 hook 吃的就是你剛裝的那支。** 中間只變動了一件事,
+所以這是觀測不是推論 —— 與第二節開頭「複製檔案不算裝好」同一句話,
+套在直譯器上。
+
+### 0-3. git identity
+
+```
+git config user.email "<你的提交信箱>"
+git config user.name  "<你的提交名稱>"
+```
+
+**GCM 登入解決的是推送憑證,不是提交身分。兩件事。**
+
+> **缺席時會製造假綠,這是本節最貴的一條。** 沒設 identity 時 `git commit`
+> 回 **128**,而**洩漏偵測一個字都沒說** —— 它根本沒跑到。
+> 第二節探針四的期望是「commit 被擋下」,如果只看「退出碼非 0」就打勾,
+> 你會把一次**完全沒有發生的洩漏偵測**記成綠燈。
+> 演練實際踩過這一次。判準見 `docs/adr/0009` 第 4 步:
+> **一次觀測只能放一個受測項**;退出碼不是觀測,訊息才是。
+
+---
+
 ## 一、`~/.claude/` 底下框架需要的每一份檔案
 
 先確保 `~/.claude/hooks/` 這個目錄存在。然後逐項備齊下表。
@@ -205,6 +269,70 @@ certutil -hashfile "%USERPROFILE%\.claude\shadow-clamp.txt" SHA256
 
 > **驗收不能只 `ls`,也不能只讀 hook 的檔名** —— 與第二節開頭同一句話:
 > 檔案都在證明不了防護會生效。
+
+## 二之二、clone **框架自己**時還缺三樣(演練實測)
+
+前面兩節管的是「裝進別的 repo」。**這一節管的是 clone `agent-gates` 自己。**
+
+第三節的 `install.py` 會替目標 repo 產生狀態與名冊,但**沒有任何東西替框架自己做這件事** ——
+而它們全被 `.gitignore` 蓋住(per-repo 狀態,不是框架內容),所以 **clone 拿不到**。
+症狀全是 fail-closed,會出聲,但訊息不會告訴你「這是新 clone 的通病」。
+
+| 要補的 | 缺席時 |
+|---|---|
+| `.dev/pipeline.json` | `[R2/fail-closed] 讀不到流程狀態` —— **擋掉所有原始碼寫入** |
+| `.dev/test-runs.jsonl`、`.dev/gate-exemptions.jsonl`(雙帳本) | R3 的紅燈紀錄那一半沒有依據;豁免記不下來即 fail-closed |
+| `.agents/legacy-no-redlight.txt` | `[R6] 找不到豁免清單 —— 讀不到一律當違規` → **擋掉所有 commit** |
+
+### 三樣怎麼補
+
+**1. `.dev/pipeline.json`** —— 照 `install.py` 的 `generate_state()` 正典,不要自己編:
+
+```json
+{
+  "current_stage": "idle",
+  "feature": null,
+  "ticket_id": null,
+  "updated": ""
+}
+```
+
+`idle` 是對的起點:它 `allows_src_write: false`,所以要開工得由**人**顯式改這個欄位;
+而提交時 `idle` 是刻意放行的(ADR 0005),不會擋掉文件類 commit。
+
+**2. 兩本空帳** —— `.dev/test-runs.jsonl`、`.dev/gate-exemptions.jsonl`,各建 **0 位元組**。
+`install.py` 是一起建它們的。**空證據是誠實的起點**,不存在的證據不是。
+
+**3. `.agents/legacy-no-redlight.txt`** —— **重新生成,絕不照抄**。
+照抄的話清單裡是別的 repo 的路徑,R6 拿本地的 sha 去驗每一筆都不在樹裡,全數判違規。
+生成邏輯就是 `install.py` 的 `generate_legacy_list()`:取 go-live commit 的樹、
+篩 `.py`、再過 `gate.is_source_path()`。首行是 `# go-live: <完整 sha>`。
+
+驗收(**寫了檔不等於過**):
+
+```
+python -c "import sys; sys.path.insert(0,'.claude/hooks'); import gate; print(len(gate.check_legacy_list()))"
+```
+
+回 `0` 才算數。
+
+> ### ⚠ 兩個會讓你查錯方向的坑
+>
+> **編碼**:`gate.py` 讀 `pipeline.json` 用的是 `utf-8`,**不是 `utf-8-sig`** ——
+> 有 BOM 的話 `json.load` 直接炸,而你看到的訊息與「檔案根本不存在」**一模一樣**。
+> Notepad 存檔請選 `UTF-8`,不要選 `UTF-8 with BOM`;檔名記得加引號免得被偷加 `.txt`。
+>
+> **目錄名**:`.dev/` 被 `.gitignore` 忽略,所以**目錄名打錯時 `git status` 看不到** ——
+> 演練那次打成字母對調的名字,而 `git status` 反而因為它「不是那個被忽略的名字」
+> 才把它顯示成未追蹤。fail-closed 訊息只會說「讀不到流程狀態」,
+> **它不會說「你建在隔壁」**。補完先用上面那條 `python -c` 之類的方式讀一次,
+> 確認讀得到的是你剛建的那份。
+>
+> 另外:若目標目錄**已經存在**(例如你先跑過測試,機制自己建了 `.dev/` 並寫了證據),
+> `Move-Item` 是**搬進去**而不是改名,會得到 `.dev/<打錯的名字>/`。
+> 而那裡面的空帳本若平移上來,會**蓋掉已經有內容的證據檔** —— 證據不搬移、不還原。
+
+---
 
 ## 三、新專案安裝
 
