@@ -271,6 +271,81 @@ def test_a_non_cert_extension_still_passes(tmp_path):
     assert ls.scan([str(f)]) == 0
 
 
+_P8 = "p" + "8"          # PKCS#8 私鑰;副檔名組裝,同本檔其他測試
+_P7B = "p" + "7b"        # PKCS#7 簽章包
+
+
+class TestCertExtCoversPkcs8AndPkcs7:
+    """票 23:`CERT_EXT` 漏掉 PKCS#8 與 PKCS#7 兩種副檔名。
+
+    **每一條都斷言「命中理由是憑證副檔名」,不只斷言退出碼。**
+    只看退出碼會綠得莫名其妙:這兩種副檔名不在 `SKIP_SUFFIX` 裡,
+    所以二進位的那份會走到內容比對、解不開、被 `TestUnreadableIsNotAPass`
+    那條規則計為違規 —— 退出碼 1,理由卻是「讀不到內容」。
+    **擋對了但理由是別的**,而那個理由不穩:任何一次把這兩種副檔名加進
+    `SKIP_SUFFIX` 的「整理」,都會讓它從擋變放行,且沒有訊號。
+    """
+
+    def test_an_ascii_decodable_pkcs8_is_caught_by_extension(self, tmp_path, capsys):
+        """**核心紅燈。** 內容可解碼、不含任何秘密形狀 —— 內容比對必然放行。
+
+        判定不能取決於「手上這份剛好是二進位」。同一種副檔名可以是 DER 也可以是
+        PEM,也可以是被工具轉過一手的純文字;副檔名判定的價值就在於不必知道
+        內容長什麼樣(F-062)。
+        """
+        f = tmp_path / ("client." + _P8)
+        f.write_text("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n", encoding="utf-8")
+        assert ls.scan([str(f)]) == 1, "可解碼的 PKCS#8 沒被擋 —— 這是 fail-open"
+        assert "憑證副檔名" in capsys.readouterr().err
+
+    def test_a_der_pkcs8_is_caught_as_a_cert_not_as_unreadable(self, tmp_path, capsys):
+        """二進位那份今天也會回 1,但**理由是「讀不到內容」**。理由要對。"""
+        import os
+        f = tmp_path / ("client." + _P8)
+        f.write_bytes(b"\x30\x82\x04\xbe\x02\x01\x00" + os.urandom(128))
+        assert ls.scan([str(f)]) == 1
+        assert "憑證副檔名" in capsys.readouterr().err
+
+    def test_a_der_pkcs7_bundle_is_caught_as_a_cert(self, tmp_path, capsys):
+        import os
+        f = tmp_path / ("bundle." + _P7B)
+        f.write_bytes(b"\x30\x82\x03\x0a\x06\x09" + os.urandom(128))
+        assert ls.scan([str(f)]) == 1
+        assert "憑證副檔名" in capsys.readouterr().err
+
+    def test_a_pem_pkcs8_is_caught_by_extension_not_by_the_key_header(
+            self, tmp_path, capsys):
+        """PEM 形狀但**不含**私鑰標頭 —— 只有副檔名判定抓得到它。
+
+        用 CERTIFICATE 標頭而不是 PRIVATE KEY:後者會命中通用內容 pattern,
+        那樣測到的是內容比對,不是這次的修改。
+        """
+        f = tmp_path / ("client." + _P8)
+        f.write_text("-----BEGIN CERTIFICATE-----\nQUJD\n-----END CERTIFICATE-----\n",
+                     encoding="utf-8")
+        assert ls.scan([str(f)]) == 1
+        assert "憑證副檔名" in capsys.readouterr().err
+
+    def test_an_uppercase_extension_is_caught(self, tmp_path, capsys):
+        """現行用 `.lower()` 後 `endswith`,這條應該一開始就對 ——
+        留著是為了守住往後別把 `lower()` 拿掉。"""
+        f = tmp_path / ("client." + _P8.upper())
+        f.write_text("harmless\n", encoding="utf-8")
+        assert ls.scan([str(f)]) == 1
+        assert "憑證副檔名" in capsys.readouterr().err
+
+    def test_a_lookalike_extension_still_passes(self, tmp_path):
+        """**誤擋的代價在這裡不是不方便,是這條規則會被關掉。**
+
+        含但不以該副檔名結尾的,一律放行。
+        """
+        for name in ("x." + _P8 + "x", "notes-about-" + _P8 + ".md",
+                     "bundle." + _P7B + ".md"):
+            f = tmp_path / name
+            f.write_text("just prose about key formats\n", encoding="utf-8")
+            assert ls.scan([str(f)]) == 0, "%s 被誤擋" % name
+
+
 def test_the_matched_secret_is_not_printed(tmp_path, capsys):
     """掃描器的輸出本身是外流面:擋下的那一刻,秘密會被印進終端機、CI log、
     對話紀錄 —— 剛好是最多眼睛在看的時候。命中的那一段必須遮掉(F-066)。"""
