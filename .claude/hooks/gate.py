@@ -428,6 +428,14 @@ def _quoting_is_ambiguous(seg):
         if '"' not in tok and "'" not in tok:
             continue
         core = tok
+        # **先剝掉 `VAR=` 前綴。** `PATH="$PATH:/x"` 的引號在 `=` 之後,
+        # 不剝的話每一條帶引號的賦值都會被判成模糊 ——
+        # 連 `export PATH="…"` 這種完全無害的都擋。
+        # 那是 F-031 那條路的起點:沒擋住任何實際危險,卻穩定增加繞路成本,
+        # 而繞路成本累積起來規則會被關掉。(本 repo 自己跑匯出時實撞一次。)
+        assign = re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", core)
+        if assign:
+            core = core[assign.end():]
         for q in ('"', "'"):
             if len(core) >= 2 and core[0] == q and core[-1] == q:
                 core = core[1:-1]

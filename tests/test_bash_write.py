@@ -289,6 +289,25 @@ class TestAmbiguousQuotingRefusesInsteadOfInventing:
         assert target in msg, "單純引號被誤傷,訊息不再點名目標:%r" % msg
         assert "無法可靠切分" not in msg, "單純引號被當成切不乾淨:%r" % msg
 
+    @pytest.mark.parametrize("cmd", [
+        'export PATH="$PATH:/c/tools/age"',
+        'FOO="bar" python x.py',
+        'PYTHONIOENCODING="utf-8" python x.py',
+    ])
+    def test_quoted_assignments_are_not_ambiguous(self, cmd):
+        """**`VAR="value"` 是極常見的 shell 慣用法,不得被誤判成切不乾淨。**
+
+        訊號原本逐 token 檢查「引號在不在兩端」,而 `PATH="$PATH:/x"` 的引號
+        在 `=` 之後 —— 於是每一條帶引號的賦值都變成模糊,連
+        `export PATH="..."` 這種完全無害的都被擋。
+
+        **這是 F-031 那條路的起點**:規則沒有擋住任何實際危險,
+        卻穩定地增加繞路成本,而繞路成本累積起來規則會被關掉。
+        實際撞到:本 repo 自己跑匯出時,設 PATH 那一行被自己的規則擋下。
+        """
+        assert gate._quoting_is_ambiguous(cmd) is False, (
+            "帶引號的賦值被判成切不乾淨:%r" % cmd)
+
     @pytest.mark.parametrize("cmd,target", [
         (r"rm C:\Users\fake\thing.py", r"C:\Users\fake\thing.py"),
         (r"Remove-Item C:\Users\fake\thing.py", r"C:\Users\fake\thing.py"),
