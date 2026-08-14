@@ -230,3 +230,187 @@ def _marks_items(marks):
     if isinstance(marks, dict):
         return list(marks.items())
     return list(marks)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# age 加密:recipient(公鑰)從哪來
+#
+# **公鑰不是祕密**,所以它可以進版控、可以跟著匯出走。
+# 私鑰不經本腳本、不經這台機器的任何自動流程 —— 那是密碼管理器 + 紙本的事。
+#
+# 來源優先序:`--recipient` 參數 > `~/.claude/age-recipient.txt`。
+# 參數優先是因為一次性覆寫要能不改狀態就做到;檔案存在是為了日常不必每次打。
+# 形狀刻意抄 `upstream-roots.txt`:一行、人維護、腳本唯讀 —— 那一份已經證明
+# 這個形狀在「跟著人走、每台機器不同」的資料上是夠用的。
+# ─────────────────────────────────────────────────────────────────────────────
+RECIPIENT_FILE = "age-recipient.txt"
+
+
+def read_recipient(home, override=None):
+    """取 age 公鑰。取不到回 None(呼叫端 fail-closed)。"""
+    if override:
+        return override.strip() or None
+    p = os.path.join(home, RECIPIENT_FILE)
+    if not os.path.exists(p):
+        return None
+    for line in io.open(p, encoding="utf-8-sig"):
+        line = line.split("#", 1)[0].strip()
+        if line:
+            return line
+    return None
+
+
+def age_encryptor(recipient):
+    """回一個 bytes -> bytes 的加密器。**age 不在就丟 Refused,不退化成明文。**"""
+    import subprocess
+
+    def _encrypt(raw):
+        try:
+            p = subprocess.run(["age", "-r", recipient],
+                               input=raw, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE)
+        except OSError:
+            raise Refused(
+                "找不到 age 執行檔 —— 無法加密,因此不匯出任何東西。\n"
+                "     安裝:winget install --id FiloSottile.age\n"
+                "     裝完用 `age --version` 確認,再重跑。")
+        if p.returncode != 0:
+            raise Refused("age 加密失敗(退出碼 %d):%s"
+                          % (p.returncode, p.stderr.decode("utf-8", "replace")))
+        return p.stdout
+
+    return _encrypt
+
+
+def _write(stream, msg):
+    """**明確走 utf-8。** 裸的 `stream.write()` 在 Windows 上用主控台編碼(cp950),
+    這支的輸出幾乎全是中文 —— 演練時人在筆電上看到的會是亂碼。
+
+    這是 F-042 家族第四次現身(前三次:PreToolUse payload、git 路徑輸出、
+    `.ps1` 腳本自身的讀取)。本 repo 的每一支腳本都已經這樣寫,
+    **只有這一支漏了** —— 而抓到它的是測試,不是我。
+    """
+    try:
+        stream.buffer.write(msg.encode("utf-8"))
+        stream.buffer.flush()
+    except Exception:
+        stream.write(msg)
+
+
+def _out(msg):
+    _write(sys.stdout, msg)
+
+
+def _err_out(msg):
+    _write(sys.stderr, msg)
+
+
+USAGE = """\
+用法:
+  python user_layer.py export <目的地> [--apply] [--recipient <age 公鑰>]
+  python user_layer.py import <來源>   [--apply]
+
+共用選項:
+  --home <路徑>    受管的使用者層(預設 ~/.claude)
+  --marks <路徑>   分類表(預設 <repo>/.agents/user-layer-manifest.txt)
+
+**export 預設是 dry-run** —— 先算、先報告,加 --apply 才寫。
+報告的主體是「未帶走清單」:匯出依設計就是不完整的(R4 把兩個 G1 檔留給人工)。
+"""
+
+
+def _default_marks_path():
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(os.path.dirname(os.path.dirname(here)),
+                        ".agents", "user-layer-manifest.txt")
+
+
+def main(argv=None):
+    """CLI。**`machine-init.md` 承諾的就是這一支** ——
+
+    它一度不存在:模組沒有 `__main__`,而文件寫著怎麼呼叫它。
+    照文件做的人會看到退出碼 0、什麼都沒發生、目的地是空的。
+    「文件描述了一個不存在的東西」是本 repo 記過很多次的一族
+    (票 27 的 bootstrap.sh、票 13 的「改用 Write/Edit」、票 26 的 --no-verify),
+    這一則的差別只在**它是寫文件的人自己漏的**。
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv or argv[0] in ("-h", "--help"):
+        _out(USAGE)
+        return 0 if argv else 2
+
+    cmd, rest = argv[0], argv[1:]
+    if cmd not in ("export", "import"):
+        _err_out("不認得的子命令:%s\n\n%s" % (cmd, USAGE))
+        return 2
+
+    def _opt(name, default=None):
+        return rest[rest.index(name) + 1] if name in rest else default
+
+    positional = [a for i, a in enumerate(rest)
+                  if not a.startswith("--")
+                  and (i == 0 or not rest[i - 1].startswith("--"))]
+    if not positional:
+        _err_out("%s 需要一個路徑參數。\n\n%s" % (cmd, USAGE))
+        return 2
+
+    where = positional[0]
+    home = _opt("--home") or os.path.join(os.path.expanduser("~"), ".claude")
+    marks_path = _opt("--marks") or _default_marks_path()
+    apply = "--apply" in rest
+
+    try:
+        marks = load_marks(marks_path)
+        if cmd == "export":
+            recipient = read_recipient(home, _opt("--recipient"))
+            plan = plan_export(home, marks)
+
+            # **「計畫算不出來」與「計畫現在還不能執行」是兩件事。**
+            # 分類問題(未分類、never 卻標成 export)讓計畫本身不成立 ->
+            # `plan_export` 直接拒絕。
+            # 缺 recipient 是**執行前提**沒滿足 —— 計畫算得出來,只是還跑不了。
+            # 把後者也做成硬失敗的話,dry-run 就回答不了它唯一的問題
+            #(「會發生什麼」),而那正是人在準備階段最需要的東西。
+            blockers = []
+            if plan.age_items and recipient is None:
+                blockers.append(
+                    "缺 age recipient(公鑰),這些項目因此帶不走:%s\n"
+                    "       兩種給法(擇一):--recipient age1... /"
+                    " 在 %s 放一行公鑰\n"
+                    "       公鑰不是祕密,可以進版控;**私鑰不經本腳本**。"
+                    % (", ".join(plan.age_items),
+                       os.path.join(home, RECIPIENT_FILE)))
+
+            if not apply:
+                _out(report(plan))
+                if blockers:
+                    _out("\n=== **執行前提未滿足**(dry-run 照樣算給你看)===\n")
+                    for b in blockers:
+                        _out("    %s\n" % b)
+                _out(
+                    "\n(dry-run —— 沒有寫出任何東西。加 --apply 才寫。)\n")
+                return 0
+
+            if blockers:
+                raise Refused("\n     ".join(blockers))
+            enc = age_encryptor(recipient) if plan.age_items else None
+            plan = export(home, where, marks, apply=True, encrypt=enc)
+            _out(report(plan))
+            return 0
+        result = import_(where, home, marks, apply=apply)
+        _out("寫入 %d 項。\n" % len(result.written))
+        if result.pending:
+            _out("\n**尚未完成** —— 還差這些人工步驟:\n")
+            for p in result.pending:
+                _out("    %s\n" % p)
+            _out("\n檔案到位不等於這台機器可以工作(machine-init.md 第二節)。\n")
+            return 1
+        _out("人工步驟已齊,匯入完成。\n")
+        return 0
+    except Refused as e:
+        _err_out("[拒絕] %s\n" % e)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

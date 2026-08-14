@@ -96,13 +96,50 @@
 分類表:`.agents/user-layer-manifest.txt`。**沒有預設** —— 未分類會拒絕整次匯出。
 
 ```
-匯出(舊機器)  python .claude/portable/user_layer.py export <dotfiles 目錄>
-匯入(新機器)  python .claude/portable/user_layer.py import <dotfiles 目錄>
+# 舊機器 —— 先看會發生什麼(dry-run,不寫任何東西)
+python .claude/portable/user_layer.py export <匯出目錄>
+
+# 確認報告沒問題,再真的寫
+python .claude/portable/user_layer.py export <匯出目錄> --apply
+
+# 新機器
+python .claude/portable/user_layer.py import <匯出目錄> --apply
 ```
 
-> **看報告的「未帶走」那一段,那是主要輸出。**
-> 匯出**依設計就是不完整的** —— 下一節那兩個檔腳本不碰。
-> 匯入在人工步驟完成前**不會回報成功**,那是刻意的。
+> **`export` 預設是 dry-run。** 先算、先報告,加 `--apply` 才寫 ——
+> 而報告的主體是**「未帶走」那一段**。
+> 匯出**依設計就是不完整的**(下一節那兩個檔腳本不碰),
+> 所以「沒帶走什麼」比「帶走什麼」重要。
+> 匯入在人工步驟完成前**不會回報成功**(退出碼 1),那是刻意的。
+
+執行前提沒滿足時(例如缺 age 公鑰),**dry-run 照樣把計畫算給你看**,
+只在報告末尾多一段「執行前提未滿足」;`--apply` 才會拒絕。
+**「計畫算不出來」與「計畫現在還不能執行」是兩件事。**
+
+### 一之二、裝 age(`age` 桶要用)
+
+`leak-patterns.local.txt` 內容本身就是祕密(使用者名稱、往來機構、資料夾名),
+明文進任何 repo 或雲端等於把「要防的東西」列成一張清單。所以它加密後才走。
+
+```
+winget install --id FiloSottile.age
+age --version          # 裝完必驗 —— 「裝了」與「叫得到」是兩件事
+```
+
+**公鑰(recipient)給法兩種,擇一:**
+
+```
+python ... export <目錄> --apply --recipient age1xxxxxxxx…
+# 或在 <使用者家目錄>/.claude/age-recipient.txt 放一行公鑰
+```
+
+| | |
+|---|---|
+| **公鑰** | **不是祕密**。可以進版控、可以跟著匯出走(分類表標 `export`)——新機器要加密自己的匯出時需要它。 |
+| **私鑰** | **不經本腳本、不經任何自動流程。** 密碼管理器 + 紙本各一份,與 age 金鑰的既有裁決一致。 |
+
+> 沒有 age 或沒有公鑰時,`--apply` **整批拒絕、不寫半套** ——
+> 不會退化成「那一項跳過、其餘照寫」。跳過是靜默的。
 
 ### 這兩個檔只能人工複製 + sha 核對(R4,腳本永遠不碰)
 

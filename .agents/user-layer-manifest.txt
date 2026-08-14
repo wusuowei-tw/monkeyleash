@@ -29,6 +29,10 @@
 upstream-roots.txt              export
 settings.json                   export
 commands/                       export
+# age 公鑰(recipient)。**公鑰不是祕密** —— 可以進版控、可以跟著匯出走,
+# 新機器要加密自己的匯出時需要它。**私鑰不經本腳本、不經任何自動流程。**
+# 形狀抄 upstream-roots.txt:一行、人維護、腳本唯讀。
+age-recipient.txt               export
 
 # ── 加密後才帶走 ─────────────────────────────────────────────
 # 內容本身就是秘密(使用者名稱、往來機構、資料夾名),

@@ -28,6 +28,7 @@ import importlib.util
 import io
 import os
 import pathlib
+import sys
 
 import pytest
 
@@ -80,6 +81,70 @@ def table(tmp_path):
     p = tmp_path / "user-layer-manifest.txt"
     p.write_text(TABLE, encoding="utf-8")
     return ul.load_marks(str(p))
+
+
+class TestTheDocumentedCommandActuallyRuns:
+    """票 22 Phase 3 前置 —— **文件承諾的指令必須跑得起來。**
+
+    `machine-init.md` 寫著 `python .claude/portable/user_layer.py export <目錄>`,
+    而模組**沒有 `__main__`** —— 執行它什麼都不會發生,而且**退出碼是 0**。
+    照文件做的人會看到「成功」然後得到一個空目錄。
+
+    這是今天記了一整天的那一族:**文件/訊息宣稱一個不存在的東西**。
+    同族:`bootstrap.sh` 宣稱 `core.hooksPath` 而它沒設定(票 27)、
+    R7 叫人「改用 Write / Edit」而那兩個工具不能刪檔(票 13)、
+    `--no-verify`「會留下紀錄」而 git 不記(票 26)。
+    **這一則是我自己寫的** —— 模組與那一節文件都出自同一次工作,
+    寫完文件沒有回頭驗指令跑不跑得起來。
+
+    所以斷言的是**輸出**,不是退出碼:沒有 `__main__` 的模組退出碼正好是 0,
+    只驗退出碼會是假綠。
+    """
+
+    MODULE = str(ROOT / ".claude" / "portable" / "user_layer.py")
+
+    def _run(self, args, cwd):
+        import subprocess
+        p = subprocess.run([sys.executable, self.MODULE] + args,
+                           cwd=str(cwd), capture_output=True)
+        return (p.returncode,
+                p.stdout.decode("utf-8", "replace"),
+                p.stderr.decode("utf-8", "replace"))
+
+    def test_export_dry_run_prints_the_report(self, home, tmp_path):
+        """文件寫的那條指令要真的印出報告 —— 包含**未帶走清單**。"""
+        tbl = tmp_path / "marks.txt"
+        tbl.write_text(TABLE, encoding="utf-8")
+        rc, out, err = self._run(
+            ["export", str(tmp_path / "out"), "--home", str(home),
+             "--marks", str(tbl)], tmp_path)
+        assert rc == 0, "文件承諾的指令跑不起來:rc=%s\n%s" % (rc, err)
+        assert "未帶走" in out, (
+            "指令跑完卻沒印報告 —— 沒有 __main__ 的模組退出碼正好是 0,"
+            "只驗退出碼會是假綠:\n%r" % out)
+
+    def test_an_unknown_subcommand_fails_loudly(self, home, tmp_path):
+        """打錯子命令不得靜默成功。"""
+        rc, out, err = self._run(["frobnicate"], tmp_path)
+        assert rc != 0, "不認得的子命令卻回 0"
+        assert "frobnicate" in (out + err), "訊息沒點名打錯的是什麼"
+
+    def test_apply_without_a_recipient_refuses_and_says_how_to_fix(
+            self, home, tmp_path):
+        """`age` 桶非空而沒有 recipient → 拒絕,而且訊息要說怎麼修。
+
+        「拒絕」單獨不夠 —— 票 13 的判準是訊息要說出哪一個前提沒滿足,
+        而這裡人能做的動作有兩個(裝 age、給 recipient),訊息要分得開。
+        """
+        tbl = tmp_path / "marks.txt"
+        tbl.write_text(TABLE, encoding="utf-8")
+        rc, out, err = self._run(
+            ["export", str(tmp_path / "out2"), "--home", str(home),
+             "--marks", str(tbl), "--apply"], tmp_path)
+        assert rc != 0, "沒有 recipient 卻寫出去了"
+        blob = out + err
+        assert "leak-patterns.local.txt" in blob, "沒點名是哪一項要加密"
+        assert "recipient" in blob.lower(), "沒說出缺的是 recipient"
 
 
 def test_an_unclassified_item_refuses_the_whole_export(home, table, tmp_path):
