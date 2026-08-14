@@ -118,14 +118,21 @@ def is_drive_root(raw):
 
 
 def protected_entries():
-    """讀保護清單。**fail-closed**:讀不到、或有不支援的條目,就回 None,呼叫端一律擋。
+    """讀保護清單。回傳 **(entries, reason)**;失敗時 entries 為 None。
 
+    **fail-closed**:讀不到、或有不支援的條目,呼叫端一律擋。
     讀不到時放行的話,刪掉清單就等於關掉整個防護 —— 那是最廉價的繞法。
 
-    **磁碟根目錄條目也走 fail-closed,而且自己出聲點名那一行**(票 25)。
-    回 None 不夠 —— 呼叫端只會說「讀不到清單」,而清單明明讀得到,
-    人會去查檔案權限、編碼、路徑,查不到問題在哪。訊息要說出是**哪一個前提**
-    沒滿足(票 13),清單三十幾行的時候尤其如此。
+    **理由跟著失敗一起回傳,不在這裡印**(票 25 收尾)。
+    原本的寫法是「這裡印specific 訊息、回 None,呼叫端再印一句通用的」,
+    實測(live 探針)的結果是兩段訊息同時出現,而第二段
+    **「讀不到保護清單」是假的** —— 清單讀得到、解析得動,只是某一行不被接受。
+    人會照那句去查權限與編碼,而答案在第一段。
+
+    與票 26 的 `--no-verify`「會留下紀錄」、票 13 的「請改用 Write / Edit」同一族:
+    **訊息描述了一個不成立的狀況**,而人會照著它去做。
+    修法不是「少印一句」,是讓**知道原因的地方**負責把原因說出來 ——
+    一個失敗,一段訊息,說出真正沒滿足的那個前提(票 13)。
     """
     try:
         out = []
@@ -134,18 +141,25 @@ def protected_entries():
             if not raw:
                 continue
             if is_drive_root(raw):
-                _err(
+                return None, (
                     "[G1/fail-closed] 保護清單第 %d 行是磁碟根目錄條目:%s\n"
                     "     這種寫法**守不住**:它只產出一個變體,\n"
                     "     git bash 形態(/x/...)會直接放行,而整顆磁碟會被誤擋 ——\n"
                     "     看起來保護最多,實際上有洞。守衛不接受自己守不住的寫法。\n"
                     "     改法:把要保護的東西逐條列出來(目錄或檔案都可以)。\n"
                     "     清單:%s\n" % (n, raw, PROTECTED_LIST))
-                return None
             out.append(raw)
-        return out or None
-    except Exception:
-        return None
+        if not out:
+            return None, (
+                "[G1/fail-closed] 保護清單 %s 沒有任何有效條目 —— 一律擋下。\n"
+                "     空清單與沒有清單一樣危險:防護的涵蓋範圍是零,而它不會出聲。\n"
+                % PROTECTED_LIST)
+        return out, None
+    except Exception as e:
+        return None, (
+            "[G1/fail-closed] 讀不到保護清單 %s(%s)—— 一律擋下。\n"
+            "     讀不到就放行的話,刪掉清單就等於關掉整個防護。\n"
+            % (PROTECTED_LIST, e))
 
 
 def _prefix_in(haystack, needle):
@@ -274,11 +288,9 @@ def main():
     if not text.strip():
         return 0
 
-    entries = protected_entries()
+    entries, reason = protected_entries()
     if entries is None:
-        _err(
-            "[G1/fail-closed] 讀不到保護清單 %s —— 一律擋下。\n"
-            "     讀不到就放行的話,刪掉清單就等於關掉整個防護。\n" % PROTECTED_LIST)
+        _err(reason)                     # 一個失敗,一段訊息(票 25 收尾)
         return 2
 
     hit = level1_hit(text, entries)

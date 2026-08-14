@@ -104,12 +104,43 @@ class TestDriveRootEntriesAreRejectedLoudly:
         lst.write_text("# 註解\n%s\nD:\\\n%s\n" % (r"C:\db_backups", r"D:\datastore"),
                        encoding="utf-8")
         monkeypatch.setattr(g1, "PROTECTED_LIST", str(lst))
-        assert g1.protected_entries() is None, (
+        entries, reason = g1.protected_entries()
+        assert entries is None, (
             "清單含磁碟根條目卻照常回傳 —— 那條目守不住 /d/ 形態,"
             "而使用者以為整顆磁碟都保護了")
+        assert "3" in reason, "訊息沒點出是第幾行:%r" % reason
+        assert "D:\\" in reason or "d:" in reason.lower(), \
+            "訊息沒點名那一行的內容:%r" % reason
+
+    def test_the_rejection_message_does_not_also_claim_the_list_is_unreadable(
+            self, tmp_path, monkeypatch, capsys):
+        """**票 25 收尾。** 擋下時只能說出**真正**沒滿足的那個前提。
+
+        實測(live 探針)印了兩段:第一段點名第 55 行的寫法(對的),
+        第二段說「讀不到保護清單」(**假的** —— 讀得到、解析得動,
+        只是那一行不被接受)。人會照第二段去查權限與編碼,而答案在第一段。
+
+        與票 26 的 `--no-verify`「會留下紀錄」、票 13 的「請改用 Write / Edit」
+        同一族:**訊息描述了一個不成立的狀況**,而人會照著它去做。
+        """
+        import io as _io
+        lst = tmp_path / "g1-protected.txt"
+        lst.write_text("%s\nD:\\\n" % r"C:\db_backups", encoding="utf-8")
+        monkeypatch.setattr(g1, "PROTECTED_LIST", str(lst))
+
+        class _Stdin(object):
+            buffer = _io.BytesIO(
+                b'{"tool_name":"Bash","tool_input":{"command":"echo probe"}}')
+
+        monkeypatch.setattr(g1.sys, "stdin", _Stdin())
+        rc = g1.main()
         err = capsys.readouterr().err
-        assert "3" in err, "訊息沒點出是第幾行:%r" % err
-        assert "D:\\" in err or "d:" in err.lower(), "訊息沒點名那一行的內容:%r" % err
+
+        assert rc == 2, "磁碟根條目沒有 fail-closed"
+        assert "磁碟根目錄條目" in err, "沒說出真正的原因:%r" % err
+        assert "讀不到保護清單" not in err, (
+            "同時宣稱『讀不到保護清單』—— 那是假的,清單讀得到、"
+            "解析得動,只是那一行不被接受:%r" % err)
 
     def test_a_clean_list_still_loads(self, tmp_path, monkeypatch):
         """**反控。** 正常清單照常讀得到,而且筆數不變。"""
@@ -117,7 +148,9 @@ class TestDriveRootEntriesAreRejectedLoudly:
         lst.write_text("# 註解\n%s\n%s\n" % (r"C:\db_backups", r"D:\datastore"),
                        encoding="utf-8")
         monkeypatch.setattr(g1, "PROTECTED_LIST", str(lst))
-        assert g1.protected_entries() == [r"C:\db_backups", r"D:\datastore"]
+        entries, reason = g1.protected_entries()
+        assert entries == [r"C:\db_backups", r"D:\datastore"]
+        assert reason is None, "成功卻帶著理由:%r" % reason
 
 
 class TestPrefixMatchingCoversSubdirectories:
@@ -163,15 +196,37 @@ class TestTheListItselfStaysProtected:
 class TestFailClosedIsPreserved:
     def test_an_unreadable_list_returns_none_so_the_caller_blocks(
             self, tmp_path, monkeypatch):
+        """讀不到 -> entries 為 None,而且**理由說的就是讀不到**。
+
+        票 25 收尾把回傳改成 `(entries, reason)`:失敗要帶著理由走,
+        呼叫端才不會用一句通用的話蓋掉真正的原因。
+        """
         monkeypatch.setattr(g1, "PROTECTED_LIST", str(tmp_path / "gone.txt"))
-        assert g1.protected_entries() is None
+        entries, reason = g1.protected_entries()
+        assert entries is None
+        assert "讀不到" in reason, "理由沒說出是讀不到:%r" % reason
 
     def test_a_readable_list_is_parsed_without_comments(self, tmp_path, monkeypatch):
         p = tmp_path / "list.txt"
         io.open(p, "w", encoding="utf-8", newline="\n").write(
             "# 註解\n\nD:\\保管庫\nD:\\封存   # 行尾註解\n")
         monkeypatch.setattr(g1, "PROTECTED_LIST", str(p))
-        assert g1.protected_entries() == ["D:\\保管庫", "D:\\封存"]
+        entries, reason = g1.protected_entries()
+        assert entries == ["D:\\保管庫", "D:\\封存"]
+        assert reason is None
+
+    def test_an_empty_list_is_not_a_pass(self, tmp_path, monkeypatch):
+        """只有註解的清單 = 涵蓋範圍是零,而它不會出聲 —— 與沒有清單一樣危險。
+
+        原本 `return out or None` 把這個情況混進「讀不到」裡,
+        訊息因此會說「讀不到保護清單」,而檔案好端端在那裡(票 25 收尾)。
+        """
+        p = tmp_path / "list.txt"
+        io.open(p, "w", encoding="utf-8", newline="\n").write("# 全是註解\n\n")
+        monkeypatch.setattr(g1, "PROTECTED_LIST", str(p))
+        entries, reason = g1.protected_entries()
+        assert entries is None
+        assert "沒有任何有效條目" in reason, "把空清單說成讀不到:%r" % reason
 
 
 class TestAbsPathExtraction:
