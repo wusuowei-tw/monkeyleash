@@ -1614,17 +1614,27 @@ class TestR3AcceptsUpstreamProvenance:
 
 
 class TestAuthorityLayerIsWired:
-    """票 27 — 權威層沒接上 git 時,必須**大聲失敗**。
+    """票 27 — 權威層有沒有**真的接上 git**。
 
-    CLAUDE.md 早就寫著這個缺陷:「`.git/hooks/` 不進版控,clone 不會帶走它,
-    而且**完全靜默** —— 前哨照跑、測試照綠,沒有東西會說權威層不在。」
-    agent-gates 自己就處在那個狀態,40 個 commit 都沒有人發現。
-    **「已知」不等於「有東西會說」**,這個 class 就是那個「會說」。
+    **這個 class 只放既有涵蓋沒有的東西。** 偵測本身早就存在
+    (`authoritative_layer()`,連同 `TestAuthoritativeLayerNotice` 那組測試):
+    它已經處理 `core.hooksPath`、已經判內容而非只判檔案存在、
+    已經被 `sentinel_footer()` 與 `mode_hook()` 呼叫。
+    第一版的我沒查就另寫了一份實作,那是重複不是補強(F-080)。
+
+    剩下三件事是真的缺的:
+
+    1. **`--pre-commit` 也要出現。** 只檢查 `"gate.py" in body` 的話,
+       一支「呼叫了 gate.py 但沒帶 `--pre-commit`」的 hook 會被判成已安裝 ——
+       而那種 hook 什麼都不擋。
+    2. **`core.hooksPath` 的優先順序有測試。** 既有測試造的是假 `.git` 目錄
+       (不是真 repo),`git config` 問不到就退回預設路徑,所以那條分支沒被走過。
+    3. **活體金絲雀** —— 見 `test_this_repo_itself_is_wired`。
 
     一句話教訓(票 27):**手動呼叫一支檢查,不等於那支檢查在通行路上。**
-    所以這條檢查刻意**不**掛在 `mode_pre_commit` 裡 —— 掛在那裡的話,
-    權威層沒接上時它根本不會被呼叫,而那正是它要偵測的情況。同一個遞迴。
-    它住在測試裡,因為測試是這個 repo 目前唯一**會被強制跑到**的路徑。
+    修正版:**訊號太弱也不等於沒有訊號** —— `mode_hook()` 每 4 小時會印一次
+    未安裝提醒,訊號存在,只是節流到實務上沒人看見。兩者的修法不同
+    (一個是接線,一個是提高可見度),所以不能混為一談。
     """
 
     def _repo(self, tmp_path, name):
@@ -1643,74 +1653,77 @@ class TestAuthorityLayerIsWired:
     WIRED = ('#!/bin/sh\nroot="$(git rev-parse --show-toplevel)"\n'
              'python "$root/.claude/portable/leak_scan.py" --staged || exit 1\n'
              'exec python "$root/.claude/hooks/gate.py" --pre-commit\n')
+    # 呼叫了 gate.py,但**沒帶 --pre-commit** —— 它會跑 gate.py 的預設模式,
+    # 那不是權威判定。檔案在、名字對、內容含 "gate.py",而它什麼都不擋。
+    NO_MODE_FLAG = ('#!/bin/sh\nexec python "$(git rev-parse --show-toplevel)'
+                    '/.claude/hooks/gate.py"\n')
 
-    def test_a_repo_with_no_hook_at_all_is_reported(self, tmp_path):
-        """沒有 pre-commit 檔 —— 訊息要說出是**這一種**沒滿足。"""
-        repo = self._repo(tmp_path, "nohook")
-        msg = gate.authority_hook_missing(str(repo))
-        assert msg, "完全沒有 hook 卻判為已接上 —— 這正是 fail-open"
-        assert "沒有" in msg or "不存在" in msg, msg
+    def test_a_hook_that_calls_the_gate_without_the_mode_flag_is_not_installed(
+            self, tmp_path):
+        """**票 27 收尾的紅燈。** 只比對 `"gate.py" in body` 會放行這一支。
 
-    def test_a_hook_without_the_gate_call_is_reported(self, tmp_path):
-        """有 hook、只接 leak_scan —— **agent-gates 自己就是這個形狀**。
-
-        訊息必須與「沒有 hook」分得開:兩者的修法不同
-        (一個是裝 hook,一個是把權威層加進既有 hook)。
+        這是「讀起來在守、實際只守一部分」的形狀(R4 那一族):
+        判定用的證據比它宣稱保證的東西弱一階。
         """
-        repo = self._repo(tmp_path, "leakonly")
-        self._hook(repo / ".git" / "hooks" / "pre-commit", self.LEAK_ONLY)
-        msg = gate.authority_hook_missing(str(repo))
-        assert msg, "hook 存在但沒接權威層,卻判為已接上"
-        assert "gate.py" in msg, "訊息沒說出缺的是什麼:%r" % msg
-        assert "沒有" not in msg.split("\n")[0] or "gate" in msg.split("\n")[0], msg
-
-    def test_a_wired_hook_passes(self, tmp_path):
-        """**反控。** 少了它,「一律回報未接上」的實作也會讓前兩條過。"""
-        repo = self._repo(tmp_path, "wired")
-        self._hook(repo / ".git" / "hooks" / "pre-commit", self.WIRED)
-        assert gate.authority_hook_missing(str(repo)) is None
+        repo = self._repo(tmp_path, "nomodeflag")
+        self._hook(repo / ".git" / "hooks" / "pre-commit", self.NO_MODE_FLAG)
+        installed, detail = gate.authoritative_layer(str(repo))
+        assert installed is False, (
+            "hook 呼叫 gate.py 但沒帶 --pre-commit,卻被判成已安裝 —— "
+            "那支 hook 什麼都不擋:%s" % detail)
+        assert "--pre-commit" in detail, "訊息沒說出缺的是哪一個前提:%r" % detail
 
     def test_the_check_follows_core_hookspath(self, tmp_path):
-        """**核心形狀:驗的是 git 實際會執行的那一支,不是某個路徑上的檔案。**
+        """**驗的是 git 實際會執行的那一支,不是某個路徑上的檔案。**
 
         構造:`.git/hooks/pre-commit` 接得好好的,但 `core.hooksPath` 指到
         另一個目錄,而那裡的 hook 只有 leak_scan。git 會執行後者。
         只看 `.git/hooks/` 的實作會在這裡給出綠燈 —— 而那個綠燈是假的。
 
-        這不是假想:agent-gates 的 `bootstrap.sh` 宣稱用 `core.hooksPath`
-        指向版控裡的 `.githooks/`,而實測 `core.hooksPath` 根本沒設定。
-        兩條掛載路徑並存,所以「哪一支會跑」必須問 git,不能假設。
+        這不是假想:`bootstrap.sh` 宣稱用 `core.hooksPath` 指向版控裡的
+        `.githooks/`,而實測那個 config 根本沒設定。兩條掛載路徑並存,
+        所以「哪一支會跑」必須問 git,不能假設。
+
+        既有測試造的是假 `.git` 目錄,`git config` 問不到 —— 這條走的是**真 repo**,
+        那個分支才真的被執行到。
         """
         repo = self._repo(tmp_path, "hookspath")
         self._hook(repo / ".git" / "hooks" / "pre-commit", self.WIRED)
         self._hook(repo / ".githooks" / "pre-commit", self.LEAK_ONLY)
         subprocess.run(["git", "config", "core.hooksPath", ".githooks"],
                        cwd=str(repo), capture_output=True)
-        msg = gate.authority_hook_missing(str(repo))
-        assert msg, ("core.hooksPath 指到的那支沒接權威層,卻因為 .git/hooks/ "
-                     "裡有一支接好的而放行 —— 綠燈的原因不對")
+        installed, detail = gate.authoritative_layer(str(repo))
+        assert installed is False, (
+            "core.hooksPath 指到的那支沒接權威層,卻因為 .git/hooks/ 裡有一支"
+            "接好的而判成已安裝 —— 綠燈的原因不對:%s" % detail)
+        assert ".githooks" in detail, "訊息沒指名實際會跑的那一支:%r" % detail
 
-    def test_the_reported_path_is_the_one_git_would_run(self, tmp_path):
-        """訊息要指名**那一支**,否則人會去修錯的檔案(票 13 判準)。"""
-        repo = self._repo(tmp_path, "whichpath")
-        self._hook(repo / ".githooks" / "pre-commit", self.LEAK_ONLY)
+    def test_a_wired_hook_under_hookspath_is_installed(self, tmp_path):
+        """**反控。** 少了它,「真 repo 一律判未安裝」的實作也會讓上面兩條過。"""
+        repo = self._repo(tmp_path, "hookspathok")
+        self._hook(repo / ".githooks" / "pre-commit", self.WIRED)
         subprocess.run(["git", "config", "core.hooksPath", ".githooks"],
                        cwd=str(repo), capture_output=True)
-        msg = gate.authority_hook_missing(str(repo))
-        assert msg and ".githooks" in msg, "訊息沒指名實際會跑的那一支:%r" % msg
-
-    def test_a_broken_git_is_not_a_pass(self, tmp_path):
-        """**fail-closed。** 問不到 git 就當作沒接上 ——
-        「問不到」與「接上了」是兩件事(與 R3 紅燈紀錄同一條判準)。"""
-        notrepo = tmp_path / "notarepo"
-        notrepo.mkdir()
-        assert gate.authority_hook_missing(str(notrepo)) is not None
+        installed, detail = gate.authoritative_layer(str(repo))
+        assert installed is True, detail
 
     def test_this_repo_itself_is_wired(self):
-        """**活體金絲雀。** 上面五條都是構造出來的形狀;這一條問的是
-        「**現在、這台機器上、這個 repo**,權威層真的接上了嗎」。
+        """**活體金絲雀:現在、這台機器上、這個 repo,權威層真的接上了嗎。**
 
-        缺席必須出聲 —— 而在票 27 落地之前,它出的聲就是這條紅燈。
+        既有那組測試明講「只驗未安裝路徑:已安裝路徑就是本機現況,
+        測它等於測環境(接縫 S3)」—— 那條原則對**框架性質**成立,
+        而這一條刻意違反它,因為它問的不是框架性質,是**部署事實**。
+        票 27 的整件事就是:框架性質全部正確,而部署從來沒發生過,
+        40 個 commit 沒有人發現。**只驗框架性質的測試集,永遠抓不到這個。**
+
+        代價誠實寫出來:任何**新 clone** 在跑 `bootstrap.sh` 之前,這一條都會紅。
+        那是刻意的(缺席必須出聲),但紅燈必須帶著修法 —— 否則就變成
+        「這套測試本來就紅」,而那比沒有測試更糟(F-031)。修法只有一行,
+        所以斷言訊息直接把它寫出來。
         """
-        msg = gate.authority_hook_missing(str(ROOT))
-        assert msg is None, msg
+        installed, detail = gate.authoritative_layer(str(ROOT))
+        assert installed is True, (
+            "%s\n"
+            "     權威層沒接上 —— 六站閘門只剩前哨,commit 時不會判定。\n"
+            "     修法:在 repo 根目錄跑 `sh bootstrap.sh`(一行 config,每個 clone 一次)。"
+            % detail)

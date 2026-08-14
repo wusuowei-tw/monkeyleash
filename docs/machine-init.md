@@ -88,6 +88,33 @@
 
 ---
 
+## 二之一、權威層接上了沒(票 27,**Phase 3 必驗**)
+
+前一節驗的是 G1。**這一節驗的是六站閘門的權威層有沒有真的在 git 的通行路上。**
+
+> **這一條是換機器最容易漏的。** `.git/hooks/` 依 git 設計不進版控,
+> **clone 不會帶走它** —— 新機器上 clone 完,權威層預設就是不在的。
+> 而缺席**幾乎無聲**:前哨照跑、測試照綠。
+> agent-gates 自己就這樣過了 40 個 commit,一次權威判定都沒發生過。
+
+| | |
+|---|---|
+| **啟用** | 在 repo 根目錄跑 `sh bootstrap.sh` —— 一行 `core.hooksPath` config,**每個 clone 一次**。零接觸不可能:git 刻意不讓 clone 自動執行任何東西。 |
+| **驗收** | `python -m pytest tests/test_gate.py::TestAuthorityLayerIsWired` —— 其中 `test_this_repo_itself_is_wired` 問的是「**現在、這台機器上**接上了沒」,不是「框架的邏輯對不對」。 |
+| **缺席時** | 紅燈,訊息直接給修法(`sh bootstrap.sh`)。**這是刻意讓它吵的** —— 靜默缺席正是票 27 的整件事。 |
+
+**兩條掛載路徑,以 `core.hooksPath` 為準:**
+
+- 有設 → git **只**跑那個目錄裡的 hook,`.git/hooks/` 整個被忽略
+- 沒設 → git 跑 `.git/hooks/`
+
+兩支都必須是三層(`leak_scan` + `gate.py --pre-commit`)。少了 `--pre-commit`
+那支 hook 跑的是預設模式,**什麼都不擋** —— 而「檔案在、名字對、內容有 gate.py」
+三件事都成立。驗收要看的是**行為**,不是這三件事。
+
+> **驗收不能只 `ls`,也不能只讀 hook 的檔名** —— 與第二節開頭同一句話:
+> 檔案都在證明不了防護會生效。
+
 ## 三、新專案安裝
 
 ```

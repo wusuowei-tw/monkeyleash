@@ -176,6 +176,19 @@ R3 的豁免宣告 `**Untested by decision:**` 是從 `.scratch/<feature>/issues
 「複製過去了」與「兩邊內容相同」是兩件事,而前者不蘊涵後者
 (這正是 machine-init 第二節「複製檔案不算裝好」的同一句話,套在檔案內容上)。
 
+### 二之零、Phase 3 必跑:**權威層接上了沒**(票 27)
+
+`.git/hooks/` 不進版控,**clone 不會帶走它** —— 新筆電 clone 完,
+六站閘門的權威層預設就是不在的,而缺席幾乎無聲(前哨照跑、測試照綠)。
+
+→ 演練時 `sh bootstrap.sh` 之後必跑
+`python -m pytest tests/test_gate.py::TestAuthorityLayerIsWired`,
+其中活體金絲雀問的是「**這台機器上**接上了沒」。
+**這一條會直接驗到「clone 後首次 commit 撞牆」那個已知缺陷** ——
+演練的價值就在這裡:桌機看不到它,因為桌機是手動接好的。
+
+`machine-init.md` 第二之一節已寫入完整步驟與兩條掛載路徑的語意。
+
 ### 二之一、Phase 3 必跑:保護清單的**存在性**檢查
 
 `g1_verify` 與唯讀探針的前四段,探針字串都是**從條目本身組出來的**,

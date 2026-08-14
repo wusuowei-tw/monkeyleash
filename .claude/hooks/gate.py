@@ -230,7 +230,16 @@ def authoritative_layer(root=None):
     if "gate.py" not in body:
         return False, ("%s 存在,但它不呼叫 gate.py —— 那是別人的 hook 佔著位子,"
                        "不是本框架的權威層。" % rel(hook))
-    return True, "%s 已呼叫 gate.py" % rel(hook)
+    # **模式旗標也要在。** 只比對 "gate.py" 的話,一支
+    # `exec python .../gate.py`(沒帶 --pre-commit)會被判成已安裝 ——
+    # 而它跑的是 gate.py 的預設模式,**什麼都不擋**。
+    # 檔案在、名字對、內容含 "gate.py",三件事都成立而那一層仍然不存在:
+    # 這是「讀起來在守、實際只守一部分」的形狀(R4 那一族),
+    # 判定用的證據比它宣稱保證的東西弱一階(票 27)。
+    if "--pre-commit" not in body:
+        return False, ("%s 有呼叫 gate.py,但**沒帶 `--pre-commit`** —— "
+                       "那跑的是預設模式,不是權威判定,什麼都不會擋。" % rel(hook))
+    return True, "%s 已呼叫 gate.py --pre-commit" % rel(hook)
 
 
 def not_installed_notice(detail):
@@ -751,87 +760,6 @@ def check_legacy_list():
                        "     清單只減不增:新檔案要走紅燈,不是往豁免名單裡加。"
                        % (p, go_live[:7]))
     return out
-
-
-def authority_hook_path(cwd=None):
-    """git **實際會執行**的那一支 pre-commit 的絕對路徑。查不到回 None。
-
-    **不能假設是 `.git/hooks/pre-commit`。** `core.hooksPath` 一設,git 就改跑
-    別的目錄,而 `.git/hooks/` 裡那一支變成死檔。本 repo 正好兩條路徑並存
-    (`bootstrap.sh` 宣稱用 `core.hooksPath` 指向版控裡的 `.githooks/`,
-    而實測那個 config 根本沒設定),所以「哪一支會跑」只能問 git,不能推。
-
-    只驗「某個路徑上有一支長得對的檔案」的檢查,會在這種佈局下給出**假綠燈**
-    —— 綠的原因不是權威層接上了,是探針剛好看了沒在跑的那一支(票 27)。
-    """
-    root = cwd or ROOT
-    try:
-        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=root,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if top.returncode != 0:
-            return None
-        top_dir = top.stdout.decode("utf-8", "replace").strip()
-        if not top_dir:
-            return None
-
-        hp = subprocess.run(["git", "config", "--get", "core.hooksPath"], cwd=root,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        configured = hp.stdout.decode("utf-8", "replace").strip()
-        if configured:
-            base = configured if os.path.isabs(configured) \
-                else os.path.join(top_dir, configured)
-        else:
-            gd = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=root,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            git_dir = gd.stdout.decode("utf-8", "replace").strip()
-            if not git_dir:
-                return None
-            if not os.path.isabs(git_dir):
-                git_dir = os.path.join(top_dir, git_dir)
-            base = os.path.join(git_dir, "hooks")
-        return os.path.normpath(os.path.join(base, "pre-commit"))
-    except Exception:
-        return None
-
-
-def authority_hook_missing(cwd=None):
-    """權威層有沒有接上 git。接上回 None,**沒接上回一段說得出原因的訊息**。
-
-    這是票 27 的金絲雀。CLAUDE.md 早就寫著這個缺陷:
-    「`.git/hooks/` 不進版控,clone 不會帶走它,而且**完全靜默** ——
-    前哨照跑、測試照綠,沒有東西會說權威層不在。」
-    agent-gates 自己就處在那個狀態,40 個 commit 沒有人發現。
-    **「已知缺陷」不等於「有東西會說」**,這個函式就是那個「會說」。
-
-    **它刻意不掛在 `mode_pre_commit` 裡。** 掛在那裡的話,權威層沒接上時
-    它根本不會被呼叫 —— 而那正是它要偵測的情況。同一個遞迴,
-    也是票 27 那句一句話教訓:**手動呼叫一支檢查,不等於它在通行路上。**
-    呼叫端要選**會被強制跑到**的地方(目前是測試)。
-
-    三種失敗分開講(票 13 判準:訊息要說出是哪一個前提沒滿足)——
-    因為三種的修法不同:不是 repo(修環境)、沒有 hook(裝一支)、
-    有 hook 但沒接(把權威層加進既有那一支)。
-
-    **fail-closed**:問不到 git 就當作沒接上。「問不到」與「接上了」是兩件事。
-    """
-    p = authority_hook_path(cwd)
-    if p is None:
-        return ("[權威層] 問不到 git 要執行哪一支 pre-commit(%s)—— 一律當作沒接上。\n"
-                "     問不到不等於接上了。" % (cwd or ROOT))
-    if not os.path.exists(p):
-        return ("[權威層] 沒有 pre-commit hook:%s\n"
-                "     六站閘門只剩前哨,commit 時一次都不會判定。\n"
-                "     裝一支把 leak_scan 與 `gate.py --pre-commit` 都接上的 hook。" % p)
-    try:
-        body = io.open(p, encoding="utf-8", errors="replace").read()
-    except Exception as e:
-        return ("[權威層] 讀不到 pre-commit hook %s(%s)—— 一律當作沒接上。" % (p, e))
-    if "gate.py" not in body or "--pre-commit" not in body:
-        return ("[權威層] pre-commit hook 沒有接 `gate.py --pre-commit`:%s\n"
-                "     這一支**是** git 會執行的那一支(已考慮 core.hooksPath),\n"
-                "     它跑了、但只跑了別的東西 —— 六站閘門在 commit 時沒有判定過。\n"
-                "     把 `gate.py --pre-commit` 加進這一支,不是加進別的路徑上的同名檔。" % p)
-    return None
 
 
 _REDLIGHT_MOD = []
