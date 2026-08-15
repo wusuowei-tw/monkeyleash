@@ -368,14 +368,30 @@ class TestDirtinessIsAboutTheOuterTree:
         assert not [r for r in plan.changed + plan.added
                     if r.startswith("data_collector/")], plan
 
-    def test_an_unrecorded_gitlink_advance_still_blocks(self, embedded):
-        """內部前進、外層未記錄 → 那是**外層**的未落定狀態 → 擋。"""
+    def test_an_unrecorded_gitlink_advance_no_longer_blocks(self, embedded):
+        """**票 42 (b):推翻票 17 在這一格的裁決。**
+
+        原本這條叫 `test_an_unrecorded_gitlink_advance_still_blocks`,
+        斷言「內部前進、外層未記錄 → 擋」。理由是「那是**外層**的未落定狀態」。
+
+        推翻的理由:`refuse_if_dirty` 要防的是
+        「**在未提交的變更上覆寫,出事時分不出是誰改的**」——
+        而 gitlink 指標落沒落定**不在 sync 的寫入面上**。
+        sync 不寫 submodule 底下任何東西,也不寫 gitlink 本身;
+        指標落後時,sync 覆寫框架檔的結果完全不變。
+        這與同組 `test_internal_dirt_does_not_block` 是同一個判準,
+        當時只套到了「內部髒」那一半。
+
+        下游代價(這條被推翻的直接原因):在 (a) 未修時,下游**無法**落定它 ——
+        bump 需要新版 leak_scan,取得新版要跑 sync,而 sync 因此拒絕。循環。
+
+        **不刪掉原測試改寫成新的**:記名推翻,理由留在這裡(F-036 的規矩)。
+        """
         src, dst, inner = embedded
         _w(inner, "collect.py", "x = 3\n")
         _git(inner, "add", "-A")
         _git(inner, "commit", "-qm", "inner2")
-        with pytest.raises(sync.Refused):
-            sync.update(str(src), str(dst), apply=True)
+        sync.update(str(src), str(dst), apply=True)          # 不得丟 Refused
 
     def test_a_staged_but_uncommitted_gitlink_bump_blocks(self, embedded):
         """已 stage 未提交的 bump 也是外層的未落定狀態 → 擋。"""
@@ -416,22 +432,93 @@ class TestDirtinessIsAboutTheOuterTree:
         _w(inner, "junk.tmp", "u\n")
         assert sync.gitlink_unsettled(str(dst)) == []
 
-    def test_gitlink_unsettled_reports_an_advanced_inner_repo(self, embedded):
+    def test_gitlink_unsettled_ignores_an_advanced_inner_repo(self, embedded):
+        """**票 42 (b):推翻票 17 在這一格的裁決**(理由見上一條)。
+
+        原名 `test_gitlink_unsettled_reports_an_advanced_inner_repo`,
+        斷言 index ≠ 內層 HEAD 要被回報為未落定。現在**不回報** ——
+        那一格不在 sync 的寫入面上。
+        """
         src, dst, inner = embedded
         _w(inner, "collect.py", "x = 9\n")
         _git(inner, "add", "-A")
         _git(inner, "commit", "-qm", "advance")
+        assert sync.gitlink_unsettled(str(dst)) == [], \
+            "內層前進、外層未記錄仍被判為未落定 —— 放寬沒生效"
+
+    # ── 放寬只有一格,另外兩格原地不動 ──────────────────────────────
+    #
+    # 三態的分界要**釘死**,否則下一次重構會把這次放寬順手擴大成
+    # 「gitlink 一律不管」—— 而那會讓一個已 staged、下次就會被提交的 bump
+    # 在 sync 覆寫時無法歸屬,正是 refuse_if_dirty 存在的唯一理由。
+    #
+    #   HEAD ≠ index      已 stage 未提交的 bump   -> 維持為髒(在寫入面上)
+    #   index ≠ 內層 HEAD 內層前進、外層未記錄     -> 放寬(不在寫入面上)
+    #   內嵌 repo 讀不到                           -> 維持為髒(fail-closed)
+
+    def test_a_staged_bump_is_still_unsettled(self, embedded):
+        """**負控一**:已 stage 未提交的 bump 仍被判髒。
+
+        `test_a_staged_but_uncommitted_gitlink_bump_blocks` 走的是
+        `sync.update` 那條路;這條直接問 `gitlink_unsettled`,
+        因為放寬是動在它身上 —— 分界要釘在被改的那個函式上。
+        """
+        src, dst, inner = embedded
+        _w(inner, "collect.py", "x = 5\n")
+        _git(inner, "add", "-A")
+        _git(inner, "commit", "-qm", "inner5")
+        _git(dst, "add", "data_collector")
         out = sync.gitlink_unsettled(str(dst))
-        assert out and "data_collector" in out[0], out
+        assert out and "data_collector" in out[0], \
+            "已 staged 的 bump 被一起放寬了 —— 那一格在 sync 的寫入面上:%r" % out
 
     def test_an_unreadable_embedded_repo_fails_closed(self, embedded):
-        """讀不到內嵌 repo(不是 git repo、權限問題)-> 當髒。
-        問不出來不等於乾淨。"""
+        """**負控二**:讀不到內嵌 repo(不是 git repo、權限問題)-> 當髒。
+        問不出來不等於乾淨。
+
+        **票 42 第四件**:原本用 `shutil.rmtree(..., ignore_errors=True)`。
+        Windows 上 git 的鬆散物件檔是**唯讀**的,`rmtree` 會
+        `PermissionError: [WinError 5]`(票 41 實測),而 `ignore_errors=True`
+        把它吞掉 —— 結果是**部分刪除**:這條測試綠的理由變成
+        「`HEAD`/`config` 剛好可寫、被刪掉了」,而不是「`.git` 真的不見了」。
+        放寬了上面那一格之後,這條是三態裡「讀不到仍髒」的**唯一守衛**,
+        它不能只有名義上的守護。
+
+        改用 `os.rename`:結果是確定的,而且更像真實情形 ——
+        **未 init 的 submodule 就是「目錄在、工作樹在、`.git` 不在」**。
+        """
         src, dst, inner = embedded
-        import shutil
-        shutil.rmtree(str(inner / ".git"), ignore_errors=True)
+        os.rename(str(inner / ".git"), str(inner / ".git-gone"))
+        assert not (inner / ".git").exists(), "前提沒成立:.git 還在"
         out = sync.gitlink_unsettled(str(dst))
         assert out, "內嵌 repo 讀不到卻回報乾淨(fail-open)"
+
+    def test_a_missing_inner_repo_is_not_answered_by_the_outer_one(self, embedded):
+        """**這一格從來沒有被走到過**(票 42 實測),所以直接釘住偵測本身。
+
+        `git -C <路徑> rev-parse HEAD` 在該路徑沒有 repo 時會**往上走**,
+        回答**外層** repo 的 HEAD 並回 0 —— 退出碼永遠是 0,
+        「讀不到內嵌 repo」那個分支因此不可達。
+
+        它一直被下一個分支遮著:舊版接著比 `index_sha != inner_sha`,
+        而逃到外層拿回來的 sha 幾乎必然不等於 index 記的,於是照樣判髒 ——
+        **結論對,理由錯**。第二格一放寬(票 42 (b)),遮蔽消失,整格 fail-open。
+
+        判法改成問 git「你認為的工作樹根在哪」,再確認那就是這個路徑本身。
+        """
+        src, dst, inner = embedded
+        assert sync.is_own_repo(str(dst), "data_collector") is True
+        os.rename(str(inner / ".git"), str(inner / ".git-gone"))
+        assert sync.is_own_repo(str(dst), "data_collector") is False, \
+            "查詢逃到外層 repo,卻被當成內嵌 repo 讀得到"
+
+        # 逃逸的證據:同一個路徑,git 照樣回 0,而那個 sha 是**外層**的
+        out = subprocess.run(["git", "-C", str(inner), "rev-parse", "HEAD"],
+                             capture_output=True)
+        outer = subprocess.run(["git", "-C", str(dst), "rev-parse", "HEAD"],
+                               capture_output=True)
+        assert out.returncode == 0 and out.stdout == outer.stdout, \
+            "這台機器上 git 不往上走了 —— 那本條的前提要重寫,不是刪掉"
 
 
 class TestDuplicateFrictionHeadingsAreRefused:

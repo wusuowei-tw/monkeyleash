@@ -1849,7 +1849,10 @@ class TestEnforcementDoesNotTeachItsOwnBypass:
     """
 
     def _blocked_stderr(self, monkeypatch, capsys):
-        monkeypatch.setattr(gate, "staged_paths", lambda cwd=None: [])
+        # 簽名跟著本體走(票 42 加了 `gitlinks` 收集串列)——
+        # 替身漏一個參數,mode_pre_commit 會在**取清單**那一步就掛掉,
+        # 而這條測試要驗的是它**擋下之後**說了什麼。
+        monkeypatch.setattr(gate, "staged_paths", lambda cwd=None, gitlinks=None: [])
         monkeypatch.setattr(gate, "check_skill_copies", lambda: [])
         monkeypatch.setattr(gate, "check_third_axis_mount", lambda: [])
         monkeypatch.setattr(gate, "check_to_spec_override", lambda: [])
@@ -2217,3 +2220,126 @@ class TestGitlinkPathsCanReachAQualifyingRedlight:
         assert gate.head_blob("pkg/plain.py") is not None, "一般路徑被弄壞了"
         assert gate.head_blob("pkg/nope.py") is None, \
             "一般目錄底下不存在的檔案卻讀到了內容"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 42 —— 權威層自己的 staged 清單也把 gitlink 當成原始碼
+#
+# `staged_paths` 在本框架有**兩份**:`.claude/portable/scanner.py`(下游回報的那份)
+# 與本檔測的這份。下游沒撞到第二份,只是因為 hook 的順序是
+# `leak_scan || exit 1` 在前 —— **還沒走到 gate**。
+#
+# 本機唯讀實測(開票時):
+#   is_source_path('data_collector') = True     ← 無副檔名、top 不在非原始碼清單
+#   check(…, at_commit=True):grill / spec / tickets → [R2/commit] 前置站卻要提交原始碼
+#                             research            → [R2/範圍]
+#                             implement / review  → None
+#
+# **implement / review 放行是巧合,不是判定認得 gitlink。** 那兩站只是 R2 在提交時
+# 本來就不問的站別;判定從頭到尾都把那一格當成一支沒有副檔名的原始碼檔。
+# 而 R2 的擋下訊息**完全不提 gitlink** —— 使用者會去查站別(票 13 的判準:
+# 訊息要說出是哪一個前提沒滿足,不是把人指向錯的方向)。
+#
+# 修的範圍**只有**「gitlink 不是原始碼」這一句,不順手改 is_source_path 的其他語意。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestTheAuthorityLayerDoesNotTreatAGitlinkAsSource:
+
+    def _repo(self, tmp_path):
+        """外層 repo:staged 一個一般檔 + 一格 gitlink。"""
+        def git(*a, **kw):
+            return subprocess.run(["git"] + list(a),
+                                  cwd=kw.get("cwd", str(tmp_path)),
+                                  capture_output=True)
+
+        inner = tmp_path / "data_collector"
+        inner.mkdir()
+        io.open(inner / "collect.py", "w", encoding="utf-8",
+                newline="\n").write("x = 1\n")
+        for c in ("init -q", "config user.email t@t", "config user.name t",
+                  "add -A", "commit -qm inner"):
+            git(*c.split(), cwd=str(inner))
+        sha = git("rev-parse", "HEAD", cwd=str(inner)).stdout.decode().strip()
+
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            git(*c.split())
+        io.open(tmp_path / "README.md", "w", encoding="utf-8").write("x\n")
+        git("add", "README.md")
+        git("commit", "-qm", "base")
+        (tmp_path / "pkg").mkdir()
+        io.open(tmp_path / "pkg" / "a.py", "w", encoding="utf-8",
+                newline="\n").write("y = 1\n")
+        git("add", "pkg/a.py")
+        git("update-index", "--add", "--cacheinfo",
+            "160000,%s,data_collector" % sha)
+        mode = git("ls-files", "-s", "data_collector").stdout.decode().split(" ")[0]
+        assert mode == "160000", "fixture 沒種出 gitlink(mode=%r)" % mode
+        return tmp_path
+
+    def test_the_gitlink_is_not_in_the_staged_listing(self, tmp_path):
+        """**本組的主張**:那一格不進權威層的判定清單,所以 R2/R3 不會碰它。"""
+        repo = self._repo(tmp_path)
+        got = gate.staged_paths(str(repo))
+        assert "data_collector" not in got, \
+            "gitlink 仍被當成待判定的原始碼:%r" % got
+
+    def test_ordinary_files_are_still_listed(self, tmp_path):
+        """**負控**:判定面不得被這次過濾弄小。
+
+        少了它,「staged_paths 一律回空」也會讓上面那條過 ——
+        而那是把整個權威層靜默關掉,測試看起來還是綠的。
+        """
+        repo = self._repo(tmp_path)
+        assert sorted(gate.staged_paths(str(repo))) == ["pkg/a.py"]
+
+    def test_the_skip_is_visible_to_the_caller(self, tmp_path):
+        """跳過要**看得見**,理由與 (a) 那半相同:靜默跳過不算修好。"""
+        repo = self._repo(tmp_path)
+        skipped = []
+        gate.staged_paths(str(repo), gitlinks=skipped)
+        assert skipped == ["data_collector"], \
+            "被跳過的 gitlink 沒有交給呼叫端:%r" % skipped
+
+    def test_the_verdict_comes_from_the_index_not_the_filesystem(self, tmp_path):
+        """**負控**:判定依據不得跑到檔案系統去(同 scanner 那半)。
+
+        把目錄搬走 —— `os.path.isdir()` 從此回 False,而 index 裡那一格還是
+        160000。index 的 mode 才是權威。
+        """
+        repo = self._repo(tmp_path)
+        os.rename(str(repo / "data_collector"), str(repo / "moved-away"))
+        assert "data_collector" not in gate.staged_paths(str(repo))
+
+    def test_the_pre_commit_report_names_the_skipped_gitlink(self, tmp_path):
+        """**接線要測**(F-044):過濾寫好了但沒接上報告,等於靜默跳過。
+
+        訊息要說出**由誰守** —— 外層對 gitlink 的正確語意是
+        「這一格由內層 repo 自己守」,而不是「這一格沒事」。
+        """
+        note = gate.gitlink_note(["data_collector"])
+        assert "data_collector" in note and "gitlink" in note and "內層" in note, note
+        src = io.open(ROOT / ".claude" / "hooks" / "gate.py", encoding="utf-8").read()
+        assert "gitlinks=" in src and "gitlink_note" in src, \
+            "mode_pre_commit 沒有把跳過的 gitlink 接進報告"
+
+    def test_both_staged_listings_agree_on_a_gitlink(self, tmp_path):
+        """**同缺陷的兩份實作必然漂開**(F-058 家族)—— 所以釘住兩者一致。
+
+        `staged_paths` 有兩份(`.claude/hooks/gate.py` 與
+        `.claude/portable/scanner.py`),它們**不共用程式碼**:前者是權威層 hook,
+        隨 `.claude/hooks/` 安裝;後者是 portable 掃描器骨架。
+        本票同時修兩份,而「同時修好」不會自己維持下去 ——
+        下一次只有一邊被動到時,漂開是無聲的。這條測試就是那個機制。
+        """
+        repo = self._repo(tmp_path)
+        spec = importlib.util.spec_from_file_location(
+            "scanner_for_parity", ROOT / ".claude" / "portable" / "scanner.py")
+        sc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sc)
+
+        g_skipped, s_skipped = [], []
+        g = gate.staged_paths(str(repo), gitlinks=g_skipped)
+        s = sc.staged_paths(cwd=str(repo), gitlinks=s_skipped)
+        assert sorted(g) == sorted(s), "兩份 staged 清單對同一個 repo 給出不同答案"
+        assert g_skipped == s_skipped == ["data_collector"], \
+            "兩份對「哪一格是 gitlink」的答案不一致:%r / %r" % (g_skipped, s_skipped)

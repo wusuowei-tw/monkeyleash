@@ -198,6 +198,83 @@ class TestStagedListingFailureIsNotAnEmptyList:
         assert ls.main(["--staged"]) == 2
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 42(a) —— staged 的 gitlink 沒有內容可掃,而「沒有內容」不是「讀不到內容」
+#
+# 下游(台股資訊收集)實測:bump 一格 gitlink 時 pre-commit 擋下,訊息是
+# 「讀不到檔案:[Errno 13] Permission denied: '…/data_collector'」。
+# 那一格是 mode 160000,值是一個 commit sha —— **沒有 blob 可掃**。
+#
+# 「讀不到不等於乾淨」這條規則的正當性,對**應該是檔案**的東西成立;
+# 對 gitlink 它產生一個**永遠無法滿足的條件**:使用者沒有任何合法動作
+# 能讓它變乾淨,因為沒有東西可以洗。而下游因此連框架都同步不了(票 42 (b))。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestAStagedGitlinkDoesNotBlockTheCommit:
+
+    def _repo(self, tmp_path, monkeypatch, dirty=False):
+        import subprocess
+
+        def git(*a, **kw):
+            return subprocess.run(["git"] + list(a),
+                                  cwd=kw.get("cwd", str(tmp_path)),
+                                  capture_output=True)
+
+        inner = tmp_path / "sub"
+        inner.mkdir()
+        io.open(inner / "collect.py", "w", encoding="utf-8",
+                newline="\n").write("x = 1\n")
+        for c in ("init -q", "config user.email t@t", "config user.name t",
+                  "add -A", "commit -qm inner"):
+            git(*c.split(), cwd=str(inner))
+        sha = git("rev-parse", "HEAD", cwd=str(inner)).stdout.decode().strip()
+
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            git(*c.split())
+        io.open(tmp_path / "README.md", "w", encoding="utf-8").write("x\n")
+        git("add", "README.md")
+        git("commit", "-qm", "base")
+
+        io.open(tmp_path / "note.md", "w", encoding="utf-8", newline="\n").write(
+            ("token=" + _TOK + "\n") if dirty else "沒有秘密\n")
+        git("add", "note.md")
+        git("update-index", "--add", "--cacheinfo", "160000,%s,sub" % sha)
+
+        monkeypatch.setattr(ls, "ROOT", str(tmp_path))
+        monkeypatch.setattr(ls, "LOCAL_PATTERNS_FILE", str(tmp_path / "none.local.txt"))
+        return tmp_path
+
+    def test_a_staged_gitlink_alone_passes(self, tmp_path, monkeypatch):
+        """**本組的主張**:bump 一格 gitlink 過得了 pre-commit。"""
+        self._repo(tmp_path, monkeypatch)
+        assert ls.main(["--staged"]) == 0, \
+            "gitlink 仍被當成讀不到內容的檔案而擋下 commit"
+
+    def test_the_skipped_gitlink_is_in_the_report(self, tmp_path, monkeypatch, capsys):
+        """跳過要**看得見**,而且要說出**由誰守**。
+
+        外層對 gitlink 的正確語意是「這一格由內層 repo 自己守」
+        (內層有自己的 pre-commit 跑 leak_scan)。靜默跳過的話,
+        讀報告的人分不出「掃過沒事」與「根本沒掃」—— 票 39 的同一條規矩。
+        """
+        self._repo(tmp_path, monkeypatch)
+        ls.main(["--staged"])
+        err = capsys.readouterr().err
+        assert "sub" in err, "被跳過的 gitlink 沒有進報告:%s" % err
+        assert "gitlink" in err and "內層" in err, \
+            "報告沒說出這一格由誰守:%s" % err
+
+    def test_an_ordinary_staged_file_is_still_scanned(self, tmp_path, monkeypatch):
+        """**負控**:掃描面不得被這次過濾弄小。
+
+        少了它,「staged 一律回空」也會讓上面兩條過 ——
+        而那是把 pre-commit 的偵測整條關掉,測試看起來還是綠的。
+        """
+        self._repo(tmp_path, monkeypatch, dirty=True)
+        assert ls.main(["--staged"]) == 1, \
+            "同一批 staged 裡的一般檔案沒有被掃到"
+
+
 class TestPatternFileEncoding:
 
     def test_a_bom_does_not_corrupt_the_first_pattern(self, tmp_path, monkeypatch):

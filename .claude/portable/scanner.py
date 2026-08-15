@@ -166,14 +166,70 @@ def read_text(path):
     return None, "任何已知編碼都解不開"
 
 
-def staged_paths(cwd=None):
-    """staged 檔案清單。**-z(NUL 分隔),而且要看退出碼。**
+# git 的檔案模式是**封閉集合**,所以判定用枚舉、不用 pattern:
+# 040000 目錄 / 100644 一般檔 / 100755 可執行檔 / 120000 symlink / 160000 gitlink。
+# 「比對的漏是未知的,枚舉的漏是不存在的」(F-087)。
+GITLINK_MODE = "160000"
+
+
+def index_modes(cwd=None):
+    """index 裡每條路徑的 mode。問不到 -> 丟 `StagedListingFailed`(fail-closed)。
+
+    **判定依據是 index,不是檔案系統。** 用 `os.path.isdir()` 判「這是不是
+    submodule」的話,問題就跑到磁碟上去了 —— 而磁碟上的樣子隨時會變
+    (目錄被搬走、submodule 沒 init、有人放了一個同名檔),
+    **index 的 mode 才是 git 對「這一格是什麼」的答案**。
+
+    fail-closed 的方向:問不到 mode = 這個問題**沒有答案**,不是「都不是 gitlink」。
+    往「一律當檔案」倒的話 gitlink 又回到 open() 那條路;往「一律跳過」倒更糟 ——
+    那會把整份 staged 清單靜默清空。兩種都不對,所以丟例外。
+    """
+    out = subprocess.run(["git", "ls-files", "--stage", "-z"],
+                         capture_output=True, cwd=cwd)
+    if out.returncode != 0:
+        raise StagedListingFailed(
+            "git ls-files --stage 失敗(退出碼 %s):%s"
+            % (out.returncode, (out.stderr or b"").decode("utf-8", "replace")[:200]))
+    modes = {}
+    for rec in out.stdout.decode("utf-8", "replace").split("\0"):
+        if not rec.strip():
+            continue
+        meta, _, path = rec.partition("\t")     # `<mode> <sha> <stage>\t<path>`
+        fields = meta.split()
+        if path and fields:
+            modes[path] = fields[0]
+    return modes
+
+
+def staged_paths(cwd=None, gitlinks=None):
+    """staged **檔案**清單。**-z(NUL 分隔),而且要看退出碼。**
 
     git 對非 ASCII 檔名回傳 C-quoted 路徑;直接 splitlines 拿到的是壞路徑,
     開不了檔 -> 被當成讀不動 -> 靜默不掃(F-064)。
 
     **退出碼要看。** 不看的話,git 因為任何理由失敗 -> stdout 空 -> 清單空 ->
     呼叫端回 0 -> pre-commit 放行。權威層沒有 fail-open 的餘地。
+
+    **gitlink(mode 160000)不是檔案,不進清單**(票 42)。
+    `--name-only` 對 submodule 條目回傳**目錄路徑**,而 index 裡它的值是一個
+    commit sha —— **沒有 blob 內容可掃**。掃描器拿它去 `open()`,Windows 得
+    `PermissionError`、POSIX 得 `IsADirectoryError`,兩者都落進「讀不到內容」的
+    fail-closed 分支,於是擋下 commit。
+
+    「讀不到不等於乾淨」這條規則的正當性,對**應該是檔案**的東西成立;
+    對 gitlink 它把「**沒有內容這回事**」判成「內容讀不到」,產生一個
+    **永遠無法滿足的條件** —— 使用者沒有任何合法動作能讓它變乾淨,
+    因為沒有東西可以洗。實測:下游因此連 bump 都做不出來。
+
+    `gitlinks`:呼叫端傳入的收集串列,被跳過的那幾格會 append 進去,
+    **讓跳過看得見**(票 39:未內容掃描的清單一律進報告)。
+    外層對 gitlink 的正確語意是「**這一格由內層 repo 自己守**」——
+    內層有自己的 pre-commit,寫清楚比靜默跳過重要。
+
+    **回傳型別不變(仍是路徑串列)。** 不改成 `(paths, skipped)`:
+    票 13 C 的教訓是簽名一改,忘了解包的呼叫端會靜默拿到錯的東西 ——
+    `(False, "…")` 在 `if` 裡是真的,fail-closed 整條翻成 fail-open 而測試全綠。
+    走收集串列就沒有那個失敗模式(形狀同 `gate.check(..., exemptions=[])`)。
     """
     out = subprocess.run(["git", "diff", "--cached", "-z", "--name-only",
                           "--diff-filter=ACM"], capture_output=True, cwd=cwd)
@@ -181,8 +237,19 @@ def staged_paths(cwd=None):
         raise StagedListingFailed(
             "git diff --cached 失敗(退出碼 %s):%s"
             % (out.returncode, (out.stderr or b"").decode("utf-8", "replace")[:200]))
-    return [p for p in out.stdout.decode("utf-8", "replace").split("\0")
-            if p.strip()]
+    paths = [p for p in out.stdout.decode("utf-8", "replace").split("\0")
+             if p.strip()]
+    if not paths:
+        return []
+    modes = index_modes(cwd)
+    kept = []
+    for p in paths:
+        if modes.get(p) == GITLINK_MODE:
+            if gitlinks is not None:
+                gitlinks.append(p)
+            continue
+        kept.append(p)
+    return kept
 
 
 def rel_path(root, path):

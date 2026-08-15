@@ -162,6 +162,43 @@ def gitlink_paths(target):
     return paths
 
 
+def is_own_repo(target, path):
+    """`target/path` 底下真的有一個**自己的** repo 嗎。
+
+    **不能只看 `git -C <path> rev-parse HEAD` 的退出碼。**
+    git 找不到 repo 時會**往上走**,於是它會回答**外層** repo 的 HEAD 並回 0 ——
+    「內嵌 repo 讀不到」那一格因此從來沒有被走到過(票 42 實測)。
+
+    這件事一直被另一個分支遮著:舊版在那之後比 `index_sha != inner_sha`,
+    而逃到外層拿回來的 sha 幾乎必然不等於 index 記的 sha,於是**照樣判髒** ——
+    結論對,理由錯。第二格一放寬,遮蔽消失,整格變成 fail-open。
+    **一個從未被走到的 fail-closed 分支,在它前面那個分支被拿掉的當天才會現形。**
+
+    判法是問 git「你認為的工作樹根在哪」,再確認那就是這個路徑本身:
+
+        git -C <path> rev-parse --show-toplevel   ==  <path>
+
+    **不看 `.git` 存不存在**:真正的 submodule 的 `.git` 是一個**檔案**
+    (指向 `../.git/modules/…`),不是目錄 —— 拿 `os.path.isdir` 判會漏掉
+    每一個標準 submodule。而且那又是把判定交給檔案系統,git 才是權威。
+    """
+    sub = os.path.join(target, path.replace("/", os.sep))
+    out = subprocess.run(["git", "-C", sub, "rev-parse", "--show-toplevel"],
+                         capture_output=True)
+    if out.returncode != 0:
+        return False                       # 路徑不在、不是 repo、git 不可用
+    top = out.stdout.decode("utf-8", "replace").strip()
+    if not top:
+        return False
+    try:
+        same = os.path.samefile(top, sub)
+    except Exception:
+        # samefile 需要兩邊都存在;存不到就退回字面比較(正規化大小寫與分隔符)
+        same = (os.path.normcase(os.path.normpath(os.path.realpath(top)))
+                == os.path.normcase(os.path.normpath(os.path.realpath(sub))))
+    return same
+
+
 def gitlink_unsettled(target):
     """**外層**對這些 gitlink 的記錄還沒塵埃落定的清單。
 
@@ -175,33 +212,43 @@ def gitlink_unsettled(target):
     它會在別人的機器上安靜地翻面,而在我的機器上永遠測不到。
     所以這裡自己比對 sha,版本無關:
 
-      HEAD 記的 sha != index 的 sha  -> 已 stage 未提交的 bump
-      index 的 sha  != 內部 HEAD     -> 內部前進、外層未記錄
+    ## 票 42(b):三態,只有中間那一格放寬
 
-    兩者都是**外層**的未落定狀態。內部 modified / untracked 不進入判定。
+    | 情況 | 判定 | 理由 |
+    |---|---|---|
+    | HEAD sha != index sha(已 stage 未提交的 bump) | **髒** | 它會被下一次提交掃進去 —— 那是真的未落定,**且落在寫入面上** |
+    | index sha != 內層 HEAD(內層前進、外層未記錄) | **放行** | **不在 sync 的寫入面上** |
+    | 內嵌 repo 讀不到 | **髒** | fail-closed,問不出來不等於乾淨 |
 
-    **fail-closed**:內嵌 repo 讀不到(不是 git repo、權限問題)一律當髒 ——
-    問不出來不等於乾淨。
+    中間那一格原本判髒,理由寫的是「那是**外層**的未落定狀態」。
+    推翻它的是本函式自己的判準:`refuse_if_dirty` 要防的是
+    「**在未提交的變更上覆寫,出事時分不出是誰改的**」,而 sync 不寫 submodule
+    底下任何東西、也不寫 gitlink 本身 —— 指標落後時,sync 覆寫框架檔的結果
+    **完全不變**。這與上面「內部 modified / untracked 不算」是同一句話,
+    當時只套到了一半。
+
+    下游代價(推翻的直接原因):在票 42 (a) 未修時,下游**無法**落定它 ——
+    bump 需要新版 leak_scan,取得新版要跑 sync,而 sync 因此拒絕。**循環**。
+
+    **放寬只有這一格。** 第一格與第三格原地不動,而且各有負控釘著 ——
+    少了它們,下一次重構會把這次放寬順手擴大成「gitlink 一律不管」,
+    而那會讓一個已 staged、下次就會被提交的 bump 在覆寫時無法歸屬,
+    也就是把 `refuse_if_dirty` 存在的唯一理由拿掉。
     """
     out = []
     for path in gitlink_paths(target):
         head_sha = _sha_at(target, "HEAD", path)
         index_sha = _sha_at(target, "", path)      # `:path` = index
-        inner = subprocess.run(
-            ["git", "-C", os.path.join(target, path.replace("/", os.sep)),
-             "rev-parse", "HEAD"], capture_output=True)
-        if inner.returncode != 0:
-            out.append("%s:讀不到內嵌 repo 的 HEAD —— 問不出來不等於乾淨" % path)
+        # 內層 repo 仍然要問 —— 但問的是「**問得到嗎**」(第三格的 fail-closed),
+        # 不再拿它的 HEAD 去跟 index 比(第二格已放寬,票 42 (b))。
+        if not is_own_repo(target, path):
+            out.append("%s:讀不到內嵌 repo —— 問不出來不等於乾淨" % path)
             continue
-        inner_sha = inner.stdout.decode("utf-8", "replace").strip()
         if index_sha is None:
             out.append("%s:讀不到 index 裡記的 sha" % path)
         elif head_sha is not None and head_sha != index_sha:
             out.append("%s:gitlink 已 stage 但未提交(HEAD %s / index %s)"
                        % (path, (head_sha or "")[:8], index_sha[:8]))
-        elif index_sha != inner_sha:
-            out.append("%s:內嵌 repo 已前進但外層未記錄(記的 %s / 實際 %s)"
-                       % (path, index_sha[:8], inner_sha[:8]))
     return out
 
 

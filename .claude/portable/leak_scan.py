@@ -229,6 +229,29 @@ def scan(paths, review=False):
     return 1
 
 
+def gitlink_note(paths):
+    """被跳過的 gitlink 進報告。**跳過要看得見,而且要說出由誰守。**
+
+    靜默跳過的話,讀報告的人分不出「掃過沒事」與「根本沒掃」——
+    票 39 的「未內容掃描清單一律進報告」是同一條規矩。
+    這裡刻意不寫成「已跳過」就結束:外層對 gitlink 的正確語意是
+    **這一格由內層 repo 自己守**(內層有自己的 pre-commit 跑本掃描器),
+    而不是「這一格沒事」。兩者的差別是責任在誰身上。
+
+    **不影響退出碼。** gitlink 進 `not_scanned` 那個桶的話,
+    非空即回 1(見 `scan`),於是每一次 bump 都被擋 ——
+    那是換一種方式重演本票要修的缺陷。
+    """
+    out = ["\n[洩漏偵測] 跳過 %d 格 gitlink(mode 160000)—— 沒有 blob 內容可掃:\n"
+           % len(paths)]
+    for p in paths:
+        out.append("  %s\n" % p)
+    out.append("     這一格記的是一個 commit sha,**由內層 repo 自己守**"
+               "(它有自己的 pre-commit)。\n"
+               "     外層掃得到的東西裡不包含它的內容 —— 這不是「掃過沒事」。\n")
+    return "".join(out)
+
+
 def main(argv):
     """`--staged` 取不到清單時回 2(機制錯誤),**不是 0**。
 
@@ -241,11 +264,14 @@ def main(argv):
     """
     review = "--review" in argv
     if "--staged" in argv:
+        gitlinks = []
         try:
-            rels = scanner.staged_paths(cwd=ROOT)
+            rels = scanner.staged_paths(cwd=ROOT, gitlinks=gitlinks)
         except scanner.StagedListingFailed as e:
             _err("[洩漏偵測/fail-closed] %s —— 一律擋。\n" % e)
             return 2
+        if gitlinks:
+            _err(gitlink_note(gitlinks))
         paths = [os.path.join(ROOT, p.replace("/", os.sep)) for p in rels]
     else:
         paths = [a for a in argv if not a.startswith("--")]

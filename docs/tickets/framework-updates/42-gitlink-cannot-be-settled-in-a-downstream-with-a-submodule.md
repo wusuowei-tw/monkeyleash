@@ -178,7 +178,27 @@ check('data_collector', at_commit=True) 逐站:
 而使用者同樣沒有合法動作能讓它變乾淨 —— 那一格不是原始碼,是一個 commit 指標。
 (`implement` / `review` 放行純屬巧合,不是因為判定認得 gitlink。)
 
-**要裁決的是範圍,兩個選項:**
+### 裁決(2026-08-15):**A —— 併進本票**
+
+理由(裁決者原文要點):**同缺陷兩份實作必然漂開**(F-058 家族);
+且 R2 那次的擋下訊息**完全不提 gitlink**,使用者會去查站別,違反票 13 的判準
+(訊息要說出是哪一個前提沒滿足,不是把人指向錯的方向)。
+
+核可的三個護欄:
+
+1. 只修「gitlink 不是原始碼」,**不順手改 `is_source_path` 其他語意**
+2. `gate.py` 那份**同樣要看得見地跳過**,進權威層報告
+3. 票面寫明「**`implement`/`review` 放行是巧合,不是判定認得 gitlink**」
+   —— 那兩站只是 R2 在提交時本來就不問的站別
+
+**併入本票的第四件**:`test_an_unreadable_embedded_repo_fails_closed` 改用 `os.rename`
+(票 41 作法)。理由:放寬兩格之後,它是三態裡「讀不到仍髒」的**唯一守衛**,
+而它現在綠的理由比宣稱的窄(Windows 上 `rmtree(ignore_errors=True)` 是部分刪除)。
+**那一格不能只有名義上的守護。**
+
+**以下是裁決前的原文,留著不改**(前一版的選項盤點):
+
+
 
 - **A(建議)——** 併進本票:`gate.py` 的 `staged_paths()` 同樣依 index mode 濾掉
   `160000`,並在 `--pre-commit` 的訊息裡明講「gitlink 由內層 repo 自己守」。
@@ -218,6 +238,81 @@ check('data_collector', at_commit=True) 逐站:
 - 備案(下游列出的內層 tag + 暫退 HEAD)**不啟用** —— 它讓內層一段時間處於
   「已完成的工作被從 HEAD 拿掉」的狀態,中途中斷就只靠 tag 可達。
   列在這裡只為了讓否決 (b) 的人知道代價
+
+## 落地紀錄(2026-08-15)
+
+### 紅燈先行:16 紅,四支實作各有自己的合格紀錄
+
+`ticket_id: "42"`,每一筆的 `impl_hash` 都等於該檔在 HEAD 的內容雜湊
+(即紅燈發生在改動之前):
+
+```
+tests/test_scanner.py                  red  .claude/portable/scanner.py    a21ffc17a2dc  42
+tests/test_leak_scan.py                red  .claude/portable/leak_scan.py  f3dde485c787  42
+tests/test_sync.py                     red  .claude/portable/sync.py       f30e92d3eeb3  42
+tests/test_gate.py                     red  .claude/hooks/gate.py          0aca91b85c84  42
+tests/test_gitlink_downstream_cycle.py red  (無單一實作)                    -             42
+```
+
+```
+16 failed, 416 passed, 3 skipped     ← 修法前
+780 passed, 3 skipped, 3 xfailed     ← 修法後(全套)
+```
+
+### 負控真的會咬 —— 三次故意寫錯的修法,各量一次
+
+| 突變 | 寫法 | 咬住它的負控 |
+|---|---|---|
+| 1 | `staged_paths` 一律跳過(等於關掉偵測) | `test_ordinary_files_are_still_listed`、`test_the_skip_is_visible_to_the_caller`、`test_an_ordinary_staged_file_is_still_scanned`(3 failed) |
+| 2 | 改用 `os.path.isdir()` 判 gitlink | `test_the_verdict_comes_from_the_index_not_the_filesystem`(1 failed) |
+| 3 | `gitlink_unsettled` 一律不管 gitlink | `test_a_staged_but_uncommitted_gitlink_bump_blocks`、`test_a_staged_bump_is_still_unsettled`、`test_an_unreadable_embedded_repo_fails_closed`、`test_the_bump_is_still_unsettled_for_sync_once_staged`、`test_an_unreadable_inner_repo_still_stops_sync`(5 failed) |
+
+突變 3 正是下游擔心的那個方向(「放寬被順手擴大成 gitlink 一律不管」)——
+**它被五條擋著。**
+
+### 意外:第三態(讀不到仍髒)**從來沒有被走到過**
+
+第四件(`rmtree` → `os.rename`)一改,負控**當場變紅**,而且不是因為改法錯:
+
+**`git -C <路徑> rev-parse HEAD` 在該路徑沒有 repo 時會往上走**,
+回答**外層** repo 的 HEAD 並回 0。那個 `returncode != 0` 的條件**永遠為假**,
+第三態的分支從未執行過。
+
+它一直被第二格遮著:舊版接著比 `index_sha != inner_sha`,而逃到外層拿回來的 sha
+幾乎必然不等於 index 記的 —— 於是**照樣判髒,結論對、理由錯**。
+第二格一放寬,遮蔽消失,整格變成 fail-open。
+
+修法:新增 `sync.is_own_repo()`,問 `rev-parse --show-toplevel` 並確認那就是這個路徑本身。
+**不用 `os.path.exists('.git')`** —— 真正的 submodule 的 `.git` 是一個**檔案**
+(指向 `../.git/modules/…`),`isdir` 會漏掉每一個標準 submodule;
+而且那又是把判定交給檔案系統。
+
+新增 `test_a_missing_inner_repo_is_not_answered_by_the_outer_one` 直接釘住逃逸本身,
+**並斷言逃逸確實發生**(同一路徑 `rev-parse` 回 0 且 sha 等於外層的)——
+哪天 git 改行為,這條會說「前提要重寫」,而不是被默默刪掉。
+
+記為 **F-090**:*那個 fail-closed 分支從來沒有被走到過,而它前面的分支剛好蓋住了它*。
+
+### 實作落點
+
+| 檔案 | 動了什麼 |
+|---|---|
+| `.claude/portable/scanner.py` | `GITLINK_MODE` / `index_modes()`;`staged_paths(cwd, gitlinks=None)` 依 index mode 過濾 |
+| `.claude/portable/leak_scan.py` | `gitlink_note()`;`main()` 收集並印出,**不影響退出碼** |
+| `.claude/portable/sync.py` | 刪掉第二格比對;新增 `is_own_repo()` 守住第三格 |
+| `.claude/hooks/gate.py` | `index_modes()` / `gitlink_note()`;`staged_paths(cwd, gitlinks=None)`;`mode_pre_commit` 印進報告 |
+| `.agents/portable-manifest.txt` | 新測試檔標 `copy`(受害者是下游,測試要跟著下去) |
+
+`staged_paths` 兩份**不共用程式碼**(一份隨 `.claude/hooks/` 安裝,一份屬 portable
+骨架),所以加 `test_both_staged_listings_agree_on_a_gitlink` 釘住兩者一致 ——
+**同時修好不會自己維持下去。** 要不要真的合成一份,是跨接縫的重構,留給 `/code-review`。
+
+### 順帶觀察那一則,已在本票處置
+
+前一節寫的「`rmtree(ignore_errors=True)` 部分刪除」原本標為**不在範圍**,
+裁決把它併進來(第四件)—— 而正是它讓 F-090 現形。
+**記在這裡是因為判斷錯了方向:當時我把它歸成 `/code-review` 的整潔問題,
+它其實是唯一守衛的守衛。**
 
 ## 引入點(下游的定位,備查)
 

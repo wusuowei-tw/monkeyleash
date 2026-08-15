@@ -2237,8 +2237,48 @@ def check_third_axis_mount():
     return []
 
 
-def staged_paths(cwd=None):
-    """staged 檔案清單。**用 -z(NUL 分隔),不是 --name-only + splitlines。**
+def index_modes(cwd=None):
+    """index 裡每條路徑的 mode。**判定依據是 index,不是檔案系統。**
+
+    用 `os.path.isdir()` 判「這是不是 submodule」的話,問題就跑到磁碟上去了 ——
+    而磁碟上的樣子隨時會變(目錄被搬走、submodule 沒 init、有人放了同名檔),
+    **index 的 mode 才是 git 對「這一格是什麼」的答案**。
+
+    問不到 -> `check_output` 丟例外 -> `mode_pre_commit` 當成「無法取得 staged
+    檔案」擋下。fail-closed:問不到不等於「都不是 gitlink」。
+
+    與 `.claude/portable/scanner.py` 的同名函式是**兩份實作**(兩者不共用程式碼:
+    本檔隨 `.claude/hooks/` 安裝,scanner 屬 portable 掃描器骨架)。
+    同缺陷的兩份實作必然漂開(F-058 家族),所以有一條測試釘住兩者對同一個 repo
+    給出相同答案 —— `test_both_staged_listings_agree_on_a_gitlink`。
+    """
+    out = subprocess.check_output(["git", "ls-files", "--stage", "-z"],
+                                  cwd=cwd or ROOT).decode("utf-8", "replace")
+    modes = {}
+    for rec in out.split("\0"):
+        if not rec.strip():
+            continue
+        meta, _, path = rec.partition("\t")      # `<mode> <sha> <stage>\t<path>`
+        fields = meta.split()
+        if path and fields:
+            modes[path] = fields[0]
+    return modes
+
+
+def gitlink_note(paths):
+    """被跳過的 gitlink 進權威層報告。**跳過要看得見,而且要說出由誰守。**
+
+    靜默跳過與「修好」之間差的就是這一段:讀報告的人要分得出
+    「判定過、沒事」與「這一格不歸這裡判」。
+    """
+    return ("[六站閘門] 跳過 %d 格 gitlink(mode 160000),它們不是原始碼:\n"
+            % len(paths)
+            + "".join("     - %s\n" % p for p in paths)
+            + "     那一格記的是一個 commit sha,**由內層 repo 自己的閘門守**。\n")
+
+
+def staged_paths(cwd=None, gitlinks=None):
+    """staged **檔案**清單。**用 -z(NUL 分隔),不是 --name-only + splitlines。**
 
     git 對非 ASCII 檔名預設回傳 C-quoted 路徑(`"docs/\\345\\217\\260….md"`),
     而下游 `replace("\\\\", "/")`(為正規化 os.path.relpath 的 Windows 反斜線而存在,
@@ -2247,20 +2287,50 @@ def staged_paths(cwd=None):
 
     不用 `core.quotePath=false`:它只關掉引號,檔名含換行或引號時仍有歧義。
     NUL 是唯一不可能出現在路徑裡的位元組 —— 結構上無歧義,不是剛好夠用。
+
+    **gitlink(mode 160000)不是原始碼,不進判定清單**(票 42)。
+    `--name-only` 對 submodule 條目回傳目錄路徑,而 `is_source_path()` 對一個
+    沒有副檔名、top 又不在非原始碼清單裡的路徑回 True —— 於是一次純 bump 在
+    `grill` / `spec` / `tickets` 被 R2 當成「提交原始碼」擋下(`research` 是
+    範圍擋)。實測如此。**`implement` / `review` 放行是巧合,不是判定認得
+    gitlink** —— 那兩站只是 R2 在提交時本來就不問的站別。
+
+    而 R2 的擋下訊息**完全不提 gitlink**:使用者會去查站別,查不出所以然 ——
+    訊息要說出是哪一個前提沒滿足,不是把人指向錯的方向(票 13)。
+
+    修的範圍**只有「gitlink 不是原始碼」這一句**,`is_source_path` 的其他語意不動。
+
+    `gitlinks`:呼叫端傳入的收集串列(形狀同 `check(..., exemptions=[])`),
+    跳過的那幾格會 append 進去,由 `mode_pre_commit` 印進報告。
+    **回傳型別不變** —— 不改成 tuple,理由見票 13 C(忘了解包會靜默翻成 fail-open)。
     """
     out = subprocess.check_output(
         ["git", "diff", "--cached", "-z", "--name-only", "--diff-filter=ACM"],
         cwd=cwd or ROOT).decode("utf-8", "replace")
-    return [p for p in out.split("\0") if p.strip()]
+    paths = [p for p in out.split("\0") if p.strip()]
+    if not paths:
+        return []
+    modes = index_modes(cwd)
+    kept = []
+    for p in paths:
+        if modes.get(p) == GITLINK_MODE:
+            if gitlinks is not None:
+                gitlinks.append(p)
+            continue
+        kept.append(p)
+    return kept
 
 
 def mode_pre_commit():
     """權威判定:掃 staged 檔案 + R4 副本一致性 + R5 第三軸掛載點。"""
+    gitlinks = []
     try:
-        staged = staged_paths()
+        staged = staged_paths(gitlinks=gitlinks)
     except Exception as e:
         _err("[六站閘門] 無法取得 staged 檔案:%s\n" % e)
         return 1
+    if gitlinks:
+        _err(gitlink_note(gitlinks))
     violations = []
     for f in staged:
         used = []

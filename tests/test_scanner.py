@@ -20,6 +20,7 @@
 
 import importlib.util  # noqa: F401  (下方 _load 用)
 import io
+import os
 import pathlib
 import re
 
@@ -214,6 +215,141 @@ class TestStagedListingFailureIsNotAnEmptyList:
             stderr = b""
         monkeypatch.setattr(sc.subprocess, "run", lambda *a, **k: _R())
         assert sc.staged_paths() == [u"docs/台股.md", "pkg/a.py"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 42(a) —— staged 清單裡的 gitlink 不是檔案
+#
+# `git diff --cached --name-only` 對 submodule 條目回傳**目錄路徑**,而 index 裡
+# 它的 mode 是 160000(gitlink),值是一個 commit sha:**沒有 blob 內容可掃**。
+# 掃描器拿它去 open() → Windows 得 PermissionError(POSIX 是 IsADirectoryError)
+# → 落進「讀不到內容」的 fail-closed 分支 → 擋下 commit。
+#
+# 「讀不到不等於乾淨」對**應該是檔案**的東西成立。gitlink 不是讀不到,是
+# **根本沒有內容這回事** —— 把「沒有內容」判成「內容讀不到」,產生一個
+# **永遠無法滿足的條件**:使用者沒有任何合法動作能讓它變乾淨,因為沒有東西可以洗。
+#
+# 判定依據是 **index 的 mode**,不是檔案系統。用 `os.path.isdir()` 的話,
+# 判定會跑到磁碟上去問一個 git 才有權威回答的問題(見下方那條負控)。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _repo_with_staged_gitlink(tmp_path):
+    """外層 repo:staged 一個一般檔 + 一格 gitlink。回傳外層根目錄。
+
+    不用 `git submodule add`(git 2.38+ 預設擋 file:// submodule,
+    那條限制與本票無關卻會讓 fixture 因為別的理由壞掉);
+    改用 `update-index --cacheinfo` 直接種一格,產出的 mode 相同。
+    """
+    import subprocess
+
+    def git(*a, **kw):
+        return subprocess.run(["git"] + list(a),
+                              cwd=kw.get("cwd", str(tmp_path)),
+                              capture_output=True)
+
+    inner = tmp_path / "sub"
+    inner.mkdir()
+    io.open(inner / "collect.py", "w", encoding="utf-8", newline="\n").write("x = 1\n")
+    for c in ("init -q", "config user.email t@t", "config user.name t",
+              "add -A", "commit -qm inner"):
+        git(*c.split(), cwd=str(inner))
+    sha = git("rev-parse", "HEAD", cwd=str(inner)).stdout.decode().strip()
+
+    for c in ("init -q", "config user.email t@t", "config user.name t"):
+        git(*c.split())
+    io.open(tmp_path / "README.md", "w", encoding="utf-8").write("x\n")
+    git("add", "README.md")
+    git("commit", "-qm", "base")
+
+    (tmp_path / "pkg").mkdir()
+    io.open(tmp_path / "pkg" / "a.py", "w", encoding="utf-8",
+            newline="\n").write("y = 1\n")
+    git("add", "pkg/a.py")
+    git("update-index", "--add", "--cacheinfo", "160000,%s,sub" % sha)
+
+    mode = git("ls-files", "-s", "sub").stdout.decode().split(" ")[0]
+    assert mode == "160000", "fixture 沒種出 gitlink(mode=%r)" % mode
+    return tmp_path
+
+
+class TestAStagedGitlinkIsNotAFile:
+
+    def test_the_gitlink_is_not_in_the_listing(self, tmp_path):
+        """**本組的主張**:那一格不進 staged 清單,所以沒有東西會去 open() 它。"""
+        root = _repo_with_staged_gitlink(tmp_path)
+        got = sc.staged_paths(cwd=str(root))
+        assert "sub" not in got, "gitlink 仍被當成檔案列進 staged 清單:%r" % got
+
+    def test_ordinary_files_are_still_listed(self, tmp_path):
+        """**負控**:掃描面不得被這次過濾弄小。
+
+        少了它,「staged_paths 一律回空」也會讓上面那條過 ——
+        而那是把偵測整條關掉,測試看起來還是綠的。
+        """
+        root = _repo_with_staged_gitlink(tmp_path)
+        assert sc.staged_paths(cwd=str(root)) == ["pkg/a.py"]
+
+    def test_the_skip_is_visible_to_the_caller(self, tmp_path):
+        """跳過要**看得見**:呼叫端拿得到被跳過的那幾格,才印得出報告。
+
+        靜默跳過與修好之間差的就是這個 —— 票 39 的
+        「未內容掃描清單一律進報告」是同一條規矩。
+        """
+        root = _repo_with_staged_gitlink(tmp_path)
+        skipped = []
+        sc.staged_paths(cwd=str(root), gitlinks=skipped)
+        assert skipped == ["sub"], "被跳過的 gitlink 沒有交給呼叫端:%r" % skipped
+
+    def test_the_return_type_is_still_a_flat_list(self, tmp_path):
+        """**簽名不變**:回傳仍是路徑串列,不是 (paths, skipped) 這種 tuple。
+
+        票 13 C 的教訓:`upstream_backed` 改成回 `(bool, reason)` 時,
+        忘了解包的呼叫端**每一個都拿到豁免** —— `(False, "…")` 在 `if` 裡是真的,
+        fail-closed 整條翻成 fail-open,而測試全綠、訊息什麼都不說。
+        簽名不變就沒有那個失敗模式,所以「跳過清單」走**呼叫端傳入的收集串列**。
+        """
+        root = _repo_with_staged_gitlink(tmp_path)
+        got = sc.staged_paths(cwd=str(root))
+        assert isinstance(got, list) and all(isinstance(p, str) for p in got), got
+
+    def test_the_verdict_comes_from_the_index_not_the_filesystem(self, tmp_path):
+        """**負控:判定依據不得跑到檔案系統去。**
+
+        把工作樹裡的那個目錄搬走 —— `os.path.isdir()` 從此回 False,
+        而 index 裡那一格**還是 160000**。用檔案系統判的實作會在這裡
+        把 gitlink 重新當成檔案(而且是一個不存在的檔案)。
+
+        index 的 mode 才是權威:它是 git 對「這一格是什麼」的答案,
+        而磁碟上的樣子隨時可以被別的東西改動。
+        """
+        root = _repo_with_staged_gitlink(tmp_path)
+        os.rename(str(root / "sub"), str(root / "sub-moved-away"))
+        got = sc.staged_paths(cwd=str(root))
+        assert "sub" not in got, \
+            "工作樹目錄一搬走,gitlink 就被當成檔案了 —— 判定掛在檔案系統上:%r" % got
+
+    def test_an_unreadable_index_is_a_mechanism_error(self, tmp_path, monkeypatch):
+        """**fail-closed**:問不到 index 的 mode = 這個問題沒有答案,不是「都不是 gitlink」。
+
+        往「不知道」倒成「一律當檔案」的話,gitlink 又回到 open() 那條路;
+        倒成「一律跳過」更糟 —— 那會把整份 staged 清單靜默清空。
+        兩種都不對,所以這裡丟例外,由呼叫端變成機制錯誤(退出碼 2)。
+        """
+        root = _repo_with_staged_gitlink(tmp_path)
+        real = sc.subprocess.run
+
+        def fake(cmd, *a, **k):
+            if "ls-files" in cmd:
+                class _R:
+                    returncode = 128
+                    stdout = b""
+                    stderr = b"fatal: boom"
+                return _R()
+            return real(cmd, *a, **k)
+
+        monkeypatch.setattr(sc.subprocess, "run", fake)
+        with pytest.raises(sc.StagedListingFailed):
+            sc.staged_paths(cwd=str(root))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
