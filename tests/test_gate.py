@@ -2322,6 +2322,28 @@ class TestTheAuthorityLayerDoesNotTreatAGitlinkAsSource:
         assert "gitlinks=" in src and "gitlink_note" in src, \
             "mode_pre_commit 沒有把跳過的 gitlink 接進報告"
 
+    def _fresh_scanner(self):
+        """另外載一份 scanner。**不共用模組物件** —— 下面那條要改它的常數,
+        改在共用的那一份上會滲到別的測試(而那種污染是無聲的)。"""
+        spec = importlib.util.spec_from_file_location(
+            "scanner_for_parity", ROOT / ".claude" / "portable" / "scanner.py")
+        sc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sc)
+        return sc
+
+    def _assert_parity(self, repo, sc):
+        """兩份 `staged_paths` 對同一個 repo 的答案必須一致。
+
+        **抽成一個函式,是為了讓下面那條突變測試打到同一段斷言** ——
+        複製一份斷言來測「斷言會不會紅」,測到的是那份副本(ADR 0003 的形狀)。
+        """
+        g_skipped, s_skipped = [], []
+        g = gate.staged_paths(str(repo), gitlinks=g_skipped)
+        s = sc.staged_paths(cwd=str(repo), gitlinks=s_skipped)
+        assert sorted(g) == sorted(s), "兩份 staged 清單對同一個 repo 給出不同答案"
+        assert g_skipped == s_skipped == ["data_collector"], \
+            "兩份對「哪一格是 gitlink」的答案不一致:%r / %r" % (g_skipped, s_skipped)
+
     def test_both_staged_listings_agree_on_a_gitlink(self, tmp_path):
         """**同缺陷的兩份實作必然漂開**(F-058 家族)—— 所以釘住兩者一致。
 
@@ -2330,16 +2352,36 @@ class TestTheAuthorityLayerDoesNotTreatAGitlinkAsSource:
         隨 `.claude/hooks/` 安裝;後者是 portable 掃描器骨架。
         本票同時修兩份,而「同時修好」不會自己維持下去 ——
         下一次只有一邊被動到時,漂開是無聲的。這條測試就是那個機制。
-        """
-        repo = self._repo(tmp_path)
-        spec = importlib.util.spec_from_file_location(
-            "scanner_for_parity", ROOT / ".claude" / "portable" / "scanner.py")
-        sc = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(sc)
 
-        g_skipped, s_skipped = [], []
-        g = gate.staged_paths(str(repo), gitlinks=g_skipped)
-        s = sc.staged_paths(cwd=str(repo), gitlinks=s_skipped)
-        assert sorted(g) == sorted(s), "兩份 staged 清單對同一個 repo 給出不同答案"
-        assert g_skipped == s_skipped == ["data_collector"], \
-            "兩份對「哪一格是 gitlink」的答案不一致:%r / %r" % (g_skipped, s_skipped)
+        **兩份是刻意保留的,不是還沒清掉的重複**(票 42 裁決):
+        權威層要依賴最少的東西 —— 讓它 import `portable/` 會多一個失效點,
+        而**閘門起不來的樣子跟沒裝一模一樣**(全靜默)。
+        看到這個重複想合併之前,先讀那則裁決。
+        """
+        self._assert_parity(self._repo(tmp_path), self._fresh_scanner())
+
+    def test_the_parity_check_itself_goes_red_when_one_side_drifts(self, tmp_path):
+        """**釘住上面那條會咬**:只改壞一份,一致性斷言必須紅。
+
+        沒有這條的話,`_assert_parity` 只是一句「兩邊相等」的宣稱 ——
+        它可能因為**任何**理由恆真(兩邊都回空、兩個清單都被跳過清單吃掉、
+        斷言寫錯方向),而恆真的斷言與有效的斷言在測試輸出上長得一模一樣。
+
+        F-090 才剛示範過這件事的代價:那一格的 fail-closed 分支從來沒有被走到過,
+        測試卻一路綠 —— **綠的理由不是我以為的那個**,而它差一步就變成 fail-open。
+
+        突變的打法:只動 scanner 那一份的 `GITLINK_MODE`(改成一個不存在的 mode,
+        等於它不再認得 gitlink)。改常數不改檔案 —— 這一份是本測試自己載的,
+        不會滲到別處;而它造成的**行為**就是「只有一邊被修好」。
+        """
+        repo = self._repo(tmp_path)         # **在 raises 之外建** —— 見下
+        sc = self._fresh_scanner()
+        sc.GITLINK_MODE = "160001"          # 只有 scanner 那一份漂開
+
+        # fixture 自己也有一句 assert(mode 必須是 160000)。把它放進 raises 區塊裡,
+        # 這條測試會在 fixture 壞掉時**照樣綠** —— 綠的理由變成「fixture 炸了」。
+        # 這正是本條要防的東西的縮影,所以它不能自己犯一次。
+        with pytest.raises(AssertionError) as caught:
+            self._assert_parity(repo, sc)
+        assert "gitlink" in str(caught.value) or "staged 清單" in str(caught.value), \
+            "紅是紅了,但不是被一致性斷言擋下的:%s" % caught.value
