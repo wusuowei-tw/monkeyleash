@@ -987,6 +987,9 @@ def head_blob(rel_path):
 
     「在不在 HEAD」與「內容是什麼」是同一次查詢,所以只有一個入口 ——
     `head_content_hash` 與豁免宣告的判定共用它,不各自呼叫一次 git(F-080)。
+
+    parent 問不到時**再**問 submodule(見 `submodule_head_blob`)。順序是刻意的:
+    一般路徑維持單次 git 呼叫,gitlink 才多付探測的錢。
     """
     try:
         out = subprocess.run(["git", "cat-file", "blob", "HEAD:" + rel_path],
@@ -994,8 +997,68 @@ def head_blob(rel_path):
     except Exception:
         return None
     if out.returncode != 0:
-        return None                      # 不在 HEAD(新建未提交)或 git 不可用
+        # 不在 HEAD(新建未提交)、gitlink 底下、或 git 不可用 —— 只有中間那種有救
+        return submodule_head_blob(rel_path)
     return out.stdout
+
+
+# git tree 的 mode 是**封閉集合**,所以用枚舉不用 pattern:
+# 040000 目錄 / 100644 一般檔 / 100755 可執行檔 / 120000 symlink / 160000 gitlink。
+# 「比對的漏是未知的,枚舉的漏是不存在的」(CLAUDE.md 常駐檢查項、F-087)。
+GITLINK_MODE = "160000"
+
+
+def is_gitlink(prefix):
+    """HEAD 的樹裡,這個前綴是不是一格 submodule。問不到一律 False。
+
+    判定看 **tree 的 mode**,不讀 `.gitmodules` —— mode 是 git 自己的權威,
+    而 `.gitmodules` 可能缺席、可能過期,拿它當來源就是「以錯的來源決定可見範圍」。
+    """
+    try:
+        out = subprocess.run(["git", "ls-tree", "HEAD", "--", prefix],
+                             cwd=ROOT, capture_output=True)
+    except Exception:
+        return False
+    if out.returncode != 0:
+        return False
+    line = out.stdout.decode("utf-8", "replace").strip()
+    return line.split(" ", 1)[0] == GITLINK_MODE if line else False
+
+
+def submodule_head_blob(rel_path):
+    """路徑落在 gitlink 底下時,改問**那個 submodule 自己的 HEAD**。讀不到回 None。
+
+    parent 的樹在 gitlink 那一格存的是一個 commit id,不是子樹,所以
+    `git cat-file blob HEAD:sub/foo.py` 一律 fatal。於是 `head_content_hash` 回 None,
+    而 R3 的兩個合格出口(`impl_exists is False` / `impl_hash == head`)
+    對 submodule 底下的**既有檔案**同時走不到 —— 永遠不合格,而唯一出口
+    legacy 清單只減不增且入場券綁 parent 的樹,等於沒有出口(票 41、F-088)。
+
+    這個缺席**完全無聲**:「gitlink 讀不到」與「新建未提交」在 `head_blob` 裡
+    共用同一個回傳值 None,所以規則看起來還在,實際上對整個 submodule 失效。
+
+    **委派的錨點是 submodule 的 HEAD,不是 parent 記錄的那個 gitlink sha。**
+    紅燈紀錄的 impl_hash 取自工作樹,而工作樹跟著 submodule 的 HEAD 走;
+    parent 的指標只在有人 bump 時才動,拿它當錨會讓「submodule 內已提交、
+    parent 還沒 bump」這個最常見的中間狀態永遠對不上。
+
+    **委派之後仍讀不到 -> None -> 呼叫端照舊當作不合格。** 這條路徑是「多開一條
+    讀取管道」,而多開一條管道最便宜的寫法就是失敗時放行 —— 那會把一個
+    「永遠擋」的缺陷換成「永遠放行」的缺陷,後者測試全綠、訊息什麼都不說。
+    """
+    parts = rel_path.replace("\\", "/").split("/")
+    for i in range(1, len(parts)):                   # 前綴由近而遠,巢狀 submodule 取最外層
+        if not is_gitlink("/".join(parts[:i])):
+            continue
+        sub = os.path.join(ROOT, *parts[:i])
+        try:
+            out = subprocess.run(["git", "-C", sub, "cat-file", "blob",
+                                  "HEAD:" + "/".join(parts[i:])],
+                                 cwd=ROOT, capture_output=True)
+        except Exception:
+            return None
+        return out.stdout if out.returncode == 0 else None
+    return None
 
 
 def committed_declaration(rel_path):

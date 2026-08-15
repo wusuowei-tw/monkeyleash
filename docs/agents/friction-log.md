@@ -1762,3 +1762,41 @@ E/F 的 refuse 落地之後,**那個理由不再成立** ——
     入口是可以造的(把欄位物化成文字送進去就有了),
     只是**我沒去造**。用「無入口」描述,會讓一個**可以做而沒做**的事
     看起來像**做不到**,於是沒有人會再回來看它。
+
+## F-088 判準錨在 `git show HEAD:`,而 gitlink 底下沒有那個物件
+
+- **發現於**:2026-08-15,下游(量化)實測回報;落地於 agent-gates 票 41。
+- **現象**:`data_collector` 是 submodule(gitlink,mode `160000`)。
+  parent 的 `git cat-file blob HEAD:data_collector/<檔>` 回 fatal ⇒
+  `head_content_hash` 回 `None` ⇒ `redlight_missing` 的**兩個**合格出口
+  (`impl_exists is False` / `impl_hash == head`)對既有檔案同時走不到 ⇒
+  **submodule 底下任何既有檔案永遠拿不到合格紅燈**。該處只因影子模式開著才沒被擋。
+- **原因**:F-0013 把錨點放在 HEAD 是對的(時點不變),
+  但它**假設 `git show HEAD:<路徑>` 對任何受版控的路徑都讀得到**。
+  gitlink 那一格存的是一個 commit id,不是子樹 —— 沒有那個 blob 物件。
+- **根因**:錨點選對了,**沒有問「這個錨點的取得方式有沒有取不到的合法情形」**。
+  而且缺席是**無聲的**:`head_blob` 用同一個 `None` 表示
+  「不在 HEAD(新建未提交)」與「問不到」,兩種意義擠在一個回傳值裡,
+  於是規則看起來還在,實際上對整個 submodule 失效。
+- **處置**:偵測 gitlink 前綴後委派 `git -C <submodule> cat-file blob HEAD:<相對路徑>`;
+  委派後仍讀不到**維持 fail-closed**。gitlink 判定用 tree 的 mode 枚舉(`160000`),
+  不讀 `.gitmodules`、不做 pattern 比對(F-087)。
+- **可複用**:
+  - **一個判準的錨點,要跟它的取得方式一起檢查。**
+    「錨在 HEAD」是判準,「`git show HEAD:<路徑>`」是取得方式 ——
+    前者正確不保證後者對每一種受版控的物件都成立。
+    問法是列舉那個 API 的**回傳形態**(blob / tree / commit / symlink),
+    不是問「這樣寫夠不夠嚴」。
+  - **fail-closed 的缺陷是隱形的,而「隱形」正比於回傳值的多義程度。**
+    `None` 同時表示「合法的不存在」與「問不到」時,後者永遠不會被查 ——
+    因為前者是日常,而兩者長得一模一樣。
+  - **判準寫「錨在 HEAD」的時候,HEAD 是誰的 HEAD 也要寫出來。**
+    修法選 submodule 自己的 HEAD,不選 parent 記錄的 gitlink sha:
+    紅燈紀錄的 hash 取自工作樹,工作樹跟著 submodule 的 HEAD 走,
+    parent 的指標只在有人 bump 時才動 —— 拿它當錨會讓
+    「submodule 內已提交、parent 還沒 bump」這個最常見的中間狀態永遠對不上。
+  - 併記(範圍誠實):**權威層對 submodule 內 staged 檔案零涵蓋** ——
+    parent 的 pre-commit 只列 parent 的索引,submodule 自己的 hook 只跑 `leak_scan`。
+    本則修好之後,submodule 底下的 R3 仍然**只有前哨那一層**。
+    這是下游 `data-collector-full-gate` 票的完成定義缺口,
+    寫在這裡是為了讓它有出處 —— 屬於「可以做而沒做」,不是「沒有入口」(F-087)。

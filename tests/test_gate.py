@@ -2053,3 +2053,167 @@ class TestAuthorityLayerIsWired:
             "     權威層沒接上 —— 六站閘門只剩前哨,commit 時不會判定。\n"
             "     修法:在 repo 根目錄跑 `sh bootstrap.sh`(一行 config,每個 clone 一次)。"
             % detail)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 41 —— R3 對 gitlink(submodule)路徑永遠給不出合格紅燈
+#
+# 下游(量化)實測:`data_collector` 是 submodule,parent 的樹在那一格存的是
+# 一個 commit id(mode 160000),不是子樹。於是:
+#
+#   git cat-file blob HEAD:data_collector/<檔>   →  fatal
+#   head_content_hash(...)                       →  None
+#
+# 而 redlight_missing 的兩個合格出口是「實作當時不存在」與「impl_hash == HEAD」——
+# 既有檔案走不到前者,head is None 走不到後者。**兩個都走不到 = 永遠不合格。**
+# 出口只剩 legacy 清單,而它只減不增且入場券綁 parent 的 go-live 樹,等於沒有出口。
+#
+# F-0013 把錨點放在 HEAD 是對的(時點不變),錯的是它假設
+# `git show HEAD:<路徑>` 對任何受版控的路徑都讀得到。這個缺席**完全無聲**:
+# 「gitlink 讀不到」與「新建未提交」在 head_blob 裡共用同一個回傳值 None。
+#
+# 本組測試的重心在**負控**:修法是「多一條讀取路徑」,而多一條路徑最便宜的寫法
+# 就是失敗時放行。少了 3/4,本票會把「永遠擋」換成「永遠放行」,而測試全綠。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestGitlinkPathsCanReachAQualifyingRedlight:
+
+    @pytest.fixture()
+    def repo(self, tmp_path, monkeypatch):
+        """parent + 真的 submodule。**gitlink 只能對著真的物件庫驗。**
+
+        用 `update-index --cacheinfo` 直接種一格 mode 160000,不走
+        `git submodule add` —— 後者要 `protocol.file.allow`(git 2.38+ 預設擋
+        file:// submodule),那條限制與本票無關,卻會讓 fixture 因為別的理由壞掉。
+        判定看的是 **tree 的 mode**,而這條路徑產出的 mode 與 `submodule add` 相同。
+
+        fixture 自己斷言那一格真的是 160000:**fixture 壞掉要當場出聲**,
+        否則「測試綠了」可能只代表它測了一個沒有 gitlink 的 repo。
+        """
+        def git(*a, **kw):
+            cwd = kw.pop("cwd", str(tmp_path))
+            return subprocess.run(["git"] + list(a), cwd=cwd, capture_output=True)
+
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        io.open(sub / "thing.py", "w", encoding="utf-8",
+                newline="\n").write("def f():\n    return 1\n")
+        git("init", "-q", cwd=str(sub))
+        git("config", "user.email", "t@t", cwd=str(sub))
+        git("config", "user.name", "t", cwd=str(sub))
+        git("add", "-A", cwd=str(sub))
+        git("commit", "-qm", "sub", cwd=str(sub))
+        sub_head = git("rev-parse", "HEAD", cwd=str(sub)).stdout.decode().strip()
+
+        git("init", "-q")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        (tmp_path / "pkg").mkdir()
+        io.open(tmp_path / "pkg" / "plain.py", "w", encoding="utf-8",
+                newline="\n").write("x = 1\n")
+        (tmp_path / "tests").mkdir()
+        io.open(tmp_path / "tests" / "test_thing.py", "w", encoding="utf-8").write("x\n")
+        io.open(tmp_path / "tests" / "test_plain.py", "w", encoding="utf-8").write("x\n")
+        git("add", "pkg", "tests")
+        git("update-index", "--add", "--cacheinfo", "160000,%s,sub" % sub_head)
+        git("commit", "-qm", "parent")
+
+        mode = git("ls-tree", "HEAD", "--", "sub").stdout.decode().split(" ")[0]
+        assert mode == "160000", "fixture 沒種出 gitlink(mode=%r)" % mode
+
+        monkeypatch.setattr(gate, "ROOT", str(tmp_path))
+        monkeypatch.setattr(gate, "RUN_LOG", str(tmp_path / ".dev" / "test-runs.jsonl"))
+        monkeypatch.chdir(tmp_path)
+        return tmp_path
+
+    def _log(self, repo, *recs):
+        d = repo / ".dev"
+        d.mkdir(exist_ok=True)
+        with io.open(d / "test-runs.jsonl", "w", encoding="utf-8") as f:
+            for r in recs:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    def _sub_head_hash(self, repo, rel="thing.py"):
+        blob = subprocess.run(["git", "cat-file", "blob", "HEAD:" + rel],
+                              cwd=str(repo / "sub"), capture_output=True).stdout
+        norm = blob.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        return hashlib.sha256(norm).hexdigest()
+
+    def _red(self, **kw):
+        rec = {"test_file": "tests/test_thing.py", "result": "red",
+               "failed_tests": ["test_a"], "impl_file": "sub/thing.py",
+               "impl_exists": True, "impl_hash": None, "ticket_id": "41"}
+        rec.update(kw)
+        return rec
+
+    # ── 正控 ──────────────────────────────────────────────────────────────
+
+    def test_head_blob_delegates_into_the_submodule(self, repo):
+        """紅燈 1:parent 問不到的東西,要去問那個 submodule 自己的 HEAD。"""
+        raw = gate.head_blob("sub/thing.py")
+        assert raw is not None, (
+            "head_blob 對 gitlink 底下的檔案回 None —— parent 的 "
+            "`HEAD:sub/thing.py` 本來就 fatal,要委派給 submodule")
+        assert b"def f()" in raw
+
+    def test_an_existing_file_in_a_submodule_can_reach_a_qualifying_redlight(self, repo):
+        """**本單元的主張**:submodule 底下的既有檔案做得到紅燈先行。"""
+        self._log(repo, self._red(impl_hash=self._sub_head_hash(repo)))
+        assert gate.redlight_missing("thing", impl_rel="sub/thing.py",
+                                     ticket="41") is None, \
+            "submodule 底下的既有檔案仍然拿不到合格紅燈"
+
+    # ── 負控 ──────────────────────────────────────────────────────────────
+
+    def test_a_file_absent_from_the_submodule_head_is_still_blocked(self, repo):
+        """紅燈 3:委派之後仍讀不到 ⇒ **維持 fail-closed**。
+
+        「讀不到」不得變成放行 —— 那是把一個「永遠擋」的缺陷換成
+        「永遠放行」的缺陷,而後者不會有人發現。
+        """
+        io.open(repo / "sub" / "fresh.py", "w", encoding="utf-8").write("y = 2\n")
+        assert gate.head_blob("sub/fresh.py") is None, \
+            "檔案不在 submodule 的 HEAD 裡,head_blob 卻回了內容"
+        self._log(repo, self._red(test_file="tests/test_fresh.py",
+                                  impl_file="sub/fresh.py", impl_hash="a" * 64))
+        assert gate.redlight_missing("fresh", impl_rel="sub/fresh.py",
+                                     ticket="41") is not None
+
+    def test_a_broken_submodule_does_not_open_the_gate(self, repo):
+        """紅燈 4:submodule 的 `.git` 不見 ⇒ 委派失敗 ⇒ 照擋。
+
+        fail-closed 不能靠「委派剛好會成功」。這也是**未 init 的 submodule**
+        在磁碟上的真實樣子:目錄在、工作樹在、`.git` 不在。
+
+        用改名不用 `rmtree`:Windows 上 git 的物件檔是唯讀的,
+        `shutil.rmtree` 直接 PermissionError —— 那會讓這條負控因為
+        **與判定無關的理由**變紅,而紅得不對的測試等於沒有測試。
+        """
+        os.rename(str(repo / "sub" / ".git"), str(repo / "sub" / ".git-gone"))
+        assert gate.head_blob("sub/thing.py") is None
+        self._log(repo, self._red(impl_hash="b" * 64))
+        assert gate.redlight_missing("thing", impl_rel="sub/thing.py",
+                                     ticket="41") is not None
+
+    def test_a_red_against_a_modified_submodule_implementation_is_blocked(self, repo):
+        """紅燈 5:先寫實作再補跑紅燈,在 submodule 底下照樣不算。
+
+        委派把出口打開了,這條確認打開的是**正確的那一個**出口。
+        """
+        self._log(repo, self._red(impl_hash="0" * 64))
+        assert gate.redlight_missing("thing", impl_rel="sub/thing.py",
+                                     ticket="41") is not None
+
+    # ── 回歸 ──────────────────────────────────────────────────────────────
+
+    def test_a_plain_directory_is_not_mistaken_for_a_submodule(self, repo):
+        """紅燈 6:mode 只認 `160000`。
+
+        檔案模式位元是**封閉集合**(`100644` / `100755` / `120000` /
+        `040000` / `160000`),所以判定用枚舉、不用 pattern 比對(F-087)。
+        一般目錄(`040000`)底下的路徑照舊由 parent 回答;不在 HEAD 就是 None,
+        不得因為「委派一下說不定讀得到」而繞去別的物件庫。
+        """
+        assert gate.head_blob("pkg/plain.py") is not None, "一般路徑被弄壞了"
+        assert gate.head_blob("pkg/nope.py") is None, \
+            "一般目錄底下不存在的檔案卻讀到了內容"

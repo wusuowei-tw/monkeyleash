@@ -144,3 +144,27 @@ skip/xfail 裡,沒有東西指出「這 4 條紅代表權威層對本 repo 是�
 > 順帶一提:本 ADR 所在的 commit `6b08c8a` 標題正是
 > 「ADR 改 F- 號 + **收回一個基於錯誤前提的結論**」。
 > 同一個 commit 裡的同一種錯誤,慣例是現成的。
+
+## 補訂(票 41,2026-08-15):錨點對,取得方式有洞
+
+本 ADR 的判準(錨在 HEAD,因為時點不變)不變,**取得方式**補一條:
+
+本 ADR 假設 `git show HEAD:<路徑>` 對任何受版控的路徑都讀得到。
+**gitlink(submodule,mode `160000`)不成立** —— parent 的樹在那一格存的是
+一個 commit id,不是子樹,沒有那個 blob 物件。於是 `head_content_hash` 回 `None`,
+而上面那條「合格 = 實作當時不存在 **或** impl_hash == HEAD」的**兩個出口對
+submodule 底下的既有檔案同時走不到**:永遠不合格,唯一出口 legacy 清單
+只減不增且入場券綁 parent 的樹 —— 也就是沒有出口。
+
+這與本 ADR 開頭那個死結是**同一個形狀的第二次**:方向 fail-closed 沒錯,
+擋的卻是做對事的人。下游(量化)實測到,而該處只因影子模式開著才沒被擋。
+
+處置:`head_blob` 偵測 gitlink 前綴後委派
+`git -C <submodule> cat-file blob HEAD:<相對路徑>`;
+**委派後仍讀不到維持 fail-closed**。判定 gitlink 用 tree 的 mode 枚舉,不讀
+`.gitmodules`(mode 是 git 自己的權威)。錨點是 **submodule 自己的 HEAD**,
+不是 parent 記錄的 gitlink sha —— 理由見票 41 與 F-088。
+
+範圍誠實:這一補訂只修**判定**。**權威層對 submodule 內 staged 檔案零涵蓋**
+(parent 的 pre-commit 只列 parent 的索引),所以 submodule 底下的 R3
+仍然只有前哨那一層 —— 那是下游票的缺口,不是本 ADR 的。
