@@ -150,6 +150,46 @@
 
 ---
 
+---
+
+## 落地紀錄(裁決 2026-08-15)—— **關票,不動任何 skill 檔**
+
+量測收下。**不改任何 skill 檔**,理由不是「不重要」,是**改動的代價已知且具體**:
+
+> 這 39 檔是**上游原檔**。改動即與上游位元不同 →
+> **R3 provenance 豁免失效**,而且**每次上游更新都要手動合併**。
+
+第二層理由是判準:**「該翻沒翻」目前零實例。**
+依「痛點出現才加機制」,等實例再議 —— 沒有實例的改動,
+付的是確定的成本、換的是假設的收益。
+
+### 觀察名單:6 個缺觸發語的 `description`
+
+**只登記,不改。** 出現「該翻沒翻」的實例時回到這張清單。
+
+| skill | `description`(原文) |
+|---|---|
+| `grill-with-docs` | A relentless interview to sharpen a plan or design, which also creates docs (ADR's and glossary) as we go. |
+| `handoff` | Compact the current conversation into a handoff document for another agent to pick up. |
+| `implement` | "Implement a piece of work based on a spec or set of tickets." |
+| `improve-codebase-architecture` | Scan a codebase for deepening opportunities, present them as a visual HTML report, then grill through whichever one you pick. |
+| `to-spec` | Turn the current conversation into a spec and publish it to the project issue tracker — no interview, just synthesis of what you've already discussed. |
+| `to-tickets` | Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges, published to the configured tracker. |
+
+**觀察指標**(出現任一即回來):
+某次該用其中一個 skill 而沒被想起來、或用錯了另一個。
+**要記的是實例本身(哪一次、該用哪個、實際用了什麼)**,不是「感覺不夠清楚」。
+
+### 腳本項同理不動
+
+13 個 skill 只有 1 支腳本,而 `.md` 內**指令碼區塊 0 個** ——
+**零可見缺口**。沒有「有具體指令卻沒封成腳本」的實例可指,
+所以沒有可據以改動的東西。
+
+**票 40 關票。**
+
+---
+
 ## 本票不做的事
 
 - **不做結論**、不排優先序、不建議改法
