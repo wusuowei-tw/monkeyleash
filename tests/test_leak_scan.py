@@ -370,3 +370,75 @@ def test_personal_pattern_text_is_not_printed(tmp_path, capsys, monkeypatch):
     err = capsys.readouterr().err
     assert tok not in err, "個人 pattern 的內容被印出來了"
     assert "個人 pattern #" in err
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 審查模式:副檔名改**白名單**(deny-by-default)—— 票 39 / P2,裁決 4
+#
+# pre-commit 那個情境用黑名單是對的:跳過二進位省時間、也省雜訊。
+# **公開審查的問題不一樣** —— 那裡「沒掃」與「掃過沒事」不能混為一談,
+# 而黑名單的性質就是「沒列到的一律進來掃」…… 反過來說,
+# 被列到的一律**靜默消失**。審查要的是相反的預設:
+#
+#   **只掃得懂的才掃,掃不懂的一律浮上來要人看。**
+#
+# 注意方向:這裡的「白名單」等於 deny-by-default,**與 ADR 0003 同方向**。
+# 0003 講的黑名單列的是「不管的東西」,而這裡的清單列的是「要跳過的東西」——
+# 同一個東西列在相反的欄位裡,所以要換一邊才維持同一個方向。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReviewModeUsesAnExtensionAllowlist:
+
+    def test_an_unknown_extension_is_reported_not_skipped(self, tmp_path,
+                                                          capsys):
+        """`.env.backup` 這種**沒人列過**的副檔名,審查模式要讓它浮上來。
+
+        它是本輪最想接住的形狀:名字看起來就有問題,而**黑名單裡沒有它**
+        (`.backup` 不在 SKIP_SUFFIX、也不在 CERT_EXT),
+        於是黑名單其實會照掃 —— 但**掃得懂與否是另一回事**,
+        而審查模式不接受「掃過了、沒命中」當成乾淨的證明。
+        """
+        f = _write_named(tmp_path, "prod.env.backup", "nothing suspicious here")
+        rc = ls.scan([f], review=True)
+        err = capsys.readouterr().err
+        assert rc != 0, "非白名單副檔名在審查模式下被放行了"
+        assert "prod.env.backup" in err, err
+
+    def test_an_allowlisted_extension_is_scanned_normally(self, tmp_path):
+        """`.md` / `.py` 這些**掃得懂**的,審查模式照原本的內容比對走。"""
+        clean = _write_named(tmp_path, "notes.md", "這一行沒有秘密")
+        assert ls.scan([clean], review=True) == 0
+
+        dirty = _write_named(tmp_path, "notes2.md",
+                             "token = " + "ghp" + "_" + ("A" * 24))
+        assert ls.scan([dirty], review=True) == 1
+
+    def test_the_skipped_list_is_part_of_the_report(self, tmp_path, capsys):
+        """Q5:**被跳過的清單是報告的必要部分,不是選項。**
+
+        差別在誰負舉證責任:清單在,人看到「跳過了 N 個」會去想那些是什麼;
+        清單不在,「跳過」這件事根本不存在於報告上,於是等同沒發生。
+        """
+        img = _write_named(tmp_path, "logo.png", b"\x89PNG\r\n", mode="wb")
+        ls.scan([img], review=True)
+        err = capsys.readouterr().err
+        assert "logo.png" in err, "被跳過的檔案沒有出現在報告裡:%s" % err
+
+    def test_an_empty_skipped_list_is_still_printed(self, tmp_path, capsys):
+        """**空清單也要印。**「印出來是空的」與「沒印」是兩件事 ——
+        後者讓人無從分辨這一輪到底有沒有跳過東西。"""
+        clean = _write_named(tmp_path, "notes.md", "乾淨")
+        ls.scan([clean], review=True)
+        err = capsys.readouterr().err
+        assert "未內容掃描" in err, "空的跳過清單沒有印出來:%s" % err
+
+    def test_default_mode_is_unchanged(self, tmp_path, capsys):
+        """**反控:審查模式不得滲進預設模式。**
+
+        `.env.backup` 在 pre-commit 情境下沒有內容問題就是通過 ——
+        把審查模式的嚴格度倒灌回預設,會讓每天的 commit 開始被陌生副檔名擋,
+        而**被煩到的規則會被關掉**。
+        """
+        f = _write_named(tmp_path, "prod.env.backup", "nothing suspicious here")
+        assert ls.scan([f]) == 0
+        assert "未內容掃描" not in capsys.readouterr().err

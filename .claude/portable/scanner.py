@@ -24,6 +24,7 @@ import io
 import os
 import re
 import subprocess
+import unicodedata
 
 
 # 解碼順序。**latin-1 永不失敗**,所以最後一關保證有東西可掃:要找的 pattern
@@ -78,6 +79,12 @@ class RuleGroup(object):
                  exempt=None, flags=0, show_pattern=True):
         self.name = name
         self.patterns = [(p, re.compile(p, flags)) for p in patterns]
+        # 大小寫不敏感的**第二份**編譯(票 39 / P2,裁決 3)。
+        # **另編一份而不是改原本那份**:原本那份的大小寫敏感性是某些 pattern
+        # 的判定依據(`\bAKIA[A-Z0-9]{16}` 靠大寫縮小誤判),直接加
+        # IGNORECASE 會讓那類 pattern 變寬。兩份都跑、取聯集,涵蓋只增不減。
+        self.patterns_ci = [(p, re.compile(p, flags | re.IGNORECASE))
+                            for p in patterns]
         self.skip_suffix = tuple(s.lower() for s in skip_suffix)
         self.skip_basenames = tuple(b.lower() for b in skip_basenames)
         self.exempt = exempt
@@ -96,6 +103,29 @@ class RuleGroup(object):
     def label(self, raw, index):
         return raw if self.show_pattern else (
             "%s pattern #%d(不顯示內容)" % (self.name, index))
+
+
+# 零寬字元:插在秘密中間就讓比對整條失效,而**肉眼完全看不出來**。
+# 最惡劣的地方不是它難擋,是**貼上去的人自己也看不見** ——
+# 從剪貼簿帶進來的零寬字元不需要任何惡意就能讓一條規則消失。
+ZERO_WIDTH = "​‌‍⁠﻿"
+
+
+def normalize_for_match(s):
+    """比對用的正規化形式(票 39 / P2,裁決 3)。
+
+    **只做兩件事**:NFKC 相容性正規化 + 濾除零寬字元。
+    大小寫由 `RuleGroup.patterns_ci` 那一份負責,不在這裡折 ——
+    折在這裡的話會連**報告要印的原文**一起折掉。
+
+    **NFKC 折不動同形字。** 西里爾 `С`(U+0421)、希臘 `Ϲ`(U+03F9)
+    在 NFKC 之後仍然不是拉丁 `C`:NFKC 處理的是**相容性**差異
+    (全形、連字、上下標),不是**視覺相似**。同形字要另一套映射
+    (Unicode TR39 的 confusables / skeleton),**本輪不做,歸妥協聲明** ——
+    把它算進「已處理」就是製造一格假涵蓋(票 39)。
+    """
+    return "".join(c for c in unicodedata.normalize("NFKC", s)
+                   if c not in ZERO_WIDTH)
 
 
 def read_text(path):
@@ -204,21 +234,50 @@ def scan_paths(paths, groups, root=".", self_paths=(),
             #
             # **防護的單位(一次命中)小於洩漏的單位(一整行)。**
             # F-067 解的是「一次命中」,這裡補的是它的多命中形式。
-            line_hits = []
+            #
+            # **比對面有三種形式**(票 39 / P2,裁決 3),取聯集:
+            #   原文 × 大小寫敏感   -> 原本就有的那一輪,一個字沒動
+            #   原文 × 大小寫不敏感 -> 大寫/混寫形式
+            #   正規化 × 兩者       -> 全形、零寬
+            # **聯集不是取代**:正規化會折掉大小寫與相容字,而折掉的東西
+            # 有可能正是某條 pattern 要的。取代的話涵蓋會變小,而**變小的
+            # 方向沒有任何測試會抱怨** —— 除了本檔那條反控。
+            norm = normalize_for_match(line)
+            variants = [line] if norm == line else [line, norm]
+
+            line_hits, seen = [], set()
             for g in active:
-                for n, (raw, rx) in enumerate(g.patterns, 1):
-                    m = rx.search(line)
-                    if m:
-                        line_hits.append((g, raw, n, m))
+                for compiled in (g.patterns, g.patterns_ci):
+                    for n, (raw, rx) in enumerate(compiled, 1):
+                        if (id(g), n) in seen:
+                            continue
+                        for v in variants:
+                            m = rx.search(v)
+                            if m:
+                                seen.add((id(g), n))
+                                line_hits.append((g, raw, n, m))
+                                break
             if not line_hits:
                 continue
             snippet = line.strip()[:100]
-            if len(line_hits) == 1:
+
+            # **遮罩安全性**:命中那一段必須在**原文裡真的存在**,
+            # 否則 `redact()` 的 `replace` 什麼都換不到 —— 於是原始那一行
+            # **原樣印出來**,在擋下的那一刻把秘密印進終端機。
+            # 對不回去就不猜,整行遮(與票 32 同一個判準)。
+            unmappable = [h for h in line_hits if h[3].group(0) not in line]
+
+            if len(line_hits) == 1 and not unmappable:
                 # 單一命中維持 F-067 的形狀:遮命中那一段,**前後文留得住**
                 #(「遮罩過頭 —— 前後文要留得住,否則定位不了」)。
                 g, raw, n, m = line_hits[0]
                 hits.append(Hit(rel, i, g.name, g.label(raw, n),
                                 redact(snippet, m.group(0))))
+            elif unmappable:
+                masked = ("***整行已遮罩(命中只在正規化後可見,"
+                          "無法安全對回原文)***")
+                for g, raw, n, _m in line_hits:
+                    hits.append(Hit(rel, i, g.name, g.label(raw, n), masked))
             else:
                 # 多命中 -> **整行遮**。前後文在這一行上不可能安全保留:
                 # 任何留下來的片段都是別份報告遮掉的那一半。

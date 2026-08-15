@@ -419,3 +419,114 @@ class TestMultiHitLinesCannotBeReassembled:
             "first\n" + "x=%s y=%s\n" % tuple(parts))
         hits = sc.scan_paths([str(p)], [self._group(parts)], root=str(tmp_path))
         assert hits and all(h.line == 2 for h in hits), [h.line for h in hits]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 七、比對軸:同一個秘密換一種**寫法**就穿過去(票 39 / P2)
+#
+# 來源是委託書「軸二」指定的編碼與轉換分類表,不是憑印象列的。
+# 本輪只收三種 —— 裁決 3 指定的 NFKC、零寬字元、大小寫。
+# **其餘(Base64 / URL 編碼 / 跳脫 / 字串分段)歸妥協聲明,不在這裡假裝有守。**
+#
+# 方向是 fail-closed 的加法:正規化後的比對是**額外**一輪,
+# 不取代原本那輪。原因見 test_normalisation_never_removes_an_existing_hit ——
+# 正規化會折掉大小寫與相容字,而**折掉的東西有可能正是某條 pattern 要的**。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestObfuscationByFormIsNormalisedBeforeMatching:
+
+    # 樣本一律執行時拼裝(同本檔開頭那段的理由)
+    TOKEN = "ghp" + "_" + ("A" * 24)
+    RULE = r"\bghp_[A-Za-z0-9]{20,}"
+    ZWSP = "​"
+
+    def _group(self):
+        return [sc.RuleGroup("leak", [self.RULE])]
+
+    def _scan(self, tmp_path, line, name="s.txt"):
+        p = tmp_path / name
+        io.open(p, "w", encoding="utf-8", newline="\n").write(line + "\n")
+        return sc.scan_paths([str(p)], self._group(), root=str(tmp_path))
+
+    def test_a_fullwidth_form_is_caught(self, tmp_path):
+        """全形拉丁字母 —— NFKC 折得動的那一類。"""
+        wide = "".join(chr(ord(c) + 0xFEE0) if "!" <= c <= "~" else c
+                       for c in self.TOKEN)
+        assert wide != self.TOKEN
+        assert self._scan(tmp_path, "token = " + wide), "全形形式沒被抓到"
+
+    def test_a_zero_width_char_inside_the_secret_is_caught(self, tmp_path):
+        """零寬字元插在秘密中間 —— **肉眼完全看不出來**,而比對整條失效。
+
+        這一種最惡劣的地方不是它難擋,是**貼上去的人自己也看不見** ——
+        從剪貼簿帶進來的零寬字元不需要任何惡意就能讓一條規則消失。
+        """
+        broken = self.TOKEN[:6] + self.ZWSP + self.TOKEN[6:]
+        assert self._scan(tmp_path, "token = " + broken), "零寬形式沒被抓到"
+
+    def test_an_upper_case_form_is_caught(self, tmp_path):
+        """大小寫 —— 委託書列了、回件漏答,自行補上的那一件。"""
+        assert self._scan(tmp_path, "token = " + self.TOKEN.upper()), \
+            "大寫形式沒被抓到"
+
+    def test_normalisation_never_removes_an_existing_hit(self, tmp_path):
+        """**反控:加了正規化之後,原本抓得到的仍然要抓得到。**
+
+        這條防的是把新一輪比對寫成「取代」而不是「加上」——
+        正規化會折掉大小寫與相容字,而折掉的東西有可能正是某條 pattern
+        要的(例:只認大寫的 token 格式)。取代的話涵蓋會**變小**,
+        而變小的方向沒有任何測試會抱怨。
+        """
+        upper_only = sc.RuleGroup("upper", [r"\bAKIA[A-Z0-9]{16}\b"])
+        secret = "AKIA" + ("Z" * 16)
+        p = tmp_path / "u.txt"
+        io.open(p, "w", encoding="utf-8", newline="\n").write("k=" + secret + "\n")
+        assert sc.scan_paths([str(p)], [upper_only], root=str(tmp_path)), \
+            "原本抓得到的樣本在加了正規化之後漏掉了"
+
+    def test_a_hit_only_visible_after_normalisation_masks_the_whole_line(
+            self, tmp_path):
+        """**遮罩安全性**:命中對不回原文時,一律整行遮。
+
+        正規化後比對到的那一段,在**原文裡不存在**(中間夾著零寬字元)。
+        照舊路徑走的話 `text.replace(matched, ...)` 會**什麼都換不到**,
+        於是原始那一行**原樣印出來** —— 擋下的那一刻把秘密印進終端機。
+
+        這與票 32 是同一個判準:**對不回去就不要猜,整行遮。**
+        """
+        broken = self.TOKEN[:6] + self.ZWSP + self.TOKEN[6:]
+        hits = self._scan(tmp_path, "token = " + broken)
+        assert hits, "前提就沒成立:零寬形式要先抓得到"
+        ctx = hits[0].context
+        assert self.TOKEN[:6] not in ctx and self.TOKEN[6:] not in ctx, \
+            "原文片段漏出來了:%r" % ctx
+        assert "遮罩" in ctx, "沒有遮罩標記:%r" % ctx
+
+    def test_a_plain_hit_still_keeps_its_context(self, tmp_path):
+        """**反控:一般命中不得被整行遮蓋掉。**
+
+        少了這條,「一律整行遮」會讓上面那條全綠,而 F-067 的
+        「前後文要留得住」就被悄悄拆掉了。
+        """
+        hits = self._scan(tmp_path, "token = " + self.TOKEN + "  # note")
+        assert len(hits) == 1, hits
+        assert "token" in hits[0].context, "前後文被遮掉了"
+
+    def test_homoglyphs_are_explicitly_out_of_scope(self, tmp_path):
+        """**同形字不在本輪範圍** —— 這條釘住的是妥協聲明,不是功能。
+
+        回件第 3 節把「同形字 / 零寬」列在同一列、處置寫「NFKC + 濾 ZWJ」。
+        **NFKC 折的是相容性差異(全形、連字),不是視覺相似。**
+        西里爾 `С`(U+0421)在 NFKC / 濾零寬 / casefold 之後都還原不成拉丁 `C`。
+
+        所以本條**斷言它抓不到** —— 把它放進「已修好」那一格就是製造一格
+        假涵蓋,而假涵蓋正是整份 ADR F-0015 在打的東西。
+
+        將來若引入 TR39 confusables 表,這條會紅 —— **那時是刻意改它**,
+        不是它壞了。
+        """
+        cyrillic_a = "А"          # 西里爾大寫 А,視覺同拉丁 A
+        spoofed = "ghp" + "_" + cyrillic_a + ("A" * 23)
+        assert spoofed != self.TOKEN
+        assert not self._scan(tmp_path, "token = " + spoofed), \
+            "同形字被抓到了 —— 若是刻意引入 confusables 表,請一併更新妥協聲明"

@@ -53,6 +53,29 @@ SELF_PATHS = (".claude/portable/leak_scan.py",
 # 因為它對每一個同類檔案都成立;身分豁免綁檔名就是開後門。
 SKIP_BASENAMES = (".gitignore",)
 
+# ── 審查模式的副檔名**白名單**(票 39 / P2,裁決 4)────────────────────
+#
+# pre-commit 那個情境用黑名單(`SKIP_SUFFIX`)是對的:跳過二進位省時間也省雜訊。
+# **公開審查的問題不一樣** —— 那裡「沒掃」與「掃過沒事」不能混為一談,
+# 而黑名單的預設是「沒列到的就掃」,反過來說**被列到的一律靜默消失**。
+#
+# 審查要的是相反的預設:**只掃得懂的才掃,掃不懂的一律浮上來要人看。**
+# 陌生副檔名(`.env.backup`、`.pem.old`、沒有副檔名的檔)在黑名單底下
+# 會被「照掃、沒命中、放行」—— 而那三步沒有一步證明它是乾淨的。
+#
+# **方向與 ADR 0003 一致,不是它的例外。** 0003 講的黑名單列的是
+# 「不管的東西」;這裡的清單列的是「要跳過的東西」——
+# 同一個東西列在相反的欄位裡,所以要換一邊才維持同一個 deny-by-default 方向。
+REVIEW_ALLOWED_EXT = (
+    ".py", ".pyi", ".sh", ".ps1", ".bat",
+    ".md", ".rst", ".txt", ".adoc",
+    ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+    ".csv", ".tsv", ".sql", ".xml", ".html", ".css", ".js", ".ts",
+    ".gitignore", ".gitattributes", ".template",
+)
+
+REVIEW_HEADER = "未內容掃描"
+
 # 憑證/金鑰檔:**依副檔名擋,不掃內容**。二進位憑證(.pfx/.p12/.jks/...)
 # 任何編碼都解不開,掃內容永遠漏,而檔名是確定的。
 # F-062 紅燈:260-byte 二進位 .pfx 進 staged,舊版回 0(沒擋)。
@@ -136,8 +159,27 @@ def should_skip(rel):
                                      scanner.SKIP_PARTS)
 
 
-def scan(paths):
-    """回 0 乾淨 / 1 有命中 / 2 機制錯誤(pattern 讀不到)。"""
+def review_allowed(rel):
+    """審查模式:這個檔案的副檔名在白名單裡嗎?
+
+    **沒有副檔名一律回 False。** `LICENSE`、`pre-commit` 這種檔在審查模式下
+    要人看一眼 —— 「我認得這個檔」是人的知識,不是掃描器的。
+    """
+    ext = os.path.splitext(os.path.basename(rel))[1].lower()
+    if not ext:
+        # `.gitignore` 這種「整個名字都是副檔名」的:splitext 回 ('.gitignore', '')
+        base = os.path.basename(rel).lower()
+        return base in tuple(e.lower() for e in REVIEW_ALLOWED_EXT)
+    return ext in REVIEW_ALLOWED_EXT
+
+
+def scan(paths, review=False):
+    """回 0 乾淨 / 1 有命中 / 2 機制錯誤(pattern 讀不到)。
+
+    `review=True` 是**公開審查模式**(票 39):副檔名改白名單
+    (deny-by-default),而且**未內容掃描的清單一律進報告**——
+    含清單是空的那一次(Q5:「印出來是空的」與「沒印」是兩件事)。
+    """
     try:
         groups = load_patterns()
     except Exception as e:
@@ -145,21 +187,39 @@ def scan(paths):
              % (PATTERNS_FILE, e))
         return 2
 
-    certs, rest = [], []
+    certs, rest, not_scanned = [], [], []
     for p in paths:
+        rel = scanner.rel_path(ROOT, p)
         if should_skip(p):
+            if review:
+                not_scanned.append((rel, "跳過清單(掃描器自己 / 類別豁免 / 二進位)"))
             continue
         if p.replace("\\", "/").lower().endswith(CERT_EXT):
             # 副檔名即判定,不讀內容 —— 二進位憑證檔的唯一可靠攔截點。
             certs.append(scanner.Hit(scanner.rel_path(ROOT, p), 0, "憑證副檔名",
                                      "<憑證副檔名>", "(依副檔名擋,不掃內容)"))
+        elif review and not review_allowed(rel):
+            not_scanned.append((rel, "非白名單副檔名 —— 需人工放行"))
         else:
             rest.append(p)
 
     hits = certs + scanner.scan_paths(rest, groups, root=ROOT,
                                       self_paths=SELF_PATHS)
-    if not hits:
+
+    if review:
+        # **必要部分,不是選項。** 清單不在,「跳過」這件事就不存在於報告上,
+        # 於是等同沒發生 —— 而那正是「沒掃」被讀成「掃過沒事」的那一步。
+        _err("\n[審查模式] %s 的檔案(%d):\n" % (REVIEW_HEADER, len(not_scanned)))
+        if not not_scanned:
+            _err("  (無)\n")
+        for rel, why in not_scanned:
+            _err("  %s\n     %s\n" % (rel, why))
+
+    if not hits and not not_scanned:
         return 0
+    if not hits:
+        _err("\n未內容掃描的檔案要逐一定性 —— 「沒掃」不是「乾淨」。\n")
+        return 1
 
     _err("\n[洩漏偵測] 這些檔案含個人身分或機密,擋下 commit:\n\n")
     for h in hits:
@@ -174,7 +234,12 @@ def main(argv):
 
     回 0 的話,git 壞掉那一刻偵測就靜默消失,而 pre-commit 照樣放行 ——
     「沒有檔案要掃」與「問不到有哪些檔案」是兩件事。
+
+    `--review` 開公開審查模式(票 39):副檔名白名單 + 未掃清單進報告。
+    **刻意不是預設** —— 把審查模式的嚴格度倒灌回 pre-commit,
+    每天的 commit 會開始被陌生副檔名擋,而**被煩到的規則會被關掉**。
     """
+    review = "--review" in argv
     if "--staged" in argv:
         try:
             rels = scanner.staged_paths(cwd=ROOT)
@@ -184,7 +249,7 @@ def main(argv):
         paths = [os.path.join(ROOT, p.replace("/", os.sep)) for p in rels]
     else:
         paths = [a for a in argv if not a.startswith("--")]
-    return scan(paths) if paths else 0
+    return scan(paths, review=review) if paths else 0
 
 
 if __name__ == "__main__":
