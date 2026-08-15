@@ -921,6 +921,74 @@ Windows 上唯讀的 `.git` 物件刪不掉,殘骸留著讓 `clone` 拒絕寫入
 
 > **開刀會抹掉它自己的前身修補。** 這不是錯,但要寫下來 ——
 > 否則將來有人比對 commit 數會發現少一個,而查不到原因。
+
+**commit 數對照(寫死,供事後核對)**
+
+| | 值 |
+|---|---|
+| 開刀前 `git rev-list --all --count` | **96**(備份當下,HEAD `f9f452c`) |
+| 演練時的對照表筆數 | 95 |
+| **被剪掉** | **1** —— `e34ce21` |
+| 預期開刀後 | **95** |
+
+**差 1 不是遺失,是 `e34ce21` 變成空 commit 被剪掉。**
+核對時看到 96 → 95,對照這一節即可,不必重新調查。
+
+---
+
+### 動刀前三件(裁決 2026-08-15,已完成 2 件)
+
+#### 一、重做備份 ✅(OneDrive 那一份)
+
+**「先前備份過」不等於「現在有備份」** —— P5 那份落後了票 39 全程與票 40 / 42。
+
+```
+agent-gates-pre-cut-2026-08-15-2004.zip
+HEAD f9f452c / commit 96 / 未提交 0
+1234 項(其中 .git/ 佔 1075)/ 原始 7.3 MB / 壓縮後 6.0 MB(6,322,966 bytes)
+sha256 524eb7c59f71005ba1d98f0577bbca34ec7f8ec1acbfea2661d8b27cd7e2e65d
+testzip OK
+```
+
+對照:舊那份 4.9 MB(`agent-gates-pre-surgery-2026-08-15.zip`),**保留不刪**。
+
+⚠ **第二個雲端(Google)是人工拖放,代理人做不到 —— 待裁決者確認到位。**
+
+#### 二、參數檔用演練通過的那一份,不得重打 ✅
+
+> 重打就是重新引入第一次演練那兩個錯的機會。
+> **演練驗的不是「這個做法可行」,是「這一組位元組可行」。**
+
+| 檔 | 位元組 | 有效行 | sha256 |
+|---|---|---|---|
+| `mailmap.txt` | 254 | 3 | `b36ee7fe1924e84fd633c5b62cbaf733390ff4f26631b0990ede683c11df4245` |
+| `replacements.txt` | 185 | 3 | `9650ae73ec41dcf5c7f46dfe961a484fcb5f5305fc7e4ca08c8a04a2f6968089` |
+
+兩份已另存為 `APPROVED-*`(雜湊相同),避免複本被清掉時參數跟著消失。
+**動刀時比對雜湊,不符即停。**
+
+#### 三、刪除遠端 `wip/f062-installer-defaults` ✅
+
+該 ref 相對 `master` **0 個獨有 commit**,指向 `fd81dfd`(master 的祖先)——
+**可還原**:`git push origin fd81dfd:refs/heads/wip/f062-installer-defaults`。
+
+**刪除前**
+
+```
+f9f452cc698969580fb3fcc10d36a3e15d1020c8  HEAD
+f9f452cc698969580fb3fcc10d36a3e15d1020c8  refs/heads/master
+fd81dfdf4617d4ba604e2c478793ad39ecc0b47e  refs/heads/wip/f062-installer-defaults
+```
+
+**刪除後**
+
+```
+f9f452cc698969580fb3fcc10d36a3e15d1020c8  HEAD
+f9f452cc698969580fb3fcc10d36a3e15d1020c8  refs/heads/master
+```
+
+**少一個 ref 要處理** —— 而 ref 是階段四第 21 條驗收的對象,
+開刀前先減少它的基數,等於減少那條驗收會漏看的機會。
 13. `filter-repo` 一次跑完**全部**改寫:身分欄位 → `noreply`、
     **K1 / K2 / K3 三筆的歷史內容清除或泛化**。**不分兩次**
 14. **`git gc` 回收 dangling object**(回件 4.1 的「要求」)——
