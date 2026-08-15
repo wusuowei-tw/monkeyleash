@@ -113,6 +113,13 @@ docs/adr/                       copy
 # 明列而不是靠「沒被提到」—— 那句「沒被提到不是合法狀態」是這份表自己的規矩,
 # 對它自己一樣適用。
 docs/tickets/                   skip
+# 轉公開審查(ADR F-0015)。**決定跟著走,資料不跟著走。**
+# 登記表標 generate 不標 skip:每個 repo 轉公開前都要有一份(ADR 要求它成立),
+# 但內容是各自的 commit 與各自的洩漏項 —— 照抄過去等於宣告下游有
+# 一個它沒有的 `3a265f2`,而那是**假的已知項清單**,比沒有更糟。
+docs/going-public-known-items.md generate
+# 委外審計的委託書是這個 repo 的工作紀錄,同 docs/tickets/ 的理由。
+docs/audits/                    skip
 docs/agents/issue-tracker.md    copy
 docs/agents/domain.md           copy
 # 摩擦記錄是這個 repo 走出來的歷史,但那些判準是這套東西**最可攜的資產**,
