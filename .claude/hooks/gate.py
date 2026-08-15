@@ -32,9 +32,25 @@ CANON_CODE_REVIEW = os.path.join(ROOT, ".agents", "skills", "code-review", "SKIL
 # 一律放行。spec 要求「新增一個獨立模組」時整站無防護。改為黑名單:
 # 除了下列非原始碼位置,其餘副檔名符合的一律視為原始碼。新模組預設被守。
 # 狀態檔分類。判準是**這個檔案壞掉或消失時,正確行為是什麼**:
-#   證據(消失即失去判定依據 → fail-closed)  放 .dev/,進版控
+#   證據(消失即失去判定依據 → fail-closed)  放 .dev/
 #   快取(可重建的純加速結構 → 重算)         放 .cache/,不進版控
 # 目錄本身就是分類,不必靠記性維持;新增狀態檔時看它該擺哪就知道它是哪一類。
+#
+# ## F-036 修訂(票 31,2026-08-14)
+#
+# **舊文**:上面第一行原本寫「放 .dev/,**進版控**」,而 `.gitignore` 忽略
+# 整個 `/.dev/` —— 三處說法不一致(本檔、`redlight.py`、`.gitignore`),
+# 實測 `git ls-files .dev` = 0。**註解描述了一個不存在的機制。**
+#
+# **現行分軌**,判準是「可審計性 vs 流量」,而兩邊各有一條存續管道:
+#   gate-exemptions.jsonl / provenance.jsonl  **進版控** —— 豁免史要可逐筆對帳
+#                                             (票 24:不進版控的帳本對不了帳)
+#   test-runs.jsonl                           **不進版控** —— 每跑一次測試就長,
+#                                             存續歸 R5 的週級異地備份
+#   pipeline.json                             不進版控 —— 執行期狀態,每台機器不同
+#
+# **「證據要進版控」不再是一句無條件的話。** 判準沒變(消失即失去判定依據),
+# 變的是「怎麼讓它不消失」不只有版控一條路。
 EXEMPTION_LOG = os.path.join(ROOT, ".dev", "gate-exemptions.jsonl")   # 證據
 RUN_LOG = os.path.join(ROOT, ".dev", "test-runs.jsonl")               # 證據
 
@@ -1489,9 +1505,22 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
     # 站別讀不到 -> 兩個時點都擋。這是唯一與時點無關的 R2 分支:
     # 「你停在哪一站」這個問題本身沒有答案時,兩種問法都答不出來。
     if stage == UNREADABLE_STAGE and not gate_self:
+        # **印出實際查找的絕對路徑**(票 31 / #10)。
+        # `.dev` 打成 `.dve` 時,`git status` 看不見(整個目錄被 gitignore,
+        # 新目錄同樣被 ignore),而訊息只說「讀不到」——
+        # 於是人對著一個**存在的、名字差一個字母**的目錄找不存在的檔案。
+        # 那條路徑本身就是證據:一眼看到 `…\.dve\pipeline.json` 就知道了。
+        #
+        # **路徑放第二行之後,不放第一行。** 它含使用者名稱,而 `log_shadow`
+        # 只把訊息的**第一行**寫進 `.dev/shadow-log.jsonl`(持久檔)——
+        # 放第一行的話,每一次影子攔截都會把使用者名稱寫進檔案。
+        # 人看得到,證據檔存不到。
         return ("[R2/fail-closed] %s:讀不到流程狀態(%s)。\n"
                 "     不知道停在哪一站,不等於停在 idle —— 後者在提交時是放行的。\n"
-                "     修好 pipeline.json 再繼續。" % (r, rel(PIPELINE)))
+                "     實際查找的位置:%s\n"
+                "     （目錄名打錯時這條路徑就是證據 —— `.dev` 與 `.dve` 差一個字母,\n"
+                "      而狀態目錄被 gitignore,`git status` 不會告訴你。)\n"
+                "     修好 pipeline.json 再繼續。" % (r, rel(PIPELINE), PIPELINE))
 
     writable = {s["id"] for s in stages if s.get("allows_src_write")}
 

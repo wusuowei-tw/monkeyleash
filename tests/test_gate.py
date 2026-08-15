@@ -1740,6 +1740,63 @@ class TestUntestedByDecisionCannotBeSelfServed:
         assert gate.logged_exemption_backed("pkg/thing.py", "thing") is True
 
 
+class TestFailClosedMessagesNameTheAbsolutePath:
+    """票 31 / #10 —— 目錄名打錯時,沒有任何管道會說「你建在隔壁」。
+
+    `.dev` 打成 `.dve` 時:
+
+      `git status` 看不見    整個目錄被 gitignore,新目錄同樣被 ignore
+      訊息只說「讀不到流程狀態」,**不會說它去哪裡找的**
+
+    於是使用者對著一個**存在的、名字差一個字母**的目錄,
+    收到一個「檔案不見了」的訊息。與票 26 同型:
+    **訊息說的是真話,但它指向的排查方向是錯的。**
+
+    修法成本近乎零:印出它**實際查找的絕對路徑**。打錯字時那條路徑本身就是證據 ——
+    人一眼看到 `…\\.dve\\pipeline.json` 就知道了。
+
+    ## 絕對路徑不得出現在第一行(順序先於 1–2 的那條)
+
+    絕對路徑含使用者名稱,而 `log_shadow` 會把**訊息的第一行**寫進
+    `.dev/shadow-log.jsonl`(持久檔)。所以路徑放在**第二行之後** ——
+    人看得到,證據檔存不到。
+
+    (`gate-exemptions.jsonl` 現在進版控,但它存的是 `blocked_by` 規則碼、
+    不是訊息全文,已查證。)
+    """
+
+    def test_the_message_names_the_absolute_path_it_looked_for(self, monkeypatch):
+        monkeypatch.setattr(gate, "load_stage",
+                            lambda: (gate.UNREADABLE_STAGE, None))
+        msg = gate.check("pkg/thing.py", "x = 1")
+        assert msg and "R2" in msg, msg
+        assert gate.PIPELINE in msg, (
+            "訊息沒印出實際查找的絕對路徑 —— 打錯目錄名時人不會知道找錯地方:%r"
+            % msg)
+
+    def test_the_absolute_path_is_not_on_the_first_line(self, monkeypatch):
+        """**這條先於上一條成立才有意義。**
+
+        `log_shadow` 只取 `msg.splitlines()[0]` 寫進持久的證據檔,
+        而絕對路徑含使用者名稱。放第一行 = 每一次影子攔截都把使用者名稱寫進檔案。
+        """
+        monkeypatch.setattr(gate, "load_stage",
+                            lambda: (gate.UNREADABLE_STAGE, None))
+        msg = gate.check("pkg/thing.py", "x = 1")
+        first = msg.splitlines()[0]
+        assert gate.PIPELINE not in first, (
+            "絕對路徑出現在第一行 —— 它會被 log_shadow 寫進 shadow-log.jsonl:%r"
+            % first)
+
+    def test_the_message_still_says_what_to_do(self, monkeypatch):
+        """**反控。** 加了路徑之後,原本的判準與指示不得消失。"""
+        monkeypatch.setattr(gate, "load_stage",
+                            lambda: (gate.UNREADABLE_STAGE, None))
+        msg = gate.check("pkg/thing.py", "x = 1")
+        assert "idle" in msg, "「不知道停在哪一站不等於 idle」那句不見了"
+        assert "pipeline.json" in msg
+
+
 class TestAuthorityLayerIsWired:
     """票 27 — 權威層有沒有**真的接上 git**。
 
