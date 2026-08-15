@@ -646,6 +646,51 @@ def unallowed_write_targets(command):
     return out
 
 
+# 刪除/改名的動詞 —— 它們的出口**不是** Write / Edit(那兩個工具做不到),
+# 而是 `git rm` / `git mv`(`git` 在許可清單裡,一直都過得了)。
+_DELETE_VERBS = ("rm", "rmdir", "del", "erase", "unlink",
+                 "remove-item", "clear-item", "clear-content")
+_RENAME_VERBS = ("mv", "move-item", "rename-item", "copy-item", "cp")
+
+
+def _real_exit_for(cmd):
+    """這條指令真正的出口是什麼。回 None 表示 Write / Edit 就是對的。
+
+    票 13 的活標本:訊息說「請改用 Write / Edit」,而**那兩個工具不能刪除或改名** ——
+    照著做的人會得出「這件事做不到」,然後發明一條繞路
+    (本票原本的結論就是這樣長出來的:留著不刪,兩個檔案並存)。
+    """
+    toks = [os.path.basename(t.strip('"').strip("'")).lower()
+            for t in cmd.replace("\t", " ").split()]
+    if any(t in _DELETE_VERBS for t in toks):
+        return "git rm"
+    if any(t in _RENAME_VERBS for t in toks):
+        return "git mv"
+    return None
+
+
+def _r7_head(bad, mixed, offenders, cmd):
+    """擋下訊息的第一段 —— **說出是哪一個前提沒滿足**(票 13 判準)。
+
+    品質標竿是票 31 的 R2 訊息:說出判準、說出實際的位置、說出該做什麼。
+    """
+    exit_hint = _real_exit_for(cmd)
+    head = "[R7] 這個 Bash 指令會寫到沒有被許可的位置(%s)。\n" % "、".join(bad)
+    if mixed:
+        # **落出許可清單的是某一段,不是整條。** 不說的話,人看到 `git mv` 被擋
+        # 會以為 git 不在清單裡,然後去改一個沒問題的地方(F-046 的形狀)。
+        head += ("     **許可是逐段比對的**(`&&` / `;` / `||` 各算一段),"
+                 "而這幾段不在清單裡:%s\n"
+                 "     其餘各段本來就許可 —— 把它們拿掉就過得了。\n"
+                 % "、".join("`%s`" % s for s in offenders))
+    if exit_hint:
+        head += ("     **Write / Edit 不能刪除或改名** —— 這條的出口是 `%s`"
+                 "(`git` 在許可清單裡)。\n" % exit_hint)
+    else:
+        head += "     請改用 Write / Edit。\n"
+    return head
+
+
 def bash_write_violation(command):
     """R7:這個 Bash 指令會不會寫入 repo。回 None(放行)或訊息。"""
     if not command or not command.strip():
@@ -655,9 +700,12 @@ def bash_write_violation(command):
     # 逐段比對:`a && b` 的每一段都要在許可清單裡才算數,
     # 否則 `git status && rm -rf x` 會整條被許可。
     segments = [s.strip() for s in re.split(r"&&|\|\||;", cmd) if s.strip()]
-    if segments and all(
-            any(seg.startswith(p) for p in BASH_ALLOWED_CMDS) for seg in segments):
+    seg_ok = [any(seg.startswith(p) for p in BASH_ALLOWED_CMDS) for seg in segments]
+    if segments and all(seg_ok):
         return None
+    # **哪幾段落出許可清單** —— 只拿來寫訊息,判定邏輯一個字都不動(票 13)。
+    offenders = [seg for seg, ok in zip(segments, seg_ok) if not ok]
+    mixed = any(seg_ok) and offenders
 
     if not WRITE_CONSTRUCT.search(cmd):
         return None
@@ -668,19 +716,12 @@ def bash_write_violation(command):
     bad = unallowed_write_targets(cmd)
     if not bad:
         return None
-    return ("[R7] 這個 Bash 指令會寫到沒有被許可的位置(%s),請改用 Write / Edit。\n"
+    return (_r7_head(bad, mixed, offenders, cmd) +
             "     理由不是風格:從指令字串解析『寫到哪』解不完,而半套的解析器\n"
             "     比零涵蓋更危險 —— 零涵蓋你知道它是零。所以入口收成一個,\n"
             "     走檔案工具的話 R1–R6 全部適用。\n"
             "     例外(附理由)在 gate.py 的 BASH_ALLOWED_CMDS / BASH_ALLOWED_TARGETS。\n"
-            "     指令裡出現 /dev/null **不會**讓其他寫入一起免檢。"
-            % "、".join(bad))
-
-    return ("[R7] 這個 Bash 指令會寫入檔案,請改用 Write / Edit。\n"
-            "     理由不是風格:從指令字串解析『寫到哪』解不完,而半套的解析器\n"
-            "     比零涵蓋更危險 —— 零涵蓋你知道它是零。所以入口收成一個,\n"
-            "     走檔案工具的話 R1–R6 全部適用。\n"
-            "     例外(附理由)在 gate.py 的 BASH_ALLOWED_CMDS / BASH_ALLOWED_TARGETS。")
+            "     指令裡出現 /dev/null **不會**讓其他寫入一起免檢。")
 
 
 RESEARCH_ROOT = "research"
@@ -1295,10 +1336,18 @@ def upstream_backed(rel_path):
             r = json.loads(line)
             if r.get("path") == rel_path:
                 rec = r          # 取最後一筆:同一個檔案可能被同步過多次
-    except Exception:
-        return False
+    except FileNotFoundError:
+        # **「沒有這個檔」是正常狀態,不是錯誤** —— 這個 repo 從來沒同步過東西。
+        # 歸進「讀不動」的話,訊息會把一個正常情況說成故障,
+        # 而人會去查權限與路徑(票 26 那個「讀不到清單」的同型錯誤)。
+        rec = None
+    except Exception as e:
+        return False, ("provenance 紀錄檔讀不動(%s):%s\n"
+                       "     檔案在但解析不了 —— 那與「沒有同步歷史」是兩件事。"
+                       % (rel(PROVENANCE), e))
     if not rec:
-        return False
+        return False, ("%s 沒有 provenance 紀錄 —— 它不是同步進來的成品,"
+                       "所以紅燈責任在本地。" % rel_path)
 
     # **位置一律取自指標檔,不看紀錄裡的 upstream_root。**
     # 紀錄是可寫的;判定要走一個 agent 動不了的來源,否則指向一個自己控制的
@@ -1306,19 +1355,34 @@ def upstream_backed(rel_path):
     root = read_upstream_root()
     commit = rec.get("upstream_commit")
     upath = rec.get("upstream_path") or rel_path
-    if not root or not commit:
-        return False
+    # **兩個分支拆開**(票 13 C):修法不同就不能共用一句話 ——
+    # 前者要去修指標檔,後者要去修 sync 產出的紀錄。
+    if not root:
+        return False, ("上游指標檔不可用(讀不到或格式不對):%s\n"
+                       "     格式是恰好一行 `UPSTREAM_ROOT=<絕對路徑>`。\n"
+                       "     (該層無法再細分原因 —— 待後續)"
+                       % rel(UPSTREAM_ROOTS))
+    if not commit:
+        return False, ("provenance 紀錄缺 `upstream_commit` 欄位 —— "
+                       "沒有基準點就無從比對。這是 sync 產出的紀錄有問題,"
+                       "不是指標檔的問題。")
     try:
         out = subprocess.run(["git", "-C", root, "show",
                               "%s:%s" % (commit, upath)], capture_output=True)
         if out.returncode != 0:
-            return False
+            return False, ("上游那個物件問不到:`%s:%s`(上游 %s)。\n"
+                           "     commit 或 upstream_path 對不上上游的樹。"
+                           % (commit[:12], upath, root))
         with io.open(os.path.join(ROOT, rel_path.replace("/", os.sep)), "rb") as f:
             local = f.read()
         rl = _redlight()
-        return rl.content_hash(out.stdout) == rl.content_hash(local)
-    except Exception:
-        return False
+        if rl.content_hash(out.stdout) == rl.content_hash(local):
+            return True, None
+        return False, ("內容與上游物件**漂移**了(不再逐位元組相同)。\n"
+                       "     豁免的判準就是「相同」—— 改過一個位元組,"
+                       "紅燈責任就回到本地。")
+    except Exception as e:
+        return False, "比對上游物件時出錯(%s)—— 問不到答案一律不豁免。" % e
 
 
 def is_bare_package_marker(rel_path, content):
@@ -1662,7 +1726,12 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
         #
         # 邊界不變:漂移一個位元組就兩半都回來;沒有證的本地碼完全照舊;
         # **不碰 R2**(票 10);**不碰 R8**(它在前面,進口成品 import research 照樣擋)。
-        if upstream_backed(r):
+        # **必須解包。** `upstream_backed` 回的是 `(bool, reason)`,
+        # 而 `(False, "…")` 在 `if` 裡**是真的** —— 忘了解包的話,
+        # 每一個同步進來的檔案都會拿到豁免,fail-closed 整條翻成 fail-open,
+        # 而測試全綠、訊息什麼都不說。這是簽名改動最貴的失敗方式(票 13 C)。
+        prov_ok, prov_why = upstream_backed(r)
+        if prov_ok:
             note_exemption(exemptions, r, base, ticket,
                            "docs/adr/F-0014-upstream-provenance.md",
                            reason="upstream-provenance")
@@ -2154,7 +2223,21 @@ def mode_pre_commit():
         _err("\n[六站閘門/pre-commit] commit 已擋下,%d 項違規:\n\n" % len(violations))
         for v in violations:
             _err("  %s\n" % tag_enforce(v))
-        _err("\n如確定要略過:git commit --no-verify(會留下紀錄,請自行負責)\n")
+        # **不寫繞過方式**(票 13 B)。原本這裡是
+        # 「如確定要略過:git commit --no-verify(會留下紀錄,請自行負責)」,
+        # 兩個問題:
+        #
+        #   一、**enforcement 訊息不得提示自身的繞過方式。** 訊息要說出哪一個前提
+        #       沒滿足(讓人去修),不是提供一條不必滿足前提的出口(讓人去繞)。
+        #       前者把人推向修好,後者推向略過 —— 而被煩到的規則會被關掉,
+        #       提示語等於幫它加速。
+        #
+        #   二、**「會留下紀錄」是假陳述。** `--no-verify` 在 git 裡不留任何痕跡:
+        #       commit 上沒有標記、reflog 也不記。宣稱一個不存在的機制比不寫更糟 ——
+        #       它讓人以為有事後對帳,於是更放心用。
+        #
+        # 真的需要逃生門的話,它要有**真的會留痕**的機制,而不是一句宣稱。
+        _err("\n上面每一項都指出了是哪一個前提沒滿足 —— 修掉它們再提交。\n")
         return 1
     return 0
 

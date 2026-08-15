@@ -1602,6 +1602,94 @@ class TestR3AcceptsUpstreamProvenance:
         msg = gate.check("pkg/fresh_local.py", "def k():\n    return 2\n")
         assert msg and "R3" in msg, msg
 
+    # ── 票 13 C:五態各自的原因,以及**每一態仍然被擋** ──────────────────
+
+    def test_the_five_failure_modes_each_report_their_own_reason(
+            self, world, monkeypatch):
+        """票 13 C —— `upstream_backed` 原本把**五種**失敗全收斂成 `False`,
+        於是 R3 的訊息三種情況印同一句:「跑一次測試讓紀錄長出來」——
+        而那對一個**同步進來的成品做不到**(那正是 F-0014 開這條路的理由)。
+
+        票面原本寫「三態」,實際列舉是**五態**(多出:provenance 檔本身讀不動、
+        紀錄缺 `upstream_commit` 欄位)。**分支 3 拆開** ——
+        `not root`(指標檔不可用)與 `not commit`(紀錄缺欄位)是兩個不同的修法。
+        """
+        up, down, sha = world
+        self._sync_in(down)
+
+        # 態一:沒有 provenance 紀錄
+        ok, why = gate.upstream_backed("pkg/thing.py")
+        assert ok is False and "沒有" in why and "紀錄" in why, why
+
+        # 態二:指標檔不可用(讀不到或格式不對)——**不追到那一層的原因**
+        self._prov(down, upstream_commit=sha)
+        monkeypatch.setattr(gate, "UPSTREAM_ROOTS",
+                            str(down / "no-such-pointer.txt"))
+        ok, why = gate.upstream_backed("pkg/thing.py")
+        assert ok is False and "指標" in why, why
+
+    def test_a_record_without_a_commit_field_says_so(self, world, monkeypatch):
+        """態三:紀錄在、指標在,但紀錄**缺 `upstream_commit`**。
+
+        與態二分開:那一態要去修指標檔,這一態要去修 sync 產出的紀錄。
+        **修法不同就不能共用一句話。**
+        """
+        up, down, sha = world
+        self._sync_in(down)
+        self._prov(down)                       # 不給 upstream_commit
+        ok, why = gate.upstream_backed("pkg/thing.py")
+        assert ok is False and "upstream_commit" in why, why
+
+    def test_an_object_missing_upstream_says_so(self, world):
+        """態四:上游問不到那個物件(commit 或路徑錯)。"""
+        up, down, sha = world
+        self._sync_in(down)
+        self._prov(down, upstream_commit="0" * 40)
+        ok, why = gate.upstream_backed("pkg/thing.py")
+        assert ok is False and ("上游" in why or "物件" in why), why
+
+    def test_content_drift_says_so(self, world):
+        """態五:上游有那個物件,但**內容漂移**了。"""
+        up, down, sha = world
+        self._sync_in(down, text="def f():\n    return 2\n")   # 改一個位元組
+        self._prov(down, upstream_commit=sha)
+        ok, why = gate.upstream_backed("pkg/thing.py")
+        assert ok is False and ("漂移" in why or "不相同" in why
+                                or "對不上" in why), why
+
+    @pytest.mark.parametrize("mode", ["no-record", "no-pointer", "no-commit",
+                                      "no-object", "drift"])
+    def test_every_failure_mode_is_still_blocked(self, world, monkeypatch, mode):
+        """**反控 —— 本輪最重要的一條。**
+
+        `upstream_backed` 改回 tuple 之後,**`(False, reason)` 在 `if` 裡是真的**。
+        呼叫端若忘了解包,fail-closed 會被簽名改動**整條翻成 fail-open** ——
+        每一個同步進來的檔案都會拿到豁免,而測試全綠、訊息什麼都不說。
+
+        所以五個 False 分支逐一驗證「**仍然被擋**」,而不是只驗 reason 對不對。
+        原因對了而擋沒了,是這一輪最貴的失敗方式。
+        """
+        up, down, sha = world
+        if mode == "drift":
+            self._sync_in(down, text="def f():\n    return 2\n")
+        else:
+            self._sync_in(down)
+        if mode == "no-pointer":
+            self._prov(down, upstream_commit=sha)
+            monkeypatch.setattr(gate, "UPSTREAM_ROOTS", str(down / "nope.txt"))
+        elif mode == "no-commit":
+            self._prov(down)
+        elif mode == "no-object":
+            self._prov(down, upstream_commit="0" * 40)
+        elif mode == "drift":
+            self._prov(down, upstream_commit=sha)
+        # no-record:什麼都不寫
+
+        msg = gate.check("pkg/thing.py", "def f():\n    return 2\n")
+        assert msg and "R3" in msg, (
+            "%s:provenance 失敗卻放行 —— tuple 恆為真把 fail-closed 翻成 fail-open"
+            % mode)
+
     def test_provenance_does_not_exempt_r2(self, world, monkeypatch):
         """**只豁免 R3。** R2 的窗口問題是票 10 的事,兩者不得互相代勞 ——
         一個豁免同時鬆兩條規則,爆炸半徑就不再是它宣稱的那個。"""
@@ -1738,6 +1826,60 @@ class TestUntestedByDecisionCannotBeSelfServed:
                         "declared_in": ".scratch/f/issues/01-x.md"},
                        ensure_ascii=False) + "\n", encoding="utf-8")
         assert gate.logged_exemption_backed("pkg/thing.py", "thing") is True
+
+
+class TestEnforcementDoesNotTeachItsOwnBypass:
+    """票 13 B —— 擋下訊息末尾寫著「如確定要略過:`git commit --no-verify`」。
+
+    兩個問題,第二個更嚴重:
+
+      **一、enforcement 訊息不得提示自身的繞過方式。**
+      訊息要說出**哪一個前提沒滿足**(讓人去修),不是提供一條
+      **不必滿足前提的出口**(讓人去繞)。前者把人推向修好,後者推向略過 ——
+      而被煩到的規則會被關掉,提示語等於幫它加速。
+
+      **二、「會留下紀錄,請自行負責」是假陳述。**
+      `--no-verify` 在 git 裡**不留任何紀錄**:commit 上沒有標記、reflog 也不記。
+      **那句話宣稱了一個不存在的機制**,比不寫更糟 ——
+      它讓人以為有事後對帳,於是更放心用。
+
+    與票 26 的同族(「請改用 Write / Edit」指向不能刪檔的工具)、
+    票 22 的同族(machine-init 承諾一個不存在的指令):
+    **訊息描述了一個世界上不存在的東西,而人會照著它去做。**
+    """
+
+    def _blocked_stderr(self, monkeypatch, capsys):
+        monkeypatch.setattr(gate, "staged_paths", lambda cwd=None: [])
+        monkeypatch.setattr(gate, "check_skill_copies", lambda: [])
+        monkeypatch.setattr(gate, "check_third_axis_mount", lambda: [])
+        monkeypatch.setattr(gate, "check_to_spec_override", lambda: [])
+        monkeypatch.setattr(gate, "check_legacy_list",
+                            lambda: ["[R6] 測試用的違規"])
+        monkeypatch.setattr(gate, "shadow_active", lambda: False)
+        rc = gate.mode_pre_commit()
+        return rc, capsys.readouterr().err
+
+    def test_the_block_message_does_not_name_the_bypass_flag(
+            self, monkeypatch, capsys):
+        """**核心紅燈。** 擋下訊息不得含任何繞過指令。"""
+        rc, err = self._blocked_stderr(monkeypatch, capsys)
+        assert rc == 1, "沒擋"
+        assert "--no-verify" not in err, (
+            "enforcement 訊息教人怎麼繞過自己:%r" % err)
+
+    def test_the_block_message_does_not_claim_a_record_is_kept(
+            self, monkeypatch, capsys):
+        """**假陳述。** git 對 `--no-verify` 不留任何痕跡 ——
+        宣稱「會留下紀錄」會讓人以為有事後對帳,於是更放心用。"""
+        rc, err = self._blocked_stderr(monkeypatch, capsys)
+        assert "會留下紀錄" not in err, "宣稱了一個不存在的留痕機制:%r" % err
+
+    def test_the_block_message_still_says_what_was_violated(
+            self, monkeypatch, capsys):
+        """**反控。** 拿掉繞過提示之後,訊息仍要說出擋了什麼、幾項。"""
+        rc, err = self._blocked_stderr(monkeypatch, capsys)
+        assert "測試用的違規" in err, "違規內容不見了:%r" % err
+        assert "1 項" in err or "1项" in err, "沒說出違規項數:%r" % err
 
 
 class TestFailClosedMessagesNameTheAbsolutePath:

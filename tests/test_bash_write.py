@@ -152,6 +152,70 @@ class TestEveryWriteTargetMustBeAllowed:
         assert gate.bash_write_violation("Set-Content -Path (Join-Path $a $b) -Value x")
 
 
+class TestTheMessagePointsAtTheRightExit:
+    """票 13 A(例一 + 活標本併案)—— **訊息指向錯的出口**。
+
+    兩件事是同一個根因:
+
+      例一   `cd docs && git mv a.md b.md` 被擋,而訊息不說
+             「許可是**逐段**比對的,是 `cd docs` 這一段落出清單」
+      活標本 訊息說「請改用 Write / Edit」,而**那兩個工具不能刪除或改名**
+
+    **正確的出口一直都在**:`git` 在許可清單裡,所以 `git rm` / `git mv`
+    本來就過得了 —— 拿掉 `cd` 前綴就好。
+
+    票 13 的判準:**fail-closed 的訊息必須說出是哪一個前提沒滿足。**
+    fail-closed 的故障是隱形的(擋得對、方向對、什麼都沒壞),
+    **唯一的線索就是那句訊息** —— 所以指錯方向的代價比一般錯誤訊息高一級:
+    它讓人去修一個沒問題的地方,然後得出「這件事做不到」,最後發明一條繞路。
+    本票原本的結論就是這樣長出來的(留著不刪、兩個檔案並存)。
+
+    **本輪只改訊息,不動逐段比對機制**(它是對的)。
+    品質標竿:票 31 的 R2 訊息 —— 說出判準、說出實際查找的位置、說出該做什麼。
+    """
+
+    def test_a_mixed_segment_command_names_the_offending_segment(self):
+        """**核心紅燈。** 有些段許可、有些不許可時,要點名**是哪一段**。"""
+        msg = gate.bash_write_violation("cd docs && git mv a.md b.md")
+        assert msg, "沒擋"
+        assert "cd docs" in msg, "沒點名落出許可清單的那一段:%r" % msg
+
+    def test_a_mixed_segment_command_explains_per_segment_matching(self):
+        """訊息要說明**許可是逐段比對的** —— 否則人不知道為什麼 `git mv` 會被擋。"""
+        msg = gate.bash_write_violation("cd docs && git mv a.md b.md")
+        assert msg and "逐段" in msg, "沒說明逐段比對:%r" % msg
+
+    @pytest.mark.parametrize("cmd,exit_hint", [
+        ("rm pkg/thing.py", "git rm"),
+        ("cd docs && git mv a.md b.md", "git mv"),
+        ("Remove-Item pkg/thing.py", "git rm"),
+        ("mv a.py b.py", "git mv"),
+    ])
+    def test_deletions_and_renames_are_pointed_at_the_real_exit(self, cmd, exit_hint):
+        """**活標本的修法。** 刪除/改名的出口是 `git rm` / `git mv`,不是 Write / Edit。
+
+        指向一個做不到那件事的工具,人會得出「這件事做不到」——
+        而那正是票 13 開頭那個錯誤結論的來源。
+        """
+        msg = gate.bash_write_violation(cmd)
+        assert msg, cmd
+        assert exit_hint in msg, "沒點名真正的出口 %s:%r" % (exit_hint, msg)
+
+    @pytest.mark.parametrize("cmd", [
+        "echo x > notes.txt",
+        "printf 'a' >> docs/log.md",
+    ])
+    def test_plain_writes_still_point_at_the_file_tools(self, cmd):
+        """**反控。** 非刪除的寫入,出口仍然是 Write / Edit ——
+        不得因為加了 git 的出口就把原本正確的那條蓋掉。"""
+        msg = gate.bash_write_violation(cmd)
+        assert msg and "Write / Edit" in msg, msg
+
+    def test_a_fully_allowed_command_still_passes(self):
+        """**反控。** 只改訊息、不動判定 —— 全段許可的指令照樣放行。"""
+        assert gate.bash_write_violation("git add -A && git commit -m x") is None
+
+
 class TestRedirectsInsideQuotesAreNotTargets:
     """票 21 標本 3(最後一塊)—— `REDIRECT_RE` 命中**引號內**的 `>`。
 
