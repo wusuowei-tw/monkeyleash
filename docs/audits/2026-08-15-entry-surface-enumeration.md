@@ -2,7 +2,7 @@
 
 **日期**:2026-08-15
 **性質**:**唯讀**。未執行任何 `filter-repo` 指令(含 dry-run)。
-**底本**:委託書 `docs/audits/2026-08-15-going-public-attack-surface.md`(commit `e9f2d13`)
+**底本**:委託書 `docs/audits/2026-08-15-going-public-attack-surface.md`(commit `f08e566`)
 的**兩軸來源表** —— **不是回件的清單**(裁決 1 的 ★)。
 
 > 拿回件的清單當底本,等於**讓被審的那一方定義「審完了」的範圍**。

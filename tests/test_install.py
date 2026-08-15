@@ -176,7 +176,7 @@ class TestTheInstallerProducesAManifest:
 
     def test_the_generated_table_marks_itself_ask(self, install_mod, manifest_mod,
                                                   tmp_path):
-        """b01f5c2 的語意要跟著裝過去,否則新 repo 的更新路徑會 blind-copy 它。"""
+        """db7205b 的語意要跟著裝過去,否則新 repo 的更新路徑會 blind-copy 它。"""
         install_mod.generate_manifest(str(tmp_path))
         table = manifest_mod.load_table(
             str(tmp_path / ".agents" / "portable-manifest.txt"))

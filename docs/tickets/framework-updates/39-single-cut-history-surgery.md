@@ -326,8 +326,8 @@ Q5 那條「清單必須是報告的一部分」在落地第一天就付了一�
 
 | repo | provenance 行數 | **相異檔案路徑** | 相異 upstream commit |
 |---|---|---|---|
-| 影音 | 23 | **23** | 1(`37f6bfa`) |
-| 量化 | 298 | **95** | 4(`4a8ca4d` / `e51c8e3` / `eb47500` / `f19a418`) |
+| 影音 | 23 | **23** | 1(`ddbf4e5`) |
+| 量化 | 298 | **95** | 4(`cfeb586` / `c11d6db` / `b378d31` / `d4673b6`) |
 | **合計** | 321 | **118** | **5** |
 
 **那 5 個 sha 在 agent-gates 全部解得開**(逐一 `git cat-file -e` 驗過,
@@ -569,7 +569,7 @@ B 多出來的 30 處**全部是 K3 自己的字串**在 friction-log 的歷史�
 **涵蓋才是 Q2-C 的全部目的**,那一翻就把它整個換掉了,而且測試仍然全綠。
 
 處置:登記表為 K2/K3 各記一個**歷史錨**(最新一個仍含該字串的 commit) ——
-K2 = `da47808`(該檔 8 個版本中 5 個命中)、K3 = `5b58e85`(31 中 30)。
+K2 = `df07b3d`(該檔 8 個版本中 5 個命中)、K3 = `cb14b11`(31 中 30)。
 回歸拿歷史錨比對;現樹另有兩條**反控**(遮乾淨了沒),**並存而不取代**。
 
 ### 一個沒有歸因的數字
@@ -758,7 +758,7 @@ K3(`docs/agents/friction-log.md:803`)**裁決:遮**。
    測試裡的是 `deadbeef` 假資料(安全)。**產出**:要改的引用清單
 9. **#5** `.dev/gate-exemptions.jsonl` —— 已確認 `at_commit` 是**布林值不是 sha**,
    **不受影響**。本項結案,不必重量
-10. **#6** 登記表自己的 sha(K1 = `3a265f2`)—— 開刀後失效,**必須同步改**
+10. **#6** 登記表自己的 sha(K1 = `f0c17fe`)—— 開刀後失效,**必須同步改**
 11. **#7** 遠端與既有 clone —— 列出遠端**所有** ref(含自查撿到的 wip 分支)
 
 ### 階段三:動刀(**只跑一次**)
@@ -876,9 +876,9 @@ docs/machine-init.md:186            匯出目錄  <雲端>\REDACTED\
 
 | | 前綴 | 分隔符 | 名字(首字/長度) | 檢查 |
 |---|---|---|---|---|
-| K1 `@3a265f2` | `OneDrive` | 單一 | `d…` / **15** | 帶前綴 ✓ 完整片段 ✓ 長度 ✓ |
-| K2 `@da47808` | `OneDrive` | 單一 | `r…` / **12** | ✓ ✓ ✓ |
-| K3 `@5b58e85` | `OneDrive` | **四個**(跳脫) | `A…` / **41** | ✓ ✓ ✓ |
+| K1 `@f0c17fe` | `OneDrive` | 單一 | `d…` / **15** | 帶前綴 ✓ 完整片段 ✓ 長度 ✓ |
+| K2 `@df07b3d` | `OneDrive` | 單一 | `r…` / **12** | ✓ ✓ ✓ |
+| K3 `@cb14b11` | `OneDrive` | **四個**(跳脫) | `A…` / **41** | ✓ ✓ ✓ |
 
 三筆都**帶前綴、是完整片段、長度 ≥ 6**。K3 那筆長度從第一次的 **2** 變成 **41** ——
 差別就是下面那個更正。
@@ -926,7 +926,7 @@ Windows 上唯讀的 `.git` 物件刪不掉,殘骸留著讓 `clone` 拒絕寫入
 
 | | 值 |
 |---|---|
-| 開刀前 `git rev-list --all --count` | **96**(備份當下,HEAD `f9f452c`) |
+| 開刀前 `git rev-list --all --count` | **96**(備份當下,HEAD `3793afe`) |
 | 演練時的對照表筆數 | 95 |
 | **被剪掉** | **1** —— `e34ce21` |
 | 預期開刀後 | **95** |
@@ -944,7 +944,7 @@ Windows 上唯讀的 `.git` 物件刪不掉,殘骸留著讓 `clone` 拒絕寫入
 
 ```
 agent-gates-pre-cut-2026-08-15-2004.zip
-HEAD f9f452c / commit 96 / 未提交 0
+HEAD 3793afe / commit 96 / 未提交 0
 1234 項(其中 .git/ 佔 1075)/ 原始 7.3 MB / 壓縮後 6.0 MB(6,322,966 bytes)
 sha256 524eb7c59f71005ba1d98f0577bbca34ec7f8ec1acbfea2661d8b27cd7e2e65d
 testzip OK
@@ -969,22 +969,22 @@ testzip OK
 
 #### 三、刪除遠端 `wip/f062-installer-defaults` ✅
 
-該 ref 相對 `master` **0 個獨有 commit**,指向 `fd81dfd`(master 的祖先)——
-**可還原**:`git push origin fd81dfd:refs/heads/wip/f062-installer-defaults`。
+該 ref 相對 `master` **0 個獨有 commit**,指向 `8af42b9`(master 的祖先)——
+**可還原**:`git push origin 8af42b9:refs/heads/wip/f062-installer-defaults`。
 
 **刪除前**
 
 ```
-f9f452cc698969580fb3fcc10d36a3e15d1020c8  HEAD
-f9f452cc698969580fb3fcc10d36a3e15d1020c8  refs/heads/master
-fd81dfdf4617d4ba604e2c478793ad39ecc0b47e  refs/heads/wip/f062-installer-defaults
+3793afe05f0be24906bd941a869bb2bc1cc63e63  HEAD
+3793afe05f0be24906bd941a869bb2bc1cc63e63  refs/heads/master
+8af42b931f868607fe137b599ccdb73470e6d496  refs/heads/wip/f062-installer-defaults
 ```
 
 **刪除後**
 
 ```
-f9f452cc698969580fb3fcc10d36a3e15d1020c8  HEAD
-f9f452cc698969580fb3fcc10d36a3e15d1020c8  refs/heads/master
+3793afe05f0be24906bd941a869bb2bc1cc63e63  HEAD
+3793afe05f0be24906bd941a869bb2bc1cc63e63  refs/heads/master
 ```
 
 **少一個 ref 要處理** —— 而 ref 是階段四第 21 條驗收的對象,

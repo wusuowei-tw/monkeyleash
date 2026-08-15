@@ -16,7 +16,7 @@ bootstrap.sh  .githooks/pre-commit
 
 ## 根因:批次二把兩份實作合一時,順手換掉了預設值
 
-`79bfe22` 為了消滅 F-058(同一件事兩份實作),讓 `sync.mark_for` 改呼叫
+`703b242` 為了消滅 F-058(同一件事兩份實作),讓 `sync.mark_for` 改呼叫
 `manifest.mark_in`。兩者對**沒有命中任何前綴**的檔案處置不同:
 
 | | 未命中任何前綴時 |
@@ -53,7 +53,7 @@ bootstrap.sh  .githooks/pre-commit
 
 影音把自己的 manifest 窮舉化之後 fresh-probe 轉綠。探針 repo 的表與宿主**逐字相同**
 —— 安裝器帶的是**來源表**,所以「新 repo 天生不窮舉」是**繼承**,不是安裝器的缺陷。
-與上游 `5f36753` 的實驗結論一致(空白 repo 綠、有專案檔的 repo 紅)。
+與上游 `f406cb4` 的實驗結論一致(空白 repo 綠、有專案檔的 repo 紅)。
 
 ## 未驗的一格:來源**沒有**標記表時的從零 repo
 

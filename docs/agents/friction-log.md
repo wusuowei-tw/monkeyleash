@@ -1379,7 +1379,7 @@
   會從**三層掛載降成只剩 leak_scan** —— **權威層靜默消失**。
   hook 還在、還會跑、還會擋洩漏,只是不再呼叫 `gate.py --pre-commit`,
   而整個過程看起來像**一次成功的更新**。
-- **為什麼第三輪才爆**:批次二(`79bfe22`)為了消滅 F-058(同一件事兩份實作),
+- **為什麼第三輪才爆**:批次二(`703b242`)為了消滅 F-058(同一件事兩份實作),
   讓 `sync.mark_for` 改呼叫 `manifest.mark_in`。兩者對**未命中任何前綴**的檔案處置相反:
 
   | | 未命中任何前綴 |
@@ -1468,7 +1468,7 @@
 - **發現於**:2026-08-14,票 27 收尾要把「金絲雀」接進 `verify_gates.py` 時。
 - **現象**:票 27 的核心交付本來寫成「新增一條檢查:權威層未接上要大聲失敗」。
   我照著寫了 `authority_hook_missing()` / `authority_hook_path()`,約 80 行,
-  紅燈綠燈都跑過、commit 也推了(`577c94a`)。
+  紅燈綠燈都跑過、commit 也推了(`1554bf0`)。
   接 `verify_gates.py` 時才看到 **`gate.authoritative_layer()` 早就存在**:
   已處理 `core.hooksPath`、已判內容而非只判檔案存在、已有測試,
   而且已經被 `sentinel_footer()`、`mode_hook()`、`install.py`、

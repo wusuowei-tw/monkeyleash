@@ -1,7 +1,7 @@
 # 42 — 含 submodule 的下游無法落定 gitlink:leak_scan 與 sync 各判錯一次對象
 
 **排程**:立即。station-④ TDD,紅燈先行。
-**來源**:下游(台股資訊收集)實測回報,錨點 `3c0e6ed`。
+**來源**:下游(台股資訊收集)實測回報,錨點 `66139a8`。
 **嚴重度**:任何含 submodule 的下游,gitlink bump 做不出來,**且因此無法再同步框架**。
 
 **兩部分必須在同一張票落地。** 只修 (a):下游能 bump 了,但要先跑 `sync` 才拿得到
@@ -348,8 +348,8 @@ fixture 一壞,這條測試會**照樣綠**,綠的理由變成「fixture 炸了�
 
 下游實測 `d500917`(2026-08-13 13:29)只 staged 一個 gitlink 並成功提交,
 當時外層 hook(2026-08-12 09:52 安裝)已在呼叫 `leak_scan`。
-最近一次同步(`e51c8e3` → `3c0e6ed`)的 `leak_scan.py` 與 `scanner.py` diff
+最近一次同步(`c11d6db` → `66139a8`)的 `leak_scan.py` 與 `scanner.py` diff
 均未觸及 staged 項目型別處理(下游已逐行確認)。
-故推定引入點為 `ffb1fc7` → `f19a418`(2026-08-13 13:53,補 `-z` 並改寫 `staged_paths`)。
+故推定引入點為 `60903c4` → `d4673b6`(2026-08-13 13:53,補 `-z` 並改寫 `staged_paths`)。
 下游無法直接驗證該版本:當時 `.claude/` 尚未納管,
 `git show d500917:.claude/portable/leak_scan.py` 回 `exists on disk, but not in 'd500917'`。

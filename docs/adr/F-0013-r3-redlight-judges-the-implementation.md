@@ -141,7 +141,7 @@ skip/xfail 裡,沒有東西指出「這 4 條紅代表權威層對本 repo 是�
 推翻證據:`test_the_list_is_what_the_generator_would_produce` 的生成器語意,
 加上實測那 10 筆一筆都排不掉。同樣照 F-036 記在此,不改寫。
 
-> 順帶一提:本 ADR 所在的 commit `6b08c8a` 標題正是
+> 順帶一提:本 ADR 所在的 commit `2eb5fc4` 標題正是
 > 「ADR 改 F- 號 + **收回一個基於錯誤前提的結論**」。
 > 同一個 commit 裡的同一種錯誤,慣例是現成的。
 
