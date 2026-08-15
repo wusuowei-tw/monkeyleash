@@ -37,8 +37,27 @@ DECODINGS = ("utf-8-sig", "utf-8", "cp950", "cp1252", "latin-1")
 # 不掃這些:二進位、鏡像、快取。判準是「內容不是文字,掃了只會有雜訊」。
 SKIP_SUFFIX = (".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".gz",
                ".pyc", ".otf", ".ttf", ".woff", ".woff2", ".parquet", ".duckdb")
-SKIP_PARTS = (".git/", ".claude/skills/", "skills/", "__pycache__/",
-              ".pytest_cache/", ".cache/")
+# ── 跳過清單分成兩類,因為它們的**錨定方式不同**(票 39 / P2 第五件)──
+#
+# 舊版是單一 tuple + **子字串**比對,於是一條裸的 `skills/`
+# 把正典 `.agents/skills/` 一起吞掉 —— 39 個進版控、會跟著公開走的檔案
+# **從來沒有被內容掃描過**,而報告一路全綠。
+#
+# 這一族在本 repo 早就被命名過:`g1_guard.py` 的 docstring 寫著
+# 「前綴要帶邊界…… 與 `.gitignore` 的 `skills/` 缺前導斜線同一族」。
+# **教訓學在一個地方,隔壁的資料從來沒有回頭重掃**(F-082 的形狀)。
+# 正確形狀 repo 裡也有現成的:`gate.py:is_source_path` 取 `r.split("/")[0]`。
+#
+# 分類判準:**這個東西是「某個固定位置的目錄」還是「任何深度都算」?**
+#   - 鏡像有固定位置(都在 repo 根),所以根錨定
+#   - 快取與巢狀 repo 到處都有,所以任何深度 —— 但**要帶分段邊界**
+
+# 根錨定:只有 repo 根底下的這些才算(鏡像的位置是構造決定的,不會浮動)
+SKIP_ROOTS = ("skills/", ".claude/skills/")
+
+# 任何深度,但**兩側都要帶 `/` 邊界** ——
+# `foo.git/` 不是 `.git/`,`my.cache/` 不是 `.cache/`,`myskills/` 不是 `skills/`。
+SKIP_PARTS = (".git/", "__pycache__/", ".pytest_cache/", ".cache/")
 
 UNREADABLE = "<讀不到內容>"
 
@@ -185,19 +204,31 @@ def redact(text, matched):
     return text.replace(matched, "***已遮罩 %d 字***" % len(matched))
 
 
-def _globally_skipped(rel, self_paths, skip_suffix, skip_parts):
+def _globally_skipped(rel, self_paths, skip_suffix, skip_parts,
+                      skip_roots=SKIP_ROOTS):
     """所有規則組共通的跳過:二進位、鏡像/快取目錄、掃描器自己。
 
     self-skip **綁 repo 相對路徑,不綁檔名** —— 綁檔名的話豁免的鑰匙就握在
     要規避的人手上:任何目錄放一個同名檔就免掃,而那個檔名誰都造得出來。
+
+    **兩種錨定,不要合成一種**(票 39 / P2 第五件):
+      `skip_roots` 根錨定 —— 鏡像的位置是構造決定的,不會浮動
+      `skip_parts` 任何深度,但**兩側帶 `/` 邊界** ——
+                   `foo.git/` 不是 `.git/`,`myskills/` 不是 `skills/`
+
+    合成一種的代價已經量過:裸的 `skills/` 做子字串比對,
+    把正典 `.agents/skills/` 的 39 個檔一起吞掉,而報告全綠。
     """
     if rel in self_paths:
         return True
     if rel.lower().endswith(tuple(s.lower() for s in skip_suffix)):
         return True
+    if any(rel == r.rstrip("/") or rel.startswith(r) for r in skip_roots):
+        return True
+    # 兩側都補 `/`,讓「片段在開頭 / 中間 / 結尾」用同一個式子判,
+    # 而且**片段兩側必然是分隔符** —— 這就是「帶邊界」的具體形式。
     padded = "/" + rel + "/"
-    return any(p in padded for p in skip_parts) or \
-        any(rel.startswith(p) for p in skip_parts)
+    return any(("/" + p) in padded for p in skip_parts)
 
 
 def scan_paths(paths, groups, root=".", self_paths=(),

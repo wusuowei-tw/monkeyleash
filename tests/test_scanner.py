@@ -530,3 +530,71 @@ class TestObfuscationByFormIsNormalisedBeforeMatching:
         assert spoofed != self.TOKEN
         assert not self._scan(tmp_path, "token = " + spoofed), \
             "同形字被抓到了 —— 若是刻意引入 confusables 表,請一併更新妥協聲明"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 八、跳過清單的比對必須帶邊界(票 39 / P2 第五件)
+#
+# 現象:`SKIP_PARTS` 有一條裸的 `skills/`,為了跳過**鏡像**
+# (`.claude/skills/`、`skills/`,兩者都 gitignore)而放;
+# 但比對是**子字串**,而正典 `.agents/skills/` 的路徑裡剛好含有 `skills/`
+# —— 於是 39 個進版控的正典檔**在兩種模式下都從來沒有被內容掃描過**。
+#
+# **正典被當成鏡像跳過了**,而它是會跟著公開走的那一份。
+#
+# 這一族在本 repo 已經被命名過:`g1_guard.py` 的 docstring 寫著
+# 「前綴要帶邊界…… 與 `.gitignore` 的 `skills/` 缺前導斜線同一族」——
+# **教訓學在一個地方,而隔壁的資料從來沒有回頭重掃**(F-082 的形狀)。
+#
+# 正確形狀 repo 裡也已經有了:`gate.py:is_source_path` 用
+# `r.split("/")[0]` 取頂層段,那是**根錨定 + 分段**,不是子字串。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSkipListMatchingIsBounded:
+
+    def _skipped(self, rel):
+        return sc._globally_skipped(rel, (), sc.SKIP_SUFFIX, sc.SKIP_PARTS)
+
+    # ── 反控:鏡像仍然要被跳過 ──────────────────────────────────
+    def test_the_mirrors_are_still_skipped(self):
+        """**先守住原本對的那一半。**
+
+        少了這條,「把 skills/ 整條拿掉」也會讓下面那條全綠 ——
+        而那是把鏡像放進掃描,每次都會撈到一堆與正典重複的命中。
+        """
+        for rel in ("skills/tdd/SKILL.md", ".claude/skills/tdd/SKILL.md"):
+            assert self._skipped(rel), "鏡像沒有被跳過:%s" % rel
+
+    # ── 正控:正典要進掃描 ──────────────────────────────────────
+    def test_the_canonical_skills_tree_is_scanned(self):
+        """`.agents/skills/` 是**正典**、進版控、會跟著公開走。"""
+        assert not self._skipped(".agents/skills/tdd/SKILL.md"), \
+            "正典被當成鏡像跳過了"
+
+    # ── 同族:子字串比對會誤吞的其他形狀 ────────────────────────
+    def test_a_directory_merely_ending_in_the_marker_is_not_skipped(self):
+        """`myskills/` 含有 `skills/` 這個子字串 —— 但它不是鏡像。
+
+        這一條與上面那條是**同一個 bug 的不同受害者**:
+        修好正典卻沒問「還有誰會被誤吞」,就只修了自己看得見的那一個。
+        """
+        assert not self._skipped("src/myskills/thing.py")
+        assert not self._skipped("docs/skills-guide.md")
+
+    def test_a_directory_merely_ending_in_dot_git_is_not_skipped(self):
+        """`foo.git/` 含有 `.git` —— 但 `.git/` 要的是那個**目錄段**。"""
+        assert not self._skipped("vendor/foo.git/README.md")
+
+    def test_a_real_nested_git_dir_is_still_skipped(self):
+        """反控:真的 `.git/` 段,**在任何深度**都要跳過。"""
+        assert self._skipped("vendor/thing/.git/config")
+
+    def test_cache_markers_still_match_at_any_depth(self):
+        """反控:快取類的標記本來就該在任何深度命中,不得被根錨定綁住。"""
+        for rel in ("a/b/__pycache__/x.pyc", "a/.pytest_cache/x",
+                    "deep/nest/.cache/x"):
+            assert self._skipped(rel), rel
+
+    def test_a_name_merely_ending_in_cache_is_not_skipped(self):
+        """`my.cache/` 不是 `.cache/`。"""
+        assert not self._skipped("a/my.cache/x.txt")
