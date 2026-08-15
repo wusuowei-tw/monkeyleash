@@ -85,6 +85,9 @@ tests/test_upstream_manifest.py skip
 # 注意這是**機制**綁死,不是想法綁死:「上限要配到期日」在下游一樣成立,
 # 要出貨得先讓安裝器把那兩個 key 也裝進去 —— 那是另一張票,不在票 34 範圍。
 tests/test_dependency_ceiling.py skip
+# **不出貨**:它驗的是**這台機器的個人 pattern 清單**(不進版控、跟人走)。
+# 出貨到下游只會天生帶紅,同上兩則的形狀。
+tests/test_known_items_regression.py skip
 
 # ── 專案自己的測試,住在同一個目錄但不是框架的 ──────────────
 # 「沒被提到」不是合法狀態:tests/ 是框架與專案混居的地方,
