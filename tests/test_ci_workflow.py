@@ -182,6 +182,40 @@ def test_permissions_are_least_privilege(path):
         % (os.path.basename(path), perms))
 
 
+@pytest.mark.parametrize("path", workflow_files() or [None])
+def test_checkout_fetches_the_whole_history(path):
+    """R6 要 `git cat-file -e <go-live>:<path>`,而 go-live 是一個**舊** commit。
+
+    `actions/checkout` 預設 `fetch-depth: 1`(只抓最新一筆)——
+    那棵樹在 CI 的 repo 裡根本不存在,於是**九個條目全部判違規**,
+    而 R6 的訊息會說它們「是新檔案、後來手加的」。
+
+    **fail-closed 的方向是對的,診斷是錯的**:R6 分不出
+    「路徑不在那棵樹裡」與「那棵樹不在這個 repo 裡」。
+    在任何淺層 clone 上,R6 會擋下每一次 commit 並給出錯誤的理由。
+
+    這條測試守的是**環境前提**,不是 R6 的邏輯 —— 邏輯那半另有登記。
+    本機永遠測不出這個(本機的 clone 一直是完整的),所以它只能寫成
+    對設定檔的斷言。
+    """
+    if path is None:
+        pytest.skip("沒有 workflow — 由 test_there_is_at_least_one_workflow 負責紅")
+    doc = yaml.safe_load(_text(path))
+    depths = []
+    for job in (doc.get("jobs") or {}).values():
+        for step in (job.get("steps") or []):
+            uses = step.get("uses", "")
+            if "actions/checkout@" in uses:
+                depths.append((step.get("with") or {}).get("fetch-depth"))
+    assert depths, "%s 沒有 actions/checkout 步驟 —— 這條測試沒有在測任何東西" % (
+        os.path.basename(path))
+    bad = [d for d in depths if d != 0]
+    assert not bad, (
+        "%s 的 checkout 沒有 fetch-depth: 0(取到 %r)。\n"
+        "     預設是淺層(只抓最新一筆),而 R6 要查 go-live 那棵舊樹。"
+        % (os.path.basename(path), bad))
+
+
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
 

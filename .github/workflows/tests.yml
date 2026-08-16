@@ -24,6 +24,18 @@ jobs:
       # 記住那一組確切的位元組,不是記住一個會漂移的名字。
       # v5.1.0
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          # **必要,不是效能取捨。** 預設 fetch-depth: 1 是淺層 clone(只抓最新
+          # 一筆),而 R6 要 git cat-file -e <go-live>:<path> —— go-live 是一個
+          # 舊 commit,淺層下那棵樹不在這個 repo 裡。
+          #
+          # 後果不是「R6 沒跑」,是**R6 判九個條目全部違規,並說它們是後來手加的**。
+          # fail-closed 的方向對,診斷錯:R6 分不出「路徑不在那棵樹裡」與
+          # 「那棵樹不在這個 repo 裡」。第一次 CI 執行就是這樣紅的(3 條)。
+          #
+          # 本機永遠測不出這個 —— 本機的 clone 一直是完整的。
+          # 守它的是 tests/test_ci_workflow.py::test_checkout_fetches_the_whole_history。
+          fetch-depth: 0
 
       # v6.3.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1

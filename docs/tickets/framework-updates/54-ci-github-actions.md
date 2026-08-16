@@ -257,8 +257,97 @@ YAML 之後:`6 passed in 0.07s`。
 |---|---|
 | 一 | **(甲-2) 等票 49** —— 排水證據的格式定案後回來重評那 1 條。票 49 加反向指標 |
 | 二 | **Python 只有下限沒有上限** —— `requires-python = ">=3.10"`。對照 pytest 有上限 `<10` **且附到期日**(`pytest-ceiling-review`)與一條會轉紅的測試。同一個 repo 裡兩種紀律 |
-| 三 | **條件 2 的另查未完成** —— repo 在 GitHub 設定裡的 workflow 預設權限(Settings → Actions → General)。需要 admin token 或網頁,本機 `gh` 未安裝。**由裁決者看第一次 CI 結果時順手確認**。注意:workflow 檔裡的 `permissions` **只管這個 workflow,不改 repo 預設**,兩件事都要做 |
+| 三 | ~~**條件 2 的另查未完成**~~ **← 已結案,見下方「條件 2 結案」** |
 | 四 | **`5180678` 在歷史紀錄裡還有 9 處** —— 票 26(4 處)、`F-0013`(3 處)、`F-0015:444`、`going-public-known-items.md:76`。**那些不該改**(F-036:歷史紀錄記的是當時的事實)。作業中的檔案只有清單 `:7` 那一處,已修 |
+
+---
+
+## 條件 2 結案(2026-08-16)
+
+**兩半都成立:**
+
+| 半 | 值 | 誰量的 |
+|---|---|---|
+| repo 預設權限 | **Read repository contents and packages permissions**(唯讀,不需要收) | **裁決者在 GitHub 網頁上看的**(Settings → Actions → General → Workflow permissions)。`gh` 未安裝,該端點需 admin token,**我量不到** |
+| workflow 檔內 | `permissions: contents: read` | `test_permissions_are_least_privilege` |
+
+> 記下是誰量的,因為這一格**沒有本機證據** —— 下次有人要複驗,得知道去哪裡看,
+> 而不是以為跑一次測試就能得到它。
+
+---
+
+## 第一次 CI 執行:`3 failed / 774 passed`(2026-08-16)
+
+### 成因:`actions/checkout` 預設是淺層 clone
+
+三條紅同一個成因,而且**不是清單有問題** —— 本機用同一份清單、同一個 sha 全綠。
+
+**本機重現(`--depth 1`,唯讀):**
+
+```
+git rev-parse --is-shallow-repository  -> true
+git log --oneline | wc -l              -> 1
+git cat-file -t 45a8d16                -> fatal: Not a valid object name 45a8d16
+git cat-file -e 45a8d16:.claude/hooks/gate.py  -> fatal: invalid object name '45a8d16'. rc=128
+```
+
+**完整 CI 條件下的淺層 clone:**
+
+```
+FAILED tests/test_gate.py::TestLegacyNoRedlightList::test_every_entry_existed_in_the_go_live_commit
+FAILED tests/test_gate.py::TestTheListItselfIsGuarded::test_an_entry_absent_from_the_go_live_tree_is_a_violation
+FAILED tests/test_gate.py::TestTheListItselfIsGuarded::test_the_shipped_list_is_clean
+3 failed, 771 passed, 3 skipped, 1 deselected, 3 xfailed in 59.91s
+```
+
+**數字對帳:**`771 + 3 skipped = 774`,與 CI 的 `774 passed` 相符 ——
+差的正是 Linux 會執行、Windows 會 skip 的那三條 symlink。**成因確認,不是推測。**
+
+### 修法:`fetch-depth: 0`,並寫成測試
+
+`test_checkout_fetches_the_whole_history`。紅燈先行:
+
+```
+E       AssertionError: tests.yml 的 checkout 沒有 fetch-depth: 0(取到 [None])。
+E              預設是淺層(只抓最新一筆),而 R6 要查 go-live 那棵舊樹。
+1 failed, 6 passed
+```
+
+修好後 `7 passed`。
+
+> 守它的必須是**對設定檔的斷言**,不能是對行為的斷言 ——
+> **本機永遠測不出這個,本機的 clone 一直是完整的。**
+
+### ⚠ 登記:R6 的訊息把環境問題誤報成違規(本票不修)
+
+真正的發現不是修法。`gate.py:1160–1168` 把 `git cat-file -e` 的**任何非零 rc**
+都歸成「路徑不在那棵樹裡」:
+
+| | 意思 | R6 現在說什麼 |
+|---|---|---|
+| ① 路徑不在那棵樹裡 | **真違規** | 「不在…的樹裡…**新檔案要走紅燈,不是往豁免名單裡加**」✅ |
+| ② 那個 commit 不在這個 repo 裡 | **環境問題** | **同一句話** ❌ |
+
+原始訊息(淺層 clone 上,九條之一):
+
+```
+[R6] .claude/hooks/gate.py 不在機制上線 commit 45a8d16 的樹裡,不得列入紅燈豁免清單。
+     清單只減不增:新檔案要走紅燈,不是往豁免名單裡加。
+```
+
+**「是後來手加的」是推論,不是量到的事實。**
+在任何淺層 clone 上,R6 會擋下每一次 commit 並對九個條目逐一給出錯誤的理由。
+
+> **fail-closed 保證的是「擋不擋」,不是「為什麼擋」。而人會照理由行動** ——
+> 讀到「是後來手加的」,合理的下一步是去刪清單條目,
+> 那會**把一份正確的清單改壞**,而且改完 R6 仍然紅(樹還是不在)。
+> **一個方向正確而理由錯誤的擋下,比不擋更耗人:它把人推向錯的修法。**
+
+**已立 `F-096`。修復需另開票**(要動權威層規則的判定路徑,不在裝 CI 的範圍)。
+最小修法的形狀已知:進迴圈前先驗 `git cat-file -e <go-live>^{commit}`,
+不成立時給另一句訊息 —— **一行就能把兩種原因分開**。
+
+---
 
 ## 本票不做的事
 
