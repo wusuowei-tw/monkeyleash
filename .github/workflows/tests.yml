@@ -1,0 +1,60 @@
+# 這個檔的驗收住在 tests/test_ci_workflow.py(票 54)。
+# 改這個檔之前先看那一支 —— permissions、action 釘 sha、不得碰使用者層,
+# 三件都是**測試在守,不是慣例**。改壞了本機就會紅,不必等 CI。
+
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+# 最小權限:只讀內容。本 repo 的 CI 只跑測試,不發布、不部署、不留言。
+# **明寫而不是留白** —— 留白用的是 repo 預設,而預設不在這個檔案裡、改了不會有 diff。
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      # 第三方 action 一律釘 40 位 commit sha,不釘標籤。
+      # 標籤可以被移動,而移動不會通知任何人 —— 與 provenance 同一原理:
+      # 記住那一組確切的位元組,不是記住一個會漂移的名字。
+      # v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      # v6.3.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          # 釘 3.11,與桌機相同。一次只變一個變數:CI 的價值是換一台
+          # 乾淨機器,不是順便換直譯器版本。
+          # pyproject.toml 只寫 requires-python >= 3.10(有下限無上限),
+          # 那個不對稱已登記在票 54,不在這裡處理。
+          python-version: '3.11'
+
+      - name: 安裝相依
+        run: python -m pip install -e ".[dev]"
+
+      # 權威層靠 core.hooksPath 接上(.githooks/pre-commit 進版控),
+      # 而那是 per-clone 的 config,clone 不會帶走 —— 每個乾淨 checkout 都要設一次。
+      # 少了這一步 tests/test_gate.py::TestAuthorityLayerIsWired 會紅,
+      # 而它紅得對:那時權威層真的沒接上。
+      - name: 接上權威層
+        run: sh bootstrap.sh
+
+      # 兩項排除各有理由,都記在票 54 的「CI 涵蓋落差」表裡。
+      # **排除是已知代價,不是待補的洞** —— 表在票面上,不在這裡的註解裡。
+      #
+      #   --ignore   個人 pattern 那 4 個測試函式(12 個參數化案例)要讀使用者層
+      #              的個人 pattern 清單,而那個檔的內容本身就是要防的東西,不上 CI。
+      #              (此處刻意用描述式、不寫字面路徑 —— 寫了會被
+      #               test_nothing_reaches_for_the_user_layer 擋下,而它擋得對。)
+      #   --deselect 清單完整性那一條要 .dev/test-runs.jsonl 裡的排水證據,
+      #              而證據格式是票 49 的題目。等票 49 定案後回來重評。
+      - name: 跑測試
+        run: |
+          python -m pytest -q \
+            --ignore=tests/test_known_items_regression.py \
+            --deselect "tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce"
