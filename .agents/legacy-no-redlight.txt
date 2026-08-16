@@ -1,0 +1,26 @@
+# go-live: 91335c8e212d21230b03bd26acc04a7e87590f3c
+# 機制上線前就存在的 .py —— 豁免 R3 **整條**(兩半:紅燈紀錄 + 測試檔存在)。
+# 生成的,不是手寫的。只減不增(R6 驗每一筆都在上面那個 commit 的樹裡)。
+#
+# 出處:票 26(2026-08-14 裁決)。agent-gates 從未被 install.py 安裝過,
+# 所以從來沒有這個檔 —— 不是消失,是從未生成。病因見票 27(權威層未接上 git)。
+# 內容由生成器算出(git ls-tree <go-live> ∩ is_source_path),不是手打的。
+# 2026-08-16(票 54)更正:本行原寫 `git ls-tree 5180678`,而 5180678 是票 39
+# 改寫歷史前的根 commit,現已解不開(git cat-file -t 回 Not a valid object name)。
+# 第 1 行的 go-live 在票 39 階段 15b 對齊成 45a8d16,**同檔隔 6 行的這一處沒有**。
+# 改寫成 <go-live> 佔位而不是填入 45a8d16:寫死第二份 sha 就是製造第二個要對齊的
+# 地方,而下一次改寫歷史時漏掉的仍會是這一份。**同一個事實只留一個可寫的位置。**
+# **新增任何一行須經 R6 與裁決。** 清單只減不增:排水的方向是移除,不是新增。
+# 排水紀錄(只減不增,移除不需要批准 —— 那是清單的設計方向):
+#   2026-08-14  移除 .claude/portable/g1_guard.py
+#               票 25 的紅燈對著它在 HEAD 的內容發生過(impl_hash 相符兩筆),
+#               R3 後半已能誠實滿足,不必再靠豁免。10 -> 9。
+.claude/hooks/gate.py
+.claude/hooks/redlight.py
+.claude/patches/apply_patches.py
+.claude/portable/claude_md.py
+.claude/portable/g1_verify.py
+.claude/portable/install.py
+.claude/portable/leak_scan.py
+.claude/portable/manifest.py
+.claude/portable/verify_gates.py

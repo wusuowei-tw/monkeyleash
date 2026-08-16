@@ -31,11 +31,31 @@ __pycache__/
 !/.dev/gate-exemptions.jsonl
 !/.dev/provenance.jsonl
 
-# 紅燈豁免清單:manifest 標 generate,**綁死產生它的那個 repo**(go-live sha +
-# 路徑清單)。跟著發布來源走的話,下游拿到一個在自己 repo 不存在的 commit 去驗
-# 每一筆,check_legacy_list fail-closed → 目標 repo 的每一次 commit 當場全擋。
-# 與 /.dev/ 同一類:per-repo 狀態,不是框架內容。
-/.agents/legacy-no-redlight.txt
+# 紅燈豁免清單 —— **票 54 改為進版控。原理由保留(F-036),更正寫在下面。**
+#
+# 原理由(2026-08-14,已不再適用於「要不要版控」這一問):
+#   紅燈豁免清單:manifest 標 generate,**綁死產生它的那個 repo**(go-live sha +
+#   路徑清單)。跟著發布來源走的話,下游拿到一個在自己 repo 不存在的 commit 去驗
+#   每一筆,check_legacy_list fail-closed → 目標 repo 的每一次 commit 當場全擋。
+#   與 /.dev/ 同一類:per-repo 狀態,不是框架內容。
+#
+# 更正(2026-08-16,票 54):**原理由描述的全部是「可攜性」,而它管的是「版控」。**
+# 這是兩個獨立的軸:
+#   可攜(下游會不會拿到)→ 由 .agents/portable-manifest.txt 的 generate 標記管。
+#                          install.py:396 只搬 copy 桶;generate 桶靠
+#                          generate_legacy_list() 在目標 repo 重新產生。
+#   版控(上游自己留不留紀錄)→ 由本檔管。
+# 所以原理由成立,但它證成的是「不該標 copy」—— 而 generate 標記已經在做那件事。
+# 一個正確的理由貼在錯的機制上。
+#
+# 進版控換來兩件事:
+#   1. CI(乾淨 clone)能跑 R6 那組測試 —— 缺這個檔時 4 條紅。
+#   2. **只減不增從此看得見。** R6 守的正是只減不增,而那件事原本只在執行時
+#      被檢查、不留痕。進版控後每次排水都是一筆 diff;有人想加回去,
+#      R6 會擋(新檔不在 go-live 樹裡)、diff 會顯示 —— 兩層都在。
+#
+# 同款先例就在上面兩行:gate-exemptions.jsonl 與 provenance.jsonl 同樣是
+# per-repo 狀態,同樣進版控,理由同樣是「它是證據」。
 
 # 工作階段暫存(票已搬進版控的 docs/tickets/;.scratch 只留真正的暫存物)
 /.scratch/

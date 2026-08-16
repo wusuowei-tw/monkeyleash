@@ -32,6 +32,16 @@ pyproject.toml                  skip
 bootstrap.sh                    skip
 .githooks/pre-commit            skip
 
+# CI 設定(票 54)。標 skip 的理由與上面五筆同一條:**每個 repo 都有一份,
+# 而內容是那個 repo 的事實** —— 相依、測試數、要不要跑 bootstrap.sh、
+# 哪些測試在該 repo 上依賴不進版控的檔案,三個 repo 各不相同。
+#
+# **這一行必須先於任何 .github/ 檔案進版控。** 未分類的檔案在更新路徑
+# (sync)會被 refuse_if_unclassified 拒絕並點名,但在**安裝器**路徑
+# (mark_in → DEFAULT_MARK)預設是 copy,而那條路徑是靜默的:
+# 下游會拿到一份為 agent-gates 寫的 CI,一裝就紅,而紅的樣子像 CI 壞了。
+.github/                        skip
+
 # ── 判定邏輯與定義 ────────────────────────────────────────────
 .claude/hooks/                  copy
 .claude/portable/               copy
@@ -92,6 +102,14 @@ tests/test_dependency_ceiling.py skip
 # **不出貨**:它驗的是**這台機器的個人 pattern 清單**(不進版控、跟人走)。
 # 出貨到下游只會天生帶紅,同上兩則的形狀。
 tests/test_known_items_regression.py skip
+# **不出貨**:它驗的是 `.github/workflows/*.yml`,而那一筆標 `skip`
+# (每個 repo 的 CI 是那個 repo 的事實)。帶走測試卻不帶走它驗的檔案
+# = 到站即紅,同上三則的形狀 —— 而 `test_there_is_at_least_one_workflow`
+# 正是設計成沒有 workflow 就紅的那條錨點。
+# 同上一則的但書:**這是機制綁死,不是想法綁死** ——
+# 「action 要釘 sha、權限要最小、不得碰使用者層」在下游一樣成立,
+# 要出貨得讓安裝器連 CI 骨架一起產生,那是另一張票。
+tests/test_ci_workflow.py       skip
 
 # ── 專案自己的測試,住在同一個目錄但不是框架的 ──────────────
 # 「沒被提到」不是合法狀態:tests/ 是框架與專案混居的地方,
