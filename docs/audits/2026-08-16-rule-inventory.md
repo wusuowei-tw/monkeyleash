@@ -249,6 +249,86 @@ R6 的判定是 `git cat-file -e <go-live>:<path>` —— 對每一條逐一問�
 
 **沒有任何測試會為那一種出聲**,因為唯一那條測試只問「R6 有沒有被列舉」。
 
+---
+
+## ⚠ 更正(2026-08-16)—— 上面那段的**事實是錯的**,原文不刪(F-036)
+
+影音的清冊推翻了本則,證據硬:`tests/test_gate.py` 在兩個 repo 是**同一份 blob**
+(`80caa4250f18ecd04807c7b44fb705fad1e82d69`),而我手上就是那份。
+
+### 一、R6 由 **(c)** 改為 **(b)**
+
+**R6 有 5 條真正對照,不是 0 條。** 我逐條手讀了三個相關類別的全部 20 條斷言:
+
+| 測試 | 斷言原文 |
+|---|---|
+| `test_an_entry_absent_from_the_go_live_tree_is_a_violation` | `assert len(v) == 1 and "not/in/the/tree.py" in v[0], v` |
+| `test_a_path_absent_from_that_tree_is_still_named` | `assert len(v) == 1 and "never/existed.py" in v[0], v` |
+| `test_an_unreadable_list_is_not_silently_clean` | `assert gate.check_legacy_list() != []` |
+| `test_a_list_without_a_sha_is_a_violation_not_a_pass` | `assert v and "go-live" in v[0], v` |
+| **`test_the_rule_is_actually_invoked_at_the_authoritative_layer`** | **`assert gate.mode_pre_commit() == 1`** |
+
+**實跑:20 passed。**
+
+最後那條比本清冊給任何規則的評價都強 —— 它驗的是**規則真的被權威層呼叫**,
+而不只是函式回對值。**我原本說它「連自己會不會被呼叫都沒驗」,那是錯的。**
+
+### 二、**所有「正對照條數」一律撤回,而且不換新數字**
+
+我用了四套方法算同一件事,得到四個答案:
+
+| 規則 | 一(搜代號) | 二(認實作) | 三(讀斷言) |
+|---|---|---|---|
+| R1 | 3 | 1 | 2 |
+| R2 | **17** | 9 | 9 |
+| R3 | **22** | 26 | 19 |
+| R4 | 7 | 6 | 10 |
+| R5 | 2 | **0** | 3 |
+| R6 | **1** | 2 | 8 |
+| R7 | 4 | 3 | 19 |
+| R8 | 12 | 4 | 10 |
+
+而方法三**也是錯的** —— 抽查它給 R8 的「正控例」:
+
+```
+test_an_indented_fragment_without_imports_is_not_an_r8_violation
+    assert not (msg and "R8" in msg)          ← 這是反控,被歸成正控
+```
+
+**壞的是單位,不是計數器。** 再換一個自動數字只是換一個錯法。
+
+### 三、根因:搜的是**規則代號**,而測試斷言的是**行為**
+
+原方法只認 body 含 `[R6` / `"R6"` / `'R6'` 的測試。而那條被我判定不存在的測試,
+斷言是 `assert len(v) == 1 and "not/in/the/tree.py" in v[0]` —— **body 裡沒有 `R6`。**
+
+> **系統性偏差**:訊息文字**碰巧含有自己代號**的規則(`R3/紅燈`、`R2/範圍`)被高估;
+> 訊息不含代號的規則被歸零。
+> **17 / 22 這兩個大數字,與 R6 的 0,是同一個 bug 的兩端。**
+
+這是 F-091 家族的第八次:**驗證用的表示法與被驗證的資料不是同一個**。
+而這一次它污染的不是一格,是**整份清冊的第 5 欄**。
+
+### 四、結論方向**部分成立**
+
+那 5 條正控**沒有一條**測「`go-live` 指向一棵什麼都在裡面的樹」。
+最接近的 `test_it_holds_when_the_gate_itself_is_absent_from_the_tree`
+構造的是**樹裡少東西**、斷言 `check_legacy_list() == []`(防誤報)—— **方向相反**。
+
+所以「**那一種失效沒有測試看著**」**仍然成立**。
+錯的是據以成立的事實(「R6 沒有正對照」),不是那個判斷。
+
+### 五、R1 / R2 / R5 / R8 四格的重驗(**各自手找一條實例,不數**)
+
+| 規則 | 實例 | 結果 |
+|---|---|---|
+| **R1** | `test_a_spec_that_cannot_be_read_is_blocked_not_allowed`(`test_gate_boundaries.py:50`)<br>`assert msg and "R1" in msg` | **(b) 成立** —— ⚠ 但**只涵蓋 fail-closed 分支**;**主路徑(規格書含程式碼 → 擋)沒有正控**。`CORPUS` 裡有那個輸入,但只餵給結構不變式與 trace 測試 |
+| **R2** | `test_unknown_file_types_in_source_dirs_are_guarded`(`test_gate.py:177`)<br>`assert msg is not None and "R2" in msg`(`load_stage` → `("spec", None)`,寫 `macro_audit/`) | **(b) 成立,主路徑** |
+| **R5** | **找不到** | **降為 (c)** —— 見下方登記五 |
+| **R8** | `test_a_result_that_imports_research_is_blocked`(`test_edit_result.py:188`)<br>`assert msg and "R8" in msg`;另有 `test_a_whole_file_write_importing_research_is_still_blocked`(`:241`) | **(b) 成立,主路徑** |
+
+**從此這四格是實例支撐,不是數字支撐。**
+
 ## 登記二:R8 不在 `CLAUDE.md` 的規則表
 
 `CLAUDE.md` 的四條規則表列 R1–R5(另有 R6/R7 在散文裡),**R8 完全沒有出現**。
@@ -274,6 +354,27 @@ R6 的判定是 `git cat-file -e <go-live>:<path>` —— 對每一條逐一問�
 第一級的設計者已經想過這個陷阱並寫下理由,**第二級沒有跟上**。
 
 **只登記,不跑實測** —— 攻擊面分析是另一件事,會把本票撐爆。
+
+## 登記五(2026-08-16 重驗新增):**R5 沒有任何正對照 —— 真正的 (c)**
+
+原本 R6 被誤判為 (c);重驗之下 R6 是 (b),而**真正落在 (c) 的是 R5**。
+
+`check_third_axis_mount()` / `check_to_spec_override()` 在測試裡只出現三種形態,
+**沒有一種在斷言它會擋**:
+
+| 出現處 | 形態 |
+|---|---|
+| `test_gate.py:819–820`、`1857–1858` | **被 monkeypatch 成 `lambda: []`** —— 為了讓別的測試跑得過而**停用**它 |
+| `test_gate.py:406` | `lambda: ["[R5] 掛載點消失"]` —— **餵一個假違規**進去測快取,不是測 R5 |
+| `test_gate.py:901` | `assert {"R1"…"R6"} <= codes` —— **只驗代號被列舉** |
+
+`test_apply_patches.py` 那 5 條測的是**貼 patch 的腳本**(`_count(grill) == 1`),
+不是 R5 的判定。
+
+**R5 的實際偵測邏輯(`MOUNT_MARKERS` 有沒有出現在正典 body 裡)零測試涵蓋。**
+
+而它守的是:`npx skills update` 會用上游版覆蓋正典 code-review、**靜默移除本地第三軸**。
+**「靜默」正是它要防的東西,而它自己現在也是靜默的。**
 
 ## 登記四:**「決定規則行為的東西不進版控」是一整族,九處**
 
