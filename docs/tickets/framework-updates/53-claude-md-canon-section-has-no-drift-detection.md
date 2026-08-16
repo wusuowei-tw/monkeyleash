@@ -1,0 +1,103 @@
+# 53 — `CLAUDE.md` 的正典段(FRAMEWORK 界線內)無漂移偵測
+
+**狀態**:**candidate**
+**立案**:票 46(2026-08-16)
+**優先**:**高。理由是相依 —— 它是票 51 的搭檔。**
+
+---
+
+## ⚠ 範圍(收窄後,2026-08-16 裁決)
+
+**本張只處理 `CLAUDE.md`。**
+題目**不是**「`generate` 桶無漂移偵測」——
+
+> 對桶內另外四個條目而言,「不比對」**不是缺陷,是那個桶存在的理由**。
+> 寫成桶會讓開工的人一起改掉,而那四個一比就全部誤報 ——
+> **修一個缺陷順手製造四個假警報是淨損失。**
+
+**`generate` 桶內若將來出現第二個混血條目,要回頭擴充本張的範圍。**
+
+這句話是釘子:收窄之後,**這個洞會消失在「已收窄」四個字底下**,
+因為 —— **同一個桶裡不同質的那一個,不會因為分在一起就變同質,而分類表看起來是齊的。**
+
+## 來源
+
+影音清冊(歸上游,已在 agent-gates 逐項複驗)。
+
+## 現況證據
+
+### 三桶的驗證強度不對稱
+
+| 桶 | 驗什麼 | 位置 |
+|---|---|---|
+| `copy` | **寫入後 hash 重驗**,不符 `raise Refused` | `sync.py:473`、`:489–492` |
+| `ask` | 兩邊 hash 不同就 `needs_decision` 出聲 | `sync.py:465–469` |
+| **`generate`** | **只有 `plan.untouched` / `moved`** | `sync.py:458`、`:495` |
+
+`sync.py:463` 的 `if mark != "copy":` 內**只有 `ask` 一個分支**,其餘 `continue`。
+
+> `generate` 被驗的是「**sync 自己有沒有亂碰它**」,
+> **不是「它跟正典一不一致」。**
+
+### `CLAUDE.md` 是這個桶裡唯一的混血
+
+`portable-manifest.txt:8` 寫著桶的語意:
+
+> `generate  內容綁這個 repo(sha、路徑清單),必須在目標 repo 重新產生;照抄會靜默壞掉`
+
+| 條目 | 內容綁 repo? | 有可比對的正典子範圍? |
+|---|---|---|
+| `.agents/legacy-no-redlight.txt` | 是(`go-live: <sha>`) | 無 |
+| `.dev/` | 是(執行期狀態) | 無 |
+| `docs/going-public-known-items.md` | 是(歷史錨 sha) | 無 |
+| `docs/agents/friction-local.md` | 是(專案自己的號) | 無 |
+| **`CLAUDE.md`**(`portable-manifest.txt:146`) | **只有 `:196` 之後** | **`:3–196`,而界線是機器可讀的** |
+
+`CLAUDE.md:3` `<!-- FRAMEWORK:BEGIN -->`、`:196` `<!-- FRAMEWORK:END -->` ——
+**界線之間是正典內容、各 repo 一份、應當完全相同。**
+
+### 已經漂了
+
+影音實測 **`:32` 與 `:65` 兩處已漂移**。
+沒有任何東西發現這件事,**因為沒有任何東西在看。**
+
+### 現有測試看的是別的東西
+
+`tests/test_claude_md.py` 七條全名:
+
+```
+test_the_framework_section_is_what_lies_between_the_markers
+test_missing_markers_is_an_error_not_the_whole_file
+test_duplicate_markers_are_an_error
+test_end_before_begin_is_an_error
+test_the_rendered_file_round_trips
+test_the_rendered_file_leaves_a_labelled_place_for_project_rules
+test_the_shipped_claude_md_carries_the_markers
+```
+
+**七條全部只驗抽取邏輯與標記存在。沒有任何一條比對下游框架段與上游。**
+
+> 抽取邏輯有測試、界線有測試、**而界線圈出來的那段內容沒有。**
+
+## 為什麼優先(相依,不是期限)
+
+**票 51 修的是正典段裡的字。** 修完之後若沒有東西看著,
+**下一次漂移一樣沒人知道** —— 於是 51 的成果會靜默地被下游的舊版本蓋過或分歧。
+
+**所以 53 是 51 的搭檔,不是票 47 的對手。** 排序:`47 → 53 → 51 → 其餘`。
+
+## 為什麼不在原票修
+
+本項由**影音**查出,而影音不是正典所在。
+跨進上游改 `sync.py` 正是 F-094 在講的動作(前哨會讀來源視窗的狀態)。
+歸上游、由上游開票,是唯一不觸發那個缺陷的路徑。
+
+## 已知代價
+
+- 票 51 修好的正典段**下一次就會再分歧**,而分歧不會出聲
+- 下游的 `CLAUDE.md` 框架段可以任意漂,**而 `sync.py` 每次都回報成功**
+- 影音已知的 `:32` / `:65` 兩處**沒有機制會告訴任何人它們什麼時候被修好**
+
+## 本票不含
+
+**解法設計不在本票。**
