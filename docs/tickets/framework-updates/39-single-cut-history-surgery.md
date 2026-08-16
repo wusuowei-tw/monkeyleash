@@ -76,6 +76,30 @@
 當時票面被擋、我改了票面,但訊息已定型 —— **票面改得掉,commit 訊息改不掉**,
 要改只能再開一刀,而那正是「只跑一次」禁止的。詳見登記表的第二個聚合鍵。
 
+### 開刀後補充:`filter-repo` 移除 `origin` 的連帶
+
+`filter-repo` 會移除 `origin`(它的安全設計:防止改寫後誤推)。
+第 16 步用 `git remote add` 加回來 —— **而 `remote add` 不重建分支的追蹤關係**。
+
+後果不影響完整性,但**讓一個習慣性的訊號消失**:
+
+| | 開刀前 | 加回 origin 後 |
+|---|---|---|
+| `git status -sb` | `## master...origin/master` | `## master` |
+| `git push` / `git pull` 不帶參數 | 可用 | **失敗** |
+| ahead / behind 顯示 | 有 | **靜默** |
+
+**是完整性檢查的第四項把它照出來的** —— `git status -sb` 印的東西比預期少一截。
+若只看 `fsck` 與測試,這一項不會出現:兩者都不看追蹤關係。
+
+處置(裁決授權):`git branch --set-upstream-to=origin/master master`。
+驗證:`## master...origin/master`,無 ahead/behind。
+
+> **判準:改寫工具移除的東西,不會在你把它加回來時一起回來。**
+> `remote` 與 `branch.<name>.remote` 是兩層設定,`remote add` 只補了第一層。
+> 同族:重裝套件不會回復它的設定檔、重建資料庫不會回復它的索引、
+> 重新 clone 不會帶回 `.git/hooks/`(ADR 0007 那一條)。
+
 ### 五、F-091 改號
 
 本輪寫的 F-090 與票 41/42 那則撞號,改為 **F-091**;票 41/42 那則保持 F-090。
