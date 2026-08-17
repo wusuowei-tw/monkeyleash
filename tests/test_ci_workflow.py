@@ -63,6 +63,23 @@ def _walk_uses(node):
                 yield u
 
 
+def _walk_runs(node):
+    """遞迴取出所有 `run:` 的值。與 `_walk_uses` 同一個理由,同一個形狀:
+    寫死 `jobs -> steps` 會漏掉巢狀位置,而**漏掉的那個不會出聲**。
+    """
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "run" and isinstance(v, str):
+                yield v
+            else:
+                for r in _walk_runs(v):
+                    yield r
+    elif isinstance(node, list):
+        for item in node:
+            for r in _walk_runs(item):
+                yield r
+
+
 # ── 使用者層的「位置」——封閉集合,枚舉不比對(F-087)────────────────
 #
 # 只封位置,不封 `~/.claude/` 底下每一個檔名:`settings.json`、`cache/`、
@@ -243,3 +260,31 @@ def test_every_third_party_action_is_pinned_to_a_sha(path):
     assert not unpinned, (
         "%s 有沒釘 sha 的 action:%s\n"
         "     標籤會被移動,而移動不會通知任何人。" % (os.path.basename(path), unpinned))
+
+
+def test_verify_gates_is_wired_into_ci():
+    """淨室驗證要真的被 CI 跑到 —— 步驟被拿掉必須有東西叫(票 56)。
+
+    **這條測試存在的理由,就是它自己要防的那個缺陷家族。** 已經三個實例:
+    verify_gates 不在 CI、mutation_check 不指閘門、內層 hook 不進版控 ——
+    三次都是「機制做好了,但沒有東西保證它被走到」。
+    加了步驟卻不加這條斷言,今天的修法就是第四次。
+
+    **比對指令,不比對步驟名。** 步驟名是給人看的字串,改了不影響行為;
+    真的把 verify_gates 換掉、註解掉、或換成別的腳本,**只有指令會變**。
+
+    不指定是哪一個 workflow、也不指定在哪一個 job:那些是佈局,會合理地變動。
+    要守的是「這件事有沒有在 CI 上發生」,不是「它排在第幾步」。
+    """
+    if not workflow_files():
+        pytest.skip("沒有 workflow — 由 test_there_is_at_least_one_workflow 負責紅")
+    runs = []
+    for path in workflow_files():
+        runs.extend(_walk_runs(yaml.safe_load(_text(path))))
+    hits = [r for r in runs if "verify_gates.py" in r]
+    assert hits, (
+        "沒有任何 workflow 步驟跑 verify_gates.py —— 淨室驗證不在 CI 上。\n"
+        "     它涵蓋的是**安裝後的形態**(每條規則各擋一次、權威層三態、\n"
+        "     以及框架測試在新 repo 裡再跑一次),與跑 pytest 那一步驗的\n"
+        "     **原始碼形態**是不同維度 —— 少了不會有別的東西補上。\n"
+        "     現有的 run 指令:%s" % runs)

@@ -21,7 +21,26 @@
 | **leak_scan 個人 pattern 層** | 4 個測試函式 / **12 個參數化案例** | **0** | `tests/test_known_items_regression.py` **整檔** |
 | **leak_scan 通用 pattern 層** | 有 | **有** | 無差(`load_patterns()` 對個人清單缺席只警告,不 fail-closed) |
 | **symlink 路徑** | **0**(3 條 skip:Windows 建不了) | **3 條** | **CI 多於本機** —— 這三條在桌機從未執行過。**2026-08-16 第二次 CI 已實證通過**,見文末收尾節 |
+| **淨室(安裝後形態)** | 有,但**手動、不強制** | **有**(每次 CI) | **票 56 加入。** CI 綠燈涵蓋 **13 / 93 面**的真實形態,**不是全部** —— 見下方註 |
 | R1–R5、R7、R8、G1 | — | — | 無差 |
+
+> **「淨室」那一列的綠燈,涵蓋範圍要照這段讀(票 56 加入)。**
+>
+> 涵蓋的 13 面(以「能獨立判錯的判定點」切,全庫 93 面):
+> R1–R8 各 1 面(每條規則各擋一次)+ 權威層 3 面(hook 刪掉 / 別人的 hook 佔位 /
+> 裝回去)+ 安裝器預設值 2 項(pre-commit 有接 leak_scan、`.gitignore` 有守 `.env`)。
+>
+> **沒被這一步涵蓋的重點**:R3 的 **8 面豁免全部零覆蓋**(legacy 清單、research 範圍、
+> bare package marker、票宣告、logged exemption、upstream provenance、upstream 指標、
+> 宣告解析)—— 而**覆蓋最差的一族,正好是最容易 fail-open 的一族**。
+> 另有 R5 的位置判定與 to-spec 兩面、R7 的 8 面、R2 的 7 面。
+>
+> **代價:`verify_gates.py` 自己沒有測試守它。** 它列在
+> `.agents/legacy-no-redlight.txt`、宣告 Untested by decision(接縫 S4),
+> 接進 CI 等於讓一支無測試的腳本成為紅綠燈的一部分。
+> **這一半已由實測補上**:把情境換成「什麼都不做」與「寫一個無害檔」兩種突變,
+> 兩次都紅(`SystemExit: 1 條規則沒擋到`)—— 情境失效的方向是 fail-closed,
+> 不會靜默變綠。**另一半沒補**:那是實測,不是機制,沒有東西保證它會被重跑。
 
 ### R6 的五條正對照(逐條,CI 上全過)
 

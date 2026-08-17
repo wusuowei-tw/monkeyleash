@@ -70,3 +70,18 @@ jobs:
           python -m pytest -q \
             --ignore=tests/test_known_items_regression.py \
             --deselect "tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce"
+
+      # 淨室:真的裝一次、讓每條規則各擋一次、再在新 repo 裡跑一次框架測試。
+      #
+      # **與上一步不重複。** 上一步驗的是**原始碼形態**(這個 repo 的樹),
+      # 這一步驗的是**安裝後的形態**(裝出去的 repo)—— 同一份碼、兩個形態,
+      # 而下游拿到的是後者。少了它,「換個環境也綠」完全沒有人在驗。
+      #
+      # **綠燈的範圍要照著票 54 的落差表讀**:這一步涵蓋的是
+      # 13 / 93 個判定面的真實形態,不是全部。綠不代表其餘 80 面沒問題。
+      #
+      # 這個步驟本身由 tests/test_ci_workflow.py::test_verify_gates_is_wired_into_ci
+      # 守著 —— 被拿掉會有東西叫。少了那條斷言,這裡就是
+      # 「機制做好了但沒有東西保證它被走到」的第四個實例(票 56)。
+      - name: 淨室驗證(每條規則各擋一次 + 安裝後形態)
+        run: python .claude/portable/verify_gates.py "${{ runner.temp }}/verify-gates"
