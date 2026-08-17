@@ -142,13 +142,29 @@ def load_target_gate(target):
 
 
 def restore(target):
-    """回到安裝後的乾淨狀態。
+    """回到安裝後的乾淨狀態。**兩半,因為這個 repo 有兩半。**
 
-    `git clean -fd` 不帶 -x:鏡像目錄被 .gitignore 忽略,帶了 -x 會把它們清掉,
-    下一條規則就在一個殘缺的 repo 上跑 —— 那會讓失敗的原因變成上一條情境。
+    追蹤側由 git 還原;**被 .gitignore 忽略的鏡像目錄 git 碰不到**,要重建。
+
+    `git clean -fd` 不帶 -x 仍然是對的:帶了會把鏡像整個清掉。但**只靠它不夠** ——
+    `scenario_r4` 刪的是鏡像**裡面**的一個檔,而 `git reset --hard` 與
+    `git clean -fd` 都管不到被忽略的路徑,那個刪除因此永久留著(票 56)。
+    舊註解只寫了「鏡像被整個清掉」那一種殘缺,漏掉「鏡像內被刪一個檔」那一種,
+    而後者正是本檔自己的情境造的。
+
+    後果不是抽象的:R4 之後每一條走 commit 的情境(R5 / R6 / R8)都在一個帶著
+    R4 違規的 repo 上跑,於是 `run_scenario` 那個連言裡的 `rc != 0` 一半**由殘留
+    白送**,真正在做事的只剩 `"[Rx]" in out`。讀起來在驗兩件事,實際只驗一件。
+
+    **重建而不是 `-x`**:`-x` 刪掉鏡像之後不會再建回來,那是換一個更大的殘缺。
+    `build_mirrors` 從正典 rmtree + copytree,兩個鏡像一起回來。
+
+    **順序不能反**:先 `git reset` 讓正典回到 HEAD,再從正典重建鏡像 ——
+    反過來的話,`scenario_r5` 改過的正典會被複製進鏡像,乾淨狀態就不乾淨了。
     """
     sh(["git", "reset", "-q", "--hard", "HEAD"], target)
     sh(["git", "clean", "-qfd"], target)
+    install.build_mirrors(target)
 
 
 def run_scenario(target, code):
