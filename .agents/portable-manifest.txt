@@ -86,6 +86,7 @@ tests/test_scanner.py           copy
 tests/test_sync.py              copy
 tests/test_evidence_isolation.py copy
 tests/test_user_layer.py        copy
+tests/test_verify_gates.py      copy
 # 票 42:含 submodule 的下游那條循環(sync 拒絕 ↔ leak_scan 擋 bump)。
 # **出貨**:它驗的是框架三支檔案接得起來,而受害者正是下游 ——
 # 留在上游的話,這條循環只有回報得夠清楚的下游才會被發現。
