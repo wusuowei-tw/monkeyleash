@@ -104,6 +104,12 @@ tests/test_sync.py              copy
 tests/test_evidence_isolation.py copy
 tests/test_user_layer.py        copy
 tests/test_verify_gates.py      copy
+# 帳本鏈驗證工具的測試(票 47 收尾)。**出貨**:它驗的
+# `.claude/portable/ledger_verify.py` 落在 `.claude/portable/` 前綴底下(標 copy),
+# 而 `.dev/gate-exemptions.jsonl` 每個裝了框架的 repo 都有(標 generate)——
+# 「帶走測試卻不帶走它驗的東西」那個形狀在這裡不成立。
+# 測試本身不碰真實帳本:全部用手造的紀錄串列,只有 CLI 那半讀檔案。
+tests/test_ledger_verify.py     copy
 # 票 42:含 submodule 的下游那條循環(sync 拒絕 ↔ leak_scan 擋 bump)。
 # **出貨**:它驗的是框架三支檔案接得起來,而受害者正是下游 ——
 # 留在上游的話,這條循環只有回報得夠清楚的下游才會被發現。
