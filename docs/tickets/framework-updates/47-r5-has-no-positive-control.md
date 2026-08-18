@@ -67,6 +67,35 @@ index mode 在 `e195adc` 之前是 `100644`,三道若當時就在會當場紅)�
 (`### 3b. Identify the data-integrity sources` 是小寫連字號,**打不到**)。
 `missing` 非空 → **面 B 觸發,面 C 永遠走不到**(面 B 先 return)。
 
+#### ⚠ R5 內部的盲區:位置判定讀五個錨點,而字串判定只認四個 marker,兩組只重疊兩個
+
+**批 2 寫測試時撿到的,不是原本盤點出來的。**
+
+`check_third_axis_mount()` 的**位置**判定(`gate.py:2295-2297`)讀五個錨點,
+而 `MOUNT_MARKERS`(`gate.py:2238-2243`)是另一組四個字串:
+
+| 錨點 | 在 `MOUNT_MARKERS`? | 上游把它改名時 |
+|---|---|---|
+| `### 3. Identify the standards sources` | **否** | **面 B 綠**、面 C 紅 |
+| `### 3b. Identify the data-integrity sources` | 是 | 兩面都紅 |
+| `### 4. Spawn` | **否** | **面 B 綠**、面 C 紅 |
+| `**Data Integrity sub-agent prompt**` | 是 | 兩面都紅 |
+| `### 5. Aggregate` | **否** | **面 B 綠**、面 C 紅 |
+
+`check_to_spec_override()` 同形:`## Implementation Decisions` 與
+`## Testing Decisions` **都不是**面 E 檢查的字串。
+
+> **所以「上游把錨點改名」這個狀態,面 B / E 完全看不見 —— 只有面 C / F 會紅。**
+> 而在批 2 之前,**面 C / F 零涵蓋**:那個狀態沒有任何東西在守。
+
+**批 2 已補上兩條專門守它的測試**
+(`test_a_renamed_anchor_is_caught_here_and_not_by_the_marker_check`,C 與 F 各一),
+而且兩條都**先斷言前提**(marker / 覆寫字串仍在),
+否則語料若不小心也弄掉一個 marker,測試會因為**面 B / E** 而綠 ——
+**那是 F-103 的形狀,而且是自己最容易踩的那一種。**
+
+**這一節是人讀的紀錄。** 機器那一半見下方「登記不處置」。
+
 #### 面 G 的性質要說清楚
 
 那 5 條測的是**快取的失效邏輯**,而**被快取的那個東西整個被換成 `lambda: []`**。
@@ -179,6 +208,26 @@ R5 守的正是「`npx skills update` **靜默**移除本地第三軸」。
 
 **裁決(2026-08-18):不抽。** 抽常數是**改實作**,超出本票宣告的「純補測試」;
 面 D 改用 `monkeypatch ROOT` 達成同樣的隔離。**登記在此,不處置。**
+
+## 登記不處置(二):`MOUNT_MARKERS` 旁沒有註解說明它與位置錨點的關係
+
+上面那個盲區(五個錨點 vs 四個 marker,只重疊兩個)**現在有測試守著了**,
+所以它不是洞。**但那件事本身沒有寫在 `gate.py` 裡的任何地方。**
+
+> **下一個改 `MOUNT_MARKERS` 的人,不會知道位置判定另外讀三個不在這份清單裡的錨點。**
+> 他可能以為「把錨點加進 `MOUNT_MARKERS` 就完整了」,
+> 或反過來以為「從 `MOUNT_MARKERS` 拿掉一個 = 那個字串不再被檢查」——
+> **兩個推論都錯,而且方向相反。**
+
+**裁決(2026-08-18):不動 `gate.py`。** 補註解是改實作,超出本票宣告的「純補測試」。
+
+**處置:將來任何一張會動 `gate.py` 的票順手帶上。** 要補的內容:
+在 `MOUNT_MARKERS` 旁註明「位置判定另外讀 `### 3.` / `### 4. Spawn` / `### 5. Aggregate`,
+它們**不在本清單裡**,改名時只有面 C 會紅」。
+
+**在那之前,守著這件事的是**
+`tests/test_r5_mounts.py::TestR5RefusesAMisplacedThirdAxis::test_a_renamed_anchor_is_caught_here_and_not_by_the_marker_check`
+—— **測試是機制,票面是紀錄,而註解兩者都不是**(F-086)。
 
 ## 批次
 
