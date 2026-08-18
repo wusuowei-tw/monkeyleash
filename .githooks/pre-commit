@@ -7,9 +7,11 @@
 # 用 `git config core.hooksPath .githooks` 指過來 —— hook 跟著 clone 走,
 # 啟用只要一行 config(零接觸不可能,git 刻意如此)。
 #
-# **三層都要接**(票 27)。這一支原本只有 leak_scan,而 manifest.py 已經
-# 記載過同一個形狀是缺陷:「目標的 .githooks/pre-commit 會從三層掛載降成
+# **兩段都要接**(票 27)。這一支原本只有 leak_scan,而 manifest.py 已經
+# 記載過同一個形狀是缺陷:「目標的 .githooks/pre-commit 會從**兩段都接**降成
 # 只剩 leak_scan,**權威層靜默消失**,而整個過程看起來像一次成功的更新。」
+# (原寫「三層」—— 那個數字從一開始就錯,只有兩個階段。票 51:⑥ 更正,
+#  上面那句引文與 manifest.py:101 的原文在同一次改完,免得引號裡的字對不上。)
 # agent-gates 自己就處在那個降級狀態,40 個 commit 沒有人發現 ——
 # 因為 core.hooksPath 根本沒設定,這一支從頭到尾沒被執行過。
 root="$(git rev-parse --show-toplevel)"

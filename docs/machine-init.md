@@ -313,9 +313,14 @@ certutil -hashfile "%USERPROFILE%\.claude\shadow-clamp.txt" SHA256
 - 有設 → git **只**跑那個目錄裡的 hook,`.git/hooks/` 整個被忽略
 - 沒設 → git 跑 `.git/hooks/`
 
-兩支都必須是三層(`leak_scan` + `gate.py --pre-commit`)。少了 `--pre-commit`
+兩支都必須**兩段都接**(`leak_scan` + `gate.py --pre-commit`)。少了 `--pre-commit`
 那支 hook 跑的是預設模式,**什麼都不擋** —— 而「檔案在、名字對、內容有 gate.py」
 三件事都成立。驗收要看的是**行為**,不是這三件事。
+
+> **本行原寫「三層」,2026-08-18(票 51:⑥)更正為「兩段」。**
+> 那個 hook 只有兩個階段,全庫沒有任何一處說得出第三樣是什麼 ——
+> **不是這裡缺一層,是那個數字從一開始就錯。** 完整查證見票 51:⑥。
+> 歷史紀錄(票 01/15/27/44 與 friction 條目)照 F-036 不改寫。
 
 > **驗收不能只 `ls`,也不能只讀 hook 的檔名** —— 與第二節開頭同一句話:
 > 檔案都在證明不了防護會生效。

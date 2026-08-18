@@ -255,7 +255,8 @@ class TestUnclassifiedIsRefusedNotCopied:
     """**「未標記 → copy」在安裝器是對的,在更新路徑是災難。**
 
     下游第三輪 dry-run 攔到:sync 要覆蓋目標的六個根目錄檔,其中
-    `.githooks/pre-commit` 會從三層掛載降成只剩 leak_scan ——
+    `.githooks/pre-commit` 會從**兩段都接**降成只剩 leak_scan ——
+    (原寫「三層掛載」,票 51:⑥ 更正:那個 hook 只有兩個階段)
     **權威層靜默消失**。hook 還在、還會跑、還會擋洩漏,只是不再呼叫
     `gate.py --pre-commit`,而整個過程看起來像一次成功的更新。
 

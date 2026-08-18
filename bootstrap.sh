@@ -9,7 +9,8 @@
 # **兩條掛載路徑,以 core.hooksPath 為準**(票 27 釐清):
 #   core.hooksPath 有設 -> git 只跑那個目錄裡的 hook,.git/hooks/ 整個被忽略
 #   沒設             -> git 跑 .git/hooks/
-# 兩支現在都是三層(leak_scan + gate.py --pre-commit),所以走哪條都不掉權威層。
+# 兩支現在**兩段都接**(leak_scan + gate.py --pre-commit),所以走哪條都不掉權威層。
+# (原寫「三層」—— 那個數字從一開始就錯,只有兩個階段。票 51:⑥ 更正。)
 # 在此之前 .githooks/ 只有 leak_scan,而 core.hooksPath 從未設定 ——
 # 於是「文件寫的機制」與「實際生效的機制」不是同一個,兩年份的 commit
 # 沒有經過權威層判定,而且完全靜默(票 27)。
