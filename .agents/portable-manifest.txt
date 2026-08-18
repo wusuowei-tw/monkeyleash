@@ -80,6 +80,12 @@ scripts/skills-update.sh        copy
 # ── 框架的測試(閘門自己的) ───────────────────────────────────
 tests/conftest.py               copy
 tests/test_gate.py              copy
+# R5 的正對照(票 47)。**出貨**:R5 守的是 `npx skills update` 靜默移除
+# 本地第三軸,而下游同樣會跑 skills 更新 —— 那條風險是跟著框架走的。
+# 它驗的兩個檔(`.agents/skills/{code-review,to-spec}/SKILL.md`)標 `copy`,
+# 所以下游一定有;**「帶走測試卻不帶走它驗的檔案」那個形狀在這裡不成立**
+# (對照 tests/test_bootstrap.py 的釘子 —— 那一筆正是因為那個形狀成立才標 skip)。
+tests/test_r5_mounts.py         copy
 tests/test_redlight.py          copy
 tests/test_manifest.py          copy
 tests/test_claude_md.py         copy
