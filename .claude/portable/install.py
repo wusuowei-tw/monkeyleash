@@ -198,6 +198,12 @@ def generate_state(target):
 
 
 def install_hook(target):
+    """**不進版控**的那一半:`.git/hooks/pre-commit`。
+
+    仍然要寫,而且是甲的裁決 C 的一半(票 58):
+    `authoritative_layer()` 沒設 `core.hooksPath` 時查的就是這裡,
+    停寫它而又不設 config 的話,`main()` 的強制驗證會**假失敗**。
+    """
     hooks = os.path.join(target, ".git", "hooks")
     os.makedirs(hooks, exist_ok=True)
     path = os.path.join(hooks, "pre-commit")
@@ -207,6 +213,69 @@ def install_hook(target):
     except Exception:
         pass
     return path
+
+
+PORTABLE_HOOK_DIR = ".githooks"
+PORTABLE_HOOK_REL = PORTABLE_HOOK_DIR + "/pre-commit"
+
+
+def install_portable_layer(target):
+    """**進版控**的那一半:`.githooks/pre-commit` + `bootstrap.sh`(票 58 / F-065:1115)。
+
+    在此之前裝出來的 repo **沒有 `.githooks/`**,於是 `bootstrap.sh` 宣稱的那條路
+    (「hook 進版控,靠一行 config 指過去」)在目標 repo 上不存在 ——
+    那一步實際是「**先手工造一個 hook**,再跑一行 config」,
+    而 `F-065:1118` 逐字寫著「現在是人工補的,**下一個安裝的人不會知道要補**」。
+
+    **⚠ 本函式不關掉 ADR 0007 那個缺口。** `ADR 0007:19-22` 已經寫著
+    `core.hooksPath` 只是把「複製一個檔案」換成「跑一行 config」,**沒有消除那一步**;
+    `:33` 寫著三個偵測點都碰不到「clone 下來直接手動 commit 的人」——
+    **本函式對他零影響**。受益的是**會跑 `bootstrap.sh` 的人**:
+    在他身上,`ADR 0007:20` 那句第一次成為真的。
+
+    **`bootstrap.sh` 從來源檔讀,不在本檔再寫一份常數。** 兩份就是同一個事實
+    有兩個可寫的位置(`legacy-no-redlight.txt:12` 的同一條規矩),
+    而下一次改 bootstrap 會漏掉其中一份 —— 漏掉的正是出貨給下游的那一份。
+    形式抄 `generate_manifest()`:它同樣讀來源的檔,理由同樣是單一來源。
+
+    **讀不到來源就丟例外,不寫半個。** 產一個沒有 `bootstrap.sh` 的
+    `.githooks/` 等於把「指過去的目錄是空的」那個狀態裝進新 repo,
+    而那正是 bootstrap 第一道 fail-closed 在防的東西。
+    """
+    d = os.path.join(target, PORTABLE_HOOK_DIR)
+    os.makedirs(d, exist_ok=True)
+    hook = os.path.join(d, "pre-commit")
+    io.open(hook, "w", encoding="utf-8", newline="\n").write(HOOK)
+
+    src = os.path.join(SRC_ROOT, "bootstrap.sh")
+    if not os.path.exists(src):
+        raise SystemExit(
+            "[安裝/fail-closed] 來源沒有 bootstrap.sh(%s)—— 拒絕只產一半。\n"
+            "     只產 .githooks/ 而不產 bootstrap.sh,等於把「指過去的目錄\n"
+            "     不知道怎麼啟用」裝進新 repo,而那是靜默的。" % src)
+    dst = os.path.join(target, "bootstrap.sh")
+    io.open(dst, "w", encoding="utf-8", newline="\n").write(
+        io.open(src, encoding="utf-8").read())
+    return hook, dst
+
+
+def stage_hook_executable(target):
+    """把 `.githooks/pre-commit` 的 **index mode** 設成 `100755`。
+
+    **`os.chmod` 不夠,兩層都失效:**
+
+      檔案系統   Windows 沒有 POSIX 執行位元,`os.chmod(0o755)` 實質是 no-op
+      git index  `filemode=false` 時 git 一律把新檔記成 `100644`,**不看檔案系統**
+
+    而 **Linux 上 git 不執行沒有執行位元的 hook,並且不出聲** ——
+    所以這一步漏掉的話,裝出來的 repo 在 CI(Linux)上是
+    **靜默沒有權威層**的,而 `authoritative_layer()` 只讀內容不看 mode,
+    它會回報「已安裝」(票 58 D0:上游自己就量到 `100644`)。
+
+    **必須在 `git add` 之後呼叫** —— `update-index --chmod` 改的是既有的
+    index 條目,檔案還沒進 index 時它沒有對象可改。
+    """
+    run(["git", "update-index", "--chmod=+x", "--", PORTABLE_HOOK_REL], target)
 
 
 def generate_manifest(target):
@@ -398,8 +467,12 @@ def main(target):
     generate_manifest(target)     # 它標 ask,copy 桶帶不過去 —— 得自己產
     generate_state(target)
     hook = install_hook(target)
+    portable_hook, boot = install_portable_layer(target)
 
     run(["git", "add", "-A"], target)
+    # **在 add 之後、commit 之前。** `update-index --chmod` 改的是既有 index 條目,
+    # 放在 add 之前沒有對象可改;放在 commit 之後那個 mode 進不了這一筆。
+    stage_hook_executable(target)
     run(["git", "commit", "-q", "--no-verify", "-m", "裝上六站閘門(框架安裝)"], target)
     _, go_live = run(["git", "rev-parse", "HEAD"], target)
     go_live = go_live.strip()
@@ -416,7 +489,18 @@ def main(target):
     print("  複製      %d 個檔案" % len(buckets["copy"]))
     print("  產生      .dev/(狀態與空證據)、.agents/legacy-no-redlight.txt(%d 筆)" % len(legacy))
     print("  鏡像      %s" % (", ".join(mirrors) or "(無 skills 可鏡像)"))
-    print("  權威層    %s" % os.path.relpath(hook, target).replace("\\", "/"))
+    print("  權威層    %s(這台機器,不進版控)"
+          % os.path.relpath(hook, target).replace("\\", "/"))
+    print("  可攜層    %s + bootstrap.sh(進版控,mode 100755)"
+          % os.path.relpath(portable_hook, target).replace("\\", "/"))
+    # **C 的代價要說出來(票 58 甲)。** 裝出來的 repo 上,`.githooks/` 在
+    # `bootstrap.sh` 跑之前是**死的** —— 只看目錄結構的人會以為權威層走那裡,
+    # 而實際走 `.git/hooks/`。不說的話,這就是本票自己製造的下一則 F-099。
+    print("\n**`.githooks/` 現在是死的,要跑一次 `sh bootstrap.sh` 才會生效。**")
+    print("    現在生效的是 .git/hooks/pre-commit(這台機器,clone 帶不走)。")
+    print("    `.githooks/` 進了版控,所以**下一個 clone 只要跑那一行**就接上 ——")
+    print("    在此之前,那一步是「先手工造一個 hook,再跑一行 config」。")
+    print("    這一步關不掉:git 刻意不讓 clone 自動執行任何東西(ADR 0007)。")
     print("  go-live   %s" % go_live)
     if carried_untracked:
         print("\n帶過去了但來源 repo 還沒把它們進版控 —— 確認不是暫存檔:")

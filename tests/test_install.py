@@ -203,3 +203,163 @@ class TestTheInstallerProducesAManifest:
         body = open(str(tmp_path / ".agents" / "portable-manifest.txt"),
                     encoding="utf-8").read()
         assert "本 repo 自己的檔案" in body, "產出的表沒有留下「這裡由人補」的界線"
+
+
+class TestTheInstallerProducesThePortableAuthorityLayer:
+    """票 58 D3 —— 執行 `F-065:1115`(標「未做,待裁決」的框架待辦)。
+
+    ## 在此之前,裝出來的 repo 沒有 `.githooks/`
+
+    `install_hook()` 只寫 `.git/hooks/pre-commit`,而**那個目錄依 git 設計
+    不進版控** —— clone 拿不到它。於是 `bootstrap.sh` 宣稱的那條路
+    (「hook 進版控,靠一行 config 指過去」)在裝出來的 repo 上**不存在**:
+    那一步實際是「先手工造一個 hook,再跑一行 config」。
+
+    > **本組測試守的是:那一步從此只剩「一行 config」。**
+
+    ## ⚠ 本票不關掉 ADR 0007 那個缺口
+
+    `ADR 0007:19-22` 已經寫著 `core.hooksPath` 只是把「複製一個檔案」換成
+    「跑一行 config」,**沒有消除那一步**;`:33` 寫著三個偵測點都碰不到
+    「clone 下來直接手動 commit 的人」。**本票對他零影響。**
+    受益的是**會跑 `bootstrap.sh` 的人** —— 在他身上,`ADR 0007:20` 那句
+    **第一次成為真的**。
+
+    ## 甲的裁決是 C:產 + 不設 config + 續寫 `.git/hooks/`
+
+    設 config 是**這台機器的 local 狀態**,不是 repo 的內容;install 設了它,
+    「裝好了」在兩台機器上意思會不同。而續寫 `.git/hooks/` 讓
+    `authoritative_layer()`(沒設 hooksPath 就查那裡)在安裝當下就判「已安裝」——
+    不續寫的話,安裝的強制驗證會**假失敗**。
+    """
+
+    HOOK_REL = ".githooks/pre-commit"
+
+    def _repo(self, tmp_path, name):
+        import subprocess
+        repo = tmp_path / name
+        repo.mkdir()
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            subprocess.run(["git"] + c.split(), cwd=str(repo), capture_output=True)
+        return repo
+
+    def test_it_produces_the_versioned_hook_and_bootstrap(self, install_mod,
+                                                          tmp_path):
+        """**核心紅燈。** 兩個檔都要產,少一個那條路就還是斷的。"""
+        target = self._repo(tmp_path, "t1")
+        assert hasattr(install_mod, "install_portable_layer"), (
+            "安裝器不會產進版控的那一半 —— F-065:1115 的待辦仍未執行")
+        install_mod.install_portable_layer(str(target))
+        assert (target / ".githooks" / "pre-commit").exists(), \
+            "沒產 .githooks/pre-commit —— clone 拿不到 hook,bootstrap 指向空目錄"
+        assert (target / "bootstrap.sh").exists(), \
+            "沒產 bootstrap.sh —— 下一個 clone 不知道要跑什麼"
+
+    def test_both_hooks_are_byte_identical(self, install_mod, tmp_path):
+        """兩支必須逐位元組相同。
+
+        不同的話,走 `core.hooksPath` 與走 `.git/hooks/` 的判定會不一樣,
+        而**哪一支會跑取決於一行本機 config** —— 那是票 27 的整件事。
+        """
+        target = self._repo(tmp_path, "t2")
+        install_mod.install_hook(str(target))
+        install_mod.install_portable_layer(str(target))
+        a = open(str(target / ".git" / "hooks" / "pre-commit"),
+                 encoding="utf-8").read()
+        b = open(str(target / ".githooks" / "pre-commit"), encoding="utf-8").read()
+        assert a == b, "兩支 hook 內容不同 —— 走哪條路徑判定會不一樣"
+
+    def test_bootstrap_comes_from_the_source_file_not_a_second_copy(
+            self, install_mod, tmp_path):
+        """**單一來源。** `bootstrap.sh` 的內容要從來源檔讀,不得在 install.py
+        裡再寫一份常數。
+
+        兩份的話就是**同一個事實有兩個可寫的位置**
+        (`legacy-no-redlight.txt:12` 的同一條規矩),而下一次改 bootstrap
+        會漏掉其中一份 —— 漏掉的那一份正是出貨給下游的那一份。
+        """
+        target = self._repo(tmp_path, "t3")
+        install_mod.install_portable_layer(str(target))
+        produced = open(str(target / "bootstrap.sh"), encoding="utf-8").read()
+        source = open(os.path.join(install_mod.SRC_ROOT, "bootstrap.sh"),
+                      encoding="utf-8").read()
+        assert produced == source, "產出的 bootstrap.sh 與來源不同 —— 有第二份在別處"
+
+    def test_the_produced_bootstrap_carries_the_three_checks(self, install_mod,
+                                                             tmp_path):
+        """**超集斷言(票 58 的硬理由)。**
+
+        D3 之後安裝器開始產 `bootstrap.sh`,而下游那份是手寫的;
+        `bootstrap.sh` 標 `skip`,兩份**永遠不會自動對齊**。
+        上游若少一道,下游將來重跑 install 就會被**降級** ——
+        丟掉它自己那三道 fail-closed,而且完全無聲。
+        """
+        target = self._repo(tmp_path, "t4")
+        install_mod.install_portable_layer(str(target))
+        body = open(str(target / "bootstrap.sh"), encoding="utf-8").read()
+        for needle, name in (('[ ! -f "$hook" ]', "缺 hook 檔"),
+                             ('[ -z "$mode" ]', "不在 index"),
+                             ('[ "$mode" != "100755" ]', "mode 不對")):
+            assert needle in body, (
+                "產出的 bootstrap.sh 少了「%s」那一道 —— 下游重跑 install 會被降級"
+                % name)
+
+    def test_the_versioned_hook_is_staged_executable(self, install_mod, tmp_path):
+        """**D0 量到的那一格,在安裝器這一側。**
+
+        `os.chmod` 不夠:Windows 沒有 POSIX 執行位元,而 `filemode=false` 時
+        git 一律把新檔記成 `100644`,**不看檔案系統**。
+        唯一的解是明確寫 index 的 mode。
+
+        Linux 上 git 不執行沒有執行位元的 hook,**而且不出聲** ——
+        所以這一格錯了,裝出來的 repo 在 CI 上是靜默沒有權威層的。
+        """
+        import subprocess
+        target = self._repo(tmp_path, "t5")
+        install_mod.install_portable_layer(str(target))
+        subprocess.run(["git", "add", "-A"], cwd=str(target), capture_output=True)
+        assert hasattr(install_mod, "stage_hook_executable"), \
+            "安裝器沒有把 index mode 設成 100755 的那一步"
+        install_mod.stage_hook_executable(str(target))
+        p = subprocess.run(["git", "ls-files", "-s", "--", self.HOOK_REL],
+                           cwd=str(target), capture_output=True)
+        rec = p.stdout.decode("utf-8", "replace").strip()
+        assert rec, "%s 不在 index 裡" % self.HOOK_REL
+        assert rec.split()[0] == "100755", (
+            "index mode 是 %s,不是 100755 —— Linux 上 git 不會執行它,且不出聲"
+            % rec.split()[0])
+
+    def test_the_installer_does_not_set_hookspath(self, install_mod, tmp_path):
+        """**甲的裁決 C 的釘子。**
+
+        `core.hooksPath` 是 local config,**不隨 clone 走**(ADR 0007:19)。
+        install 設了它,等於把這台機器的狀態混進安裝產物,而下一個 clone
+        拿不到 —— 「裝好了」在兩台機器上意思不同。那一行留給人跑 bootstrap。
+
+        **這一條驗的是本組函式,不是整支 `main()`** —— 端到端由 CI 的
+        淨室驗證(`verify_gates`,每次 CI 跑真安裝)守著。誠實寫出來,
+        免得它被讀成「已證明 main() 不設 config」。
+        """
+        import subprocess
+        target = self._repo(tmp_path, "t6")
+        install_mod.install_portable_layer(str(target))
+        subprocess.run(["git", "add", "-A"], cwd=str(target), capture_output=True)
+        install_mod.stage_hook_executable(str(target))
+        p = subprocess.run(["git", "config", "--local", "--get", "core.hooksPath"],
+                           cwd=str(target), capture_output=True)
+        assert p.stdout.decode("utf-8", "replace").strip() == "", (
+            "安裝器設了 core.hooksPath —— 那是 local 狀態,不是安裝產物")
+
+    def test_the_local_hook_is_still_written(self, install_mod, tmp_path):
+        """**反控:C 不是 B。**
+
+        只產 `.githooks/` 而停寫 `.git/hooks/`,又不設 config 的話,
+        `authoritative_layer()` 會去查 `.git/hooks/pre-commit`(沒設 hooksPath
+        就查那裡)—— 找不到 → `install.py:328` 的強制驗證 **raise SystemExit**,
+        安裝當場失敗。兩支並存才是票 27 裁過的正解。
+        """
+        target = self._repo(tmp_path, "t7")
+        install_mod.install_hook(str(target))
+        install_mod.install_portable_layer(str(target))
+        assert (target / ".git" / "hooks" / "pre-commit").exists(), \
+            "停寫 .git/hooks/pre-commit —— 沒設 hooksPath 時安裝驗證會假失敗"
