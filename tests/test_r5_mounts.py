@@ -264,3 +264,236 @@ class TestTheShippedCanonPassesBothChecks:
         assert gate.check_to_spec_override() == [], (
             "本 repo 的正典 to-spec 缺 inline snippet 覆寫掛載點 —— "
             "修復:bash scripts/skills-update.sh")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 面 C / F —— 位置(批 2)
+#
+# **這兩面守的失效模式與 B / E 不同,而且更難看見。**
+# `gate.py:2289-2291` 逐字:
+#
+#     錨點插入法真正的失效模式不是「掛載點消失」,
+#     而是上游改動錨點附近結構、patch 插進去但位置錯了 —— 此時字串全在、卻掛錯地方。
+#
+# **「字串全在」就是問題所在**:面 B / E 是字串比對,它們在這種狀態下**全綠**。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 3b 節搬到「### 4.」之後 —— 四個 marker 一個不少
+CANON_3B_AFTER_SECTION_4 = (
+    "### 3. Identify the standards sources\n"
+    "\n"
+    "### 4. Spawn\n"
+    "\n"
+    "### 3b. Identify the data-integrity sources\n"
+    "Clean degradation is mandatory.\n"
+    "**Data Integrity sub-agent prompt**\n"
+    "Exemption reconciliation (local addition)\n"
+    "\n"
+    "### 5. Aggregate\n"
+)
+
+# prompt 搬到「### 4.」之前
+CANON_PROMPT_BEFORE_SECTION_4 = (
+    "### 3. Identify the standards sources\n"
+    "\n"
+    "### 3b. Identify the data-integrity sources\n"
+    "Clean degradation is mandatory.\n"
+    "**Data Integrity sub-agent prompt**\n"
+    "\n"
+    "### 4. Spawn\n"
+    "Exemption reconciliation (local addition)\n"
+    "\n"
+    "### 5. Aggregate\n"
+)
+
+# **2026-08-17 探針用的那一種**:掛載點都在,但整段搬到檔尾
+CANON_ALL_MOVED_TO_THE_END = (
+    "### 4. Spawn\n"
+    "\n"
+    "### 5. Aggregate\n"
+    "\n"
+    "### 3. Identify the standards sources\n"
+    "### 3b. Identify the data-integrity sources\n"
+    "Clean degradation is mandatory.\n"
+    "**Data Integrity sub-agent prompt**\n"
+    "Exemption reconciliation (local addition)\n"
+)
+
+# 上游把錨點改名 —— **四個 marker 一個不少,而錨點不見了**
+CANON_RENAMED_ANCHOR = VALID_CODE_REVIEW.replace("### 4. Spawn", "### 4. Launch agents")
+
+TO_SPEC_OVERRIDE_BEFORE_IMPL = (
+    "LOCAL OVERRIDE (prototype snippets)\n"
+    "\n"
+    "## Implementation Decisions\n"
+    "\n"
+    "## Testing Decisions\n"
+)
+
+TO_SPEC_OVERRIDE_AFTER_TESTING = (
+    "## Implementation Decisions\n"
+    "\n"
+    "## Testing Decisions\n"
+    "\n"
+    "LOCAL OVERRIDE (prototype snippets)\n"
+)
+
+TO_SPEC_RENAMED_IMPL_ANCHOR = VALID_TO_SPEC.replace(
+    "## Implementation Decisions", "## Implementation Notes")
+
+TO_SPEC_RENAMED_TESTING_ANCHOR = VALID_TO_SPEC.replace(
+    "## Testing Decisions", "## Test Plan")
+
+
+class TestR5RefusesAMisplacedThirdAxis:
+    """面 C —— **哪一個 repo 狀態確定會讓這條紅?**
+
+    正典 `code-review` 在、四個 `MOUNT_MARKERS` **一個不少**,而它們**掛在錯的地方**:
+
+      3b 節跑到「### 4.」之後
+      prompt 跑到「### 4.」之前
+      整段被搬到檔尾(2026-08-17 探針用的形狀)
+      上游把「### 4. Spawn」改名 -> 錨點消失
+
+    **最後一種是這一面存在的理由。** 那三個錨點
+    (`### 3. …` / `### 4. Spawn` / `### 5. Aggregate`)**不在 `MOUNT_MARKERS` 裡** ——
+    所以上游改名時**面 B 全綠**,而 patch 已經插到一個沒有意義的位置。
+    """
+
+    def _canon(self, tmp_path, monkeypatch, body):
+        canon = _write(tmp_path / "SKILL.md", body)
+        monkeypatch.setattr(gate, "CANON_CODE_REVIEW", str(canon))
+        return canon
+
+    def test_the_3b_section_after_section_4_is_misplaced(self, tmp_path, monkeypatch):
+        self._canon(tmp_path, monkeypatch, CANON_3B_AFTER_SECTION_4)
+        v = gate.check_third_axis_mount()
+        assert len(v) == 1, "3b 掛錯位置卻沒回違規:%r" % v
+        assert "位置錯誤" in v[0], v
+        assert "3b 節必須落在" in v[0], "沒點名是哪一段掛錯:%r" % v
+
+    def test_the_prompt_before_section_4_is_misplaced(self, tmp_path, monkeypatch):
+        self._canon(tmp_path, monkeypatch, CANON_PROMPT_BEFORE_SECTION_4)
+        v = gate.check_third_axis_mount()
+        assert len(v) == 1, "prompt 掛錯位置卻沒回違規:%r" % v
+        assert "Data Integrity sub-agent prompt 必須落在" in v[0], v
+
+    def test_everything_moved_to_the_end_reports_both(self, tmp_path, monkeypatch):
+        """**2026-08-17 探針的形狀**,而且兩個子判定都該中。
+
+        只報一條的話,修的人會以為改好那一段就完了 ——
+        而另一段仍然掛在錯的地方,**下一次跑會再紅一次,理由不同**。
+        """
+        self._canon(tmp_path, monkeypatch, CANON_ALL_MOVED_TO_THE_END)
+        v = gate.check_third_axis_mount()
+        assert len(v) == 1, v
+        assert "3b 節必須落在" in v[0], "少報了 3b 那一段:%r" % v
+        assert "Data Integrity sub-agent prompt 必須落在" in v[0], (
+            "少報了 prompt 那一段:%r" % v)
+
+    def test_a_renamed_anchor_is_caught_here_and_not_by_the_marker_check(
+            self, tmp_path, monkeypatch):
+        """**這一面存在的理由,寫成一條測試。**
+
+        `### 4. Spawn` **不在 `MOUNT_MARKERS` 裡**,所以上游把它改名時:
+
+            面 B(字串比對)  四個 marker 全在 -> **綠**
+            面 C(位置)      i_sec4 == -1     -> **紅**
+
+        少了面 C,這個狀態會**整條通過** —— 而 patch 已經插在一個
+        沒有錨點可依附的位置上。
+        """
+        # 先證明前提:四個 marker 真的一個不少(否則這條測的是別的東西)
+        for m in gate.MOUNT_MARKERS:
+            assert m in CANON_RENAMED_ANCHOR, (
+                "語料把 marker %r 也弄掉了 —— 那就變成在測面 B,不是面 C" % m)
+        self._canon(tmp_path, monkeypatch, CANON_RENAMED_ANCHOR)
+        v = gate.check_third_axis_mount()
+        assert len(v) == 1, "錨點被改名卻整條通過:%r" % v
+        assert "sec4=-1" in v[0], (
+            "訊息沒把「錨點根本不在」講出來(sec4 應為 -1):%r" % v)
+
+    def test_the_message_carries_the_offsets(self, tmp_path, monkeypatch):
+        """**偏移量要印出來。**
+
+        位置錯誤與掛載點消失不同:看不到數字的話,人得自己去檔案裡數 ——
+        而「掛在哪裡才對」正是這條規則唯一能給的線索。
+        2026-08-17 的探針就是靠這串數字認出「搬到檔尾」那一種的。
+        """
+        self._canon(tmp_path, monkeypatch, CANON_3B_AFTER_SECTION_4)
+        v = gate.check_third_axis_mount()
+        for field in ("sec3=", "3b=", "sec4="):
+            assert field in v[0], "訊息少了偏移量欄位 %s:%r" % (field, v)
+
+    def test_the_message_points_at_the_patch_anchors(self, tmp_path, monkeypatch):
+        """票 13 判準:訊息要說出該去看哪裡。位置錯的修法在 patch 的錨點,不在正典。"""
+        self._canon(tmp_path, monkeypatch, CANON_3B_AFTER_SECTION_4)
+        v = gate.check_third_axis_mount()
+        assert "apply_patches.py" in v[0], "沒指向錨點定義的位置:%r" % v
+
+    def test_the_correct_order_is_clean(self, tmp_path, monkeypatch):
+        """**成對的另一半。** 少了它,一支「位置永遠算錯」的實作也會讓上面全綠。"""
+        self._canon(tmp_path, monkeypatch, VALID_CODE_REVIEW)
+        assert gate.check_third_axis_mount() == []
+
+
+class TestR5RefusesAMisplacedToSpecOverride:
+    """面 F —— **哪一個 repo 狀態確定會讓這條紅?**
+
+    正典 `to-spec` 在、`LOCAL OVERRIDE (prototype snippets)` **也在**,
+    而它落在「## Implementation Decisions」與「## Testing Decisions」之外:
+
+      覆寫跑到 Implementation Decisions 之前
+      覆寫跑到 Testing Decisions 之後
+      上游把任一個錨點改名 -> 那個錨點消失
+
+    **與面 C 同一個形狀**:兩個錨點都**不是**面 E 檢查的字串,
+    所以改名時面 E 全綠。
+    """
+
+    def _root(self, tmp_path, monkeypatch, body):
+        root = _to_spec_root(tmp_path, body)
+        monkeypatch.setattr(gate, "ROOT", str(root))
+        return root
+
+    def test_the_override_before_the_implementation_anchor_is_misplaced(
+            self, tmp_path, monkeypatch):
+        self._root(tmp_path, monkeypatch, TO_SPEC_OVERRIDE_BEFORE_IMPL)
+        v = gate.check_to_spec_override()
+        assert len(v) == 1, "覆寫掛在 Implementation 之前卻沒回違規:%r" % v
+        assert "覆寫位置錯誤" in v[0], v
+
+    def test_the_override_after_the_testing_anchor_is_misplaced(
+            self, tmp_path, monkeypatch):
+        self._root(tmp_path, monkeypatch, TO_SPEC_OVERRIDE_AFTER_TESTING)
+        v = gate.check_to_spec_override()
+        assert len(v) == 1, "覆寫掛在 Testing 之後卻沒回違規:%r" % v
+        assert "覆寫位置錯誤" in v[0], v
+
+    @pytest.mark.parametrize("body,gone", [
+        (TO_SPEC_RENAMED_IMPL_ANCHOR, "impl=-1"),
+        (TO_SPEC_RENAMED_TESTING_ANCHOR, "test=-1"),
+    ])
+    def test_a_renamed_anchor_is_caught_here_and_not_by_the_marker_check(
+            self, tmp_path, monkeypatch, body, gone):
+        """**同面 C 的理由**:兩個錨點都不在面 E 的檢查裡。
+
+        先證明前提 —— 覆寫字串本身還在,所以面 E 綠;紅的必須是位置這一面。
+        """
+        assert "LOCAL OVERRIDE (prototype snippets)" in body, (
+            "語料把覆寫字串也弄掉了 —— 那就變成在測面 E,不是面 F")
+        self._root(tmp_path, monkeypatch, body)
+        v = gate.check_to_spec_override()
+        assert len(v) == 1, "錨點被改名卻整條通過:%r" % v
+        assert gone in v[0], "訊息沒把「錨點根本不在」講出來(應含 %s):%r" % (gone, v)
+
+    def test_the_message_carries_the_offsets(self, tmp_path, monkeypatch):
+        self._root(tmp_path, monkeypatch, TO_SPEC_OVERRIDE_AFTER_TESTING)
+        v = gate.check_to_spec_override()
+        for field in ("impl=", "override=", "test="):
+            assert field in v[0], "訊息少了偏移量欄位 %s:%r" % (field, v)
+
+    def test_the_correct_order_is_clean(self, tmp_path, monkeypatch):
+        """**成對的另一半。**"""
+        self._root(tmp_path, monkeypatch, VALID_TO_SPEC)
+        assert gate.check_to_spec_override() == []
