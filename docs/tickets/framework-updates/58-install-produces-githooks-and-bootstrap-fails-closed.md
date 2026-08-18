@@ -1,6 +1,9 @@
 # 58 — 執行 `F-065:1115`:install 產 `.githooks/`,bootstrap 三道 fail-closed
 
-**狀態**:**進行中**(2026-08-18 立案)
+**狀態**:**完成**(2026-08-18)—— 本機 824 passed、淨室 R1–R8 各擋一次、巢狀 790 passed。
+**唯一未驗的一格是 CI 的「接上權威層」步驟,推上去才驗得到,所以驗收清單留白不勾。**
+**落地**:`69854e9` D4(票 54 落差表 + F-099 第五列)→ `7020057` D1 立案
+→ `e195adc` D2(三道 + mode)→ `af8752a` D3(install 產出 + `--chmod=+x`)→ 本筆收尾
 **立案**:2026-08-18,批一(票 57)收乾淨、CI 綠之後
 **批次**:本輪第二批。**批一是票 57**,它的卷首是本票的前提 —— **引用,不重述。**
 **來源**:`docs/agents/friction-log.md` 的 **F-065:1115–1118**(標「未做,待裁決」)
@@ -275,12 +278,14 @@ F-031 的累積曲線因此比票 56 記的陡。**
 
 | 批 | 內容 | 狀態 |
 |---|---|---|
-| **D0** | 量 `.githooks/pre-commit` 的 index mode | ✅ 已量:**100644** |
-| **D4** | 票 54 落差表「淨室」那一列更正 + `F-099` 第五列(載體:落差表) | ✅ 已落地 |
-| **D1** | 本票立案(卷首、範圍聲明、現況證據、設計裁決、明確不做項) | ← **本筆** |
-| **D2** | `bootstrap.sh` 三道 fail-closed + **`.githooks/pre-commit` 的 mode 改 100755** + 三道各自的正對照 | 待做 |
-| **D3** | `install.py` 產 `.githooks/pre-commit` 與 `bootstrap.sh`,並以 `--chmod=+x` 進 index + 測試 | 待做 |
-| **D5** | 收尾 + `F-101` | 待做 |
+| 批 | 內容 | commit |
+|---|---|---|
+| **D0** | 量 `.githooks/pre-commit` 的 index mode → **100644** | (唯讀,無 commit) |
+| **D4** | 票 54 落差表「淨室」那一列更正 + `F-099` 第五列(載體:落差表) | `69854e9` |
+| **D1** | 本票立案(卷首、範圍聲明、現況證據、設計裁決、明確不做項) | `7020057` |
+| **D2** | `bootstrap.sh` 三道 fail-closed + **`.githooks/pre-commit` 的 mode 改 100755** + `tests/test_bootstrap.py`(9 條) | `e195adc` |
+| **D3** | `install.py` 產 `.githooks/pre-commit` 與 `bootstrap.sh`,以 `--chmod=+x` 進 index + `tests/test_install.py`(7 條) | `af8752a` |
+| **D5** | 收尾 + `F-101` / `F-102` / `F-103` + `F-099` 增補 + 票 51 的行號 | **本筆** |
 
 ### 三個順序約束
 
@@ -304,14 +309,96 @@ F-031 的累積曲線因此比票 56 記的陡。**
 
 ## 怎樣算做完
 
-- [ ] `bootstrap.sh` 以量化那一版為起點(不重寫),三道 fail-closed 各有正對照
-- [ ] 三道都**在設 config 之前**跑,且各自額外斷言 `core.hooksPath` 沒被設下去(TSI-030)
-- [ ] `.githooks/pre-commit` 的 index mode 是 `100755`,而且該筆 commit 的訊息說出它獨立成立
-- [ ] `install.py` 產 `.githooks/pre-commit` + `bootstrap.sh`,前者以 `--chmod=+x` 進 index
-- [ ] `install.py` **不設** `core.hooksPath`、**繼續寫** `.git/hooks/pre-commit`(甲的 C)
-- [ ] C 的代價(`.githooks/` 在 bootstrap 跑之前是死的)出現在安裝輸出或 `decisions-pending.md`
-- [ ] 淨室 `verify_gates` 全綠(它跑真安裝,是本票的端到端驗收)
-- [ ] CI 的「接上權威層」步驟綠
-- [ ] 範圍聲明(不關掉 ADR 0007)在票面上,且 `F-065:1117` 的措辭更正已記
-- [ ] `F-101` 落地(D5)
+- [x] `bootstrap.sh` 以量化那一版為起點(不重寫),三道 fail-closed 各有正對照
+- [x] 三道都**在設 config 之前**跑,且各自額外斷言 `core.hooksPath` 沒被設下去(TSI-030)
+- [x] `.githooks/pre-commit` 的 index mode 是 `100755`,而且該筆 commit 的訊息說出它獨立成立
+- [x] `install.py` 產 `.githooks/pre-commit` + `bootstrap.sh`,前者以 `--chmod=+x` 進 index
+- [x] `install.py` **不設** `core.hooksPath`、**繼續寫** `.git/hooks/pre-commit`(甲的 C)
+- [x] C 的代價(`.githooks/` 在 bootstrap 跑之前是死的)出現在安裝輸出
+- [x] 淨室 `verify_gates` 全綠(它跑真安裝,是本票的端到端驗收)
+- [ ] **CI 的「接上權威層」步驟綠** —— **推上去才驗得到,本機驗不了,所以留白不勾**
+- [x] 範圍聲明(不關掉 ADR 0007)在票面上,且 `F-065:1117` 的措辭更正已記
+- [x] `F-101` 落地(D5),外加 `F-102` / `F-103` / `F-099` 增補
+
+---
+
+## 落地紀錄(2026-08-18)
+
+### 端到端:那一步從此真的只剩一行
+
+**在拋棄式 target 上驗**(`verify_gates` 產的淨室 repo),照 **F-102** 不碰本尊:
+
+```
+$ git -C <target> ls-files -s .githooks/pre-commit bootstrap.sh
+100755 12be7ba08a7ad36a62bd361eb8f66152cd2cd22e 0	.githooks/pre-commit
+100644 8f6da5bf78ca238526b8eca0284337f1019f90c5 0	bootstrap.sh
+
+$ git -C <target> config --local --get core.hooksPath
+(空)
+
+$ cd <target> && sh bootstrap.sh
+[bootstrap] core.hooksPath -> .githooks
+rc=0
+
+$ git -C <target> config --local --get core.hooksPath
+.githooks
+```
+
+**甲的 C 三格全中**:`.githooks/pre-commit` 是 `100755`、config 未設、
+`.git/hooks/pre-commit` 仍在。`bootstrap.sh` 是 `100644` —— **對的**,
+它被 `sh` 呼叫,不需要執行位元(F-101:同類的判準是機制不是外觀)。
+
+> **在此之前,一個裝出來的 repo 上跑 `bootstrap.sh` 會撞到第一道 fail-closed
+> (`找不到 .githooks/pre-commit`),因為安裝器根本不產它。**
+> `F-065:1118` 逐字:「現在是人工補的,**下一個安裝的人不會知道要補**。」
+
+### 測試
+
+| | 本機 | 巢狀(淨室) |
+|---|---|---|
+| D2 前 | 808 | 783 |
+| D2 後 | 817(+9,`tests/test_bootstrap.py`) | — |
+| D3 後 | **824**(+7,`tests/test_install.py`) | **790**(+7) |
+
+**巢狀 +7 而不是 +16**:`tests/test_install.py` 標 `copy` 會跟著走,
+`tests/test_bootstrap.py` 標 `skip` 不走(見標記表裡的釘子)。
+**+7 是真的 +7** —— 那七條在巢狀 repo 裡讀的是巢狀自己的
+`SRC_ROOT/bootstrap.sh`,而那個檔是它自己剛被產出來的。
+
+紅燈先行,兩批都走:D2 先跑 **1 failed**(活體金絲雀抓到上游自己 `100644`)、
+D3 先跑 **7 failed**(整個新 class)。
+
+### 本輪產出的 friction
+
+| | 主題 |
+|---|---|
+| **F-101** | **觀測點的數量不等於覆蓋 —— 盲區會重疊。** 執行位元是實例,盲區重疊才是教訓 |
+| **F-102** | 一個已經在拋棄式環境被證明的東西,不要在本尊上再證一次 |
+| **F-103** | 一個斷言可以因為**錯的理由**而通過(兩個實例) |
+| **F-099 增補** | 第四面(**行號**)、處置欄的**構造解:釘子** |
+
+### ⚠ 兩處我自己寫錯、在下一個批次被自己抓到
+
+**兩處都留著不刪**,理由見 F-099 的處置欄:
+**釘子的價值不是「條件會對」,是「條件被寫下來所以可以被查」。**
+
+| 寫在 | 錯的 | 什麼時候抓到 |
+|---|---|---|
+| 標記表的釘子(D2) | 到期條件寫「**D3 之後**」 | **D3 當天** —— 正確條件是「目標 repo 有 `bootstrap.sh`」,而 D3 之前裝好的下游要**重跑 install** 才會有。現在標 `copy` 會讓 sync 送一條註定紅的測試過去 |
+| `_index_of()` 的 docstring(D2) | 失效方向寫成「讓順序斷言變成**假的**」 | **D3 當天** —— 實際是讓它**假地成立**。已落成 **F-103 實例一**,而那一處是 `TSI-029` × `F-099` 的交集:**程式碼本來就是對的,錯的是它的說明,而錯的說明與正確的程式碼同向 —— 所以沒有任何東西會揭穿它** |
+
+> **兩處都是「寫下來所以被查到」。** 沒寫的話那兩個假設一樣是錯的,
+> 只是沒有人會發現 —— 而其中一個會在某天讓 `sync` 把一條註定紅的測試送到下游。
+
+### ⚠ 提交過程中的一次自我修正(留紀錄)
+
+E1 第一次提交時**多帶了 `.githooks/pre-commit` 的 mode 變更** ——
+那一格早在 D2 就被 `git update-index --chmod=+x` **直接寫進 index**,
+於是 `git add <兩個 docs 檔>` 之後它仍然在暫存區,被一起收進 E1。
+
+未推送,`git reset --soft HEAD~1` + `git restore --staged` 退掉重做。
+
+> **`update-index` 不經過工作樹,所以 `git status` 的第一欄早就是 `M`** ——
+> 而按檔名逐一 `git add` 的習慣**看不到那一格**:它不在我要加的清單裡,
+> 它已經在裡面了。**「我只加了這兩個檔」與「這一筆只有這兩個檔」是兩件事。**
 
