@@ -216,6 +216,153 @@ class TestTheMessagePointsAtTheRightExit:
         assert gate.bash_write_violation("git add -A && git commit -m x") is None
 
 
+class TestTheMessageCoversTheNoSegmentQualifiedPath:
+    """票 57 ⑦ —— **票 13 修好的是 `mixed` 分支,heredoc 走的是另一條。**
+
+    這不是回歸,是**同一張票的涵蓋缺口**:
+
+        `mixed = any(seg_ok) and offenders`        (gate.py)
+
+    `any(seg_ok)` 要求「**至少有一段是許可的**」。heredoc 那條路徑上一段都不許可
+    (`python` 不在 `BASH_ALLOWED_CMDS` —— 清單裡只有 `python -m pytest`、
+    `python -m pip`、`python .claude\\`),於是 `mixed` 為假,
+    **「許可是逐段比對的」那句一個字都不會印。**
+
+    F-097 記下的實測訊息就是這個樣子,兩行,沒有「逐段」二字:
+
+        [六站閘門/前哨] [R7][enforce] 這個 Bash 指令會寫到沒有被許可的位置((引號或跳脫使目標無法可靠切分))。
+             請改用 Write / Edit。
+
+    ## 第二件事:訊息說的「各算一段」與實作切的東西不是同一件事
+
+    `re.split(r"&&|\\|\\||;", cmd)` **對引號、heredoc 內文、跳脫一律無視**。
+    訊息寫的「`&&` / `;` / `||` 各算一段」讀起來像在講 shell 的指令分隔符,
+    而實作切的是**整條字串裡的每一個分隔字元,包含資料裡的**。
+
+    > 照訊息推論會得到「整條以 `git` 開頭就安全」,而實測不是。
+
+    **本輪只改訊息。** `if mixed:` 換成 `if offenders:` 是**訊息的發出條件**,
+    不是判定 —— `bash_write_violation()` 對同一條指令的擋/放結論改前改後完全相同,
+    由本類最後兩條反控釘住。票 13:70 的定調照樣適用。
+    """
+
+    # F-097 的原始事件,逐字重建(那一則記的就是這條指令的形狀)
+    HEREDOC = "python - <<'PY'\nprint(1)\nPY"
+
+    def test_it_is_still_blocked(self):
+        """前提:這條指令本來就會被擋。擋法不變,本輪只動訊息。"""
+        assert gate.bash_write_violation(self.HEREDOC), "前提不成立,後面幾條就沒有意義"
+
+    def test_no_segment_qualified_still_explains_per_segment_matching(self):
+        """**核心紅燈。** 一段都不許可時,「逐段比對」那句照樣要印。
+
+        不印的話,人看到的是「會寫到沒有被許可的位置」+「請改用 Write / Edit」——
+        而那條指令**根本沒有在寫檔案**(heredoc 走 stdin),
+        於是訊息把人指向一個不存在的問題。票 13 判準:
+        **fail-closed 的訊息必須說出是哪一個前提沒滿足。**
+        """
+        msg = gate.bash_write_violation(self.HEREDOC)
+        assert msg and "逐段" in msg, "一段都不許可時沒說明逐段比對:%r" % msg
+
+    def test_no_segment_qualified_says_so_explicitly(self):
+        """要說出**是「一段都沒有」而不是「某一段」** —— 兩者的修法不同。
+
+        某一段落出清單 -> 拿掉那一段就過得了。
+        一段都沒有     -> 整條要換寫法。把後者講成前者,人會去刪一個刪不掉的前綴。
+        """
+        msg = gate.bash_write_violation(self.HEREDOC)
+        assert msg and "沒有任何一段" in msg, "沒說出一段都不許可:%r" % msg
+
+    def test_a_mixed_command_keeps_its_own_wording(self):
+        """**反控。** `mixed` 那條路徑的措辭不得被新分支蓋掉(票 13 的成果)。"""
+        msg = gate.bash_write_violation("cd docs && git mv a.md b.md")
+        assert msg and "其餘各段本來就許可" in msg, msg
+        assert "沒有任何一段" not in msg, "把 mixed 誤講成一段都沒有:%r" % msg
+
+    def test_the_message_says_quotes_and_heredoc_bodies_are_also_split(self):
+        """**第二個紅燈。** 訊息要說出**引號與 heredoc 內文一樣會被切**。
+
+        沒有這句,讀者會照字面推論「`&&` / `;` / `||` 各算一段」講的是
+        shell 的指令分隔符,於是得出「整條以 `git` 開頭就安全」—— 而那是錯的。
+        """
+        msg = gate.bash_write_violation(self.HEREDOC)
+        assert msg and "heredoc" in msg, "沒提 heredoc 內文也被切:%r" % msg
+
+    def test_the_message_names_the_write_the_body_to_a_file_exit(self):
+        """**出口要指得出來。** heredoc 的真實出口不是 Write / Edit 取代整條指令,
+        而是**把內文寫成檔案,再用 `-F <路徑>` / `<路徑>` 餵進去** ——
+        內文完全不進指令字串,就沒有東西可以被切。
+
+        這正是 F-097 記下的那句:
+        「這不是我更小心了,是那條路徑上已經沒有『小心』可以失敗的地方。」
+        """
+        msg = gate.bash_write_violation(self.HEREDOC)
+        assert msg and "-F" in msg, "沒指出把內文寫成檔案再餵進去的出口:%r" % msg
+
+    def test_a_separator_inside_a_heredoc_body_really_does_split(self):
+        """**把「內文也被切」證明給自己看,不是只在訊息裡宣稱。**
+
+        `git commit -F - <<'EOF' … EOF` 整條以 `git` 開頭,
+        而內文裡一個 ASCII 分號就切出一段不以許可前綴開頭的段落。
+        """
+        cmd = "git commit -F - <<'EOF'\nfix: a; b\nEOF"
+        segments = [s.strip() for s in gate.re.split(r"&&|\|\||;", cmd) if s.strip()]
+        assert len(segments) > 1, "分號沒有切開 heredoc 內文,本則的前提要重寫:%r" % segments
+        assert not segments[-1].startswith("git"), segments
+
+    def test_long_offending_segments_are_clipped(self):
+        """**訊息不得把整份 heredoc 內文倒出來。**
+
+        `offenders` 現在在「一段都不許可」時也會印。heredoc 的段落可以有幾百行,
+        原樣印出來的話訊息本身變成噪音 —— 而**吵鬧的訊號訓練人忽略訊號**(F-031)。
+        """
+        body = "\n".join("line %d" % i for i in range(200))
+        msg = gate.bash_write_violation("python - <<'PY'\n%s\nPY" % body)
+        assert msg, "沒擋"
+        assert "line 150" not in msg, "整份內文被倒進訊息:%d 字元" % len(msg)
+        assert len(msg) < 2000, "訊息長度失控:%d 字元" % len(msg)
+
+    def test_the_target_list_never_shows_an_empty_entry(self):
+        """**票 13 第 3 項的殘留。** 那一項當時判為「closed by 票 36」——
+        `if not saw_target` 保證 `bad` **不是空 list**。
+
+        但那擋不住 `bad` 裡夾著一個**空元素**:`"、".join` 會印出
+        `(…、)`,讀者看到的是一個沒有名字的目標,然後去找一個不存在的路徑
+        (票 21 的「具體而錯誤」)。
+
+        > **「清單非空」與「清單裡每一項都有內容」是兩件事。**
+        > 票 36 只保證了前者,而驗收當時把它讀成後者。
+
+        實例:commit 訊息同時含分號與 `Co-Authored-By: … <a@b.c>` 的角括號。
+        """
+        msg = gate.bash_write_violation(
+            "git commit -m 'fix: a; b\n\nCo-Authored-By: X <a@b.c>'")
+        assert msg, "沒擋"
+        head = msg.splitlines()[0]
+        assert "、)" not in head and "(、" not in head, "目標欄有空元素:%r" % head
+
+    @pytest.mark.parametrize("cmd,blocked", [
+        # 票 13 的四條原案,判定必須一個字都沒變
+        ("rm pkg/thing.py", True),
+        ("cd docs && git mv a.md b.md", True),
+        ("Remove-Item pkg/thing.py", True),
+        ("mv a.py b.py", True),
+        # 放行側:全段許可、許可目標
+        ("git add -A && git commit -m x", False),
+        ("python -m pytest -q", False),
+        ("python x.py > /tmp/out.txt", False),
+    ])
+    def test_the_verdict_is_untouched(self, cmd, blocked):
+        """**反控,本類最重要的一條。**
+
+        本輪宣稱「只改訊息」。那句宣稱要有東西釘住,否則它就只是一句話 ——
+        而**「判定悄悄變了」的失效方式是靜默的**:訊息變好看了,擋的東西變少了,
+        沒有人會去比對。
+        """
+        got = gate.bash_write_violation(cmd)
+        assert bool(got) is blocked, "判定變了:%r -> %r" % (cmd, got)
+
+
 class TestRedirectsInsideQuotesAreNotTargets:
     """票 21 標本 3(最後一塊)—— `REDIRECT_RE` 命中**引號內**的 `>`。
 
