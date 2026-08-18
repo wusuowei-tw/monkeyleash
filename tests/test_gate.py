@@ -2,7 +2,11 @@
 """票 01 — 兩層不變式,以及閘門自我修改的豁免。
 
 不變式是單向的:**任何時點下,權威層的嚴格程度不得低於前哨。**
-前哨擋而權威放行 = 缺陷;權威擋而前哨放行 = 合規(R4/R5 只在提交時評估就是這種)。
+前哨擋而權威放行 = 缺陷;權威擋而前哨放行 = 合規(**R4** 只在提交時評估就是這種)。
+
+**⚠ 更正(票 47 批 0,2026-08-18):舊文寫「R4/R5」,而 R5 不是這個例子。**
+R5 **兩層都跑** —— 前哨走 `gate.py:2051` 的 `mount_violations_cached()`,
+權威層走 `gate.py:2419-2420` 直接呼叫(不快取)。原句保留形狀、只拿掉 R5(F-036)。
 
 這條測試存在的理由是 F-017:修 R2 的時點語意時,at_commit 分支被寫成提早返回,
 把 R3 在提交時整個跳過,權威層反而比前哨鬆。當時沒有任何東西發現。
@@ -145,12 +149,25 @@ def test_the_detector_itself_records_each_rule(monkeypatch, path, expected):
 def test_the_invariants_do_not_assert_the_reverse(monkeypatch):
     """權威嚴於前哨是合規的,不是不對稱缺陷。
 
-    R4/R5 只在提交時評估就是這種情況;為了讓兩層對稱而把成本推進前哨是錯的方向。
+    **R4** 只在提交時評估就是這種情況;為了讓兩層對稱而把成本推進前哨是錯的方向。
     這裡以「存在一個權威嚴於前哨的案例、而測試不因此失敗」來表達單向性。
+
+    **⚠ 更正(票 47 批 0,2026-08-18)**:舊文寫「R4/R5」,而 **R5 兩層都跑**,
+    不是這個例子。**下面兩條斷言本來就只驗 R4,一個字都沒改。**
     """
     monkeypatch.setattr(gate, "load_stage", lambda: ("implement", "01"))
-    # R4/R5 只在 pre_commit 模式被呼叫,check() 本身不含它們 —— 單向性由此成立:
+    # **R4** 只在 pre_commit 模式被呼叫,`check()` 本身不含它 —— 單向性由此成立:
     # 權威層額外跑的檢查不需要在前哨有對應。
+    #
+    # **R5 不在這個例子裡(票 47 批 0 更正)。** 它兩層都跑:
+    #   前哨      gate.py:2051      mount_violations_cached()  ← 走快取
+    #   權威層    gate.py:2419-2420 check_third_axis_mount()
+    #                               check_to_spec_override()   ← 不走快取
+    #
+    # 舊註解寫「R4/R5 只在 pre_commit 模式被呼叫,check() 本身不含它們」——
+    # **後半句(check() 不含它們)對兩者都成立,前半句對 R5 是假的**,
+    # 而兩個子句支持同一個結論。F-103 那一族:錯的論據與正確結論同向,
+    # 所以沒有任何東西會揭穿它。
     assert "check_skill_copies" not in gate.mode_hook.__code__.co_names
     assert "check_skill_copies" in gate.mode_pre_commit.__code__.co_names
 
