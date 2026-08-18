@@ -48,6 +48,7 @@ R5 守的是:`npx skills update` 會用上游版覆蓋正典 `code-review`,
 """
 import importlib.util
 import io
+import json
 import os
 import pathlib
 
@@ -497,3 +498,210 @@ class TestR5RefusesAMisplacedToSpecOverride:
         """**成對的另一半。**"""
         self._root(tmp_path, monkeypatch, VALID_TO_SPEC)
         assert gate.check_to_spec_override() == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 批 3 —— 兩層各自的「有沒有被走到」
+#
+# 前六面驗的是**判定對不對**(給它壞輸入,它認不認得)。
+# 這一段驗的是**它有沒有被呼叫**,而那是加嚴驗收的第二題。
+#
+# **R5 兩層都跑**(票 47 批 0 更正的那件事):
+#
+#     權威層  gate.py:2419-2420  check_third_axis_mount() + check_to_spec_override()
+#                                直接呼叫,**不走快取**
+#     前哨    gate.py:2051       mount_violations_cached()  ← 走快取(面 G)
+#
+# 所以兩層各要一組,而且**都餵真的壞正典**,不是替換判定函式。
+# **不用 `co_names`** —— 那證明的是「原始碼裡提到那個名字」,
+# 不是「那一行真的被執行到」。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _skills_tree(tmp_path, code_review_body, to_spec_body=VALID_TO_SPEC):
+    """造一個完整的 `ROOT`,底下有兩個正典。
+
+    **兩個都要建**,因為 `mode_pre_commit()` 會呼叫兩支 —— 只建一個的話,
+    另一支會因為「找不到正典」而回違規,於是斷言的 `rc == 1`
+    **有一半是別的原因造成的**(F-103:因為錯的理由而通過)。
+    """
+    _write(tmp_path / ".agents" / "skills" / "code-review" / "SKILL.md",
+           code_review_body)
+    _write(tmp_path / ".agents" / "skills" / "to-spec" / "SKILL.md", to_spec_body)
+    return tmp_path
+
+
+def _wire_pre_commit(monkeypatch, root):
+    """把 `mode_pre_commit()` 的鄰居全部停掉,只留 R5 那兩行是活的。
+
+    停掉的每一個都有理由,而且理由不同:
+
+      staged_paths        它要 git;而本組驗的不是 staged 檔案那條路徑
+      check_skill_copies  R4 —— 讓 rc==1 只可能來自 R5
+      check_legacy_list   R6 —— 同上
+      shadow_active       影子開著時違規會被寫進 shadow-log 而**回 0**
+                          (gate.py:2422-2429)—— 不關的話這一組全部假綠
+
+    **簽名要跟著本體走**:`staged_paths` 的替身漏一個參數,`mode_pre_commit`
+    會在取清單那一步就掛掉,而本組要驗的是它**擋下之後**的行為(票 42 / test_gate.py:1852)。
+    """
+    monkeypatch.setattr(gate, "ROOT", str(root))
+    monkeypatch.setattr(gate, "CANON_CODE_REVIEW",
+                        str(root / ".agents" / "skills" / "code-review" / "SKILL.md"))
+    monkeypatch.setattr(gate, "staged_paths", lambda cwd=None, gitlinks=None: [])
+    monkeypatch.setattr(gate, "check_skill_copies", lambda: [])
+    monkeypatch.setattr(gate, "check_legacy_list", lambda: [])
+    monkeypatch.setattr(gate, "shadow_active", lambda: False)
+
+
+class TestR5IsActuallyInvokedAtTheAuthoritativeLayer:
+    """④ —— **哪一個 repo 狀態確定會讓這條紅?**
+
+    一個 repo,兩個正典都在,而 `code-review`(或 `to-spec`)少一個掛載點 ——
+    **`git commit` 必須被擋下,而且訊息裡有 `[R5]`。**
+
+    **這一組與前六面的差別**:前六面直接呼叫 `check_*()`,證明**判定對**;
+    這一組走 `mode_pre_commit()`,證明**那兩行真的在權威層的通行路上**。
+    規則正確但沒人呼叫,就是 F-017 的形狀 —— 而 R5 到批 3 之前
+    **沒有任何測試證明它被呼叫過**(唯一沾邊的是把它 monkeypatch 掉,
+    好讓別的規則的呼叫可以被斷言)。
+
+    **兩支各一條**,因為它們是 `gate.py:2419` 與 `:2420` **兩行不同的接線** ——
+    拿掉其中一行,另一條測試照樣綠。
+    """
+
+    def test_a_broken_code_review_canon_blocks_the_commit(self, tmp_path,
+                                                          monkeypatch, capsys):
+        root = _skills_tree(tmp_path, VALID_CODE_REVIEW.replace(
+            "Clean degradation is mandatory.", "(被上游版覆蓋掉了)"))
+        _wire_pre_commit(monkeypatch, root)
+        rc = gate.mode_pre_commit()
+        err = capsys.readouterr().err
+        assert rc == 1, "正典缺掛載點,而 commit 沒有被擋下 —— R5 沒有被權威層呼叫"
+        assert "[R5]" in err, "擋下了,但訊息裡沒有 [R5](擋下的是別的規則):%r" % err
+        assert "Clean degradation is mandatory." in err, (
+            "訊息沒點名少了哪一個掛載點 —— 被擋的人查不到要修什麼:%r" % err)
+
+    def test_a_broken_to_spec_canon_blocks_the_commit(self, tmp_path,
+                                                      monkeypatch, capsys):
+        """**第二行接線,單獨釘。**
+
+        `code-review` 保持乾淨 —— 所以 `rc == 1` 只可能來自 `check_to_spec_override()`。
+        """
+        root = _skills_tree(tmp_path, VALID_CODE_REVIEW,
+                            to_spec_body=VALID_TO_SPEC.replace(
+                                "LOCAL OVERRIDE (prototype snippets)", "(被覆蓋掉了)"))
+        _wire_pre_commit(monkeypatch, root)
+        rc = gate.mode_pre_commit()
+        err = capsys.readouterr().err
+        assert rc == 1, "to-spec 缺覆寫掛載點,而 commit 沒有被擋下"
+        assert "[R5]" in err, err
+        assert "覆寫掛載點" in err, "訊息沒說出缺的是什麼:%r" % err
+
+    def test_a_clean_repo_does_not_block(self, tmp_path, monkeypatch):
+        """**成對的另一半,而且這一條最要緊。**
+
+        少了它,一支「`mode_pre_commit` 永遠回 1」的實作會讓上面兩條全綠 ——
+        **F-103 實例二的形狀**(只驗結果的一半)。
+        """
+        root = _skills_tree(tmp_path, VALID_CODE_REVIEW)
+        _wire_pre_commit(monkeypatch, root)
+        assert gate.mode_pre_commit() == 0, "兩個正典都乾淨,卻擋下了 commit"
+
+    def test_the_two_halves_are_wired_independently(self, tmp_path, monkeypatch,
+                                                    capsys):
+        """**兩行接線各自成立,不是「有一行就夠了」。**
+
+        兩個正典**同時**壞掉時,兩則訊息都要出現。只出現一則的話,
+        修的人會以為修好那一個就完了 —— 而另一個仍然壞著,
+        **下一次 commit 會再擋一次,理由不同**。
+        """
+        root = _skills_tree(
+            tmp_path,
+            VALID_CODE_REVIEW.replace("Clean degradation is mandatory.", "(沒了)"),
+            to_spec_body=VALID_TO_SPEC.replace(
+                "LOCAL OVERRIDE (prototype snippets)", "(沒了)"))
+        _wire_pre_commit(monkeypatch, root)
+        rc = gate.mode_pre_commit()
+        err = capsys.readouterr().err
+        assert rc == 1, err
+        assert "缺第三軸掛載點" in err, "少報了 code-review 那一半:%r" % err
+        assert "覆寫掛載點" in err, "少報了 to-spec 那一半:%r" % err
+
+
+class TestR5IsActuallyInvokedAtTheSentinel:
+    """面 G 的真實輸入版 —— **哪一個 repo 狀態確定會讓這條紅?**
+
+    同樣是「正典少一個掛載點」,但走的是**前哨**那條路
+    (`mount_violations_cached()`,`gate.py:2051`)。
+
+    **與既有那五條快取測試的差別**:那五條把
+    `_mount_violations_uncached` / `_skills_mtime` 都換成 `lambda`,
+    測的是**快取的失效邏輯**;被快取的東西是合成的。
+    **它們是快取的正對照,不是 R5 的正對照。**
+
+    這一組反過來:**兩個都不換**,餵真的壞正典、用真的檔案系統 mtime,
+    驗的是「前哨這條路上,真的壞正典會不會被擋」。
+
+    **`MOUNT_CACHE` 一定要指到 tmp** —— 不指的話這一組會寫進宿主真實的
+    `.cache/mount-check.json`,而那是閘門下一次判定的輸入(票 18 的形狀:
+    測試去改變閘門之後的判斷)。
+    """
+
+    def _wire(self, monkeypatch, root):
+        monkeypatch.setattr(gate, "ROOT", str(root))
+        monkeypatch.setattr(gate, "CANON_CODE_REVIEW",
+                            str(root / ".agents" / "skills" / "code-review" / "SKILL.md"))
+        monkeypatch.setattr(gate, "MOUNT_CACHE", str(root / "mount-check.json"))
+
+    def test_a_broken_canon_makes_the_sentinel_block(self, tmp_path, monkeypatch):
+        root = _skills_tree(tmp_path, VALID_CODE_REVIEW.replace(
+            "Clean degradation is mandatory.", "(被上游版覆蓋掉了)"))
+        self._wire(monkeypatch, root)
+        assert gate.mode_hook_would_block_on_mounts() is True, (
+            "正典缺掛載點,而前哨述詞說可以放行")
+
+    def test_a_clean_canon_lets_the_sentinel_pass(self, tmp_path, monkeypatch):
+        """**成對的另一半。**"""
+        root = _skills_tree(tmp_path, VALID_CODE_REVIEW)
+        self._wire(monkeypatch, root)
+        assert gate.mode_hook_would_block_on_mounts() is False
+
+    def test_the_cache_file_records_the_real_violation(self, tmp_path, monkeypatch):
+        """快取寫下去的必須是**真的那一條違規**,不是空殼。
+
+        寫錯的話下一次會沿用一個空的結果 —— 而**沿用空結果就是放行**。
+        """
+        root = _skills_tree(tmp_path, VALID_CODE_REVIEW.replace(
+            "Clean degradation is mandatory.", "(沒了)"))
+        self._wire(monkeypatch, root)
+        gate.mount_violations_cached()
+        cached = json.loads(io.open(str(root / "mount-check.json"),
+                                    encoding="utf-8").read())
+        assert cached["violations"], "快取檔裡沒有違規 —— 下一次會沿用一個空結果"
+        assert "Clean degradation is mandatory." in cached["violations"][0], cached
+
+    def test_fixing_the_canon_invalidates_the_cache(self, tmp_path, monkeypatch):
+        """**真實的失效條件,不是合成的 mtime。**
+
+        既有那五條用 `lambda: 1000.0` / `lambda: 2000.0` 表達「時間變了」;
+        這一條**真的改檔案、真的讓 mtime 前進**,然後看快取有沒有跟上。
+
+        `os.utime` 是必要的,不是造假:同一秒內寫兩次檔,檔案系統的
+        mtime 解析度可能給出同一個值,而那會讓這條測試**隨機綠隨機紅**。
+        推進的是**真實的檔案系統 mtime**(判定讀的就是它),不是替換讀取函式。
+        """
+        canon_dir = tmp_path / ".agents" / "skills" / "code-review"
+        root = _skills_tree(tmp_path, VALID_CODE_REVIEW.replace(
+            "Clean degradation is mandatory.", "(沒了)"))
+        self._wire(monkeypatch, root)
+        assert gate.mount_violations_cached(), "前提不成立:壞正典沒有產生違規"
+
+        _write(canon_dir / "SKILL.md", VALID_CODE_REVIEW)
+        later = os.path.getmtime(str(canon_dir / "SKILL.md")) + 10
+        os.utime(str(canon_dir / "SKILL.md"), (later, later))
+        os.utime(str(tmp_path / ".agents" / "skills"), (later, later))
+
+        assert gate.mount_violations_cached() == [], (
+            "正典修好了、mtime 也前進了,而快取還在回報舊的違規 —— "
+            "失效條件沒有生效,使用者會看到一條已經不存在的違規")
