@@ -464,6 +464,123 @@ class TestICardIsKeptOnRecord:
         assert not (tmp_path / "shadow-cards.jsonl").exists()
 
 
+class TestJDeliberateRefuseIsItsOwnBucket:
+    """票 65 —— 「刻意 refuse」不是假陽,也不是真陽。
+
+    **哪一個 repo 狀態確定會讓這條紅**:五類的工具遇到一筆 fail-closed
+    保守觸發,按 `1` 會把刻意成本算成真陽、按 `5` 會把規則的正確行為算成誤判,
+    而兩者對同一批資料給出相反的假陽率(ADR 0012 §2:R7 202 筆
+    在五類公式下 FP > 80%,三分類下 6.9–11.9%)。
+
+    判準(上游票 21 的既有裁決,非新裁):
+    **fail-closed 保守觸發是規則照設計動作** —— 成本是真的、要算進分母,
+    但它不是誤判。把它算成假陽,等於要求一條 fail-closed 規則
+    證明自己從不 fail-closed。
+    """
+
+    def test_the_sixth_class_exists(self):
+        assert "6" in sr.CLASSES
+        assert "refuse" in sr.CLASSES["6"] or "刻意" in sr.CLASSES["6"]
+
+    def test_deliberate_refuse_is_not_a_false_positive(self):
+        assert not sr._is_false_positive(sr.CLASSES["6"])
+
+    def test_deliberate_refuse_still_counts_in_the_denominator(self, tmp_path):
+        """**成本是真的,要算進分母。** 不計分母的話,一條規則只要
+        大量 fail-closed 就能把自己的假陽率稀釋掉。"""
+        recs = ([_rec("R7", sr.CLASSES["6"]) for _ in range(9)]
+                + [_rec("R7", "假陽/範圍")])
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        per = sr.promotion_status(str(p))
+        assert per["R7"]["classified"] == 10
+        assert per["R7"]["false_positives"] == 1
+        assert abs(per["R7"]["fp_rate"] - 0.1) < 1e-9
+
+    def test_the_two_readings_of_the_same_data_now_agree(self, tmp_path):
+        """五類時代的病:同一批資料按 `1` 或按 `5` 給出相反的 FP。
+        補桶之後,fail-closed 保守觸發有自己的鍵,不必二選一。"""
+        recs = [_rec("R7", sr.CLASSES["6"]) for _ in range(10)]
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        per = sr.promotion_status(str(p))
+        assert per["R7"]["false_positives"] == 0
+        assert per["R7"]["deliberate"] == 10
+
+
+class TestKClassSemanticsAreNotCarriedByAStringPrefix:
+    """**這一組比加桶重要。**
+
+    `_is_false_positive()` 原本是 `classification.startswith("假陽")` ——
+    **分類語意藏在中文字串的前兩個字裡**。任何人把「假陽/範圍」改名成
+    「範圍誤判」,假陽率會**當場歸零而且全綠**。
+
+    分類集合是**封閉且可窮舉**的,而
+    **封閉集合用枚舉勝過比對** —— 比對的漏是未知的,枚舉的漏是不存在的。
+    """
+
+    def test_the_false_positive_set_is_explicit(self):
+        assert isinstance(sr.FALSE_POSITIVE_CLASSES, (set, frozenset))
+        assert sr.FALSE_POSITIVE_CLASSES == {
+            sr.CLASSES["2"], sr.CLASSES["3"], sr.CLASSES["4"], sr.CLASSES["5"]}
+
+    def test_a_class_not_starting_with_the_prefix_can_still_be_a_false_positive(self):
+        """反向釘子:判定不得**依賴**那個前綴。
+        這裡直接問集合,若實作退回 startswith,這條仍會綠 ——
+        所以它的搭檔是下一條。"""
+        for name in sr.FALSE_POSITIVE_CLASSES:
+            assert sr._is_false_positive(name)
+
+    def test_an_unknown_classification_is_loud_not_silently_bucketed(self, tmp_path):
+        """**正面釘死 startswith 那條路**:`假陽/沒登記過的` 在前綴實作下
+        會被靜默算成假陽,在枚舉實作下不屬於任何桶。
+
+        兩種靜默都不行 —— 一個高估、一個低估,而**兩者都印得出一個
+        看起來權威的百分比**。所以:出聲。
+        """
+        p = _write(tmp_path / "shadow-log.jsonl",
+                   [_rec("R7", "假陽/沒登記過的")])
+        with pytest.raises(sr.ShadowLogError) as e:
+            sr.promotion_status(str(p))
+        assert "沒登記過的" in str(e.value)
+
+    def test_the_known_classes_do_not_raise(self, tmp_path):
+        """負控:一支「什麼都當未知」的實作會讓上一條全綠。"""
+        recs = [_rec("R%d" % i, sr.CLASSES[k])
+                for i, k in enumerate(sorted(sr.CLASSES), 1)]
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        assert len(sr.promotion_status(str(p))) == len(sr.CLASSES)
+
+
+class TestLStatusReportsTheThreeWaySplit:
+    """票 65:`--status` 要說出三分類的三個數,不只印一個 FP。
+
+    ADR 0012 §2 寫「三分類的真相以建議清單與評估報告為準,不以工具輸出為準」——
+    那句話是**過渡期的但書**,而它存在的理由就是工具印不出三分類。
+    印得出來之後,那句但書才拿得掉(拿掉要改下游 ADR,見票 66,不在本票)。
+    """
+
+    def test_status_shows_true_positive_deliberate_and_false_positive(
+            self, tmp_path, capsys):
+        recs = ([_rec("R7", "真陽") for _ in range(5)]
+                + [_rec("R7", sr.CLASSES["6"]) for _ in range(3)]
+                + [_rec("R7", "假陽/解析") for _ in range(2)])
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        sr.print_status(str(p))
+        out = capsys.readouterr().out
+        assert "真陽" in out
+        assert "refuse" in out or "刻意" in out
+        for n in ("5", "3", "2"):
+            assert n in out
+
+    def test_the_rate_uses_the_full_denominator(self, tmp_path, capsys):
+        """10 筆裡 1 筆誤報 -> 10.0%,不是「扣掉 refuse 之後的 1/7」。"""
+        recs = ([_rec("R7", sr.CLASSES["6"]) for _ in range(3)]
+                + [_rec("R7", "真陽") for _ in range(6)]
+                + [_rec("R7", "假陽/時點")])
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        sr.print_status(str(p))
+        assert "10.0" in capsys.readouterr().out
+
+
 class TestETheErrorTypeIsItsOwn:
     """**不要用 `Exception`**:呼叫端要分得出「日誌壞了」與別的錯,
     而 `except Exception` 正是本票在修的東西 —— 修完又要求呼叫端

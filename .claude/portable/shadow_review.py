@@ -44,18 +44,41 @@ import sys
 MIN_CLASSIFIED = 10
 MAX_FALSE_POSITIVE_RATE = 0.05
 
-# 五類:一真陽,四種假陽(各對應一種修法)
+# 六類:一真陽、四種假陽(各對應一種修法)、一種**刻意成本**。
 CLASSES = {
     "1": "真陽",
     "2": "假陽/範圍",     # 路徑判定錯(非原始碼當成原始碼)-> 修非原始碼清單
     "3": "假陽/時點",     # 時點語意錯 -> 修規則
     "4": "假陽/既有",     # 早於閘門的既有碼 -> legacy 清單 / R3 豁免
     "5": "假陽/解析",     # 規則誤解輸入 -> 修規則
+    # 票 65:fail-closed 保守觸發 —— **規則照設計動作**(「切不出目標就擋」)。
+    # 成本是真的、要算進分母,但它**不是誤判**:把它算成假陽,
+    # 等於要求一條 fail-closed 規則證明自己從不 fail-closed(上游票 21 裁決)。
+    "6": "刻意 refuse",
 }
+
+# **顯式集合,不是字串前綴。**
+#
+# 原本是 `classification.startswith("假陽")` —— 分類語意藏在中文字串的
+# **前兩個字**裡。任何人把「假陽/範圍」改名成「範圍誤判」,
+# 假陽率會**當場歸零而且全綠**。
+#
+# 分類集合是**封閉且可窮舉**的,而封閉集合**枚舉勝過比對** ——
+# 比對的漏是未知的,枚舉的漏是不存在的(CLAUDE.md 常駐檢查項)。
+# 加第六類只是觸發物,這個才是缺陷。
+FALSE_POSITIVE_CLASSES = frozenset([
+    CLASSES["2"], CLASSES["3"], CLASSES["4"], CLASSES["5"],
+])
+
+# 三分類(ADR 0012 §2):真實觸發 / 刻意 refuse(不計分子)/ 誤報。
+DELIBERATE_CLASS = CLASSES["6"]
+TRUE_POSITIVE_CLASS = CLASSES["1"]
+
+KNOWN_CLASSES = frozenset(CLASSES.values())
 
 
 def _is_false_positive(classification):
-    return classification and classification.startswith("假陽")
+    return classification in FALSE_POSITIVE_CLASSES
 
 
 class ShadowLogError(Exception):
@@ -312,15 +335,35 @@ def promotion_status(path):
     """
     rows = load_log(path)
     per = {}
-    for r in rows:
+    for lineno, r in enumerate(rows, 1):
         c = r.get("classification")
         if not c:
             continue
+        if c not in KNOWN_CLASSES:
+            # **不靜默歸桶。** 前綴實作會把「假陽/沒登記過的」算成假陽(高估),
+            # 枚舉實作會把它算成不是假陽(低估)—— 而**兩種靜默都印得出一個
+            # 看起來權威的百分比**。所以出聲。
+            raise ShadowLogError(
+                "第 %d 筆的 classification 是 %r,不是任何一個已知分類。\n"
+                "     已知分類:%s\n"
+                "     檔案:%s\n"
+                "     **不猜它屬於哪一桶** —— 猜高會誇大假陽率、猜低會掩蓋它,\n"
+                "     而兩種猜法都會印出一個看起來權威的數字。\n"
+                "     修法:把那一筆改成已知分類,或先確認這份日誌是不是\n"
+                "     由別的版本寫的。"
+                % (lineno, c, "、".join(sorted(KNOWN_CLASSES)), path))
         rule = r.get("rule", "?")
-        d = per.setdefault(rule, {"classified": 0, "false_positives": 0})
+        d = per.setdefault(rule, {"classified": 0, "false_positives": 0,
+                                  "true_positives": 0, "deliberate": 0})
         d["classified"] += 1
         if _is_false_positive(c):
             d["false_positives"] += 1
+        elif c == DELIBERATE_CLASS:
+            # **算進分母,不算進分子**(ADR 0012 §2)。
+            # 不算分母的話,一條規則只要大量 fail-closed 就能稀釋掉自己的假陽率。
+            d["deliberate"] += 1
+        elif c == TRUE_POSITIVE_CLASS:
+            d["true_positives"] += 1
     for rule, d in per.items():
         n = d["classified"]
         d["fp_rate"] = (d["false_positives"] / n) if n else 0.0
@@ -352,11 +395,16 @@ def print_status(path):
         return
     print("每規則晉升狀態(≥%d 筆已分類 且 假陽率 <%.0f%% 才可轉正):"
           % (MIN_CLASSIFIED, MAX_FALSE_POSITIVE_RATE * 100))
+    # **三分類的三個數都印**(票 65 / ADR 0012 §2)。只印一個 FP 的話,
+    # 讀者無從判斷分母裡有多少是刻意成本 —— 而那正是同一批資料
+    # 曾經算得出兩個相反 FP 的原因。
+    print("  (分母含刻意 refuse:成本是真的,但它不是誤判)")
     for rule in sorted(per):
         d = per[rule]
-        print("  %-4s 已分類 %3d  假陽 %3d  假陽率 %5.1f%%  -> %s"
-              % (rule, d["classified"], d["false_positives"],
-                 d["fp_rate"] * 100,
+        print("  %-4s 已分類 %3d  真陽 %3d  刻意 refuse %3d  誤報 %3d"
+              "  假陽率 %5.1f%%  -> %s"
+              % (rule, d["classified"], d["true_positives"], d["deliberate"],
+                 d["false_positives"], d["fp_rate"] * 100,
                  "可轉正" if d["promotable"] else "留影子"))
 
 
@@ -376,7 +424,10 @@ def review(path):
         r = rows[i]
         print("── %s  [%s]  %s" % (r.get("ts", "")[:19], r.get("rule", "?"),
                                     r.get("message", "")[:90]))
-        ans = input("  分類 [1-5/s/q]: ").strip()
+        # 範圍字串從 `CLASSES` 導出,不寫死 —— 寫死的話,加一類而忘了改這裡,
+        # 使用者會看到一個**不含新鍵的提示**,然後永遠不會按它。
+        ans = input("  分類 [%s-%s/s/q]: "
+                    % (min(CLASSES), max(CLASSES))).strip()
         if ans == "q":
             break
         if ans == "s" or ans not in CLASSES:
