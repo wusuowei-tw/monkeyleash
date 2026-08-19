@@ -15,6 +15,7 @@
 
 import ast
 import datetime
+import hashlib
 import io
 import json
 import os
@@ -1988,12 +1989,67 @@ def tag_enforce(msg):
     return "[enforce] " + msg
 
 
-def log_shadow(msg, at_commit):
-    """把一筆『本該擋』寫進 shadow-log(證據)。append-only。"""
+# ── 指令指紋(票 68)────────────────────────────────────────────────────
+#
+# **記指紋,不記原文。** 三個各自獨立的理由:
+#   1. 指令原文含路徑,而路徑含使用者名、專案名、真實資料夾名(F-082 / F-085 那族)
+#   2. `shadow-log.jsonl` **不進版控**,靠週級人工備份 ——
+#      備份會被複製到別處,而複製讓洩漏面跟著擴散
+#   3. 它是 G1 的保護對象 —— **一個檔案越難刪改,往裡面寫東西就越要保守**
+#
+# 由來:R7 202 筆裡有 72 筆判不出真陽/誤報,因為紀錄裡沒有指令。
+# **本欄救不了那 72 筆**(它們的指令已經不存在),它是為下一次評估而做的。
+
+CMD_VERB_UNKNOWN = "<其他>"
+
+# **認得的動詞,枚舉。** 認不得就記 `CMD_VERB_UNKNOWN`,不照抄第一個 token ——
+# 那個 token 本身可能就是路徑(`"C:/…/app.exe" run`),照抄等於把
+# 「不記原文」讓掉一半。
+#
+# **這不是退回白名單。** CLAUDE.md 那條講的是**閘門**(列出不管的、其餘全擋);
+# 這裡是**輸出的遮罩**,而遮罩的 fail-closed 方向是**少講** ——
+# 所以 deny-by-default 才是對的方向,同 `leak-patterns.txt` 檔頭自己註明的
+# 「方向與其他清單不同」。漏一個動詞的代價是少一格資訊;多印一個的代價是洩漏。
+CMD_VERBS = frozenset("""
+    python python3 py pip pytest node npm npx
+    git gh
+    cd ls cat head tail grep find wc sed awk diff sort uniq od
+    echo printf touch cp mv rm mkdir chmod ln
+    sh bash pwsh powershell
+    curl wget tar zip unzip
+    set-content out-file add-content new-item remove-item copy-item move-item
+    get-content get-childitem select-string test-path
+""".split())
+
+
+def command_verb(command):
+    """指令的第一個 token,**只在它是認得的動詞時才回傳它本身**。"""
+    parts = (command or "").strip().split()
+    if not parts:
+        return None
+    head = parts[0].strip().lower()
+    return head if head in CMD_VERBS else CMD_VERB_UNKNOWN
+
+
+def log_shadow(msg, at_commit, command=None):
+    """把一筆『本該擋』寫進 shadow-log(證據)。append-only。
+
+    `command` 給得出來時,額外記**指紋**(sha256 / 動詞 / 長度),**不記原文**。
+
+    **給不出來時三個欄位一律缺席,不填 `N/A`** —— `N/A` 是一個值,
+    而值會被統計、被比對、被當成「有記錄」。R1–R6 的觸發物是檔案寫入不是指令,
+    **不要為了欄位齊整而編造一個指令**(票 68)。
+    """
     rec = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
            "rule": rule_of(msg), "at_commit": at_commit,
            "verdict": "would-block",
            "message": (msg or "").splitlines()[0] if msg else ""}
+    if command and command.strip():
+        raw = command.encode("utf-8", "replace")
+        # **不加鹽**:同一條指令在不同 repo 要對得起來。它是指紋不是密碼。
+        rec["cmd_sha256"] = hashlib.sha256(raw).hexdigest()
+        rec["cmd_verb"] = command_verb(command)
+        rec["cmd_len"] = len(command)
     try:
         _append_jsonl(SHADOW_LOG, rec)
     except Exception:
@@ -2030,7 +2086,9 @@ def mode_hook():
         msg = bash_write_violation(command)
         if msg:
             if shadow_active():
-                log_shadow(msg, at_commit=False)
+                # **只有這個呼叫點給得出 command** —— R7 是唯一以指令為觸發物的規則。
+                # 其餘兩處(檔案寫入前哨、pre-commit)手上沒有指令,欄位缺席是對的。
+                log_shadow(msg, at_commit=False, command=command)
                 return 0
             # **不套 sentinel_footer()**:那句話說「繞過前哨仍會在 commit 被擋」,
             # 對 R7 是假的 —— commit 看不到工具呼叫,只看得到 staged 檔案。

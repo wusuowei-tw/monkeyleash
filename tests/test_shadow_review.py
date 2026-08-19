@@ -735,6 +735,55 @@ class TestOStatusShowsTheDecidableRate:
         assert "未判定" in out
 
 
+class TestPOldRecordIdentitiesMustNotDrift:
+    """票 68 的連帶:`record_id` 是「除 `classification` 外全欄位」的雜湊,
+    所以**加欄位會改變新紀錄的身分**。舊紀錄沒有新欄位,身分理應不變 ——
+    但那是**目前實作**的性質,不是這條路徑的性質。
+
+    > **已發出去的套用卡指的是身分。身分漂了,卡片就指不到東西 ——
+    > 而那不會報錯,它只會變成「這張卡的 id 對不到任何一筆」。**
+
+    所以這裡釘一個**黃金雜湊**:任何讓舊形態紀錄算出別的 id 的改動
+    (補預設值、正規化欄位、換序列化)都會在這裡紅。
+    """
+
+    OLD_SHAPE = {
+        "ts": "2026-08-15T03:47:37.702840+00:00",
+        "rule": "R7",
+        "at_commit": False,
+        "verdict": "would-block",
+        "message": "[R7] x",
+    }
+    GOLDEN = "af5d40aa258c7575e7544501fa8e169ae7cd045af5f154bc5bf7f9590b3641c0"
+
+    def test_the_old_shape_still_hashes_to_the_same_id(self):
+        assert sr.record_id(dict(self.OLD_SHAPE)) == self.GOLDEN
+
+    def test_adding_the_new_fields_changes_the_id(self):
+        """**負控**:若 `record_id` 忽略未知欄位,上一條會永遠綠而這條會紅。
+        身分必須涵蓋全欄位 —— 那正是它不用 `ts` 的理由(票 64)。"""
+        new_shape = dict(self.OLD_SHAPE,
+                         cmd_sha256="0" * 64, cmd_verb="python", cmd_len=12)
+        assert sr.record_id(new_shape) != self.GOLDEN
+
+    def test_classification_still_does_not_affect_the_id(self):
+        """既有性質不得被票 68 順手改掉。"""
+        assert sr.record_id(dict(self.OLD_SHAPE, classification="真陽")) \
+            == self.GOLDEN
+
+    def test_a_log_mixing_old_and_new_shapes_reads_and_counts(self, tmp_path):
+        """**向後相容是硬需求**:現有 222 筆是舊形態,新紀錄是新形態,
+        兩種會在同一個檔案裡並存。"""
+        old = dict(self.OLD_SHAPE, classification="真陽")
+        new = dict(self.OLD_SHAPE, message="[R7] y", classification="真陽",
+                   cmd_sha256="a" * 64, cmd_verb="python", cmd_len=9)
+        p = _write(tmp_path / "shadow-log.jsonl", [old, new])
+        rows = sr.load_log(str(p))
+        assert len(rows) == 2
+        d = sr.promotion_status(str(p))["R7"]
+        assert d["classified"] == 2 and d["true_positives"] == 2
+
+
 class TestETheErrorTypeIsItsOwn:
     """**不要用 `Exception`**:呼叫端要分得出「日誌壞了」與別的錯,
     而 `except Exception` 正是本票在修的東西 —— 修完又要求呼叫端

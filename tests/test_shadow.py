@@ -243,3 +243,127 @@ class TestPerRulePromotion:
                 [{"rule": "R2"}] * 10)   # 10 筆未分類
         status = sr.promotion_status(self._log(tmp_path, rows))
         assert status["R2"]["classified"] == 5 and status["R2"]["promotable"] is False
+
+
+class TestShadowLogRecordsACommandFingerprint:
+    """票 68 —— 影子日誌要記指令的**指紋**,不記原文。
+
+    由來:R7 202 筆裡有 72 筆判不出真陽/誤報,因為紀錄裡**沒有指令**
+    (欄位只有 ts / rule / at_commit / verdict / message)。
+
+    **不記原文的三個理由**(裁決 2026-08-19):
+      1. 指令原文含路徑,而路徑含使用者名、專案名、真實資料夾名(F-082 / F-085 那族)
+      2. `shadow-log.jsonl` 不進版控,靠週級人工備份 —— **備份會被複製,洩漏面跟著擴散**
+      3. 它是 G1 保護對象 —— **一個檔案越難刪改,往裡面寫東西就越要保守**
+    """
+
+    def test_a_command_yields_a_stable_fingerprint(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(gate, "SHADOW_LOG", str(tmp_path / "log.jsonl"))
+        a = gate.log_shadow("[R7] x", at_commit=False, command="printf hi > a.txt")
+        b = gate.log_shadow("[R7] x", at_commit=False, command="printf hi > a.txt")
+        assert a["cmd_sha256"] == b["cmd_sha256"]
+        assert len(a["cmd_sha256"]) == 64
+
+    def test_different_commands_differ(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(gate, "SHADOW_LOG", str(tmp_path / "log.jsonl"))
+        a = gate.log_shadow("[R7] x", at_commit=False, command="printf a > f")
+        b = gate.log_shadow("[R7] x", at_commit=False, command="printf b > f")
+        assert a["cmd_sha256"] != b["cmd_sha256"]
+
+    def test_the_raw_command_is_never_written(self, tmp_path, monkeypatch):
+        """**這一條是本票存在的理由。**
+
+        指令原文的任何片段都不得出現在紀錄裡。
+
+        ## fixture 用**合成 token**,不用逼真的假路徑(這一段是被擋出來的)
+
+        本條第一版寫的是 `cd "c:/Users/somebody/OneDrive/…/…" && cat token.txt`
+        —— 一個「看起來像真的」的假路徑。它**命中了洩漏偵測的個人 pattern**,
+        `tests/test_leak_scan.py::test_the_shipped_tree_is_clean` 當場轉紅。
+
+        > **寫一個逼真的假機密,本身就是洩漏鄰近行為** ——
+        > 而「它是假的」這件事只有寫的人知道,掃描器不知道,讀的人也不知道。
+
+        所以改用一眼看得出是合成的 token。斷言強度不變:
+        要證明的是「這些字不出現在輸出裡」,而那與它們像不像真的無關。
+        """
+        monkeypatch.setattr(gate, "SHADOW_LOG", str(tmp_path / "log.jsonl"))
+        marks = ("ZZFIXTUREALPHA", "ZZFIXTUREBETA", "ZZFIXTUREGAMMA")
+        command = "someverb %s/%s --flag %s" % marks
+        rec = gate.log_shadow("[R7] x", at_commit=False, command=command)
+        blob = json.dumps(rec, ensure_ascii=False)
+        for leaked in marks:
+            assert leaked not in blob, "指令原文的片段漏進紀錄:%s" % leaked
+        # 整份檔案也要驗 —— 回傳值乾淨而寫進去的髒,是可能的
+        written = io.open(gate.SHADOW_LOG, encoding="utf-8").read()
+        for leaked in marks:
+            assert leaked not in written
+
+    def test_the_length_is_recorded(self, tmp_path, monkeypatch):
+        """長度不洩漏內容,但它讓「被截掉了多少」看得見。"""
+        monkeypatch.setattr(gate, "SHADOW_LOG", str(tmp_path / "log.jsonl"))
+        rec = gate.log_shadow("[R7] x", at_commit=False, command="abcde")
+        assert rec["cmd_len"] == 5
+
+    def test_a_known_verb_is_recorded(self, tmp_path, monkeypatch):
+        """讓人看得出「這是哪一類指令」—— 而**只記得出的動詞**。"""
+        monkeypatch.setattr(gate, "SHADOW_LOG", str(tmp_path / "log.jsonl"))
+        for cmd, verb in (("python -c 'x'", "python"),
+                          ("git commit -F msg.txt", "git"),
+                          ("printf x >> a", "printf")):
+            rec = gate.log_shadow("[R7] x", at_commit=False, command=cmd)
+            assert rec["cmd_verb"] == verb
+
+    def test_an_unknown_verb_is_not_echoed(self, tmp_path, monkeypatch):
+        """**認不得的動詞不照抄。**
+
+        第一個 token 本身可能就是路徑(`"C:\\Program Files\\x\\app.exe" …`)——
+        照抄等於把「不記原文」讓掉一半。認不得就記一個固定字串。
+
+        **這不是退回白名單。** CLAUDE.md 那條講的是**閘門**(列出不管的、其餘全擋);
+        這裡是**輸出的遮罩**,而遮罩的 fail-closed 方向是**少講**,
+        所以 deny-by-default 才是對的方向 —— 同 `leak-patterns.txt` 檔頭
+        自己註明的「方向與其他清單不同」。
+        """
+        monkeypatch.setattr(gate, "SHADOW_LOG", str(tmp_path / "log.jsonl"))
+        # 合成 token,理由同上一條的 docstring。
+        rec = gate.log_shadow(
+            "[R7] x", at_commit=False,
+            command='"ZZFIXTUREDELTA/ZZFIXTUREEPSILON.exe" run')
+        assert rec["cmd_verb"] == gate.CMD_VERB_UNKNOWN
+        blob = json.dumps(rec, ensure_ascii=False)
+        assert "ZZFIXTUREDELTA" not in blob
+        assert "ZZFIXTUREEPSILON" not in blob
+
+    def test_records_without_a_command_omit_the_fields(self, tmp_path, monkeypatch):
+        """R1–R6 的觸發物是**檔案寫入**不是指令。
+
+        **不要為了欄位齊整而編造一個「指令」** —— 欄位缺席比填 `N/A` 誠實:
+        `N/A` 是一個值,而值會被統計、會被比對、會被當成「有記錄」。
+        """
+        monkeypatch.setattr(gate, "SHADOW_LOG", str(tmp_path / "log.jsonl"))
+        rec = gate.log_shadow("[R2] x.py:idle", at_commit=True)
+        for f in ("cmd_sha256", "cmd_verb", "cmd_len"):
+            assert f not in rec
+
+    def test_the_old_call_signature_still_works(self, tmp_path, monkeypatch):
+        """**向後相容是硬需求**:現有呼叫點有兩處不傳 command。"""
+        monkeypatch.setattr(gate, "SHADOW_LOG", str(tmp_path / "log.jsonl"))
+        rec = gate.log_shadow("[R3] a.py:x", at_commit=False)
+        assert rec["rule"] == "R3" and rec["verdict"] == "would-block"
+
+    def test_an_empty_command_is_treated_as_absent(self, tmp_path, monkeypatch):
+        """空字串不是指令 —— 別替它算一個 sha。"""
+        monkeypatch.setattr(gate, "SHADOW_LOG", str(tmp_path / "log.jsonl"))
+        rec = gate.log_shadow("[R7] x", at_commit=False, command="   ")
+        assert "cmd_sha256" not in rec
+
+    def test_the_r7_call_site_passes_the_command(self):
+        """**機制做好了但沒有東西保證它被走到** —— 票 56 已記過那個形狀。
+
+        直接讀原始碼確認 R7 那個呼叫點真的把 command 傳下去了。
+        """
+        src = io.open(ROOT / ".claude" / "hooks" / "gate.py",
+                      encoding="utf-8").read()
+        assert "log_shadow(msg, at_commit=False, command=command)" in src, \
+            "R7 呼叫點沒有把 command 傳給 log_shadow —— 欄位會永遠是空的"
