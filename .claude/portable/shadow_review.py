@@ -2,8 +2,10 @@
 """影子日誌逐筆分類 + per-rule 晉升狀態。
 
 用法:
-  python .claude/portable/shadow_review.py            互動:逐筆分類未分類的
-  python .claude/portable/shadow_review.py --status   只印各規則的晉升狀態
+  python .claude/portable/shadow_review.py                     互動:逐筆分類未分類的
+  python .claude/portable/shadow_review.py --status            只印各規則的晉升狀態
+  python .claude/portable/shadow_review.py --card <卡片>       批次:dry-run,不寫
+  python .claude/portable/shadow_review.py --card <卡片> --apply   批次:實際套用
 
 **晉升 per-rule 不全局**:每條規則自己 ≥10 筆已分類 且 假陽率 <5% 才可轉正。
 全局比率會讓一條規則的真陽稀釋另一條的假陽 —— 那會把「R2 很準」誤讀成
@@ -32,6 +34,8 @@
 只改編碼的話,下一種壞法會走同一條靜默路徑回來。
 """
 
+import datetime
+import hashlib
 import io
 import json
 import os
@@ -108,6 +112,196 @@ def load_log(path):
 def _nonblank_line_count(path):
     """檔案裡有幾行非空白。**筆數守恆那一道的右邊。**"""
     return sum(1 for line in _read_lines(path) if line.strip())
+
+
+# ── 票 64:批次分類(套用卡)────────────────────────────────────────────
+
+ID_PREFIX = 16
+
+
+def _canonical(rec):
+    """身分用的正規化形式。**排除 `classification`。**
+
+    身分必須在**套用前後不變** —— 否則卡片套完之後就再也指不到它動過的東西,
+    而「留檔」會變成留一份指不回去的紙。
+    """
+    d = dict((k, v) for k, v in rec.items() if k != "classification")
+    return json.dumps(d, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def record_id(rec):
+    """一筆紀錄的身分 —— **整筆內容的雜湊,不是時間戳。**
+
+    `ts` 在生產資料上**已經撞號**:量化 222 筆裡 `ts` 只有 221 個相異值,
+    `ts` + `rule` 也一樣。用時間戳當鍵的批次工具今天就會把兩筆不同的判定
+    當成同一筆。
+
+    **也不用 `ts`+`rule`+`message` 三元組**:它今天唯一,但那是**這份資料**的
+    性質,不是這個結構的性質。欄位集合是封閉且可窮舉的,而
+    **封閉集合用枚舉勝過比對** —— 整筆雜湊就是枚舉,挑三個欄位是比對,
+    而比對的漏是未知的(CLAUDE.md 常駐檢查項)。
+    """
+    return hashlib.sha256(_canonical(rec).encode("utf-8")).hexdigest()
+
+
+class CardPlan(object):
+    """套用卡的計畫。`applied` 在 dry-run 一律為 0 —— **不是「打算套幾筆」**,
+    是「**真的寫進去幾筆**」。兩者用同一個欄位表達的話,dry-run 的輸出會
+    讀起來像已經做過了。"""
+
+    __slots__ = ("card", "applied", "by_class")
+
+    def __init__(self, card):
+        self.card = card
+        self.applied = 0
+        self.by_class = {}
+
+    def __repr__(self):
+        return "CardPlan(applied=%d, by_class=%r)" % (self.applied, self.by_class)
+
+
+def load_card(path):
+    """回 [(行號, dict), …]。壞行一律出聲(同 `load_log`)。"""
+    out = []
+    for lineno, line in enumerate(_read_lines(path), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append((lineno, json.loads(line)))
+        except ValueError as e:
+            raise ShadowLogError(
+                "套用卡第 %d 行不是合法 JSON:%s\n     檔案:%s" % (lineno, e, path))
+    return out
+
+
+def _card_ledger_path(log_path):
+    return os.path.join(os.path.dirname(os.path.abspath(log_path)),
+                        "shadow-cards.jsonl")
+
+
+def apply_card(log_path, card_path, apply=False):
+    """把一張套用卡套到影子日誌上。**全有全無。**
+
+    預設 dry-run(`apply=False`)。**dry-run 也要擋** —— 一份把不合法的卡
+    列成「將套用」的清單本身就是錯的答案(同 `sync.refuse_if_unclassified`)。
+
+    工具**不產生判斷**:它只套用人寫在卡片上的分類。ADR 0012 的
+    「逐筆判,不算總數」要的是每一筆都有一個判斷,不是每一筆都要按一次鍵 ——
+    **批次模式換的是介面,不是判準。**
+    """
+    rows = load_log(log_path)
+
+    # 日誌自己撞號 -> 卡片指過去會指到兩筆,而「套哪一筆」不是工具能決定的
+    by_id = {}
+    for i, r in enumerate(rows):
+        by_id.setdefault(record_id(r), []).append(i)
+    dup = dict((k, v) for k, v in by_id.items() if len(v) > 1)
+    if dup:
+        raise ShadowLogError(
+            "影子日誌裡有內容完全相同的紀錄(%d 組重複),整批拒絕。\n"
+            "     %s\n"
+            "     缺的前提是**身分唯一**:卡片指過去會同時對到多筆,\n"
+            "     而「該套哪一筆」是人的判斷,不是工具能決定的。"
+            % (len(dup), "\n     ".join(
+                "%s… 出現在第 %s 筆" % (k[:ID_PREFIX],
+                                     "、".join(str(x + 1) for x in v))
+                for k, v in sorted(dup.items()))))
+
+    entries = load_card(card_path)
+
+    # 卡片自己撞號 —— 同一件事的反方向
+    seen = {}
+    for lineno, e in entries:
+        seen.setdefault((e.get("id") or "").strip(), []).append(lineno)
+    cdup = dict((k, v) for k, v in seen.items() if len(v) > 1)
+    if cdup:
+        raise ShadowLogError(
+            "套用卡裡有重複的 id(%d 組),整批拒絕。\n"
+            "     %s\n"
+            "     同一筆紀錄被指定兩次,而兩次的分類可能不同 —— 那要人決定。"
+            % (len(cdup), "\n     ".join(
+                "%s 出現在第 %s 行" % (k, "、".join(str(x) for x in v))
+                for k, v in sorted(cdup.items()))))
+
+    problems = []
+    targets = []
+    by_class = {}
+    for lineno, e in entries:
+        cid = (e.get("id") or "").strip()
+        klass = e.get("class")
+        why = (e.get("why") or "").strip()
+        if not why:
+            problems.append(
+                "第 %d 行缺 `why` —— 一張沒有理由的批次卡,事後沒有人分得出"
+                "它是判斷還是手滑。" % lineno)
+        if klass not in CLASSES:
+            problems.append(
+                "第 %d 行的 class=%r 不是合法分類(合法值:%s)。"
+                % (lineno, klass, "、".join(sorted(CLASSES))))
+        matches = [i for i, r in enumerate(rows)
+                   if cid and record_id(r).startswith(cid)]
+        if not matches:
+            problems.append(
+                "第 %d 行的 id %s 在日誌裡對不到任何一筆 —— 卡片與日誌不同步。"
+                % (lineno, cid or "(空)"))
+        elif len(matches) > 1:
+            problems.append(
+                "第 %d 行的 id %s 對到 %d 筆 —— 前綴不夠長,加長它。"
+                % (lineno, cid, len(matches)))
+        elif rows[matches[0]].get("classification"):
+            problems.append(
+                "第 %d 行的目標**已經有分類**(%s)—— 覆蓋別人的判斷要是一個"
+                "顯式動作,不是批次的副作用。"
+                % (lineno, rows[matches[0]]["classification"]))
+        elif klass in CLASSES:
+            targets.append((matches[0], klass))
+            by_class[klass] = by_class.get(klass, 0) + 1
+
+    if problems:
+        raise ShadowLogError(
+            "套用卡有 %d 個問題,**整批拒絕,一個字都沒寫**:\n     %s\n"
+            "     卡片:%s\n"
+            "     全有全無不是嚴格,是可還原性:部分套用之後,\n"
+            "     沒有人分得出哪些是這張卡做的、哪些本來就在。"
+            % (len(problems), "\n     ".join(problems), card_path))
+
+    plan = CardPlan(card_path)
+    plan.by_class = by_class
+    if not apply:
+        return plan
+
+    for i, klass in targets:
+        rows[i]["classification"] = CLASSES[klass]
+
+    on_disk = _nonblank_line_count(log_path)
+    if len(rows) != on_disk:
+        raise ShadowLogError(
+            "拒絕重寫影子日誌:手上有 %d 筆,檔案裡有 %d 筆非空白行。"
+            % (len(rows), on_disk))
+
+    with io.open(log_path, "w", encoding="utf-8", newline="\n") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    plan.applied = len(targets)
+
+    # 留檔在**寫入並通過筆數守恆之後**才做 —— 驗證沒過就不該有憑證,
+    # 否則帳面上會出現一張替沒發生的套用背書的紀錄(同 sync 的 provenance)。
+    rec = {
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "card": card_path,
+        # **指紋要能被獨立查證**:事後有人可以拿卡片重算一次。
+        # 一份只能自我背書的紀錄,證明不了任何事。
+        "card_sha256": hashlib.sha256(
+            io.open(card_path, "rb").read()).hexdigest(),
+        "applied": plan.applied,
+        "by_class": by_class,
+    }
+    with io.open(_card_ledger_path(log_path), "a",
+                 encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return plan
 
 
 def promotion_status(path):
@@ -225,8 +419,29 @@ def main(argv):
     """
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     log = os.path.join(root, ".dev", "shadow-log.jsonl")
+    card = None
+    for i, a in enumerate(argv):
+        if a == "--card" and i + 1 < len(argv):
+            card = argv[i + 1]
     try:
-        if "--status" in argv:
+        if card:
+            apply = "--apply" in argv
+            plan = apply_card(log, card, apply=apply)
+            total = sum(plan.by_class.values())
+            print("套用卡:%s" % card)
+            print("將套用 %d 筆:%s"
+                  % (total, "、".join("%s×%d(%s)" % (k, plan.by_class[k], CLASSES[k])
+                                      for k in sorted(plan.by_class))))
+            if apply:
+                print("已寫入 %d 筆,留檔於 %s" % (plan.applied, _card_ledger_path(log)))
+                print()
+                print_status(log)
+            else:
+                # **dry-run 的收尾句要說出「什麼都沒發生」。** 少了它,
+                # 上面那份清單讀起來像是已經做完的報告(F-104 的形狀:
+                # 「我做了什麼」與「現在的狀態是什麼」)。
+                print("(dry-run,日誌一個位元組都沒動;要實際套用加 --apply)")
+        elif "--status" in argv:
             print_status(log)
         else:
             review(log)

@@ -246,6 +246,224 @@ class TestDStatusSeparatesEmptyFromUnclassified:
         assert "11" in out
 
 
+class TestFRecordIdentityIsBoundToContent:
+    """票 64 約束 1:識別唯一綁定。
+
+    **`ts` 在生產資料上已經撞號**(量化 222 筆:221 相異,1 組撞號涉及 2 筆),
+    所以身分不能是時間戳,也不能是行號或順序。
+    """
+
+    def test_two_records_differing_only_in_message_get_different_ids(self):
+        a = {"ts": "T", "rule": "R7", "message": "x"}
+        b = {"ts": "T", "rule": "R7", "message": "y"}
+        assert sr.record_id(a) != sr.record_id(b)
+
+    def test_the_same_timestamp_and_rule_do_not_collide(self):
+        """直接對著生產資料撞到的那一組形狀。"""
+        a = {"ts": "T", "rule": "R7", "message": "a", "verdict": "block"}
+        b = {"ts": "T", "rule": "R7", "message": "b", "verdict": "block"}
+        assert sr.record_id(a) != sr.record_id(b)
+
+    def test_key_order_does_not_change_the_id(self):
+        a = {"ts": "T", "rule": "R7", "message": "x"}
+        b = {"message": "x", "rule": "R7", "ts": "T"}
+        assert sr.record_id(a) == sr.record_id(b)
+
+    def test_classification_is_excluded_from_the_identity(self):
+        """**套用前後身分必須不變** —— 否則卡片套完就再也指不回它動過的東西,
+        而留檔會變成留一份指不回去的紙。"""
+        a = {"ts": "T", "rule": "R7", "message": "x"}
+        b = dict(a, classification="真陽")
+        assert sr.record_id(a) == sr.record_id(b)
+
+
+class TestGCardIsDryRunByDefault:
+    """票 64 約束 3。"""
+
+    def _log_and_card(self, tmp_path, n=5, klass="1"):
+        recs = [_rec("R7") for _ in range(n)]
+        for i, r in enumerate(recs):
+            r["message"] = "m%d" % i
+        log = _write(tmp_path / "shadow-log.jsonl", recs)
+        card = tmp_path / "card.jsonl"
+        with io.open(str(card), "w", encoding="utf-8", newline="\n") as f:
+            for r in recs:
+                f.write(json.dumps({"id": sr.record_id(r)[:16],
+                                    "class": klass,
+                                    "why": "測試"}, ensure_ascii=False) + "\n")
+        return log, card
+
+    def test_plan_does_not_touch_the_log(self, tmp_path):
+        log, card = self._log_and_card(tmp_path)
+        before = io.open(str(log), "rb").read()
+        sr.apply_card(str(log), str(card), apply=False)
+        assert io.open(str(log), "rb").read() == before
+
+    def test_plan_reports_counts_per_class(self, tmp_path):
+        log, card = self._log_and_card(tmp_path, n=7, klass="5")
+        plan = sr.apply_card(str(log), str(card), apply=False)
+        assert plan.by_class == {"5": 7}
+        assert plan.applied == 0          # dry-run 沒有套用任何東西
+
+    def test_apply_writes_and_reports(self, tmp_path):
+        log, card = self._log_and_card(tmp_path, n=3, klass="1")
+        plan = sr.apply_card(str(log), str(card), apply=True)
+        assert plan.applied == 3
+        rows = sr.load_log(str(log))
+        assert [r["classification"] for r in rows] == ["真陽"] * 3
+
+    def test_the_untouched_fields_survive_the_rewrite(self, tmp_path):
+        """套用只加 `classification`,不動別的欄位。"""
+        log, card = self._log_and_card(tmp_path, n=2)
+        before = sr.load_log(str(log))
+        sr.apply_card(str(log), str(card), apply=True)
+        after = sr.load_log(str(log))
+        for b, a in zip(before, after):
+            for k in b:
+                assert a[k] == b[k]
+
+
+class TestHAllOrNothing:
+    """票 64 約束 2 與 5:任一條件不滿足 -> 整批拒絕,檔案逐位元組不變。"""
+
+    def _setup(self, tmp_path, card_lines, n=4):
+        recs = [_rec("R7") for _ in range(n)]
+        for i, r in enumerate(recs):
+            r["message"] = "m%d" % i
+        log = _write(tmp_path / "shadow-log.jsonl", recs)
+        card = tmp_path / "card.jsonl"
+        with io.open(str(card), "w", encoding="utf-8", newline="\n") as f:
+            for line in card_lines(recs):
+                f.write(json.dumps(line, ensure_ascii=False) + "\n")
+        return log, card, recs
+
+    def _refuses(self, log, card):
+        before = io.open(str(log), "rb").read()
+        with pytest.raises(sr.ShadowLogError) as e:
+            sr.apply_card(str(log), str(card), apply=True)
+        assert io.open(str(log), "rb").read() == before, \
+            "拒絕之後檔案必須逐位元組不變 —— 拒絕但已寫了一半,比不拒絕更糟"
+        return str(e.value)
+
+    def test_an_unknown_id_refuses_the_whole_batch(self, tmp_path):
+        log, card, recs = self._setup(tmp_path, lambda rs: [
+            {"id": sr.record_id(rs[0])[:16], "class": "1", "why": "ok"},
+            {"id": "0" * 16, "class": "1", "why": "指不到任何一筆"},
+        ])
+        assert "0000" in self._refuses(log, card)
+
+    def test_a_duplicate_id_in_the_card_refuses(self, tmp_path):
+        log, card, recs = self._setup(tmp_path, lambda rs: [
+            {"id": sr.record_id(rs[0])[:16], "class": "1", "why": "一"},
+            {"id": sr.record_id(rs[0])[:16], "class": "5", "why": "二"},
+        ])
+        assert "重複" in self._refuses(log, card)
+
+    def test_a_duplicate_record_in_the_log_refuses(self, tmp_path):
+        """**日誌自己撞號** —— 卡片指過去會指到兩筆,而「套哪一筆」
+        不是工具能決定的。"""
+        r = _rec("R7")
+        log = _write(tmp_path / "shadow-log.jsonl", [dict(r), dict(r)])
+        card = tmp_path / "card.jsonl"
+        with io.open(str(card), "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"id": sr.record_id(r)[:16], "class": "1",
+                                "why": "x"}, ensure_ascii=False) + "\n")
+        assert "重複" in self._refuses(log, card)
+
+    def test_an_unknown_class_refuses(self, tmp_path):
+        log, card, recs = self._setup(tmp_path, lambda rs: [
+            {"id": sr.record_id(rs[0])[:16], "class": "9", "why": "沒有第 9 類"},
+        ])
+        assert "9" in self._refuses(log, card)
+
+    def test_a_missing_why_refuses(self, tmp_path):
+        log, card, recs = self._setup(tmp_path, lambda rs: [
+            {"id": sr.record_id(rs[0])[:16], "class": "1"},
+        ])
+        assert "why" in self._refuses(log, card)
+
+    def test_an_already_classified_record_refuses(self, tmp_path):
+        r = _rec("R7", "真陽")
+        log = _write(tmp_path / "shadow-log.jsonl", [r])
+        card = tmp_path / "card.jsonl"
+        with io.open(str(card), "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"id": sr.record_id(r)[:16], "class": "5",
+                                "why": "想覆蓋"}, ensure_ascii=False) + "\n")
+        assert "已" in self._refuses(log, card)
+
+    def test_dry_run_refuses_for_the_same_reasons(self, tmp_path):
+        """**dry-run 也要擋。** 一份把不合法的卡列成「將套用」的清單,
+        本身就是錯的答案(同 sync 的 refuse_if_unclassified)。"""
+        log, card, recs = self._setup(tmp_path, lambda rs: [
+            {"id": "0" * 16, "class": "1", "why": "指不到"},
+        ])
+        with pytest.raises(sr.ShadowLogError):
+            sr.apply_card(str(log), str(card), apply=False)
+
+    def test_a_valid_card_is_not_refused(self, tmp_path):
+        """**非空洞性**:一支「永遠拒絕」的實作會讓上面每一條全綠。"""
+        log, card, recs = self._setup(tmp_path, lambda rs: [
+            {"id": sr.record_id(rs[0])[:16], "class": "1", "why": "ok"},
+        ])
+        plan = sr.apply_card(str(log), str(card), apply=True)
+        assert plan.applied == 1
+
+
+class TestICardIsKeptOnRecord:
+    """票 64 約束 4:套用卡留檔。"""
+
+    def _apply(self, tmp_path):
+        recs = [_rec("R7"), _rec("R3")]
+        for i, r in enumerate(recs):
+            r["message"] = "m%d" % i
+        log = _write(tmp_path / "shadow-log.jsonl", recs)
+        card = tmp_path / "card.jsonl"
+        with io.open(str(card), "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"id": sr.record_id(recs[0])[:16], "class": "1",
+                                "why": "a"}, ensure_ascii=False) + "\n")
+            f.write(json.dumps({"id": sr.record_id(recs[1])[:16], "class": "5",
+                                "why": "b"}, ensure_ascii=False) + "\n")
+        return log, card
+
+    def test_applying_appends_a_ledger_record(self, tmp_path):
+        log, card = self._apply(tmp_path)
+        sr.apply_card(str(log), str(card), apply=True)
+        ledger = tmp_path / "shadow-cards.jsonl"
+        assert ledger.exists()
+        rec = json.loads(io.open(str(ledger), encoding="utf-8").read().strip())
+        assert rec["applied"] == 2
+        assert rec["by_class"] == {"1": 1, "5": 1}
+
+    def test_the_ledger_records_the_card_fingerprint(self, tmp_path):
+        """**指紋要能被獨立查證** —— 事後有人可以拿卡片重算一次。
+        同 provenance 的判準:寫下來的東西不得只能自我背書。"""
+        log, card = self._apply(tmp_path)
+        sr.apply_card(str(log), str(card), apply=True)
+        rec = json.loads(io.open(str(tmp_path / "shadow-cards.jsonl"),
+                                 encoding="utf-8").read().strip())
+        import hashlib
+        expect = hashlib.sha256(io.open(str(card), "rb").read()).hexdigest()
+        assert rec["card_sha256"] == expect
+
+    def test_dry_run_writes_no_ledger_record(self, tmp_path):
+        log, card = self._apply(tmp_path)
+        sr.apply_card(str(log), str(card), apply=False)
+        assert not (tmp_path / "shadow-cards.jsonl").exists()
+
+    def test_a_refused_apply_writes_no_ledger_record(self, tmp_path):
+        """**驗證沒過就不該有憑證** —— 否則帳面上會出現一張替沒發生的
+        套用背書的紀錄(同 sync:provenance 在 hash 重驗之後才寫)。"""
+        recs = [_rec("R7")]
+        log = _write(tmp_path / "shadow-log.jsonl", recs)
+        card = tmp_path / "card.jsonl"
+        with io.open(str(card), "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"id": "0" * 16, "class": "1", "why": "指不到"},
+                               ensure_ascii=False) + "\n")
+        with pytest.raises(sr.ShadowLogError):
+            sr.apply_card(str(log), str(card), apply=True)
+        assert not (tmp_path / "shadow-cards.jsonl").exists()
+
+
 class TestETheErrorTypeIsItsOwn:
     """**不要用 `Exception`**:呼叫端要分得出「日誌壞了」與別的錯,
     而 `except Exception` 正是本票在修的東西 —— 修完又要求呼叫端
