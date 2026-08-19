@@ -581,6 +581,160 @@ class TestLStatusReportsTheThreeWaySplit:
         assert "10.0" in capsys.readouterr().out
 
 
+class TestMUndecidableIsNeitherEvidenceNorFault:
+    """票 67 —— 「無法判定」是**判定不能**,不是判定結果。
+
+    由來:R7 202 筆裡有 72 筆從日誌本身判不出真陽/誤報,因為
+    **日誌沒有記指令**(欄位只有 ts / rule / at_commit / verdict / message)。
+
+    所以它既不進假陽率的分子,**也不進分母** ——
+    把它算進分母會稀釋假陽率,算進分子會誣賴規則。
+    """
+
+    def test_the_seventh_class_exists(self):
+        assert "7" in sr.CLASSES
+        assert "無法判定" in sr.CLASSES["7"]
+
+    def test_undecidable_is_not_a_false_positive(self):
+        assert not sr._is_false_positive(sr.CLASSES["7"])
+
+    def test_undecidable_is_excluded_from_the_rate_denominator(self, tmp_path):
+        """**與刻意 refuse 的差別就在這一條。**
+
+        5 筆誤報 + 5 筆無法判定:
+          舊算法(分母 = 已分類)   -> 5/10 = 50%
+          本票算法(分母 = 可判定) -> 5/5  = 100%
+        """
+        recs = ([_rec("R7", "假陽/解析") for _ in range(5)]
+                + [_rec("R7", sr.CLASSES["7"]) for _ in range(5)])
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        d = sr.promotion_status(str(p))["R7"]
+        assert d["undecidable"] == 5
+        assert d["decidable"] == 5
+        assert abs(d["fp_rate"] - 1.0) < 1e-9
+
+    def test_deliberate_refuse_stays_in_the_denominator(self, tmp_path):
+        """負控:別把刻意 refuse 一起踢出分母。
+        **成本是真的**(ADR 0012 §2),它算分母、只是不算分子。"""
+        recs = ([_rec("R7", "假陽/解析")]
+                + [_rec("R7", sr.CLASSES["6"]) for _ in range(9)])
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        d = sr.promotion_status(str(p))["R7"]
+        assert d["decidable"] == 10
+        assert abs(d["fp_rate"] - 0.1) < 1e-9
+
+
+class TestNDecidableRateIsAThirdGate:
+    """票 67 —— 轉正要同時滿足三條:已分類 ≥ 10、假陽率 < 5%、**可判定率 ≥ 90%**。
+
+    **哪一個 repo 狀態確定會讓這條紅**:量化 2026-08-19 的實況 ——
+    R7 202 筆,130 筆標刻意 refuse、72 筆還沒判。
+    舊判定只看「已分類 130 ≥ 10」與「假陽率 0.0% < 5%」,於是印出 `可轉正`。
+
+    > **36% 判不出來的規則,它的 0% 假陽率不代表它準,
+    > 只代表我們只看了它願意讓我們看的那部分。**
+    """
+
+    def test_the_real_world_case_is_not_promotable(self, tmp_path):
+        """量化 2026-08-19 的實況:130 判定 / 72 未判定。"""
+        recs = ([_rec("R7", sr.CLASSES["6"]) for _ in range(130)]
+                + [_rec("R7") for _ in range(72)])
+        for i, r in enumerate(recs):
+            r["message"] = "m%d" % i
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        d = sr.promotion_status(str(p))["R7"]
+        assert d["total"] == 202
+        assert d["classified"] == 130
+        assert abs(d["decidable_rate"] - 130.0 / 202.0) < 1e-9
+        assert d["decidable_rate"] < sr.MIN_DECIDABLE_RATE
+        assert d["promotable"] is False, \
+            "130/202 = 64% 可判定,不得可轉正 —— 誤報全在沒判的那 72 筆裡"
+
+    def test_marking_the_remainder_undecidable_does_not_unlock_it(self, tmp_path):
+        """**這一條釘住 (c) 那個漏。**
+
+        把 72 筆全標「無法判定」之後,「已分類」變成 202/202 ——
+        若可判定率沒有把無法判定排除在分子外,這裡就會變成可轉正,
+        而那與「只印不擋」同結果。
+        """
+        recs = ([_rec("R7", sr.CLASSES["6"]) for _ in range(130)]
+                + [_rec("R7", sr.CLASSES["7"]) for _ in range(72)])
+        for i, r in enumerate(recs):
+            r["message"] = "m%d" % i
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        d = sr.promotion_status(str(p))["R7"]
+        assert d["classified"] == 202
+        assert d["undecidable"] == 72
+        assert d["promotable"] is False
+
+    def test_a_rule_meeting_all_three_is_promotable(self, tmp_path):
+        """**非空洞性**:少了這條,一支「永遠回 False」的實作全綠。"""
+        recs = [_rec("R2", sr.CLASSES["6"]) for _ in range(20)]
+        for i, r in enumerate(recs):
+            r["message"] = "m%d" % i
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        d = sr.promotion_status(str(p))["R2"]
+        assert d["decidable_rate"] == 1.0
+        assert d["promotable"] is True
+
+    def test_each_of_the_three_gates_can_veto_alone(self, tmp_path):
+        """三條各自都要擋得住 —— 否則其中一條是裝飾。"""
+        # 只差筆數:9 筆全可判定、零誤報
+        recs = [dict(_rec("R3", sr.CLASSES["6"]), message="a%d" % i)
+                for i in range(9)]
+        p = _write(tmp_path / "a.jsonl", recs)
+        assert sr.promotion_status(str(p))["R3"]["promotable"] is False
+
+        # 只差假陽率:20 筆全可判定,2 筆誤報 = 10%
+        recs = ([dict(_rec("R3", sr.CLASSES["6"]), message="b%d" % i)
+                 for i in range(18)]
+                + [dict(_rec("R3", "假陽/解析"), message="c%d" % i)
+                   for i in range(2)])
+        p = _write(tmp_path / "b.jsonl", recs)
+        assert sr.promotion_status(str(p))["R3"]["promotable"] is False
+
+        # 只差可判定率:20 筆已分類全無法判定 + 20 筆刻意 refuse
+        recs = ([dict(_rec("R3", sr.CLASSES["7"]), message="d%d" % i)
+                 for i in range(20)]
+                + [dict(_rec("R3", sr.CLASSES["6"]), message="e%d" % i)
+                   for i in range(20)])
+        p = _write(tmp_path / "c.jsonl", recs)
+        d = sr.promotion_status(str(p))["R3"]
+        assert abs(d["decidable_rate"] - 0.5) < 1e-9
+        assert d["promotable"] is False
+
+    def test_the_threshold_is_a_named_constant(self):
+        """畫在哪裡要看得見、改得動,而不是埋在判斷式裡(票 34 先例)。"""
+        assert sr.MIN_DECIDABLE_RATE == 0.90
+
+
+class TestOStatusShowsTheDecidableRate:
+    """票 67:`print_status` 單獨列一欄。"""
+
+    def test_status_shows_undecidable_and_the_decidable_rate(self, tmp_path, capsys):
+        recs = ([dict(_rec("R7", sr.CLASSES["6"]), message="m%d" % i)
+                 for i in range(8)]
+                + [dict(_rec("R7", sr.CLASSES["7"]), message="n%d" % i)
+                   for i in range(2)])
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        sr.print_status(str(p))
+        out = capsys.readouterr().out
+        assert "無法判定" in out
+        assert "可判定率" in out
+        assert "80.0" in out
+
+    def test_status_names_the_unclassified_remainder(self, tmp_path, capsys):
+        """**未判定的餘量要印出來** —— 它是可判定率掉下來的主要原因,
+        而不印的話讀者只看得到一個低百分比、看不出低在哪。"""
+        recs = ([dict(_rec("R7", sr.CLASSES["6"]), message="m%d" % i)
+                 for i in range(5)]
+                + [dict(_rec("R7"), message="u%d" % i) for i in range(5)])
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        sr.print_status(str(p))
+        out = capsys.readouterr().out
+        assert "未判定" in out
+
+
 class TestETheErrorTypeIsItsOwn:
     """**不要用 `Exception`**:呼叫端要分得出「日誌壞了」與別的錯,
     而 `except Exception` 正是本票在修的東西 —— 修完又要求呼叫端

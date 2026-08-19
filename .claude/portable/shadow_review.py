@@ -55,6 +55,11 @@ CLASSES = {
     # 成本是真的、要算進分母,但它**不是誤判**:把它算成假陽,
     # 等於要求一條 fail-closed 規則證明自己從不 fail-closed(上游票 21 裁決)。
     "6": "刻意 refuse",
+    # 票 67:**判定不能,不是判定結果。** 日誌沒有記指令(票 68),
+    # 所以有一整群 R7 從紀錄本身判不出真陽/誤報。
+    # 它**既不進假陽率的分子,也不進分母** ——
+    # 進分母會稀釋假陽率,進分子會誣賴規則。
+    "7": "無法判定",
 }
 
 # **顯式集合,不是字串前綴。**
@@ -73,6 +78,22 @@ FALSE_POSITIVE_CLASSES = frozenset([
 # 三分類(ADR 0012 §2):真實觸發 / 刻意 refuse(不計分子)/ 誤報。
 DELIBERATE_CLASS = CLASSES["6"]
 TRUE_POSITIVE_CLASS = CLASSES["1"]
+UNDECIDABLE_CLASS = CLASSES["7"]                                     # 票 67
+
+# 可判定率門檻(票 67)。**線畫在實測證據的邊界上**,同票 34 的先例:
+#
+#   畫在哪:2026-08-19 量化 R7 的實況 —— 202 筆裡 130 筆機械上判得出來,
+#           72 筆判不出來(可判定率 64%)。**那是「明顯不夠」的一側**,
+#           而 100% 是「顯然足夠」的另一側;90% 是在兩者之間、
+#           容得下一成雜訊而不容得下一整群系統性盲區的位置。
+#
+#   ⚠ 這個數字**沒有**跨規則的實證支撐 —— 目前只有 R7 一條有夠多的樣本。
+#     它是一條**保守的預設**,不是量出來的最適值。
+#
+#   什麼條件重畫:當有第二條規則累積到 ≥100 筆且完成分類時,
+#   拿兩條的可判定率分佈回來重評 —— **而不是等到有人覺得 90% 太嚴**。
+#   重畫的依據是分佈,不是誰被擋住了。
+MIN_DECIDABLE_RATE = 0.90
 
 KNOWN_CLASSES = frozenset(CLASSES.values())
 
@@ -328,13 +349,42 @@ def apply_card(log_path, card_path, apply=False):
 
 
 def promotion_status(path):
-    """回傳 {rule: {classified, false_positives, fp_rate, promotable}}。
+    """回傳每條規則的計數與晉升判定。
 
-    只算**已分類**的筆數(有 classification 欄)。未分類的不進分母 ——
-    否則「還沒判」會被當成分母灌水,永遠達不到門檻或反而虛高。
+    ## 三個分母,不是一個(票 67)
+
+        total       這條規則的**全部**紀錄(含還沒判的)
+        classified  有 classification 欄的
+        decidable   真陽 + 誤報 + 刻意 refuse —— **假陽率的分母**
+
+    「無法判定」進 `classified`、進 `total`,**不進 `decidable`** ——
+    它是**判定不能**,不是判定結果:進分母會稀釋假陽率,進分子會誣賴規則。
+
+    ## 轉正要同時滿足三條
+
+        classified >= MIN_CLASSIFIED
+        fp_rate     <  MAX_FALSE_POSITIVE_RATE
+        decidable / total >= MIN_DECIDABLE_RATE          <- 票 67 新增
+
+    第三條要防的東西,2026-08-19 在量化實測過:R7 202 筆,先判掉機械上
+    判得出來的 130 筆(全部是刻意 refuse),於是
+    `已分類 130 >= 10` 且 `假陽率 0.0% < 5%` —— **印出「可轉正」**,
+    而誤報全部在還沒判的 72 筆裡。
+
+    > **一條規則可以靠「只判對自己有利的那一群」把自己判成可轉正。**
+    > **36% 判不出來的規則,它的 0% 假陽率不代表它準,
+    > 只代表我們只看了它願意讓我們看的那部分。**
+
+    原本的 `MIN_CLASSIFIED` 問的是**絕對數**(樣本夠不夠),
+    擋不住這件事 —— 擋得住的是**涵蓋率**,所以第三條問的是比例。
     """
     rows = load_log(path)
     per = {}
+    # **`total` 要數全部紀錄,不能只數已分類的** —— 可判定率的分母是它,
+    # 而「還沒判的有多少」正是這一輪要讓它看得見的東西。
+    totals = {}
+    for r in rows:
+        totals[r.get("rule", "?")] = totals.get(r.get("rule", "?"), 0) + 1
     for lineno, r in enumerate(rows, 1):
         c = r.get("classification")
         if not c:
@@ -354,7 +404,8 @@ def promotion_status(path):
                 % (lineno, c, "、".join(sorted(KNOWN_CLASSES)), path))
         rule = r.get("rule", "?")
         d = per.setdefault(rule, {"classified": 0, "false_positives": 0,
-                                  "true_positives": 0, "deliberate": 0})
+                                  "true_positives": 0, "deliberate": 0,
+                                  "undecidable": 0})
         d["classified"] += 1
         if _is_false_positive(c):
             d["false_positives"] += 1
@@ -362,13 +413,25 @@ def promotion_status(path):
             # **算進分母,不算進分子**(ADR 0012 §2)。
             # 不算分母的話,一條規則只要大量 fail-closed 就能稀釋掉自己的假陽率。
             d["deliberate"] += 1
+        elif c == UNDECIDABLE_CLASS:
+            # **兩個分母都不進**(票 67)。與刻意 refuse 的差別就在這裡:
+            # 刻意 refuse 是「規則做了對的事,而它有成本」——成本要算;
+            # 無法判定是「我們不知道規則做得對不對」——那不是成本,是空白。
+            d["undecidable"] += 1
         elif c == TRUE_POSITIVE_CLASS:
             d["true_positives"] += 1
     for rule, d in per.items():
-        n = d["classified"]
-        d["fp_rate"] = (d["false_positives"] / n) if n else 0.0
-        d["promotable"] = (n >= MIN_CLASSIFIED
-                           and d["fp_rate"] < MAX_FALSE_POSITIVE_RATE)
+        d["total"] = totals.get(rule, d["classified"])
+        d["unclassified"] = d["total"] - d["classified"]
+        d["decidable"] = (d["true_positives"] + d["false_positives"]
+                          + d["deliberate"])
+        d["fp_rate"] = ((d["false_positives"] / d["decidable"])
+                        if d["decidable"] else 0.0)
+        d["decidable_rate"] = ((d["decidable"] / d["total"])
+                               if d["total"] else 0.0)
+        d["promotable"] = (d["classified"] >= MIN_CLASSIFIED
+                           and d["fp_rate"] < MAX_FALSE_POSITIVE_RATE
+                           and d["decidable_rate"] >= MIN_DECIDABLE_RATE)
     return per
 
 
@@ -393,18 +456,24 @@ def print_status(path):
         else:
             print("日誌本身是空的 —— 影子模式還沒有記錄過任何判定。")
         return
-    print("每規則晉升狀態(≥%d 筆已分類 且 假陽率 <%.0f%% 才可轉正):"
-          % (MIN_CLASSIFIED, MAX_FALSE_POSITIVE_RATE * 100))
+    print("每規則晉升狀態(三條同時滿足才可轉正:"
+          "已分類 ≥%d、假陽率 <%.0f%%、可判定率 ≥%.0f%%):"
+          % (MIN_CLASSIFIED, MAX_FALSE_POSITIVE_RATE * 100,
+             MIN_DECIDABLE_RATE * 100))
     # **三分類的三個數都印**(票 65 / ADR 0012 §2)。只印一個 FP 的話,
     # 讀者無從判斷分母裡有多少是刻意成本 —— 而那正是同一批資料
     # 曾經算得出兩個相反 FP 的原因。
-    print("  (分母含刻意 refuse:成本是真的,但它不是誤判)")
+    print("  (假陽率的分母 = 真陽+誤報+刻意 refuse;無法判定兩個分母都不進)")
+    print("  (可判定率 = 那個分母 ÷ 總筆數 —— **未判定的餘量看得見**,票 67)")
     for rule in sorted(per):
         d = per[rule]
-        print("  %-4s 已分類 %3d  真陽 %3d  刻意 refuse %3d  誤報 %3d"
-              "  假陽率 %5.1f%%  -> %s"
-              % (rule, d["classified"], d["true_positives"], d["deliberate"],
-                 d["false_positives"], d["fp_rate"] * 100,
+        print("  %-4s 總 %3d  已分類 %3d  未判定 %3d"
+              "  真陽 %3d  刻意 refuse %3d  誤報 %3d  無法判定 %3d"
+              % (rule, d["total"], d["classified"], d["unclassified"],
+                 d["true_positives"], d["deliberate"], d["false_positives"],
+                 d["undecidable"]))
+        print("       假陽率 %5.1f%%  可判定率 %5.1f%%  -> %s"
+              % (d["fp_rate"] * 100, d["decidable_rate"] * 100,
                  "可轉正" if d["promotable"] else "留影子"))
 
 
