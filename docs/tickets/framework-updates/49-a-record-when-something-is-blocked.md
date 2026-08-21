@@ -34,7 +34,7 @@
 | 豁免 | 觸發的檔案 | 進帳本? | 程式位置 |
 |---|---|---|---|
 | **R2 自我修改**(`GATE_SELF`) | `.claude/hooks/gate.py` | **是** —— 4 筆,`reason: gate-self-modification`、`outcome: granted` | 記帳走 `log_exemptions` |
-| **R3 legacy 清單** | `.claude/portable/manifest.py` | **否 —— 一筆都沒有** | `gate.py:1742-1743` `if r in legacy_no_redlight(): return None` |
+| **R3 legacy 清單** | `.claude/portable/manifest.py` | **否 —— 一筆都沒有** | `gate.py` 的 R3 legacy 分支:`if r in legacy_no_redlight(): return None` |
 
 那兩行直接 `return None`,**不進 `bucket`**,所以 `log_exemptions()` 收不到它。
 

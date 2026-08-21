@@ -22,7 +22,7 @@
 
 ### ① R8 不在 `CLAUDE.md` 的規則表
 
-R8 只活在 `gate.py:1700–1727` 與 12 條測試裡,
+R8 只活在 `gate.py` 的 R8 分支(擋下訊息 `[R8] …:生產程式碼不得 import research/。`)與 12 條測試裡,
 **而它現在正在下游擋人**(量化 `morning_run.py` 15+ 處)。
 
 規則活著,**總表漏列**。
@@ -32,9 +32,9 @@ R8 只活在 `gate.py:1700–1727` 與 12 條測試裡,
 | | 內容 |
 |---|---|
 | `CLAUDE.md:32` | ``| R1 | `docs/specs/**` 內容含 ``` / `def` / `import` / `function` → 擋 |`` |
-| `gate.py:1591` | `if r.startswith("docs/specs/") or re.match(r"^\.scratch/[^/]+/spec\.md$", r):` |
+| `gate.py` 的 R1 路徑判定 | `if r.startswith("docs/specs/") or re.match(r"^\.scratch/[^/]+/spec\.md$", r):` |
 
-**實作守兩個路徑,文件只寫一個。** 而 `gate.py:1590` 自己寫著為什麼:
+**實作守兩個路徑,文件只寫一個。** 而它正上方那行註解自己寫著為什麼:
 
 > `# 只守前者的話 R1 在官方佈局下是死規則。`
 
@@ -43,7 +43,7 @@ R8 只活在 `gate.py:1700–1727` 與 12 條測試裡,
 | | 內容 |
 |---|---|
 | `CLAUDE.md:32` | ``` / `def` / `import` / `function` —— **四個** |
-| `gate.py:184` | `CODE_IN_SPEC_RE = re.compile(r"```\|^\s*(def\|class\|import\|from\|function\|const\|let)\s", re.M)` —— **八個** |
+| `gate.py` 的 `CODE_IN_SPEC_RE` | `CODE_IN_SPEC_RE = re.compile(r"```\|^\s*(def\|class\|import\|from\|function\|const\|let)\s", re.M)` —— **八個** |
 
 漏列:**`class` / `from` / `const` / `let`**。
 
@@ -51,10 +51,10 @@ R8 只活在 `gate.py:1700–1727` 與 12 條測試裡,
 
 ### ④ `schema-draft.md` 在 R1 範圍外 —— 根因是同一行
 
-`gate.py:1591` 的 `^\.scratch/[^/]+/spec\.md$` **把檔名寫死成 `spec.md`**。
+R1 路徑判定裡的 `^\.scratch/[^/]+/spec\.md$` **把檔名寫死成 `spec.md`**。
 所以 `.scratch/<feature>/schema-draft.md` 不受 R1 管,而它同樣是規格文件。
 
-**②③④ 三項出自同兩行**(`gate.py:184` 與 `:1591`)——
+**②③④ 三項出自同兩行**(`gate.py` 的 `CODE_IN_SPEC_RE` 與 R1 路徑判定那一行)——
 ②③ 是文件跟不上實作,④ 是實作自己太窄。**方向相反,位置相同。**
 
 ### ⑤ 上游正典的框架段自己要修
@@ -64,9 +64,9 @@ R8 只活在 `gate.py:1700–1727` 與 12 條測試裡,
 | 位置 | 現況 | 問題 |
 |---|---|---|
 | `CLAUDE.md:32` | R1 那列 | 要補**實際守備範圍**(②③④) |
-| `CLAUDE.md:112` | 「目前沒有 per-repo 開關,**R1–R7 全部無條件生效**」 | **排除了 R8**,而 R8 正在下游擋人 |
+| `CLAUDE.md` 的「目前沒有 per-repo 開關,**R1–R7 全部無條件生效**」那句 | 閉區間寫法 | **排除了 R8**,而 R8 正在下游擋人 |
 
-**兩處都在 `FRAMEWORK:BEGIN`(:3)與 `FRAMEWORK:END`(:196)之間** ——
+**兩處都在 `FRAMEWORK:BEGIN` 與 `FRAMEWORK:END` 之間** ——
 也就是**會跟著 install 走的那一段**。
 
 > 不修正典,每個新安裝的 repo 都會再拿到同一段錯字,

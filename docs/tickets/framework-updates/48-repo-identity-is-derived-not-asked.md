@@ -20,7 +20,7 @@
 | 推導來源 | 出現在 | 實際指向 |
 |---|---|---|
 | `$CLAUDE_PROJECT_DIR` | `.claude/settings.json` 的 PreToolUse;`g1_guard.py:306`、`:314` | **發起視窗**的專案根,不是被寫檔案所在的 repo |
-| `__file__` | `gate.py:26` 的 `ROOT`(`dirname×3`) | **hook 檔自己住的地方** |
+| `__file__` | `gate.py` 頂層的 `ROOT = os.path.dirname(…×3…(os.path.abspath(__file__)))` | **hook 檔自己住的地方** |
 
 `g1_guard.py:40` 明文寫著第一級**拒絕**這種推導:
 
