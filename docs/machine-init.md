@@ -93,6 +93,55 @@ git config user.name  "<你的提交名稱>"
 | **格式** | Python 腳本,不是資料。原封不動。 |
 | **誰提供** | **你從 repo 複製**:`.claude/portable/g1_guard.py` → 上面那個路徑。 |
 | **缺席時** | **靜默失效(危險)**。掛載指令會去執行這支檔;檔不在 → 指令執行失敗 → 依 harness 對「hook 無法執行」的處置而定,**不能假設它會 fail-closed**。實務上等於 G1 整層不在,而且**沒有東西會說它不在**。所以這一項要跟第 5 項(掛載)一起驗活體探針,別只確認檔案存在。 |
+| **過期時** | **靜默分歧(同樣危險,而且更容易發生)**。repo 副本每改一次,這一份就落後一次 —— 它**不會**自己跟上,`git pull` 也碰不到它(它不在 repo 裡)。而**兩邊都跑得起來、測試都綠**:repo 的測試驗的是 repo 那份,`~/.claude/` 這份沒有任何東西在驗。見下方「repo 改了之後」。 |
+
+#### repo 改了之後:這一份要人工重蓋(ADR 0009)
+
+**判準:`.claude/portable/g1_guard.py` 一有變動,這台機器上的副本就過期了。**
+覆蓋只有人能做(agent 碰不到保護目錄,而且**不得寫腳本代勞** —— 那會讓保護消失)。
+
+**⚠ 凍結過的機器解凍時,`git pull` 之後的下一個動作就是這一步。**
+`git pull` 只更新 repo 副本;使用者層那份還停在凍結當時的版本,而**沒有任何訊號會說它舊了**。
+
+```powershell
+# 1. 兩個路徑 + 備份現行版
+$src = "<repo 根目錄>\.claude\portable\g1_guard.py"
+$dst = "$env:USERPROFILE\.claude\hooks\g1_guard.py"
+Copy-Item $dst "$dst.working"
+
+# 2. 覆蓋。**用 Copy-Item(位元組複製)**
+#    不要用 Get-Content | Set-Content —— 它會重新編碼,可能加 BOM 或把 LF 換成 CRLF,
+#    兩者都會讓 hash 對不上(BOM 這一族在本專案已經咬過三次)。
+Copy-Item $src $dst -Force
+
+# 3. 確認蓋對了 —— 三個確認點,缺一不可
+Get-FileHash $dst -Algorithm SHA256 | Select-Object -ExpandProperty Hash
+Get-Item $dst | Select-Object Length
+cd "<repo 根目錄>"; git status --porcelain     # 必須**沒有輸出**
+```
+
+**期望的 sha256 從 repo 那份現算**,不要抄一個寫死的值(它每次修都會變):
+
+```powershell
+Get-FileHash $src -Algorithm SHA256 | Select-Object -ExpandProperty Hash
+```
+
+第 3 步的 `git status` 是 ADR 0009 票 25 加的查核項:**確認剛才是複製不是搬移**。
+若出現 ` D .claude/portable/g1_guard.py`,立刻 `git checkout -- .claude/portable/g1_guard.py` 還原,再重做。
+
+**覆蓋完必跑四項**,缺一不算裝好:
+
+1. 兩檔 sha256 相同
+2. `python -W error::DeprecationWarning` 匯入乾淨(`~/.claude/hooks/` 那一支)
+3. `PYTHONIOENCODING=utf-8 python .claude/portable/g1_verify.py`(**不帶參數 = 驗正式檔**)全綠
+4. **活體探針一次** —— 對一條含保護路徑的唯讀指令試一次,要看到 `[G1/保護清單]`
+
+> **第 4 項不能被第 3 項取代。** `g1_verify` 自己 `subprocess` 起 guard,**不經 `settings.json` 的掛載** ——
+> 它證明的是「如果被呼叫,它會擋」,證明不了「它會被呼叫」。這與本檔第 1、5 項「檔案都在也可能沒生效」是同一句話。
+>
+> `PYTHONIOENCODING=utf-8` 不是可選的:`g1_verify.py` 有一行 `print("  無 ✓")`,
+> 在 cp950 主控台會 `UnicodeEncodeError` 崩掉(票 62,已立案未修)——
+> 你會看到一個編碼錯誤,而不是驗收結果。
 
 ### 2. G1 保護清單 `g1-protected.txt`
 
