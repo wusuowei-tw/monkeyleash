@@ -15,21 +15,50 @@
 誤擋累積起來的後果是規則被關掉,而關掉的涵蓋率是零(F-031)。
 """
 
+import ast
 import importlib.util
 import io
 import pathlib
+import warnings
 
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+SRC = ROOT / ".claude" / "portable" / "g1_guard.py"
+
+
 def _load():
-    spec = importlib.util.spec_from_file_location(
-        "g1_under_test", ROOT / ".claude" / "portable" / "g1_guard.py")
+    spec = importlib.util.spec_from_file_location("g1_under_test", SRC)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def test_the_guard_body_still_compiles_when_warnings_are_errors():
+    """**這一支未來還編不編得動。** framework-updates/69。
+
+    由來:量化 `TSI-037` —— 本檔的 docstring 含 `\\<` 而它不是 raw string,
+    CI 的 log 出現 `DeprecationWarning: invalid escape sequence`。
+    今天只是警告,而 Python 3.12 起這一族已轉 `SyntaxWarning`,
+    更晚的版本規劃改成 `SyntaxError` —— **屆時本檔直接 import 失敗,
+    而它是 G1 的守衛本體**:防護不會報錯,它會不在。
+
+    **測剖析不測 import**:import 有副作用(讀家目錄的清單),
+    而要問的是「編譯器還收不收這份原始碼」,那由 `ast.parse` 回答。
+
+    範圍限本檔 —— **R3 要的紅燈必須在配對的測試檔裡**,而那是這一份。
+    同一個判準對 `.claude/` 底下**全部** `.py` 的枚舉在
+    `tests/test_source_hygiene.py::test_claude_python_parses_clean_with_warnings_as_errors`
+    (封閉集合,枚舉不比對)。兩條不是重複:
+    **這一條是這個檔案的紅燈,那一條是這一族的偵測器。**
+    """
+    src = io.open(SRC, encoding="utf-8").read()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        warnings.simplefilter("error", SyntaxWarning)
+        ast.parse(src, filename=str(SRC))
 
 
 g1 = _load()

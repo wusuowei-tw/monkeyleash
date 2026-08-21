@@ -1,12 +1,24 @@
 # -*- coding: utf-8 -*-
-"""G1 —— agent 檔案系統災難防護。使用者層,涵蓋所有專案。
+r"""G1 —— agent 檔案系統災難防護。使用者層,涵蓋所有專案。
+
+**本 docstring 是 raw string,而那個 `r` 不是風格。** 底下第一級那一段舉的例子
+含反斜線;不加 `r` 的話它是一個無效跳脫序列,今天只發 DeprecationWarning,
+而 Python 3.12 起這一族已轉 SyntaxWarning、更晚的版本規劃改成 SyntaxError ——
+**屆時本檔直接 import 失敗,而它是 G1 的守衛本體。**
+守著這件事的是 `tests/test_g1_guard.py` 的
+`test_the_guard_body_still_compiles_when_warnings_are_errors`(量化 TSI-037)。
 
 **與 R 系列相反的設計。** R 系列是流程規則:**性質上**各自獨立、可分開裝,
 每個專案自己決定要不要。G1 是災難防護:任何專案都該開,
 所以住在 ~/.claude/ 而不是某個 repo 裡。
 
 **上面那句是性質描述,不是功能宣告** —— 目前沒有 per-repo 開關,
-R1–R7 在裝了閘門的 repo 裡全部無條件生效。
+R 系列在裝了閘門的 repo 裡全部無條件生效。
+
+**刻意不寫成閉區間。** 寫死一個結尾編號會讓讀的人認定它後面那一條不存在,
+而那一條存在:R8(生產程式碼不得 import `research/`)在下游擋過人。
+規則代號的權威來源是 `gate.py` 的 `rule_codes()` —— 它從規則自己的擋下訊息
+掃出來,加一條規則就自動涵蓋,不必有人記得回來改一份對照表。
 
 也不用 R 系列的做法列舉危險指令 —— rm / del / Remove-Item / rmtree /
 git clean / 某支會刪檔的腳本…那個清單列不完,而列不完的清單就是 fail-open。
