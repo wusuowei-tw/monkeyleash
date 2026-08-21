@@ -21,6 +21,17 @@
 |---|---|---|
 | `$CLAUDE_PROJECT_DIR` | `.claude/settings.json` 的 PreToolUse;`g1_guard.py:306`、`:314` | **發起視窗**的專案根,不是被寫檔案所在的 repo |
 | `__file__` | `gate.py` 頂層的 `ROOT = os.path.dirname(…×3…(os.path.abspath(__file__)))` | **hook 檔自己住的地方** |
+| `__file__` | **`leak_scan.py` 頂層的 `HERE` / `ROOT`(`dirname×2`,經 `HERE`)** | **同上 —— 掃描器自己住的地方**(2026-08-21 補列) |
+
+> **第三處是 2026-08-21 上游輪補的,而它一直都在。**
+> 本票原本只列兩處,而 `leak_scan.py` 用的是同一個手法(`__file__` 往上推)
+> 只是層數不同(×2 經 `HERE`,不是 ×3)。**它有紀錄、有票族,卻沒進本票的修復範圍** ——
+> 先前只出現在盤點檔裡(`docs/audits/2026-08-16-rule-inventory.md` 的
+> 「`staged_paths(cwd=ROOT, …)` 綁 `ROOT`」那一列、票 45 的登記 A)。
+>
+> **「已登記未做」在這一件上要拆成兩句:盤點檔登記了,票面沒有。**
+> 而動工的人讀的是票面。這是 CLAUDE.md「收了一個入口,就回頭問它的同類入口在哪」
+> 的實例 —— 問法是「這個手法還用在哪些檔案上」,不是「我還想得到什麼」。
 
 `g1_guard.py:40` 明文寫著第一級**拒絕**這種推導:
 

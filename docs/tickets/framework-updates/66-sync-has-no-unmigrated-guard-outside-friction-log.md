@@ -84,6 +84,49 @@ friction-log 好比,因為它有**機器可辨識的條目邊界**(`^## F-\d+`),
    > **這一題比機制本身重要。** 一道沒有出口的 fail-closed 守衛,
    > 第一次擋住的時候就會被繞過或拿掉。
 
+## 落地驗收要多兩項(2026-08-21,上游輪裁決)
+
+**由來**:影音 sync 輪曾裁「上游開票把 `certify` 發證判準從『`copy` 桶』改成
+『與上游逐位元組相同』」。上游輪全庫查證的結果是 **那張票沒有開**
+(`grep -rln "certify" docs/tickets/` 只命中票 39,而票 39 是史料手術票,
+`--certify` 在那裡只是修復手段,不是題目)。
+
+**而問題本身成立** —— `docs/adr/` 於 2026-08-19 標 `ask` 止血之後,
+**15 份 ADR 補不了證**(`git ls-files docs/adr | wc -l` = 15,
+`0001`–`0012` + `F-0013` / `F-0014` / `F-0015`)。
+
+**裁決:不開新票,掛本票。** 理由:本票落地時 `docs/adr/` 改回 `copy`,
+那 15 檔的發證問題**自動消失** —— 開一張獨立票去改 `identical_copy_files()` 的
+集合語意,很可能在本票落地後整個不需要,而它要動 `sync.py` 核心 +
+重評 `tests/test_sync.py` 的四條 certify 測試。
+
+**所以本票的落地驗收多兩項:**
+
+1. **`docs/adr/` 標記改回 `copy`**(`.agents/portable-manifest.txt` 的 `ask` 註解
+   已寫著到期條件「票 66 落地時改回 `copy`」,引用不重述)。
+2. **兩個下游各跑一次 `python .claude/portable/sync.py <target> --certify --apply`**,
+   替那 15 檔補證,並確認 `.dev/provenance.jsonl` 逐筆對得上。
+
+### 順帶記一行:`identical_copy_files()` 的 docstring 與程式不是同一個判準
+
+```
+sync.py  def identical_copy_files(src, target, marks):
+             """`copy` 桶裡**與上游逐位元組相同**的檔案。…"""
+             …
+             if manifest.explicit_mark(rel, marks) != "copy":
+                 continue
+             if file_hash(sp) is not None and file_hash(sp) == file_hash(tp):
+```
+
+**docstring 講的是一個條件,程式做的是兩個條件的交集**(在 `copy` 桶 **且** 逐位元組相同)。
+`--certify` 與一般 sync 共用這個集合,所以桶標一改,發證範圍就跟著變 ——
+**而讀 docstring 的人不會預期這件事。**
+
+> **記這一行的理由**:只把桶標改回 `copy` 會讓症狀消失,而**語意差留在原地**。
+> 下一次有人把某個 `copy` 檔改成 `ask` 或 `generate`,同一件事會再發生一次,
+> 而那時 15 檔那個標本已經沒有人記得了。
+> **症狀消失與缺陷修好,在驗收表上長得一樣。**
+
 ## 本票不含
 
 - 動 sync 的任何一行(candidate)
