@@ -37,6 +37,7 @@
 | R3 | 寫 `<name>.py` 但 `tests/test_<name>.py` 不存在 → 擋 |
 | R4 | `.claude/skills/` 或 `skills/` 的 SKILL.md 與正典 `.agents/skills/` 不一致 → 擋 |
 | R5 | 正典 `code-review` 缺第三軸掛載點(patch 未重套)→ 擋 |
+| R6 | 紅燈豁免清單列入不在 go-live commit 樹裡的路徑 → 擋。**清單只減不增** —— 入場券是「存在於上線那一刻的樹裡」,而 agent 改不了 git 歷史(`docs/adr/0006`) |
 
 被擋時不要繞過(改路徑、換工具、改 pipeline.json)。跳過流程由使用者自行修改 `.dev/pipeline.json` 的 `current_stage`。
 
@@ -236,7 +237,10 @@ wrapper 三步:更新 → 冪等重套 patch → gate.py 全規則驗證。R5 �
 保護清單是獨立純文字檔 `~/.claude/g1-protected.txt`。
 
 **G1 把自己與保護清單都列在保護清單裡,所以 agent 改不動它。**
-要改它:草稿放專案內、跑完 18 條驗收、附 diff,**覆蓋那一步只有人能做**。
+要改它:草稿放專案內、跑完 `.claude/portable/g1_verify.py` 的**全套**驗收、附 diff,**覆蓋那一步只有人能做**。
+**條數刻意不寫在這裡** —— 案例是執行時從實際保護清單生成的(該檔 docstring:
+「案例是**執行時從實際清單生成的**,不是寫死在這裡」),清單長出一條,驗收就自動多一條。
+寫一個數字在這裡等於保證它過期,而**過期時沒有東西會說話**。
 完整流程見 `docs/adr/0009`。不得寫腳本代勞那一步 —— 那會讓保護消失。
 
 ## Code review 的分流判準
