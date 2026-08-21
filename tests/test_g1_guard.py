@@ -349,8 +349,9 @@ class TestLevelTwoIsUnchanged:
 
     @pytest.mark.xfail(
         strict=True,
-        reason="票 04:ABS_PATH 的 POSIX 分支是頂層目錄白名單,未列名的根目錄"
-               "第二級看不見。**變綠的條件**:票 04 把它改成通用比對(或補上這些根)。"
+        reason="agent-gates framework-updates/04:ABS_PATH 的 POSIX 分支是頂層目錄"
+               "白名單,未列名的根目錄第二級看不見。**變綠的條件**:那張票把它"
+               "改成通用比對(或補上這些根)。"
                "屆時本測試會 XPASS,而 strict=True 讓 XPASS 算失敗 —— "
                "強迫有人回來刪掉這個 marker,而不是讓一條長期紅的測試變成噪音。")
     @pytest.mark.parametrize("path", ["/srv/x", "/data/x", "/backup/x"])
