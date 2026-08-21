@@ -919,6 +919,110 @@ class TestCanonSectionDrift:
         sync.update(str(src), str(dst), apply=True)
         assert _h(dst, "CLAUDE.md") == before
 
+    def test_the_refusal_messages_do_not_promise_a_command_that_is_missing(self):
+        """B4 留的釘子:B5 落地時,兩處訊息裡的「尚未落地」要拿掉。
+
+        **一個名字寫在訊息裡而指令不存在,比沒有出口更糟** ——
+        `main()` 對未知旗標不報錯,照著打的人會拿到同一個拒絕,無限迴圈。
+        所以 B4 把能用的手動出口寫在前面、把這個明標為未落地。
+        B5 之後那個標註本身變成謊話,由本條釘住。
+        """
+        src = io.open(ROOT / ".claude" / "portable" / "sync.py",
+                      encoding="utf-8").read()
+        assert "尚未落地" not in src, (
+            "`--regenerate-canon` 已經落地了,而拒絕訊息還說它沒有 —— "
+            "照訊息做的人會走一條它自己說不通的路")
+
+    def test_regenerate_canon_replaces_only_what_lies_between_the_markers(self, pair):
+        """**第 1 條釘子:界線之外逐位元組不變。**
+
+        這是本指令唯一的寫入面保證。少了它,「重新產生正典段」與
+        「用上游那份蓋掉整個檔」在結果上分不出來 —— 而後者會刪掉專案段,
+        那正是 `CLAUDE.md` 標 `generate`(不整檔照抄)的全部理由。
+        """
+        src, dst = pair
+        before = io.open(dst / "CLAUDE.md", "rb").read()
+        i = before.index(BEGIN.encode("utf-8")) + len(BEGIN)
+        j = before.index(END.encode("utf-8"))
+
+        _w(dst, "CLAUDE.md",
+           _claude_md(CANON.replace("完全相同", "被下游改過了"), "台股收盤 13:30。"))
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "動正典段")
+
+        sync.regenerate_canon(str(src), str(dst))
+
+        after = io.open(dst / "CLAUDE.md", "rb").read()
+        assert after[:i] == before[:i], "界線**之前**的位元組被動到了"
+        assert after[after.index(END.encode("utf-8")):] == before[j:], \
+            "界線**之後**的位元組被動到了 —— 專案段就住在那裡"
+        assert "台股收盤 13:30。" in after.decode("utf-8"), "專案段不見了"
+
+    def test_after_regenerating_the_drift_guard_is_quiet(self, pair):
+        """做完之後 II 不再出聲 —— **出口要真的通到出口**。
+
+        票 66:一道沒有出口的 fail-closed 守衛,第一次擋住的時候就會被繞過或拿掉。
+        「有一個指令」不等於「那個指令解得掉」,兩者差一階。
+        """
+        src, dst = pair
+        _w(dst, "CLAUDE.md", _claude_md("## 完全不同的正典段\n", "台股收盤 13:30。"))
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "動正典段")
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=False)
+
+        sync.regenerate_canon(str(src), str(dst))
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "重新產生")
+
+        plan = sync.update(str(src), str(dst), apply=True)   # 不得丟例外
+        assert plan.canon_drift == []
+
+    def test_a_broken_target_refuses_and_writes_nothing(self, pair):
+        """界線壞掉 -> 拒絕,而且**一個位元組都不寫**。
+
+        「拒絕了但已經寫了一半」比不擋更糟:它看起來像一次失敗的操作,
+        實際是一次部分成功的。
+        """
+        src, dst = pair
+        _w(dst, "CLAUDE.md", "沒有任何標記的一份\n")
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "拿掉界線")
+        before = io.open(dst / "CLAUDE.md", "rb").read()
+        with pytest.raises(sync.Refused):
+            sync.regenerate_canon(str(src), str(dst))
+        assert io.open(dst / "CLAUDE.md", "rb").read() == before
+
+    def test_a_dirty_target_refuses(self, pair):
+        """與 `--apply` 同規矩:在未提交的變更上覆寫,出事時分不出是誰改的。"""
+        src, dst = pair
+        _w(dst, "CLAUDE.md",
+           _claude_md(CANON.replace("完全相同", "改過"), "台股收盤 13:30。"))
+        # 刻意**不** commit —— 工作樹髒
+        with pytest.raises(sync.Refused) as e:
+            sync.regenerate_canon(str(src), str(dst))
+        assert "乾淨" in str(e.value) or "髒" in str(e.value), e.value
+
+    def test_a_write_that_lands_wrong_is_caught_by_regenerate(self, pair, monkeypatch):
+        """寫完要重驗 —— 沒有這條的話「寫對了」只是宣稱。
+
+        與 `--apply` 那條同形狀(`test_a_write_that_lands_wrong_is_caught`),
+        因為它們是同一類動作:**寫到別人的 repo 裡**。
+        """
+        src, dst = pair
+        _w(dst, "CLAUDE.md",
+           _claude_md(CANON.replace("完全相同", "改過"), "台股收盤 13:30。"))
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "動正典段")
+
+        def _bad(path, raw):
+            io.open(path, "wb").write(raw + b"# tampered\n")
+
+        monkeypatch.setattr(sync, "_write_bytes", _bad)
+        with pytest.raises(sync.Refused) as e:
+            sync.regenerate_canon(str(src), str(dst))
+        assert "驗證" in str(e.value) or "重驗" in str(e.value), e.value
+
     def test_every_hybrid_key_is_marked_generate_in_the_real_manifest(self):
         """`HYBRID` 表與標記表要一致。
 
