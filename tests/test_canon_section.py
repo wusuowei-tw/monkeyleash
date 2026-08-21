@@ -238,22 +238,63 @@ def test_every_path_token_in_the_canon_is_classified():
         % "\n  ".join(unclassified))
 
 
+def git_ignores(rel):
+    """`git check-ignore` 命中嗎。
+
+    **這是版控裡的事實,不是這台機器的事實** —— 規則寫在 `.gitignore`,
+    每個 clone 都一樣。用它來表達「工作機會長出這個檔,而它永不進出貨樹」,
+    比斷言「磁碟上有沒有」強一階:後者在乾淨 checkout 上是假的。
+    """
+    out = subprocess.run(["git", "check-ignore", "-q", rel],
+                         cwd=str(ROOT), capture_output=True)
+    return out.returncode == 0
+
+
 def test_the_shipped_tree_criterion_is_not_the_disk_criterion():
     """判準換掉的那一格,留一條測試釘住它不會被換回去。
 
-    標本兩個,而**只有一個是 CI 抓到的**:
-      `.dev/pipeline.json`  兩邊磁碟不同 -> CI 紅,所以被發現
-      `.git/hooks/`         兩邊磁碟都有 -> **CI 也不會紅**,舊判準下它永遠綠
+    標本兩個,**而它們被發現的方式不同**:
 
-    後者是這一格存在的理由:一個判準的錯,只有一部分會被環境差異照出來。
+      `.dev/pipeline.json`  兩邊磁碟不同 -> CI run #34 紅,所以被發現
+      `.git/hooks/`         **兩邊磁碟都有** -> CI 不會紅,舊判準下它永遠綠
+
+    後者是這一格存在的理由:**一個判準的錯,只有一部分會被環境差異照出來。**
+
+    ## 本條自己犯過同一個錯(CI run #36)
+
+    第一版對兩個 token 都斷言「磁碟上存在」—— 而 `.dev/pipeline.json`
+    在乾淨 checkout 上不存在,於是**這條釘住判準的測試,自己用了它要釘掉的判準**。
+
+    那是同一族在 24 小時內的第三次:
+      作者(B0 寫裸檔名)-> 環境(I-5 用磁碟判準)-> **釘子本身(本條)**
+    每一次都比前一次高一層,而**高一層的那次更難看見,因為它看起來像在防守**。
+
+    改法:斷言只用**環境無關的事實**。
+      兩個 token   不在 git 追蹤集合 + 已分類且附理由   (處處為真)
+      `.git/hooks/` 磁碟上存在                          (git 依定義在每個 clone 都建它)
+      `.dev/pipeline.json` 被 `.gitignore` 命中          (規則在版控裡)
+
+    CI run #34 的紅**留在這段文字裡當歷史證據**,不再當成可斷言的事實。
     """
     tracked = tracked_paths()
+
+    # (a) 兩個都硬斷言:不在出貨樹、已分類、理由非空。
     for token in (".dev/pipeline.json", ".git/hooks/"):
-        assert (ROOT / pathlib.PurePath(token)).exists(), \
-            "%s 在這台機器的磁碟上應該存在,否則這個標本不成立" % token
         assert not in_shipped_tree(token, tracked), \
             "%s 進了出貨樹 —— 標本失效,回頭重判它的分類" % token
         assert token in NOT_IN_THE_SHIPPED_TREE, "%s 沒有被分類" % token
+        assert NOT_IN_THE_SHIPPED_TREE[token].strip(), \
+            "%s 分類了但沒寫理由 —— 理由欄是讓判準漂移看得見的東西" % token
+
+    # (b) 磁碟那半只對 `.git/hooks/` 硬斷言 —— git 依定義在每個 clone 都建它,
+    #     所以「磁碟有、出貨樹沒有」這個組合處處成立。它是較強的那個標本。
+    assert (ROOT / ".git" / "hooks").exists(), \
+        "`.git/hooks/` 不在磁碟上 —— 那不是 git repo,本條的前提不成立"
+
+    # (c) `.dev/pipeline.json` 改用 ignore 規則表達,不用磁碟。
+    #     語意:工作機會長出它,而它永不進出貨樹。
+    assert git_ignores(".dev/pipeline.json"), \
+        "`.dev/pipeline.json` 不再被 .gitignore 命中 —— 分類的前提變了,回頭重判"
 
 
 def test_i5_catches_an_unclassified_path_token():
