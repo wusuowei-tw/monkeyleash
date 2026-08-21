@@ -41,7 +41,7 @@ R8 只活在 `gate.py` 的 R8 分支(擋下訊息 `[R8] …:生產程式碼不�
 
 | | 內容 |
 |---|---|
-| `CLAUDE.md:32` | ``| R1 | `docs/specs/**` 內容含 ``` / `def` / `import` / `function` → 擋 |`` |
+| `CLAUDE.md` 規則表的 **R1 那列** | ``| R1 | `docs/specs/**` 內容含 ``` / `def` / `import` / `function` → 擋 |`` |
 | `gate.py` 的 R1 路徑判定 | `if r.startswith("docs/specs/") or re.match(r"^\.scratch/[^/]+/spec\.md$", r):` |
 
 **實作守兩個路徑,文件只寫一個。** 而它正上方那行註解自己寫著為什麼:
@@ -52,7 +52,7 @@ R8 只活在 `gate.py` 的 R8 分支(擋下訊息 `[R8] …:生產程式碼不�
 
 | | 內容 |
 |---|---|
-| `CLAUDE.md:32` | ``` / `def` / `import` / `function` —— **四個** |
+| `CLAUDE.md` 規則表的 **R1 那列** | ``` / `def` / `import` / `function` —— **四個** |
 | `gate.py` 的 `CODE_IN_SPEC_RE` | `CODE_IN_SPEC_RE = re.compile(r"```\|^\s*(def\|class\|import\|from\|function\|const\|let)\s", re.M)` —— **八個** |
 
 漏列:**`class` / `from` / `const` / `let`**。
@@ -73,7 +73,7 @@ R1 路徑判定裡的 `^\.scratch/[^/]+/spec\.md$` **把檔名寫死成 `spec.md
 
 | 位置 | 現況 | 問題 |
 |---|---|---|
-| `CLAUDE.md:32` | R1 那列 | 要補**實際守備範圍**(②③④) |
+| `CLAUDE.md` 的規則表 | R1 那列 | 要補**實際守備範圍**(②③④) |
 | `CLAUDE.md` 的「目前沒有 per-repo 開關,**R1–R7 全部無條件生效**」那句 | 閉區間寫法 | **排除了 R8**,而 R8 正在下游擋人 |
 
 **兩處都在 `FRAMEWORK:BEGIN` 與 `FRAMEWORK:END` 之間** ——
@@ -105,8 +105,8 @@ R1 路徑判定裡的 `^\.scratch/[^/]+/spec\.md$` **把檔名寫死成 `spec.md
 | 位置 | 逐字 | 列了幾樣 |
 |---|---|---|
 | `27-authority-layer-is-not-wired-to-git.md:24` | `唯一會寫出三層掛載(leak_scan **加** \`gate.py --pre-commit\`)的是` | **2** |
-| `docs/machine-init.md:316`(更正前) | `兩支都必須是三層(\`leak_scan\` + \`gate.py --pre-commit\`)` | **2** |
-| `bootstrap.sh:12`(更正前) | `# 兩支現在都是三層(leak_scan + gate.py --pre-commit)` | **2** |
+| `docs/machine-init.md` 的「兩支都必須…」那句(更正前) | `兩支都必須是三層(\`leak_scan\` + \`gate.py --pre-commit\`)` | **2** |
+| `bootstrap.sh` 的「兩支現在…」那句(更正前) | `# 兩支現在都是三層(leak_scan + gate.py --pre-commit)` | **2** |
 
 **加上 `HOOK` 常數與兩支實體檔 —— 五個獨立來源,全部枚舉出兩個階段。**
 
@@ -138,7 +138,7 @@ R1 路徑判定裡的 `^\.scratch/[^/]+/spec\.md$` **把檔名寫死成 `spec.md
 
 | 類別 | 位置(逐**行**) | 處置 |
 |---|---|---|
-| **活** 1 | `docs/machine-init.md:316` | ✅ 已改(2026-08-18) |
+| **活** 1 | `docs/machine-init.md` —— **原 `:316`,行號已失效**(同活 2) | ✅ 已改(2026-08-18) |
 | **活** 2 | `bootstrap.sh` —— **原 `:12`,行號已失效(見下)** | ✅ 已改 |
 | **活** 3 | `.agents/portable-manifest.txt:22` | ✅ 已改(連同下方的 stale 理由) |
 | **活** 4 | `tests/test_sync.py:258` | ✅ 已改 |
@@ -343,7 +343,8 @@ setup-matt-pocock-skills  tdd  to-spec  to-tickets
 
 ### ⑥ 的落地紀錄(2026-08-18,票 57 那一輪)
 
-- **已改 6 處**:`docs/machine-init.md:316`、`bootstrap.sh:12`、
+- **已改 6 處**:`docs/machine-init.md` 的「兩支都必須**兩段都接**」那句、
+  `bootstrap.sh` 的「兩支現在**兩段都接**」那句、
   `.agents/portable-manifest.txt:22-24`(含 stale 理由)、`tests/test_sync.py:258`、
   `.claude/portable/manifest.py:101`、`.githooks/pre-commit:10-12`
 - 後兩處**在同一次改完**(`.githooks/pre-commit` 逐字引用 `manifest.py:101`)——

@@ -19,7 +19,7 @@
 
 | 推導來源 | 出現在 | 實際指向 |
 |---|---|---|
-| `$CLAUDE_PROJECT_DIR` | `.claude/settings.json` 的 PreToolUse;`g1_guard.py:306`、`:314` | **發起視窗**的專案根,不是被寫檔案所在的 repo |
+| `$CLAUDE_PROJECT_DIR` | `.claude/settings.json` 的 PreToolUse;`g1_guard.py` 的 `main()` 兩處 —— `l2 = level2_hit(text, os.environ.get("CLAUDE_PROJECT_DIR"))`,以及緊接的第二級擋下訊息 `% (verb, path, os.environ.get("CLAUDE_PROJECT_DIR") or "(未設定)"))` | **發起視窗**的專案根,不是被寫檔案所在的 repo |
 | `__file__` | `gate.py` 頂層的 `ROOT = os.path.dirname(…×3…(os.path.abspath(__file__)))` | **hook 檔自己住的地方** |
 | `__file__` | **`leak_scan.py` 頂層的 `HERE` / `ROOT`(`dirname×2`,經 `HERE`)** | **同上 —— 掃描器自己住的地方**(2026-08-21 補列) |
 
@@ -33,7 +33,8 @@
 > 而動工的人讀的是票面。這是 CLAUDE.md「收了一個入口,就回頭問它的同類入口在哪」
 > 的實例 —— 問法是「這個手法還用在哪些檔案上」,不是「我還想得到什麼」。
 
-`g1_guard.py:40` 明文寫著第一級**拒絕**這種推導:
+`g1_guard.py` 的 import 區塊正下方那段註解(起首句
+「**從使用者家目錄解析,不從 `__file__` 推導。**」)明文寫著第一級**拒絕**這種推導:
 
 > `# **從使用者家目錄解析,不從 __file__ 推導。**`
 > `# 從檔案位置推導的話,專案內的草稿會去找專案裡的清單、正式檔會去找家目錄裡的,`
@@ -81,7 +82,7 @@
 
 - 跨視窗操作仍會讓前哨判錯 repo,而**判錯時它照樣給出一個看起來正常的答案**
 - G1 第二級在跨視窗時錨錯根 —— 而它守的是**專案外的破壞性動作**
-- 上半修好而下半沒修的話,`g1_guard.py:40` 那段註解會變成**描述一個只有一半成立的紀律**
+- 上半修好而下半沒修的話,`g1_guard.py` 那段「從使用者家目錄解析」的註解會變成**描述一個只有一半成立的紀律**
 
 ## 本票不含
 
