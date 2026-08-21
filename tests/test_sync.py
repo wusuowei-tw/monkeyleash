@@ -44,6 +44,19 @@ MANIFEST = (
 )
 
 
+# 票 53 II —— fixture 的 CLAUDE.md 必須帶界線標記,因為**真實的下游一定帶**:
+# `install.py` 走 `claude_md.render_for_new_repo()`,那個函式一律寫進兩個標記。
+# 舊 fixture 用的是不帶標記的純文字,那不是任何真實安裝的形態。
+BEGIN = "<!-- FRAMEWORK:BEGIN -->"
+END = "<!-- FRAMEWORK:END -->"
+CANON = "## 開發流程\n框架的正典段,各 repo 一份、應當完全相同。\n"
+
+
+def _claude_md(canon, project):
+    return "# 專案開發規範\n\n%s\n%s%s\n\n## 這個專案自己的規範\n\n%s\n" % (
+        BEGIN, canon, END, project)
+
+
 def _w(root, rel, text):
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -78,7 +91,7 @@ def pair(tmp_path):
     _w(src, ".claude/hooks/newfile.py", "# 全新\n")
     _w(src, "docs/agents/friction-log.md", "# Friction\n\n## F-001 一\n## F-002 二\n")
     _w(src, ".agents/legacy-no-redlight.txt", "# go-live: aaa\n")
-    _w(src, "CLAUDE.md", "框架版\n")
+    _w(src, "CLAUDE.md", _claude_md(CANON, "(還沒有。)"))
     _git(src, "add", "-A")
     _git(src, "commit", "-qm", "src")
 
@@ -86,7 +99,7 @@ def pair(tmp_path):
     _w(dst, ".claude/hooks/gate.py", "# 舊版\nx = 1\n")
     _w(dst, "docs/agents/friction-log.md", "# Friction\n\n## F-001 一\n")
     _w(dst, ".agents/legacy-no-redlight.txt", "# go-live: zzz\n目標自己的\n")
-    _w(dst, "CLAUDE.md", "目標版 + 專案段\n")
+    _w(dst, "CLAUDE.md", _claude_md(CANON, "台股收盤 13:30。"))
     _w(dst, "project_only.py", "專案自己的\n")
     _git(dst, "add", "-A")
     _git(dst, "commit", "-qm", "dst")
@@ -789,3 +802,133 @@ class TestItVerifiesAfterWriting:
         with pytest.raises(sync.Refused) as e:
             sync.update(str(src), str(dst), apply=True)
         assert "驗證" in str(e.value) or "hash" in str(e.value), e.value
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 53 偵測器 II —— `generate` 桶的混血條目(`CLAUDE.md` 的正典段)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 現況:`generate` 桶只被驗「sync 自己有沒有亂碰它」(寫入前後 hash 相同),
+# **不驗「它跟正典一不一致」**。而 `CLAUDE.md` 是這個桶裡唯一的混血 ——
+# `FRAMEWORK:END` 之後是各 repo 自己的,界線之間是正典、應當完全相同。
+#
+# 判準:比 `claude_md.framework_section()` 抽出來的子範圍,**不比整個檔**。
+# 比整檔的話每個有專案規範的下游都會被判漂移,而**永遠吵的檢查等於沒有檢查**。
+#
+# 失效方向:漂移 -> **拒絕**,不是警告。這個 repo 自己記過警告會失效
+# (`unmigrated_friction` 的 docstring:「這是拒絕的條件,不是警告 ——
+# 警告會被略過,而被刪掉的條目沒有第二份」)。
+# 而拒絕必須有出口,否則第一次擋住就會被拿掉(票 66)——
+# 出口是 `--regenerate-canon`(B5),本批不含。
+
+class TestCanonSectionDrift:
+
+    def test_editing_only_the_project_section_is_not_drift(self, pair):
+        """**這一格是整個設計成不成立的關鍵。**
+
+        下游本來就會在專案段寫自己的規矩 —— 那是那道界線存在的理由。
+        把它判成漂移的話,每一個有專案規範的 repo 都會永遠被擋。
+        """
+        src, dst = pair
+        _w(dst, "CLAUDE.md", _claude_md(CANON, "台股收盤 13:30。\n加了一整段。"))
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "專案段")
+        sync.update(str(src), str(dst), apply=True)   # 不得丟例外
+
+    def test_editing_the_canon_section_refuses_and_names_the_file(self, pair):
+        src, dst = pair
+        _w(dst, "CLAUDE.md",
+           _claude_md(CANON.replace("完全相同", "不太一樣"), "台股收盤 13:30。"))
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "動正典段")
+        with pytest.raises(sync.Refused) as e:
+            sync.update(str(src), str(dst), apply=True)
+        assert "CLAUDE.md" in str(e.value), e.value
+        assert "--regenerate-canon" in str(e.value), \
+            "拒絕了卻沒給出口 —— 沒有出口的守衛第一次擋住就會被拿掉(票 66)"
+
+    def test_drift_is_refused_in_dry_run_too(self, pair):
+        """**dry-run 也要擋。**
+
+        dry-run 的用途是「看看會動到什麼」,而一份沒提到正典段已經分歧的清單
+        本身就是錯的答案 —— 同 `refuse_if_unclassified` 的理由。
+        """
+        src, dst = pair
+        _w(dst, "CLAUDE.md", _claude_md("## 開發流程\n完全不同。\n", "專案段"))
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "動正典段")
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=False)
+
+    def test_a_target_without_markers_refuses(self, pair):
+        """目標沒有界線 —— **不是全新安裝,是被動過或是舊版**。
+
+        全新安裝一定有界線(`render_for_new_repo()` 一律寫進去),
+        所以這裡拒絕不會撞上票 19 的死循環形狀。
+        """
+        src, dst = pair
+        _w(dst, "CLAUDE.md", "沒有任何標記的一份\n")
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "拿掉界線")
+        with pytest.raises(sync.Refused) as e:
+            sync.update(str(src), str(dst), apply=True)
+        assert "CLAUDE.md" in str(e.value), e.value
+
+    def test_a_target_with_two_marker_pairs_refuses(self, pair):
+        """兩組界線 —— 取哪一組取決於實作,而那是隱形的。"""
+        src, dst = pair
+        _w(dst, "CLAUDE.md",
+           _claude_md(CANON, "專案段") + "\n%s\nx\n%s\n" % (BEGIN, END))
+        _git(dst, "add", "-A")
+        _git(dst, "commit", "-qm", "兩組界線")
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=True)
+
+    def test_a_source_without_markers_refuses(self, pair):
+        """**來源壞了不該往外傳。**
+
+        方向與目標那一格相反但理由相同:抽不出正典段時不知道該比什麼,
+        而「不知道該比什麼」的正解是停,不是跳過。
+        """
+        src, dst = pair
+        _w(src, "CLAUDE.md", "上游自己掉了界線\n")
+        _git(src, "add", "-A")
+        _git(src, "commit", "-qm", "來源掉界線")
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=True)
+
+    def test_identical_canon_sections_leave_canon_drift_empty(self, pair):
+        """沒有漂移時,**要看得出來檢查跑過了**。
+
+        沒有這一格的話,「守衛沒說話」與「守衛根本沒跑」在退出碼上長得一樣。
+        """
+        src, dst = pair
+        plan = sync.update(str(src), str(dst), apply=True)
+        assert plan.canon_drift == []
+
+    def test_apply_leaves_claude_md_byte_identical(self, pair):
+        """**II 不碰寫入面。**
+
+        這一格釘住那件事:偵測與寫入分開,寫入要人打第二個指令
+        (`--regenerate-canon`,B5)。少了它,`--apply` 有一天會「順手」
+        把正典段補上,而 `CLAUDE.md` 的失效方向是往「不帶」倒
+        (`claude_md.py` 的 docstring),自動改寫與那個方向相反。
+        """
+        src, dst = pair
+        before = _h(dst, "CLAUDE.md")
+        sync.update(str(src), str(dst), apply=True)
+        assert _h(dst, "CLAUDE.md") == before
+
+    def test_every_hybrid_key_is_marked_generate_in_the_real_manifest(self):
+        """`HYBRID` 表與標記表要一致。
+
+        **這條守的是一致,不是完整** —— 它答不出「所有該進 `HYBRID` 的都進了」,
+        那要判斷「這個 `generate` 條目有沒有可比對的子範圍」,是人的事。
+        票 53 卷首那根釘子(第二個混血條目要回頭擴範圍)因此仍然是釘子。
+        """
+        marks = sync.load_manifest(str(ROOT))
+        assert sync.HYBRID, "`HYBRID` 是空的 —— 枚舉本身壞了,不是通過"
+        for rel in sync.HYBRID:
+            assert sync.mark_for(rel, marks) == "generate", (
+                "`HYBRID` 收了 %s,而標記表把它標成 %s —— "
+                "混血分支只對 `generate` 桶有意義" % (rel, sync.mark_for(rel, marks)))
