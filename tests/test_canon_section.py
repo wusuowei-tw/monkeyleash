@@ -40,6 +40,7 @@ import io
 import os
 import pathlib
 import re
+import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -152,9 +153,30 @@ def test_i3_catches_an_adr_reference_that_does_not_resolve():
 # **誠實話:下表是人寫的,所以「未分類 = 0」今天為真是因為表照今天的內容寫。**
 # 真正的斷言是那個條件本身,它對**明天新增的** token 才有效力。
 
-# 不必存在於這棵樹上的 token,逐一給理由。**理由欄不是註解,是判準本身** ——
+# **「存在」的判準是 git 追蹤集合,不是磁碟。**(2026-08-21,CI run #34 的教訓)
+#
+# 第一版用 `os.path.exists()`,本機全綠而 CI 紅:`.dev/pipeline.json` 在**開發機**
+# 的磁碟上,而它被 `.gitignore` 排除,乾淨 checkout 沒有它 —— 於是它在本機被歸進
+# 「存在」桶,在 CI 變成未分類。
+#
+# **根因不是漏了一個檔,是判準問錯了問題。** I-5 要問的是
+# 「這個引用指向的東西**會不會跟著出貨**」,而那是**出貨樹**的性質;
+# 磁碟只是「這台機器現在長什麼樣」,兩者在開發機上碰巧重合。
+#
+# 換判準之後,兩個 token 的分類改變(逐一對照過 22 個):
+#   `.dev/pipeline.json`  磁碟在 / git 未追蹤  <- CI 抓到的那個
+#   `.git/hooks/`         磁碟在 / git 未追蹤  <- **CI 也抓不到的那個**
+# 後者要緊:git 自己會在每個 clone 建出 `.git/hooks/`,所以它在**兩邊**的磁碟上
+# 都存在 —— 舊判準下它永遠綠,而它從來就不是出貨樹的一部分。
+# **同一族的兩個成員,一個被 CI 抓到、一個連 CI 都跳過**,而分辨它們的是判準本身。
+
+# 不會跟著出貨的 token,逐一給理由。**理由欄不是註解,是判準本身** ——
 # 清單一長判準就會漂移,理由欄是讓漂移看得見的東西(照 manifest.py 的同一條)。
-NOT_EXPECTED_ON_DISK = {
+NOT_IN_THE_SHIPPED_TREE = {
+    ".dev/pipeline.json":            "執行期狀態,`.gitignore` 排除 —— "
+                                     "每個 repo 自己產生,不隨出貨走(票 31 的 .dev 分軌)",
+    ".git/hooks/":                   "git 自己的目錄,依定義不進版控 —— "
+                                     "而它在每個 clone 的磁碟上都存在,所以磁碟判準看不見它",
     "~/.claude/settings.json":       "使用者層 —— 不在任何 repo 裡,CI 上也沒有",
     "~/.claude/hooks/g1_guard.py":   "使用者層 —— G1 的本體依設計住家目錄(ADR 0009)",
     "~/.claude/g1-protected.txt":    "使用者層 —— 保護清單不進版控(它自己在保護清單裡)",
@@ -183,22 +205,55 @@ def path_tokens_in(text):
     return out
 
 
+def tracked_paths():
+    """出貨樹 = git 追蹤集合。**不是磁碟** —— 見上面那段的由來。"""
+    out = subprocess.run(["git", "ls-files", "-z"],
+                         cwd=str(ROOT), capture_output=True)
+    assert out.returncode == 0, out.stderr
+    return set(p for p in out.stdout.decode("utf-8").split("\0") if p)
+
+
+def in_shipped_tree(token, tracked):
+    """目錄 token 用前綴比對,檔案 token 用完全比對。"""
+    if token.endswith("/"):
+        return any(p.startswith(token) for p in tracked)
+    return token in tracked
+
+
 def test_every_path_token_in_the_canon_is_classified():
     tokens = path_tokens_in(canon_text())
     assert tokens, "正典段一個路徑 token 都沒枚舉到 —— 枚舉本身壞了,不是通過"
-    unclassified = []
-    for t in tokens:
-        if t in NOT_EXPECTED_ON_DISK:
-            continue
-        if not (ROOT / pathlib.PurePath(t)).exists():
-            unclassified.append(t)
+    tracked = tracked_paths()
+    assert tracked, "`git ls-files` 回空 —— 枚舉本身壞了,不是通過"
+    unclassified = [t for t in tokens
+                    if t not in NOT_IN_THE_SHIPPED_TREE
+                    and not in_shipped_tree(t, tracked)]
     assert not unclassified, (
-        "正典段的下列路徑 token 在這棵樹上不存在,而且沒有被分類:\n  %s\n"
+        "正典段的下列路徑 token **不在出貨樹裡**(git 追蹤集合),而且沒有被分類:\n  %s\n"
         "判一次它屬於哪一種:\n"
-        "  在這棵樹上 -> 把引用寫成完整路徑(裸檔名不算)\n"
-        "  使用者層 / gitignored / 上下文相對名 / 設計上可缺\n"
-        "     -> 加進本檔的 NOT_EXPECTED_ON_DISK,**連理由一起寫**\n"
+        "  會跟著出貨 -> 把引用寫成完整路徑(裸檔名不算),並確認它真的進版控\n"
+        "  使用者層 / gitignored / git 自己的目錄 / 上下文相對名 / 設計上可缺\n"
+        "     -> 加進本檔的 NOT_IN_THE_SHIPPED_TREE,**連理由一起寫**\n"
+        "判準是 git 不是磁碟:磁碟只說「這台機器現在長什麼樣」。\n"
         % "\n  ".join(unclassified))
+
+
+def test_the_shipped_tree_criterion_is_not_the_disk_criterion():
+    """判準換掉的那一格,留一條測試釘住它不會被換回去。
+
+    標本兩個,而**只有一個是 CI 抓到的**:
+      `.dev/pipeline.json`  兩邊磁碟不同 -> CI 紅,所以被發現
+      `.git/hooks/`         兩邊磁碟都有 -> **CI 也不會紅**,舊判準下它永遠綠
+
+    後者是這一格存在的理由:一個判準的錯,只有一部分會被環境差異照出來。
+    """
+    tracked = tracked_paths()
+    for token in (".dev/pipeline.json", ".git/hooks/"):
+        assert (ROOT / pathlib.PurePath(token)).exists(), \
+            "%s 在這台機器的磁碟上應該存在,否則這個標本不成立" % token
+        assert not in_shipped_tree(token, tracked), \
+            "%s 進了出貨樹 —— 標本失效,回頭重判它的分類" % token
+        assert token in NOT_IN_THE_SHIPPED_TREE, "%s 沒有被分類" % token
 
 
 def test_i5_catches_an_unclassified_path_token():
@@ -213,6 +268,6 @@ def test_i5_catches_an_unclassified_path_token():
     """
     found = path_tokens_in("跑完 `g1_verify.py` 的全套驗收,見 `docs/adr/`")
     assert found == ["g1_verify.py", "docs/adr/"]
-    assert "g1_verify.py" not in NOT_EXPECTED_ON_DISK, \
+    assert "g1_verify.py" not in NOT_IN_THE_SHIPPED_TREE, \
         "裸檔名不該靠豁免表放行 —— 出口是把它寫成完整路徑"
     assert not (ROOT / "g1_verify.py").exists(), "這個標本要成立,樹根不能真的有這個檔"

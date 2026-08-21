@@ -29,6 +29,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import manifest                                             # noqa: E402
+import claude_md                                            # noqa: E402
 
 FRICTION = "docs/agents/friction-log.md"
 PROVENANCE = ".dev/provenance.jsonl"
@@ -36,17 +37,39 @@ FRICTION_LOCAL = "docs/agents/friction-local.md"
 
 HEADING = re.compile(r"^## (\S+)", re.M)
 
+# ── `generate` 桶裡的**混血**條目(票 53)────────────────────────────────────
+#
+# `generate` 的語意是「內容綁這個 repo,必須在目標重新產生」,而桶裡有一個條目
+# 只有**一部分**綁 repo:`CLAUDE.md` 的 `FRAMEWORK:END` 之後是各 repo 自己的,
+# **界線之間是正典、各 repo 一份、應當完全相同**。
+#
+# 比的是抽出來的子範圍,**不是整個檔** —— 比整檔的話每個有專案規範的下游都會被
+# 判成漂移,而**永遠吵的檢查等於沒有檢查**。
+#
+# **這張表沒有構造保證,只有紀律加一條測試。** 測試守的是
+# 「本表的每個 key 在標記表裡都標 `generate`」(一致),**答不出**
+# 「所有該進本表的都進了」(完整)—— 後者要判斷「這個 `generate` 條目有沒有
+# 可比對的子範圍」,那是人的判斷,沒有靜態檢查答得出來。
+# 票 53 卷首那根釘子(桶內出現第二個混血條目就要回頭擴範圍)因此仍然是釘子。
+HYBRID = {
+    "CLAUDE.md": (claude_md.framework_section, "FRAMEWORK 界線之間"),
+}
+
 
 class Refused(Exception):
     """拒絕執行。**回傳空計畫不是拒絕** —— 那會被讀成「沒事要做」。"""
 
 
 class Plan(object):
-    __slots__ = ("changed", "added", "needs_decision", "verified", "untouched")
+    __slots__ = ("changed", "added", "needs_decision", "verified", "untouched",
+                 "canon_drift")
 
     def __init__(self):
         self.changed = []
         self.added = []
+        # 混血條目的正典段兩邊不同。**空 list 是「查過了,沒漂」** ——
+        # 沒有這個欄位的話,「守衛沒說話」與「守衛根本沒跑」在退出碼上長得一樣。
+        self.canon_drift = []
         # `ask` 桶裡兩邊不一樣的檔案。**跳過是對的,不出聲不對** ——
         # 靜默跳過的話,那些檔案的漂移永遠沒有人看得到,而
         # 「兩邊不一致而沒有人知道」正是這條路徑要消滅的東西(ticket 01)。
@@ -337,6 +360,64 @@ def unmigrated_friction(src, target):
     return sorted(th - sh)
 
 
+def _read(path, whose, rel):
+    try:
+        with io.open(path, "rb") as f:
+            return f.read().decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    except Exception as e:
+        raise Refused(
+            "讀不到 %s 的 %s,無法判定正典段有沒有漂移:%s\n"
+            "     讀不到不等於沒漂 —— 判不了就停,不放行。" % (whose, rel, e))
+
+
+def canon_drift(src, target, marks):
+    """混血條目的正典段,兩邊不一樣的那些。回 [(路徑, 範圍的名字), ...]。
+
+    **這是拒絕的條件,不是警告。** 警告會被略過(`unmigrated_friction` 的
+    docstring 已經記過同一句),而漂掉的正典段不會有任何東西說話 ——
+    票 53 的整張票就是「沒有任何東西在看」。
+
+    **抽不出界線一律拒絕,不跳過。** 「不知道該比什麼」的正解是停:
+    跳過會讓一個界線壞掉的目標永遠通過這道守衛,而那正是最該被看見的狀態。
+    目標沒有界線也**不是**「全新安裝」—— 全新安裝一定有界線
+    (`install.py` 走 `claude_md.render_for_new_repo()`,它一律寫進兩個標記),
+    所以這裡拒絕不會撞上票 19 的死循環形狀。
+    """
+    out = []
+    for rel, (extract, label) in sorted(HYBRID.items()):
+        if manifest.explicit_mark(rel, marks) != "generate":
+            # 標記表把它改標成別的桶了 —— 那時混血分支的前提不成立。
+            # 不靜默跳過:標記與本表不一致是**設定的缺陷**,由測試守著,
+            # 這裡只確保執行期不會拿一個錯的前提去比對。
+            continue
+        sp = os.path.join(src, rel.replace("/", os.sep))
+        tp = os.path.join(target, rel.replace("/", os.sep))
+        if not os.path.exists(tp):
+            raise Refused(
+                "目標沒有 %s —— 混血條目的正典段無從比對。\n"
+                "     這個檔由 install 產生,不存在代表目標不是裝出來的,"
+                "或它被刪了。" % rel)
+        a, b = _read(sp, "來源", rel), _read(tp, "目標", rel)
+        try:
+            sa = extract(a)
+        except ValueError as e:
+            raise Refused(
+                "**來源**的 %s 抽不出%s:%s\n"
+                "     上游壞了不該往外傳 —— 先修來源再同步。" % (rel, label, e))
+        try:
+            sb = extract(b)
+        except ValueError as e:
+            raise Refused(
+                "目標的 %s 抽不出%s:%s\n"
+                "     出口:把兩個界線標記補回去(各一個,順序不可反),"
+                "界線之間放正典段、之後放專案段。\n"
+                "     `--regenerate-canon`(票 53 B5)**尚未落地**,"
+                "所以現在只能手動。" % (rel, label, e))
+        if sa != sb:
+            out.append((rel, label))
+    return out
+
+
 def head_commit(root):
     out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True)
     if out.returncode != 0:
@@ -452,6 +533,24 @@ def update(src, target, apply=False):
             "覆蓋會刪掉它們:\n  %s"
             % (FRICTION, len(stale), FRICTION_LOCAL, "\n  ".join(stale)))
 
+    # 混血條目的正典段(票 53)。**前置守衛,與 unmigrated_friction 同一排** ——
+    # 寫入發生在下面的迴圈裡,放在迴圈之後才拒絕會留下一個「寫了一半又拒絕」的
+    # 中間狀態,而那比不擋更糟:它看起來像一次失敗的更新,實際是一次部分成功的。
+    plan.canon_drift = canon_drift(src, target, marks)
+    if plan.canon_drift:
+        raise Refused(
+            "目標的正典段與來源不同(%d 個條目)—— 那一段各 repo 應當完全相同:\n"
+            "  %s\n"
+            "     出口(**現在就能用**):人手動把目標那個檔的**界線之間**換成來源的那一段,\n"
+            "     界線之外一個位元組都不要動。\n"
+            "     出口(**尚未落地**):`--regenerate-canon`,票 53 的 B5。\n"
+            "     **這一行在 B5 落地時要改** —— 一個名字寫在訊息裡而指令不存在,\n"
+            "     照著打的人會回到同一個拒絕,那比沒有出口更糟。\n"
+            "     這是拒絕不是警告:警告會被略過,而漂掉的正典段不會有東西說話。"
+            % (len(plan.canon_drift),
+               "\n  ".join("%s(%s)" % (rel, label)
+                           for rel, label in plan.canon_drift)))
+
     # 別的桶的現況 —— 寫入前先記下來,寫完要驗它們沒變
     for rel in tracked(target):
         if mark_for(rel, marks) != "copy":
@@ -543,6 +642,9 @@ def main(argv):
     for rel in plan.needs_decision:
         out.append(u"  ? %s(ask 桶:兩邊不同,不自動搬,要人決定帶哪些)" % rel)
     out.append(u"")
+    # **查過了要說出來。** 只在漂移時出聲的話,「一致」與「這道守衛沒跑」
+    # 在畫面上長得一樣 —— 而漂移那一路會 raise,根本走不到這裡。
+    out.append(u"混血條目的正典段:一致(%s)" % u"、".join(sorted(HYBRID)))
     out.append(u"寫入並通過 hash 重驗" if plan.verified
                else u"(dry-run,沒有寫任何東西;要實際更新加 --apply)")
     sys.stdout.buffer.write((u"\n".join(out) + u"\n").encode("utf-8"))
