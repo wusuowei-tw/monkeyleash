@@ -205,3 +205,13 @@ clone URL 用 `github.com/jeff273314/monkeyleash`(GitHub 端 rename 公開日由
 copy 桶散文逐處「活改史留」;歷史票面 14 處不動(F-036)。
 
 **執行序**:C1 → C2 → C4 → C3。zh-TW 照英文翻回,連同 C3 給 Jeff 過目。
+
+## 帳號改名善後(2026-08-23,GitHub username → `wusuowei-tw`)
+
+- 四刀落地:C1 `cc59833`、C2 `3822aab`、C4 `ddce215`、C3 `3a7918e`;C3 起作者為新代號。
+- README 全部 URL 換 `github.com/wusuowei-tw/monkeyleash`;本機 remote 改指 `wusuowei-tw/agent-gates.git`
+  (GitHub 端 repo 名公開日才 rename),**本 repo 層級**的 `user.name` / `user.email` 改新代號。
+- `LICENSE:3` 版權行裁改 `wusuowei-tw`,單獨一刀:版權行是傳播最遠的一行,每個轉散布者永遠攜帶;
+  兩個代號同為筆名效力等同,取與品牌一致者。
+- **登記,不動**:全域 git 身分與量化 / 影音兩個私有 repo 仍是舊代號 —— 私有無曝光面,留著無妨。
+- 歷史 commit 的舊代號照裁不動。
