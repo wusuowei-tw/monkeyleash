@@ -147,7 +147,7 @@ needs_sh = pytest.mark.skipif(
     SH is None,
     reason="這台機器上找不到 sh —— **三道 fail-closed 的行為正對照整組沒有執行**。"
            "結構斷言仍然跑得到,但「它真的會擋」這件事在本機沒有被證明過"
-           "(agent-gates framework-updates/16)。")
+           "(monkeyleash framework-updates/16)。")
 
 
 def _repo(tmp_path, name):

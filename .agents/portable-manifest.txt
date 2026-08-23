@@ -55,7 +55,7 @@ bootstrap.sh                    skip
 # **這一行必須先於任何 .github/ 檔案進版控。** 未分類的檔案在更新路徑
 # (sync)會被 refuse_if_unclassified 拒絕並點名,但在**安裝器**路徑
 # (mark_in → DEFAULT_MARK)預設是 copy,而那條路徑是靜默的:
-# 下游會拿到一份為 agent-gates 寫的 CI,一裝就紅,而紅的樣子像 CI 壞了。
+# 下游會拿到一份為 monkeyleash 寫的 CI,一裝就紅,而紅的樣子像 CI 壞了。
 .github/                        skip
 
 # ── 判定邏輯與定義 ────────────────────────────────────────────

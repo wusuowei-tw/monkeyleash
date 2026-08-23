@@ -376,7 +376,7 @@ certutil -hashfile "%USERPROFILE%\.claude\shadow-clamp.txt" SHA256
 
 ## 二之二、clone **框架自己**時還缺三樣(演練實測)
 
-前面兩節管的是「裝進別的 repo」。**這一節管的是 clone `agent-gates` 自己。**
+前面兩節管的是「裝進別的 repo」。**這一節管的是 clone `monkeyleash`(原 `agent-gates`)自己。**
 
 第三節的 `install.py` 會替目標 repo 產生狀態與名冊,但**沒有任何東西替框架自己做這件事** ——
 而它們全被 `.gitignore` 蓋住(per-repo 狀態,不是框架內容),所以 **clone 拿不到**。

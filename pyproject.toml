@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-gates"
+name = "monkeyleash"
 version = "0.1.0"
 description = "六站流程閘門與 agent 檔案系統災難防護"
 requires-python = ">=3.10"
@@ -34,7 +34,7 @@ dev = [
     "pytest>=8.0,<10",
 ]
 
-[tool.agent-gates]
+[tool.monkeyleash]
 # 上限複審日(票 34)。過了這天 tests/test_dependency_ceiling.py 轉紅,
 # 訊息會直接給複審程序。改這個日期就是做一次複審 —— 不要只把它往後推。
 pytest-ceiling-review = "2027-02-15"

@@ -1,4 +1,6 @@
-# agent-gates
+# monkeyleash
+
+*No monkeypatch, no fake greens.* —— formerly agent-gates
 
 六站開發流程的**機器強制層**,加上 agent 檔案系統災難防護。
 

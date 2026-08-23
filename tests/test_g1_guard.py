@@ -349,7 +349,7 @@ class TestLevelTwoIsUnchanged:
 
     @pytest.mark.xfail(
         strict=True,
-        reason="agent-gates framework-updates/04:ABS_PATH 的 POSIX 分支是頂層目錄"
+        reason="monkeyleash framework-updates/04:ABS_PATH 的 POSIX 分支是頂層目錄"
                "白名單,未列名的根目錄第二級看不見。**變綠的條件**:那張票把它"
                "改成通用比對(或補上這些根)。"
                "屆時本測試會 XPASS,而 strict=True 讓 XPASS 算失敗 —— "

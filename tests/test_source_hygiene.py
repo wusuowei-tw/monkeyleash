@@ -162,7 +162,7 @@ def test_no_closed_rule_range_on_the_live_framework_surface():
 # docstring 的讀者在這個 repo 裡,`reason` 的讀者不在。
 #
 # 正確寫法帶 feature(同 repo)或 repo + feature(跨 repo):
-#   `framework-updates/04`、`agent-gates framework-updates/04`
+#   `framework-updates/04`、`monkeyleash framework-updates/04`
 # 不寫裸的「票 04」—— 命名空間的邊界是 `.scratch/<feature>/issues/`,不是 repo。
 
 _BARE_TICKET = __import__("re").compile(r"票\s*\d+")
