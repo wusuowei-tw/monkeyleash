@@ -1,69 +1,124 @@
 # monkeyleash
 
-*No monkeypatch, no fake greens.* —— formerly agent-gates
+**No monkeypatch, no fake greens.**
 
-六站開發流程的**機器強制層**,加上 agent 檔案系統災難防護。
+Machine-enforced gates for a six-stage, test-first development pipeline —
+plus a filesystem disaster guard for coding agents. Formerly `agent-gates`.
 
-核心前提:**Prompt 是建議,檔案和 hook 才是法律。**
+Core premise: **prompts are suggestions; files and hooks are law.**
 
-## clone 之後先跑一次
+[![tests](https://github.com/wusuowei-tw/monkeyleash/actions/workflows/tests.yml/badge.svg)](https://github.com/wusuowei-tw/monkeyleash/actions/workflows/tests.yml)
+
+[繁體中文](README.zh-TW.md)
+
+## What this is
+
+A set of git hooks and Claude Code hooks that refuse to let a coding agent
+(or a human) skip steps: no source writes outside the implementation stage,
+no `x.py` without `tests/test_x.py`, no secrets in commits, no spec files
+that contain code. The rules are enforced twice — early by an agent-side
+hook, and authoritatively by `pre-commit` — and every rule fails *closed*:
+when the gate itself breaks, it blocks rather than passes.
+
+It also ships **G1**, a user-level guard that blocks destructive filesystem
+commands (`rm -rf`, `Remove-Item -Recurse`, …) against a protected list that
+the agent cannot edit.
+
+The six-stage pipeline builds on Matt Pocock's open-source skills
+(to-spec → to-tickets → implement → code-review); the enforcement layer —
+the gates themselves — is original to this repo.
+
+## Prerequisites
+
+- Python ≥ 3.10, git
+- Claude Code (the `PreToolUse` hook layer targets it; the `pre-commit`
+  layer works with any git client)
+
+## Quickstart
+
+    git clone https://github.com/wusuowei-tw/monkeyleash
+    cd monkeyleash
+    sh bootstrap.sh          # wires .githooks/ via core.hooksPath (once per clone)
+    python -m pytest -q      # run the framework's own tests
+
+Install into another repository:
+
+    python .claude/portable/install.py <path-to-target-repo>
+
+Install always creates a commit and ends with a full verification —
+*installed* means *verified*, not *copied*. Verify later with:
+
+    python .claude/portable/verify_gates.py <scratch-dir>   # every rule, clean-room
+    python .claude/portable/g1_verify.py                    # G1 protected list
+
+## No coding background? Let your AI install it
+
+Paste the following into your coding agent (Claude Code or similar) from
+inside the project you want to protect:
 
 ```
-sh bootstrap.sh
+Install monkeyleash (https://github.com/wusuowei-tw/monkeyleash) into this
+project by following the "Quickstart" section of its README.
+
+Rules for this task:
+1. Before running each command, explain in plain language what it does and
+   why — then run it.
+2. When the install finishes, run the verification commands from the README
+   and paste their complete output back to me.
+3. If anything fails or gets blocked, report the original error message
+   verbatim. Do not work around it, do not change paths, do not edit the
+   gate's state files — stop and ask me.
 ```
 
-啟用進版控的洩漏偵測 pre-commit(擋個人身分/機密進版控)。
-git hooks 住在 `.git/hooks/` 而 `.git/` 不進版控 —— 所以 hook 放在版控的
-`.githooks/`,`bootstrap.sh` 用 `core.hooksPath` 指過來。這一行 config 是
-每個 clone 要跑一次的(零接觸不可能,git 刻意如此,見 `docs/adr/0007`)。
+## Two enforcement layers
 
-## 裝進一個專案
-
-```
-python .claude/portable/install.py <目標 repo 路徑>
-```
-
-安裝**一律建立 commit**(go-live sha 要指向真的存在的 commit),
-並在最後**強制驗證**。**裝好的定義是驗證通過,不是檔案複製完。**
-
-驗證:
-
-```
-python .claude/portable/verify_gates.py <暫存目錄>   # 全規則,含淨室安裝
-python .claude/portable/g1_verify.py                 # G1 保護清單
-```
-
-## 兩層強制
-
-| 層 | 掛載 | 涵蓋 |
+| Layer | Mount | Reach |
 |---|---|---|
-| 前哨 | `.claude/settings.json` 的 PreToolUse | 隨 repo 走,只涵蓋 AI 路徑 |
-| 權威 | `.git/hooks/pre-commit` | 綁得住所有人 —— **但不進版控**,見 `docs/adr/0007` |
+| Outpost | `.claude/settings.json` → `PreToolUse` | Travels with the repo; covers only the agent path |
+| Authority | `.git/hooks/pre-commit` (via `.githooks/`) | Binds everyone — **but must be wired once per clone** (`docs/adr/0007`) |
 
-## 規則
+## Rules
 
-| | 判定 |
+The authoritative list is `rule_codes()` in `.claude/hooks/gate.py` — it is
+derived from the rules' own block messages, so this table claims only that
+each row is correct, not that it is complete.
+
+| | Blocks when |
 |---|---|
-| R1 | 規格書含程式碼 → 擋 |
-| R2 | 站別不允許時寫入原始碼 → 擋(寫入與提交問的問題不同,`docs/adr/0005`) |
-| R3 | 寫 `x.py` 但沒有 `tests/test_x.py`、或沒有紅燈紀錄 → 擋 |
-| R4 | skill 鏡像與正典不一致 → 擋 |
-| R5 | 正典 code-review 缺第三軸掛載點 → 擋 |
-| R6 | 紅燈豁免清單裡有不在 go-live 樹裡的項目 → 擋 |
-| R7 | Bash 寫入 repo → 擋,請改用 Write/Edit(前哨限定,`docs/adr/0008`) |
-| G1 | 碰到保護清單裡的路徑 → 擋(使用者層,獨立於六站) |
+| R1 | a spec under `docs/specs/` contains code |
+| R2 | source is written outside a stage that allows it (`docs/adr/0005`) |
+| R3 | `x.py` is written without `tests/test_x.py`, or without a failing test written first |
+| R4 | a skill mirror drifts from the canonical `.agents/skills/` |
+| R5 | the canonical `code-review` skill lost its third-axis mount point |
+| R6 | the red-light exemption list gains an entry not in the go-live tree |
+| R7 | Bash writes into the repo — use Write/Edit instead (outpost only, `docs/adr/0008`) |
+| R8 | production code imports from `research/` |
+| G1 | a path on the protected list is touched (user level, independent of the pipeline) |
 
-**目前沒有 per-repo 開關,裝了就全部無條件生效**(`docs/adr/0010`)。
+There is no per-repo switch: once installed, every rule is active (`docs/adr/0010`).
 
-## 最該先讀的東西
+## Known limitations
 
-`docs/agents/friction-log.md` —— 46 則判準,是這套東西**最可攜的資產**,
-比任何一支程式碼都通用。裡面每一條都是實際踩過的坑,而不是設計時想到的原則。
+- The authority layer lives in `.git/hooks/`, which git never versions.
+  A fresh clone is **silent** about it until `bootstrap.sh` runs.
+- Personal leak patterns (`~/.claude/leak-patterns.local.txt`) stay on the
+  author's machine by design; CI scans with the generic patterns only.
+- Gate messages are currently in Traditional Chinese.
+- Skill mirrors under `.claude/skills/` are hard links or symlinks depending
+  on the platform; R4 cannot assume either.
 
-幾個反覆出現的:
+## Where to read next
 
-- **fail-closed**:閘門壞掉時只能更嚴,不能更鬆。`except: return 0` 在任何閘門裡都是禁忌
-- **黑名單,不是白名單**:列出不管的東西,其餘全管,新東西預設被守
-- **豁免條件必須無法自我服務**:「檔案已存在」agent 造得出來,「在凍結清單裡」造不出來
-- **驗邏輯證明「如果被呼叫它會擋」,證明不了「它會被呼叫」**:掛載完要用真實呼叫收尾
-- **擋不住就明說擋不住**:假裝擋得住比擋不住危險,你會停止注意它
+- `docs/agents/friction-log.md` — the numbered `F-` entries: every one is a
+  bug that actually happened, not a principle imagined at design time.
+  This is the most portable asset in the repo.
+- `docs/adr/` — decisions and their reasons.
+- `docs/tickets/` — the work log, one file per ticket.
+- `docs/audits/` — point-in-time audits (rule inventory, going-public surface).
+- `CLAUDE.md` — the standing checks the agent is held to.
+
+## License
+
+MIT — see `LICENSE`. The skills under `.agents/skills/` are derived from
+[mattpocock/skills](https://github.com/mattpocock/skills) (MIT) and modified
+by `.claude/patches/`; see `THIRD_PARTY_NOTICES.md`.

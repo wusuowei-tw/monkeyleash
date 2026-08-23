@@ -37,6 +37,7 @@
 # `.gitattributes` 標 skip 的已知後果:框架的 `*.py text eol=lf` 保證不隨安裝走。
 # 那是 F-0013 已記載的殘留,雜湊比對因此做行尾正規化,不構成回歸。
 README.md                       skip
+README.zh-TW.md                 skip
 # 授權與第三方聲明(票 72)標 skip 的理由與 README 同一條:它們講的是**這個**
 # repo 的授權與來源,下游有自己的授權;第三方聲明裡的 skills 本來就隨
 # `.agents/skills/`(copy)走,下游要不要重述是下游的事。
