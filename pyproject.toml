@@ -7,6 +7,7 @@ name = "agent-gates"
 version = "0.1.0"
 description = "六站流程閘門與 agent 檔案系統災難防護"
 requires-python = ">=3.10"
+license = { file = "LICENSE" }
 dependencies = [
     # gate.py 讀 .agents/pipeline-stages.yaml。讀不到會 fail-closed 擋掉所有
     # 原始碼寫入 —— 少了它閘門不是壞掉,是把人鎖在外面。
