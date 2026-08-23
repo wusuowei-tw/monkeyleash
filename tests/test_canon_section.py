@@ -1,34 +1,30 @@
 # -*- coding: utf-8 -*-
-"""票 53 偵測器 I 的**上游專用**那一半 —— 三條樹相依 / 出口未備的判定。
+"""票 53 偵測器 I 的**上游專用**那一半 —— 兩條樹相依的判定。
 
-**本檔標 `skip`,不出貨。** 三條各有各的理由,合檔所以取最嚴的那條:
+**本檔標 `skip`,不出貨。** 兩條各有各的理由,合檔所以取最嚴的那條:
 
-  I-1b  每條存在的規則都要在正典段出現過   **出口未備**,見下
   I-3   正典段的 ADR 引用要 resolve        `docs/adr/` 目前標 `ask`(票 66 止血),
                                             下游那份可能落後
   I-5   正典段的路徑 token 全部要被分類     分類表是**上游這棵樹**的事實
 
 與本檔配對的另一半在 `tests/test_claude_md.py`(標 `copy`,跟著出貨):
-I-1a / I-2 / I-4 / 枚舉沒壞。切法的判準是**下游那一側的事實**,
+I-1a / I-1b / I-2 / I-4 / 枚舉沒壞。切法的判準是**下游那一側的事實**,
 不是上游的進度 —— 照 `tests/test_bootstrap.py` 那一則的教訓。
 
-## ⚠ 釘子 —— I-1b 為什麼還不能出貨,以及它什麼時候可以
+## 釘子已拔:I-1b 於 2026-08-21 搬去 `tests/test_claude_md.py`
 
-`CLAUDE.md` 標 `generate`:**sync 從不更新下游的正典段**。
-而 `.claude/hooks/gate.py` 標 `copy`:**每次 sync 都更新**。
+原本扣在本檔,理由是**出口未備**:`CLAUDE.md` 標 `generate`(sync 從不更新
+下游的正典段),而 `.claude/hooks/gate.py` 標 `copy`(每次 sync 都更新)——
+上游加一條規則之後,下游的下一次 sync 就讓
+「它的 gate.py 有 R9」與「它的正典段沒提過 R9」同時成立,I-1b 當場紅,
+**而下游沒有做錯任何事,也沒有任何指令可以修好它**。
 
-所以上游加一條規則之後,下游的下一次 sync 會讓
-「它的 gate.py 有 R9」與「它的正典段沒提過 R9」同時成立 —— **I-1b 當場紅**,
-而下游沒有做錯任何事,也沒有任何指令可以修好它。
+到期條件寫的是「**那個指令存在且驗收過**」,不是「B5 那一刀 commit 了」——
+兩者現在都成立(`sync.py --regenerate-canon`,六條驗收)。
+搬過去安全的理由:**斷言與它的出口同在 `copy` 桶**,下游同一批拿到,
+不存在「先收到紅、後收到出口」的窗口。
 
-**一道 fail-closed 守衛在出口存在之前不得出貨**(票 66 逐字:
-「一道沒有出口的 fail-closed 守衛,第一次擋住的時候就會被繞過或拿掉」)。
-
-出口是 B5 的 `--regenerate-canon`。**B5 落地之後,I-1b 搬進
-`tests/test_claude_md.py`,本檔剩兩條。** 到期條件是「那個指令存在且驗收過」,
-不是「B5 那一刀 commit 了」。
-
-另外三條為什麼沒有同一個問題(逐條問過,不是推的):
+另外三條當時為什麼沒有同一個問題(逐條問過,不是推的):
 
   I-1a  下游的舊正典段提到的代號是**現有代號的子集** -> 不會紅
   I-2   舊正典段引用的是**更舊的** F 號,而 friction-log 只增不刪 -> resolve 得到
@@ -59,43 +55,6 @@ claude_md = _load("claude_md_for_canon", pathlib.PurePath(
 def canon_text():
     return claude_md.framework_section(
         io.open(ROOT / "CLAUDE.md", encoding="utf-8").read())
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# I-1b —— 每條存在的規則都要在正典段出現過至少一次
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# **與 I-1a 是兩個問題,不是同一個檢查跑兩遍。**
-# I-1a 的參照物是**現實**(規則還在不在),I-1b 的參照物是**正典段的過去**
-# (它涵蓋了多少)。參照物不同,盲區就不同。
-#
-# 標本:2026-08-21 實測,`rule_codes()` 是 R1..R8 而正典段從頭到尾沒提過 R6 ——
-# 票 51 ① 只記了「R8 不在規則表」,而 R6 連散文裡都沒有。
-# 每一個下游拿到的規則清單因此少一條,**而沒有任何東西說話**。
-#
-# 規則表自己寫著「只求『列出的每一條都對』,不宣稱『列完了』」——
-# 那句話管的是**表**,本條管的是**整段**。兩件事。
-
-def rules_named_in(text):
-    return set(re.findall(r"\bR\d+\b", text))
-
-
-def test_every_rule_that_exists_is_named_somewhere_in_the_canon():
-    gate = _load("gate_for_canon_section",
-                 pathlib.PurePath(".claude", "hooks", "gate.py"))
-    authoritative = gate.rule_codes()
-    assert authoritative, "`rule_codes()` 回空 —— 權威來源讀不到,不是通過"
-    missing = sorted(authoritative - rules_named_in(canon_text()))
-    assert not missing, (
-        "下列規則存在,而正典段從頭到尾沒有提過:%s\n"
-        "正典段跟著每一次 install 出貨,所以每個下游拿到的規則清單都少這幾條。\n"
-        "改法:規則表加一列(表只求「列出的每一條都對」,加一列正確的不違反它)。"
-        % ", ".join(missing))
-
-
-def test_i1b_catches_a_rule_that_the_canon_never_mentions():
-    """I-1b 的正對照。"""
-    assert sorted({"R1", "R2", "R6"} - rules_named_in("表裡有 R1 與 R2。")) == ["R6"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

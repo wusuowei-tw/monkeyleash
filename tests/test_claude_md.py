@@ -232,3 +232,46 @@ def test_i4_catches_a_line_number_reference():
     """I-4 的正對照 —— 含區間的形態也要收。"""
     found = line_refs_in("見 `gate.py:123` 與 `install.py:34-41`,而 `第 3 步` 不是引用")
     assert found == ["`gate.py:123`", "`install.py:34-41`"]
+
+
+# ── I-1b:2026-08-21 從 tests/test_canon_section.py(skip)搬進本檔(copy)──
+#
+# **搬遷的到期條件是「出口存在且驗收過」,不是「B5 那一刀 commit 了」** ——
+# 現在兩者都成立:`sync.py --regenerate-canon` 落地並通過六條驗收。
+#
+# **為什麼搬過來是安全的**:這條斷言與它的出口**同在 `copy` 桶** ——
+# 斷言住 `tests/test_claude_md.py`,出口住 `.claude/portable/sync.py`,
+# 下游的下一次 sync **同一批**拿到兩者。
+# 所以不存在「先收到紅燈、後收到出口」的窗口,而那個窗口正是 B1–B2 當時
+# 把它扣在上游的唯一理由(票 66:一道沒有出口的 fail-closed 守衛,
+# 第一次擋住的時候就會被繞過或拿掉)。
+
+def test_every_rule_that_exists_is_named_somewhere_in_the_canon():
+    """I-1b —— 每條存在的規則都要在正典段出現過至少一次。
+
+    **與 I-1a 是兩個問題,不是同一個檢查跑兩遍。**
+    I-1a 的參照物是**現實**(規則還在不在),I-1b 的參照物是**正典段的過去**
+    (它涵蓋了多少)。參照物不同,盲區就不同。
+
+    標本:2026-08-21 實測,`rule_codes()` 是 R1..R8 而正典段從頭到尾沒提過 R6 ——
+    票 51 ① 只記了「R8 不在規則表」,而 R6 連散文裡都沒有。
+    每一個下游拿到的規則清單因此少一條,**而沒有任何東西說話**。
+
+    規則表自己寫著「只求『列出的每一條都對』,不宣稱『列完了』」——
+    那句話管的是**表**,本條管的是**整段**。兩件事。
+    """
+    authoritative = _load_gate().rule_codes()
+    assert authoritative, "`rule_codes()` 回空 —— 權威來源讀不到,不是通過"
+    missing = sorted(authoritative - rules_named_in(canon_text()))
+    assert not missing, (
+        "下列規則存在,而正典段從頭到尾沒有提過:%s\n"
+        "正典段跟著每一次 install 出貨,所以每個下游拿到的規則清單都少這幾條。\n"
+        "改法:規則表加一列(表只求「列出的每一條都對」,加一列正確的不違反它)。\n"
+        "若這裡紅的是下游:出口是 `sync.py <這個 repo> --regenerate-canon`,\n"
+        "它只換界線之間,專案段一個位元組都不動。"
+        % ", ".join(missing))
+
+
+def test_i1b_catches_a_rule_that_the_canon_never_mentions():
+    """I-1b 的正對照。"""
+    assert sorted({"R1", "R2", "R6"} - rules_named_in("表裡有 R1 與 R2。")) == ["R6"]
