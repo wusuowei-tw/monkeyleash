@@ -411,11 +411,79 @@ def canon_drift(src, target, marks):
                 "目標的 %s 抽不出%s:%s\n"
                 "     出口:把兩個界線標記補回去(各一個,順序不可反),"
                 "界線之間放正典段、之後放專案段。\n"
-                "     `--regenerate-canon`(票 53 B5)**尚未落地**,"
-                "所以現在只能手動。" % (rel, label, e))
+                "     補回去之後 `--regenerate-canon` 就能替你換正典段;"
+                "**界線壞著的時候它也拒絕**,理由與這裡相同。" % (rel, label, e))
         if sa != sb:
             out.append((rel, label))
     return out
+
+
+def regenerate_canon(src, target):
+    """把目標的正典段換成來源的那一段。**界線之外一個位元組都不動。**
+
+    這是 `canon_drift` 那道守衛的**出口**,而出口與偵測分開是刻意的:
+    `--apply` 的寫入面因此一行都不用改,而「重新產生正典段」是一個
+    人要自己打出來的動作,不是同步的副作用。
+
+    **失效方向與 `--apply` 相同:每一個「不確定」都往「不寫」倒。**
+    工作樹髒、來源界線壞、目標界線壞 —— 三者都在寫之前拒絕。
+
+    寫法是**位元組層的接合**,不是重新組裝整個檔:
+    保留 `[0, BEGIN 結束)` 與 `[END 開始, 檔尾)` 兩段原樣,只換中間。
+    重新組裝的話,「重新產生正典段」與「用上游那份蓋掉整個檔」
+    在結果上會分不出來 —— 而後者會刪掉專案段,那正是這個檔標 `generate` 的理由。
+    """
+    src, target = os.path.abspath(src), os.path.abspath(target)
+    refuse_if_dirty(target)
+
+    done = []
+    for rel, (extract, label) in sorted(HYBRID.items()):
+        sp = os.path.join(src, rel.replace("/", os.sep))
+        tp = os.path.join(target, rel.replace("/", os.sep))
+        if not os.path.exists(tp):
+            raise Refused("目標沒有 %s —— 沒有東西可以重新產生。" % rel)
+        with io.open(sp, "rb") as f:
+            s = f.read().decode("utf-8")
+        with io.open(tp, "rb") as f:
+            before = f.read()
+        t = before.decode("utf-8")
+
+        # **兩邊都先驗過再寫。** 驗到一半就寫的話,第二個條目壞掉時
+        # 第一個已經落地了 —— 那是「部分成功」,而它看起來像一次失敗。
+        try:
+            canon = extract(s)
+        except ValueError as e:
+            raise Refused("**來源**的 %s 抽不出%s:%s\n"
+                          "     上游壞了不該往外傳,先修來源。" % (rel, label, e))
+        try:
+            extract(t)
+        except ValueError as e:
+            raise Refused(
+                "目標的 %s 抽不出%s:%s\n"
+                "     **沒有寫任何東西。** 先把兩個界線標記補回去(各一個,順序不可反),"
+                "再跑一次。" % (rel, label, e))
+
+        i = t.index(claude_md.BEGIN) + len(claude_md.BEGIN)
+        j = t.index(claude_md.END)
+        if t[i:j] == canon:
+            continue
+        head, tail = t[:i], t[j:]
+        _write_bytes(tp, (head + canon + tail).encode("utf-8"))
+
+        # 寫完重驗,兩個方向都問(F-108:參照物不同,盲區就不同)。
+        #   A 方向:該換的換到了嗎 —— 參照物是**來源**
+        #   B 方向:不該動的還在嗎 —— 參照物是**目標的過去**
+        with io.open(tp, "rb") as f:
+            after = f.read()
+        got = after.decode("utf-8")
+        if extract(got) != canon:
+            raise Refused("%s 寫入後重驗不通過:正典段與來源仍然不同。" % rel)
+        if not (got.startswith(head) and got.endswith(tail)):
+            raise Refused(
+                "%s 寫入後重驗不通過:**界線之外**的內容被動到了。\n"
+                "     專案段就住在界線之後 —— 這是這個指令唯一的寫入面保證。" % rel)
+        done.append((rel, label, len(before), len(after)))
+    return done
 
 
 def head_commit(root):
@@ -541,11 +609,9 @@ def update(src, target, apply=False):
         raise Refused(
             "目標的正典段與來源不同(%d 個條目)—— 那一段各 repo 應當完全相同:\n"
             "  %s\n"
-            "     出口(**現在就能用**):人手動把目標那個檔的**界線之間**換成來源的那一段,\n"
-            "     界線之外一個位元組都不要動。\n"
-            "     出口(**尚未落地**):`--regenerate-canon`,票 53 的 B5。\n"
-            "     **這一行在 B5 落地時要改** —— 一個名字寫在訊息裡而指令不存在,\n"
-            "     照著打的人會回到同一個拒絕,那比沒有出口更糟。\n"
+            "     出口:`python .claude/portable/sync.py <目標> --regenerate-canon`\n"
+            "     它**只換界線之間**,界線之外(專案段、標題)逐位元組不變,\n"
+            "     而且寫完會重驗那兩件事,不符就拒絕。\n"
             "     這是拒絕不是警告:警告會被略過,而漂掉的正典段不會有東西說話。"
             % (len(plan.canon_drift),
                "\n  ".join("%s(%s)" % (rel, label)
@@ -613,6 +679,25 @@ def main(argv):
         return 2
     target = argv[0]
     apply = "--apply" in argv
+    if "--regenerate-canon" in argv:
+        src = os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))))
+        try:
+            done = regenerate_canon(src, target)
+        except Refused as e:
+            sys.stderr.buffer.write((u"[重產正典段/拒絕] %s\n" % e).encode("utf-8"))
+            return 1
+        if not done:
+            sys.stdout.buffer.write(
+                u"正典段本來就一致,沒有寫任何東西。\n".encode("utf-8"))
+            return 0
+        out = [u"重新產生完成,**只換了界線之間**:"]
+        for rel, label, a, b in done:
+            out.append(u"  %s(%s)  %d -> %d bytes" % (rel, label, a, b))
+        out.append(u"(界線之外逐位元組不變,寫入後已重驗兩個方向。)")
+        sys.stdout.buffer.write((u"\n".join(out) + u"\n").encode("utf-8"))
+        return 0
+
     if "--certify" in argv:
         src = os.path.dirname(os.path.dirname(
             os.path.dirname(os.path.abspath(__file__))))
