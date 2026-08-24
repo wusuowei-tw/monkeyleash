@@ -256,7 +256,17 @@ def authoritative_layer(root=None):
     if "--pre-commit" not in body:
         return False, ("%s 有呼叫 gate.py,但**沒帶 `--pre-commit`** —— "
                        "那跑的是預設模式,不是權威判定,什麼都不會擋。" % rel(hook))
-    return True, "%s 已呼叫 gate.py --pre-commit" % rel(hook)
+    # **洩漏段也要在**(票 76 B5)。hook 的契約是兩段都接(.githooks/pre-commit,
+    # 票 27),而本判定原本只找 "gate.py" 與 "--pre-commit" —— 判定用的證據比
+    # 契約弱一階(與上面 --pre-commit 那格同族,方向相反:那次掉的是 gate 段,
+    # 這格掉的是 leak_scan 段)。少了這格,裝好之後洩漏段被降級是**完全靜默**的:
+    # 常駐提醒照說已安裝、活體金絲雀照綠,唯一驗它的時點是安裝當下
+    # (verify_gates 的 F-062 檢查),而那個時點只有一次。
+    if "leak_scan" not in body:
+        return False, ("%s 有六站那段(gate.py --pre-commit),但**沒接 leak_scan** "
+                       "—— 洩漏偵測層不在:含真金鑰的 commit 會直接成功"
+                       "(F-062 負控實測過的方向)。兩段都接才算裝好。" % rel(hook))
+    return True, "%s 已接 leak_scan + gate.py --pre-commit(兩段)" % rel(hook)
 
 
 def not_installed_notice(detail):
@@ -403,6 +413,32 @@ WRAPPERS = {"sudo", "env", "time", "nohup", "xargs", "command"}
 REDIRECT_RE = re.compile(r"(?<!\d)(?<!&)>>?\s*([^\s;&|>]+)")
 
 
+# 段落切分 —— **單一來源**(票 76 A2)。許可判定與目標抽取原本各持一份:
+# 許可那份少了單一 `|`,於是 `git log | tee pkg/evil.py` 整段被當 git 放行
+# (管線後面那截才是真正在寫的東西,而它從來沒被看過);目標抽取那份有 `|`。
+# **同一條規則兩份切段定義** —— POSIX_WRITE_COMMANDS 的註解記過同型教訓
+# (票 29:兩份各自維護的名單必分岔,而註解宣稱的同步從未存在),修法相同:
+# 只留一份,「兩邊要一致」從紀律變構造。
+SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|\|")
+
+
+def _allowed_cmd_prefix(seg):
+    """這一段是不是以許可指令開頭。**前綴後須為空白或字串尾**(票 76 A1)。
+
+    裸的 `startswith` 沒有邊界:`gitfoo`、`github-cli`、`pipx` 都以許可詞開頭,
+    整段(含重導向)因此免檢 —— F-051 邊界家族,F-117 記的三處之一。
+    以 `/` 結尾的前綴(`python .claude/`)自帶邊界:斜線本身就是分隔符,
+    `.claudefoo` 從構造上 startswith 不到它,所以那一類維持原樣。
+    """
+    for p in BASH_ALLOWED_CMDS:
+        if p.endswith("/"):
+            if seg.startswith(p):
+                return True
+        elif seg == p or (seg.startswith(p) and seg[len(p)] in " \t"):
+            return True
+    return False
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 「切不乾淨」的字元層級訊號(票 21 E/F)
 #
@@ -489,8 +525,27 @@ def _mask_quoted(seg):
 
 
 def _target_allowed(token):
-    tok = token.strip().strip('"').strip("'")
-    return any(t in tok for t in BASH_ALLOWED_TARGETS)
+    """這個寫入目標在不在許可清單裡。**路徑成分比對,不是子字串**(票 76 A3)。
+
+    子字串的 `in` 沒有邊界:`mybuild/x` 含 `build/`、`x.dev/y` 含 `.dev/`、
+    `myscratchpad_notes.py` 含 `scratchpad` —— 全部被誤判成許可(F-051 家族,
+    F-117 記的三處之一)。正典形狀照 scanner.py 的兩種錨定:成分兩側補分隔符,
+    讓「成分在開頭 / 中間 / 結尾」用同一個式子判,而且兩側必然是邊界。
+
+    以 `/` 結尾的清單項(目錄)**不吃尾端補位**:`.dev/` 要求斜線真的出現在
+    目標字串裡 —— 否則 `rm -rf .dev` 這種**刪目錄本體**的指令會因為補位
+    變成許可,而舊行為擋它(證據目錄不是「`.dev/` 底下的流量」)。
+    """
+    tok = token.strip().strip('"').strip("'").replace("\\", "/")
+    haystack = "/" + tok.lstrip("/")
+    for t in BASH_ALLOWED_TARGETS:
+        needle = "/" + t.strip("/") + "/"
+        if t.endswith("/"):
+            if needle in haystack:
+                return True
+        elif needle in haystack + "/":
+            return True
+    return False
 
 
 def unallowed_write_targets(command):
@@ -512,7 +567,8 @@ def unallowed_write_targets(command):
     # **先按分隔符切段再解析。** 不切的話,運算元會一路吃過 `;` 吃到下一段:
     # `rm -rf x; cd y && ls` 會把 `cd`、`y`、`ls` 全當成 rm 的目標。
     # 分隔符還可能**黏在 token 上**(`fresh9;`),所以用切的,不是比對 token。
-    segments = [s for s in re.split(r"&&|\|\||;|\|", command) if s.strip()]
+    # 切段定義與許可判定同一份(票 76 A2,見 SEGMENT_SPLIT_RE)。
+    segments = [s for s in SEGMENT_SPLIT_RE.split(command) if s.strip()]
     # **兩個變數,不是一個**(票 36)。原本只有 `saw_construct`,於是
     #   「有寫入構造」與「抽到了目標」混成同一件事 —— 而它們不是:
     #   動詞認得(construct=True)但運算元全被跳過(target=False)時,
@@ -774,8 +830,9 @@ def bash_write_violation(command):
 
     # 逐段比對:`a && b` 的每一段都要在許可清單裡才算數,
     # 否則 `git status && rm -rf x` 會整條被許可。
-    segments = [s.strip() for s in re.split(r"&&|\|\||;", cmd) if s.strip()]
-    seg_ok = [any(seg.startswith(p) for p in BASH_ALLOWED_CMDS) for seg in segments]
+    # 前綴比對帶邊界(票 76 A1)—— `gitfoo` 不是 `git`,見 _allowed_cmd_prefix。
+    segments = [s.strip() for s in SEGMENT_SPLIT_RE.split(cmd) if s.strip()]
+    seg_ok = [_allowed_cmd_prefix(seg) for seg in segments]
     if segments and all(seg_ok):
         return None
     # **哪幾段落出許可清單** —— 只拿來寫訊息,判定邏輯一個字都不動(票 13)。

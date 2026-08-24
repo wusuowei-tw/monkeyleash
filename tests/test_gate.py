@@ -1030,8 +1030,17 @@ class TestAuthoritativeLayerDetection:
         assert "gate.py" in detail
 
     def test_a_hook_that_calls_the_gate_is_installed(self, tmp_path):
-        root = self._repo(tmp_path, '#!/bin/sh\nexec python "$(git rev-parse '
-                                    '--show-toplevel)/.claude/hooks/gate.py" --pre-commit\n')
+        """正控。**兩段都接**才算裝好 —— 票 76(B5)把「已安裝」的語意從
+        「六站段在」收緊為「hook 契約完整(leak_scan + gate.py --pre-commit)」,
+        本 fixture 的 hook 因此與 install.py 的 HOOK 同形。
+        只有 gate 段的 hook 現在判未安裝,由
+        TestAuthorityLayerIsWired.test_a_hook_missing_the_leak_stage_is_not_installed 釘住。
+        """
+        root = self._repo(
+            tmp_path,
+            '#!/bin/sh\nroot="$(git rev-parse --show-toplevel)"\n'
+            'python "$root/.claude/portable/leak_scan.py" --staged || exit 1\n'
+            'exec python "$root/.claude/hooks/gate.py" --pre-commit\n')
         installed, _ = gate.authoritative_layer(str(root))
         assert installed is True
 
@@ -2052,6 +2061,30 @@ class TestAuthorityLayerIsWired:
                        cwd=str(repo), capture_output=True)
         installed, detail = gate.authoritative_layer(str(repo))
         assert installed is True, detail
+
+    # 呼叫了 gate.py --pre-commit,但**沒接 leak_scan** —— 六站那段在,
+    # 洩漏偵測那段不在。hook 的契約是**兩段都接**(.githooks/pre-commit 票 27)。
+    GATE_ONLY = ('#!/bin/sh\nexec python "$(git rev-parse --show-toplevel)'
+                 '/.claude/hooks/gate.py" --pre-commit\n')
+
+    def test_a_hook_missing_the_leak_stage_is_not_installed(self, tmp_path):
+        """**票 76(B5)的紅燈。** 缺洩漏段的 hook 不得被判成「已安裝」。
+
+        與票 27 那條(`NO_MODE_FLAG`)同族、方向相反:那次掉的是 gate 段,
+        這次掉的是 leak_scan 段。`authoritative_layer()` 原本只找
+        `"gate.py"` 與 `"--pre-commit"` 兩個字串 —— 判定用的證據比 hook
+        契約(兩段都接)弱一階,於是裝好之後洩漏段被降級是**完全靜默**的:
+        常駐提醒照說已安裝、活體金絲雀照綠,唯一驗它的時點是安裝當下
+        (verify_gates 的 F-062 檢查),而那個時點只有一次。
+        """
+        repo = self._repo(tmp_path, "gateonly")
+        self._hook(repo / ".git" / "hooks" / "pre-commit", self.GATE_ONLY)
+        installed, detail = gate.authoritative_layer(str(repo))
+        assert installed is False, (
+            "hook 缺 leak_scan 段,卻被判成已安裝 —— 洩漏偵測層靜默消失:%s"
+            % detail)
+        assert "leak_scan" in detail, (
+            "訊息沒說出缺的是哪一個前提(洩漏段):%r" % detail)
 
     def test_this_repo_itself_is_wired(self):
         """**活體金絲雀:現在、這台機器上、這個 repo,權威層真的接上了嗎。**

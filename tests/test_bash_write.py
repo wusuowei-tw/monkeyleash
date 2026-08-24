@@ -769,3 +769,63 @@ class TestPowerShellVerbFamiliesAreCovered:
             assert noise not in msg, (
                 "具名參數的值被當成寫入目標了(%r)—— 那是票 21 的病:%r"
                 % (noise, msg))
+
+
+class TestAllowMatchingCarriesBoundaries:
+    """票 76 —— R7 三處**放行**比對不帶邊界,唯讀探針 8/8 實測放行(2026-08-24)。
+
+    三處同族(F-051 邊界家族;F-117 記的就是這件事:判準在 `g1_guard.py`
+    命名過、`scanner.py` 票 39 修過、連「沒回頭重掃」都逐字記過,
+    而同 repo 的 R7 原地開著):
+
+      A1  許可前綴 `seg.startswith(p)` 無邊界     -> `gitfoo` 被當 `git`
+      A2  許可切段不含單一管線(目標切段含)      -> `git log | tee …` 整段免檢
+      A3  許可目標 `any(t in tok …)` 子字串比對   -> `mybuild/` 被當 `build/`
+
+    A2 的根還是**同一條規則兩份切段定義** —— `POSIX_WRITE_COMMANDS` 的註解
+    早寫過同型教訓(票 29:兩份各自維護的名單必分岔),修法照它:收單一來源。
+
+    **這裡的每一條探針都是擋的方向;成對的對照組在下一個測試釘住放行方向** ——
+    誤擋會讓規則被關掉(F-031),所以兩個方向要一起進回歸網,缺一不可。
+
+    定性:R7 為 sentinel-only(ADR 0008),本票修的是內部韁繩不是對外攻擊面;
+    但 R7 破則 Bash 路徑上的寫入不再被逼回 Write/Edit,R2/R3 對那條路徑落空
+    (ADR 0003:不改會讓別的規則失效)。
+    """
+
+    @pytest.mark.parametrize("cmd", [
+        # A1:前綴無邊界 —— 這三個都不是 git / pip,只是名字以它們開頭
+        "gitfoo > x.py",
+        "github-cli > x.py",
+        "pipx > x.py",
+        # A2:管線接在許可前綴後 —— 第二截才是真正在寫的東西
+        "git log | tee pkg/evil.py",
+        "pip list | tee x.py",
+        # A3:目標名含許可子字串 —— mybuild 不是 build,x.dev 不是 .dev
+        "tee mybuild/x.py",
+        "tee x.dev/y.py",
+        "tee myscratchpad_notes.py",
+    ])
+    def test_boundaryless_allow_matches_are_blocked(self, cmd):
+        """**核心紅燈(8 條,實測全數放行)。** 放行比對必須帶邊界:
+        前綴後須為分隔符或字串尾、目標須整段命中而不是含有子字串。"""
+        msg = gate.bash_write_violation(cmd)
+        assert msg and "R7" in msg, (
+            "%r 靠無邊界比對穿過了放行檢查 —— 它不是許可清單裡的東西" % cmd)
+
+    @pytest.mark.parametrize("cmd,blocked", [
+        ("git status", False),           # A1 對照:真 git 必須維持放行
+        ("tee build/out.tmp", False),    # A3 對照:真 build/ 是設計許可
+        ("tee .dev/notes.jsonl", False),  # A3 對照:真 .dev/ 是設計許可
+        ("cat x | tee out.txt", True),   # A2 對照:非許可前綴的管線維持擋
+    ])
+    def test_the_paired_controls_keep_their_verdict(self, cmd, blocked):
+        """**成對反控(4 條,現行即綠,修完必須仍綠)。**
+
+        邊界收窄的失敗方向是誤擋:`git status` 或 `.dev/` 被誤擋的話,
+        規則會被關掉,而關掉的涵蓋率是零(F-031)。
+        修 A1–A3 的每一步都要回來看這四條 —— 它們與上面 8 條是同一組判準的
+        兩個方向,分開改就是把誤擋換成漏擋或反過來。
+        """
+        got = gate.bash_write_violation(cmd)
+        assert bool(got) is blocked, "對照組判定變了:%r -> %r" % (cmd, got)
