@@ -25,8 +25,9 @@ commands (`rm -rf`, `Remove-Item -Recurse`, …) against a protected list that
 the agent cannot edit.
 
 The six-stage pipeline builds on Matt Pocock's open-source skills
-(to-spec → to-tickets → implement → code-review); the enforcement layer —
-the gates themselves — is original to this repo.
+(grill-with-docs → to-spec → to-tickets → implement → code-review →
+improve-codebase-architecture); the enforcement layer — the gates
+themselves, the ledger, and the friction log — is original to this repo.
 
 ## Prerequisites
 

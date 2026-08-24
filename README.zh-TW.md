@@ -27,8 +27,9 @@ AI(或任何人)想跳步、想亂改、想把祕密塞進提交,門口直接擋
 擋下破壞性的檔案系統指令(`rm -rf`、`Remove-Item -Recurse`……)。
 
 六站流程建立在 Matt Pocock 的開源 skills 之上
-(to-spec → to-tickets → implement → code-review);強制層 ——
-閘門本身 —— 是本 repo 原創。
+(grill-with-docs → to-spec → to-tickets → implement → code-review →
+improve-codebase-architecture);強制層 —— 閘門本身、帳本、
+與 friction log —— 是本 repo 原創。
 
 ## 前提
 
