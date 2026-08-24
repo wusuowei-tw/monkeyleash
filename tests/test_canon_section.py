@@ -144,6 +144,13 @@ NOT_IN_THE_SHIPPED_TREE = {
     ".scratch/portability/grill.md": "gitignored 工作階段暫存 —— 本機才有",
     "CONTEXT.md":                    "設計上可缺 —— domain.md 逐字:"
                                      "「If any of these files don't exist, proceed silently」",
+    ".dev/provenance.jsonl":         "執行期證據帳本,本 repo 尚未產生第一筆(票 31 逐字:"
+                                     "「本 repo 目前尚未產生,先立規則」)—— .gitignore 有 negation,"
+                                     "產生後照票 31 進版控,屆時 in_shipped_tree 自然為真、本列變冗餘",
+    ".dev/test-runs.jsonl":          "執行期證據帳本,`.gitignore` 命中 —— "
+                                     "每個 repo 自己寫,不隨出貨走(票 31 的 .dev 分軌)",
+    "research/":                     "R8 的判定對象 —— 安裝的 repo 的目錄慣例;"
+                                     "本 repo(框架)沒有這個目錄,R8 對沒有它的樹自動不觸發",
     "gate.py":                       "上下文相對名,不是路徑 —— 全名在同段別處出現過",
     "scanner.py":                    "上下文相對名 —— 同上",
     "pipeline-stages.yaml":          "上下文相對名 —— 同上",
