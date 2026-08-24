@@ -56,7 +56,13 @@ B 案會讓 regenerate 把修好的蓋回過窄版且中間無聲);「票 67 / �
 - [x] 正典段六處 + R1 列 + 兩字修落地(C2 `8b441ba`);H2 / I-4 綠(在全套內實跑,非推定)
 - [x] `tests/test_canon_section.py` 分類表補三列,I-5 綠(同 C2)
 - [x] 全套測試綠:**972 passed / 3 skipped / 3 xfailed,collected 978**(以 `3e6b056` 的 978 為底,+0 如預測)
-- [ ] 推送 + CI 對帳(CI 預測:975 passed / 0 skipped —— 本機 972+3=975,Linux 上 symlink 三條會跑;基準同上)
+- [x] 推送(`3e6b056..b9d3359`)+ CI 對帳:run **#42** success,
+  外層 `962 passed, 1 deselected, 3 xfailed`、巢狀淨室 `933 passed, 3 xfailed` ——
+  與 run **#41**(基準 `3e6b056`)**兩行逐字同數,差 0,如「+0 條」預測**。
+  **併記一筆錯預測,不劃掉**:上一格原寫「CI 預測 975 passed / 0 skipped」——
+  那是拿**本機無 flag 管線**(972+3 skipped)去預測**CI 帶 deselect 的管線**,
+  兩個管線的母體不同。F-109 的形狀:預測沒標管線,過期(錯位)之後看起來像算錯。
+  「+0」那一半預測中了,絕對值那一半錯了 —— 兩半要分開記,不因後者中和前者。
 
 ## 票 51 收窄留痕(C3)
 
