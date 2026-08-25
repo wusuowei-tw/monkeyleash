@@ -16,7 +16,7 @@
 - 影子生效 iff:兩個檔都在 且 `今天 <= min(shadow.json.until, SHADOW_MAX)`。
 - 生效時,每個「本該擋」改為寫進 `.dev/shadow-log.jsonl`(ts/rule/at_commit/message),
   然後放行。**決策放在進入點**(mode_hook / mode_pre_commit),check() 保持純判定。
-- **G1 不進影子** —— 它是災難防護,不是流程規則,永遠擋。
+- **G1 不進影子** —— 它是檔案系統破壞性指令防護,不是流程規則,永遠擋。
 
 ## 安全閥防篡改(乙案)
 

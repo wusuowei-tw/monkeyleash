@@ -2,7 +2,7 @@
 
 **No monkeypatch, no fake greens.**
 
-六站、測試先行開發流程的**機器強制層**,加上給 coding agent 用的檔案系統災難防護。
+六站、測試先行開發流程的**機器強制層**,加上給 coding agent 用的檔案系統破壞性指令防護。
 原名 `agent-gates`。
 
 核心前提:**Prompt 是建議,檔案和 hook 才是法律。**
@@ -25,6 +25,7 @@ AI(或任何人)想跳步、想亂改、想把祕密塞進提交,門口直接擋
 
 另附 **G1**:使用者層的防護,對一份 agent 改不動的保護清單
 擋下破壞性的檔案系統指令(`rm -rf`、`Remove-Item -Recurse`……)。
+這是黑名單式的 hook,不是沙箱 —— 真正的隔離要靠容器或作業系統權限。
 
 六站流程建立在 Matt Pocock 的開源 skills 之上
 (grill-with-docs → to-spec → to-tickets → implement → code-review →
@@ -74,6 +75,15 @@ improve-codebase-architecture);強制層 —— 閘門本身、帳本、
 |---|---|---|
 | 前哨(Outpost) | `.claude/settings.json` 的 `PreToolUse` | 隨 repo 走,只涵蓋 agent 路徑 |
 | 權威(Authority) | `.git/hooks/pre-commit`(經 `.githooks/`) | 綁得住所有人 —— **但每個 clone 要接一次**(`docs/adr/0007`) |
+
+加起來的實際涵蓋:
+
+- 前哨層綁的是 **Claude Code 的工具掛鉤**。換一個 agent 來開這個 repo,這一層就不存在。
+- 權威層是 git 的 `pre-commit`,**與哪個 agent 無關**(人工 commit 也綁得住);
+  但它住在 `.git/hooks/`,而 clone 不會帶走那裡的東西 ——
+  跑過一次 `bootstrap.sh` 之後它才存在。
+- 所以:**不跑 `bootstrap.sh` 的人得到的強制是「無」,不用 Claude Code 的 agent
+  得到的是「僅權威層」。這是設計的邊界,不是缺陷。**
 
 ## 規則
 

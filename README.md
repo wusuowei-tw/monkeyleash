@@ -3,7 +3,8 @@
 **No monkeypatch, no fake greens.**
 
 Machine-enforced gates for a six-stage, test-first development pipeline —
-plus a filesystem disaster guard for coding agents. Formerly `agent-gates`.
+plus a user-level guard against destructive filesystem commands, for coding
+agents. Formerly `agent-gates`.
 
 Core premise: **prompts are suggestions; files and hooks are law.**
 
@@ -22,7 +23,8 @@ when the gate itself breaks, it blocks rather than passes.
 
 It also ships **G1**, a user-level guard that blocks destructive filesystem
 commands (`rm -rf`, `Remove-Item -Recurse`, …) against a protected list that
-the agent cannot edit.
+the agent cannot edit. This is a denylist hook, not a sandbox — real isolation
+needs containers or OS-level permissions.
 
 The six-stage pipeline builds on Matt Pocock's open-source skills
 (grill-with-docs → to-spec → to-tickets → implement → code-review →
@@ -77,6 +79,17 @@ Rules for this task:
 |---|---|---|
 | Outpost | `.claude/settings.json` → `PreToolUse` | Travels with the repo; covers only the agent path |
 | Authority | `.git/hooks/pre-commit` (via `.githooks/`) | Binds everyone — **but must be wired once per clone** (`docs/adr/0007`) |
+
+What that adds up to:
+
+- The outpost hooks into **Claude Code's tool layer**. Drive the repo with a
+  different agent and this layer is simply not there.
+- The authority layer is a git `pre-commit` hook, so it does not care which
+  agent (or human) is committing — but it lives in `.git/hooks/`, which a
+  clone never carries. It exists only after `bootstrap.sh` has been run once.
+- So: someone who never runs `bootstrap.sh` gets **no** enforcement, and an
+  agent that is not Claude Code gets **the authority layer only**. That is the
+  boundary of the design, not a defect.
 
 ## Rules
 
