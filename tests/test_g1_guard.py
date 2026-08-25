@@ -535,3 +535,57 @@ class TestVariantsAndCanonCoverTheSameForms:
     def test_the_msys_form_still_hits_level_one(self):
         assert g1.level1_hit("touch /d/datastore/x",
                              [r"D:\datastore"]) is not None
+
+    def test_every_form_canon_recognizes_is_also_expanded(self):
+        """增量 review F-a:耦合要**兩個方向**。
+
+        單向(展開的每個形態收斂回正典形)在 F2 修前就是綠的 ——
+        它抓不到「收斂側學了新形態、展開側沒學」這一類,而那正是 F2 本身。
+        本條反向:**從共用表推導**每一種收斂側認得的寫法,斷言展開側都有 ——
+        下一個掛載點(如 cygdrive)加進表裡,兩側同時被這條逼到。
+        """
+        vs = set(g1.variants(r"D:\datastore"))
+        for mount in ("",) + tuple("%s/" % m for m in g1._POSIX_DRIVE_MOUNTS):
+            form = "/%sd/datastore" % mount
+            assert g1._canon(form) == "d:/datastore", form
+            assert form in vs, "收斂側認得 %s,展開側沒有" % form
+
+    def test_a_posix_spelled_entry_covers_all_forms_at_level_one(self):
+        """增量 review F-b:條目寫成 WSL/MSYS 形態也要得到全形態涵蓋。
+
+        修前:條目 `/mnt/d/backup` 只展開出它自己 —— `del D:\\backup\\x`
+        與 `rm -rf /d/backup/x` 都穿過**無豁免的第一級**。
+        「遮一半比完全沒遮更容易過關」:條目看起來受保護,實際只護一種寫法。
+        修法:展開前先過 `_canon`(又一份知識收回同一個住處)。
+        """
+        entry = ["/mnt/d/backup"]
+        assert g1.level1_hit(r"del D:\backup\x", entry) is not None
+        assert g1.level1_hit("rm -rf /d/backup/x", entry) is not None
+        assert g1.level1_hit("touch /mnt/d/backup/x", entry) is not None
+
+    def test_variants_carry_no_dead_duplicates(self):
+        """增量 review F-d:回傳全小寫,upper 形態是重複 —— 熱迴圈白掃。"""
+        vs = g1.variants(r"D:\datastore")
+        assert len(vs) == len(set(vs))
+        assert all(v == v.lower() for v in vs)
+
+
+class TestPowershellBacktickEscapeIsNotSubstitution:
+    """增量 review F-c:PS 雙引號裡的**單個**反引號是跳脫字元(`n、`t),
+    不做命令替換 —— 只有 `$()` 替換。bash 的反引號替換必然**成對**。
+
+    第一版 F1 修把「span 含任一反引號」都當替換,PS 散文寫個 `n
+    就整段失去散文身分 —— 誤擋面遠大於 docstring 宣告的「散文裡寫 $(」。
+    修法:反引號規則要求 span 內**至少一對**;單個反引號維持散文。
+    """
+
+    PROJ = r"c:\proj"
+
+    def test_a_single_ps_escape_backtick_stays_prose(self):
+        assert g1.level2_hit(
+            'git commit -m "line1 `n rm -rf /home/x was blocked"',
+            self.PROJ) is None
+
+    def test_a_backtick_pair_is_still_substitution(self):
+        assert g1.level2_hit('echo "`rm -rf /home/x`"',
+                             self.PROJ) is not None

@@ -89,9 +89,15 @@ ABS_PATH = re.compile(
 # 少了這個邊界,`D:\notes1` 會擋掉 `D:\notes123`,而誤擋累積起來規則會被關掉(F-031)。
 _BOUNDARY = set("/\\\"' \t;&|)>,")
 
-# MSYS(`/c/…`)與 WSL(`/mnt/c/…`)的磁碟形態。單一字母 + 邊界才算 ——
+# 磁碟形態的 POSIX 掛載點 —— **展開(variants)與收斂(_canon)共用這一張表**。
+# 加一個掛載點(如日後 cygdrive 有實例)兩側同時獲得;
+# 兩側同表是增量 review F-a 之後的**構造**,一致性另有雙向耦合測試釘著。
+_POSIX_DRIVE_MOUNTS = ("mnt",)
+
+# MSYS(`/c/…`)與掛載形態(`/mnt/c/…`)的磁碟形態。單一字母 + 邊界才算 ——
 # `/mnt/data` 是真的 mnt 路徑,不是磁碟。
-_DRIVE_FORM = re.compile(r"^/(?:mnt/)?([a-z])(?=/|$)")
+_DRIVE_FORM = re.compile(r"^/(?:(?:%s)/)?([a-z])(?=/|$)"
+                         % "|".join(re.escape(m) for m in _POSIX_DRIVE_MOUNTS))
 
 
 def _canon(p):
@@ -103,12 +109,13 @@ def _canon(p):
     `/c/users/…` 永遠比不上 `c:/users/…`,**擷取得到卻比不上,判專案外而擋**。
     session 內每條 Bash 指令都以 `cd /c/…` 開頭,等於全面誤擋(量化 2026-08-25)。
 
-    同一份「一個路徑會被寫成哪些樣子」的知識,第一級住在 `variants()`
-    (清單條目 → 各形態,方向是**展開**);這裡是**收斂**(各形態 → 一個
-    正典形)。**兩側各有自己的正則 —— 一致性不是構造保證,是被測試釘住的**:
-    `TestVariantsAndCanonCoverTheSameForms` 斷言展開出去的每個形態收斂回同一個
-    正典形(本 docstring 第一版宣稱「認定收在一處」,code-review 照出那是
-    願望不是構造 —— 說「構造保證」之前先確認那真的是構造)。
+    同一份「一個路徑會被寫成哪些樣子」的知識:認定住 `_DRIVE_FORM`(由
+    `_POSIX_DRIVE_MOUNTS` 生成),展開側 `variants()` **先過本函式收斂、
+    再從同一張表展開** —— 這才是構造共用(增量 review F-a/F-b 之後)。
+    本 docstring 第一版宣稱「認定收在一處」而 `variants()` 其實自帶正則,
+    code-review 照出那是願望不是構造;第二版改成「靠測試釘」,增量 review
+    再照出那條測試只釘單向。現在:構造共表 + **雙向**耦合測試
+    (`TestVariantsAndCanonCoverTheSameForms`)並存。
     """
     p = p.replace("\\", "/").rstrip("/").lower()
     m = _DRIVE_FORM.match(p)
@@ -130,10 +137,15 @@ def _quote_spans(text):
     回 None 時呼叫端把整條當成沒有引號 —— 往擋的方向倒,
     與 `_is_scratch` 契約違約的方向同一條。
 
-    **含 `$(` 或反引號的雙引號區間不算散文**(code-review F1)。
-    bash 與 PowerShell 的雙引號都做命令替換 —— `"$(rm -rf …)"` 是
+    **含 `$(` 或成對反引號的雙引號區間不算散文**(code-review F1)。
+    bash 與 PowerShell 的雙引號都替換 `$()` —— `"$(rm -rf …)"` 是
     **會執行的真操作**,本函式第一版把它當散文放行,是 fail-open 回歸。
-    單引號兩邊都不替換,維持散文。代價:散文裡寫 `$(` 會維持誤擋,方向正確。
+    反引號**要求成對**(增量 review F-c):bash 的反引號替換必然成對,
+    而 PS 雙引號裡的單個反引號是跳脫字元(`` `n ``、`` `t ``)不替換 ——
+    第一版見一個反引號就取消散文身分,PS 散文寫個 `` `n `` 就整段誤擋。
+    單引號兩種 shell 都不替換,維持散文。
+    殘留代價(方向都往擋倒):散文裡寫 `$(`、或 PS 散文帶**兩個以上**
+    跳脫反引號,維持誤擋。
     """
     spans = []
     i, n = 0, len(text)
@@ -155,7 +167,7 @@ def _quote_spans(text):
         if not closed:
             return None              # 未閉合 —— 掃描失敗,呼叫端退回現行為
         body = text[i + 1:j]
-        if not (ch == '"' and ("$(" in body or "`" in body)):
+        if not (ch == '"' and ("$(" in body or body.count("`") >= 2)):
             spans.append((i, j + 1))
         i = j + 1
     return spans
@@ -170,20 +182,22 @@ def variants(path):
     p = path.strip().rstrip("\\/")
     if not p:
         return []
-    out = {p.replace("\\", "/"), p.replace("/", "\\")}
-    m = re.match(r"^([A-Za-z]):[\\/](.*)$", p)
+    # **先收斂再展開**(增量 review F-b):條目本身寫成 `/mnt/d/…` 或 `/d/…`
+    # 也要得到全形態涵蓋 —— 修前那種條目只展開出自己,`del D:\…` 與
+    # `/d/…` 都穿過無豁免的第一級(「遮一半比完全沒遮更容易過關」)。
+    # 收斂用的就是第二級那顆 `_canon` —— 磁碟形態的知識只住 `_DRIVE_FORM` 一處。
+    c = _canon(p)
+    out = {c, c.replace("/", "\\")}
+    m = re.match(r"^([a-z]):/(.*)$", c)
     if m:
-        drive, rest = m.group(1), m.group(2).replace("\\", "/")
-        out.add("/%s/%s" % (drive.lower(), rest))
-        out.add("/%s/%s" % (drive.upper(), rest))
-        # WSL 形態(framework-updates/79 code-review F2)。
-        # 第二級的 `_canon` 認得 `/mnt/x/…`,第一級的展開就也要有 ——
-        # 兩側認不同組形態的話,本票在收斂側教會的寫法,**無豁免的那一級**
-        # 反而不認得。兩側的一致由
-        # `TestVariantsAndCanonCoverTheSameForms` 釘住(耦合測試,TSI-035 機制解)。
-        out.add("/mnt/%s/%s" % (drive.lower(), rest))
-        out.add("/mnt/%s/%s" % (drive.upper(), rest))
-    return [v.lower() for v in out if v]
+        drive, rest = m.group(1), m.group(2)
+        # 展開面從共用表推導(WSL 形態是 framework-updates/79 code-review F2 補的)。
+        # 全小寫即可:level1_hit 比對前把兩邊都折小寫,upper 形態是
+        # 熱迴圈裡的重複白掃(增量 review F-d)。
+        out.add("/%s/%s" % (drive, rest))
+        for mount in _POSIX_DRIVE_MOUNTS:
+            out.add("/%s/%s/%s" % (mount, drive, rest))
+    return [v for v in out if v]
 
 
 # 磁碟根目錄條目 —— `D:\` / `D:/` / `d:` / `/d/`。**一律拒絕,不是支援。**
