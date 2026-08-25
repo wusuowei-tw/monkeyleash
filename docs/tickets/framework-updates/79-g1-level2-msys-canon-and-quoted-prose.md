@@ -106,6 +106,19 @@ A2(同路徑 Windows 形態)exit=0 對照;D1/D2 真外部仍擋。
 修後:單檔 `71 passed, 3 xfailed`;`g1_verify` 全套 exit=0;16 案探針 0 不符。
 **部署版此刻落後一刀(只含第一版)—— 需第二次 cp 覆蓋 + live 探針**,見下一節登記。
 
+## 第二次覆蓋與重 sync(2026-08-25 落地)
+
+- **cp 覆蓋(Jeff)**:備份 `.working2`(第一份 `.working` 保留),覆蓋後 `git status --short` 零輸出;
+  基準核對 `deployed == HEAD~1 canon: True`。
+- **live 探針三發全對**(部署版訊息):
+  - F1 正向:`git commit -m "log: $(rm -rf /home/g1-probe79-f1/nonexistent)"` → **擋**(修前 v1 放行的那一類);
+  - 經典正向:`git rm --cached /home/g1-live-probe-79/does-not-exist` → 擋;
+  - 散文負向:`git commit -m "上次 rm -rf /home/x 被擋"` → 穿過 G1 抵達 git,`nothing to commit`。
+- **重 sync**:量化、影音各 `--apply`,「寫入並通過 hash 重驗」;複驗 dry-run 兩邊 copy 桶
+  已收斂(只剩 ask 桶),樹上為未 commit 的 M,照 F-118 由各自視窗提交。
+- 追認入判準句:**「引號裡的東西不一定是在講話」**(F1 —— 雙引號裡的 `$(…)` 會執行);
+  宣稱由測試撐著,不由文字撐著(`_canon` docstring 改述 + 耦合測試)。
+
 ## 對帳待辦(裁 ⑤)
 
 - [ ] 量化該次原始擋下訊息到手後對帳;對上之前**不宣稱兩缺陷已窮盡**
