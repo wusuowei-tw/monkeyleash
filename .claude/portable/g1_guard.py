@@ -83,16 +83,32 @@ ABS_PATH = re.compile(
     # 回歸集當場抓到六條(帶 `-`、帶 `.`、暫存區鄰居)。
     # 舊的 `(?:/…)?` 也不對:它把 `/tmpdata/x` 截成 `/tmp`,而 `/tmp` 在豁免裡。
     # 正解是擷取到 token 邊界為止,讓 `_is_scratch` 拿完整路徑去判。
-    r"|/(?:home|tmp|var|etc|usr|opt|mnt|root)[^\s'\"<>|;]*)")
+    # `cygdrive` 是票 80 裁 A 補的第三側(2026-08-25)。**這張白名單不由
+    # `_POSIX_DRIVE_MOUNTS` 生成 —— 那是刻意的,不是遺漏。** 生成要改的是
+    # 這條正則的組裝方式,而這條正則的失敗方向是**砍長度 → 從擋下變放行**
+    # (見上面六行那段回歸紀錄),裁 A 明訂「加一格 ≠ 改通用,本刀不改路線」。
+    # 代價是表與本清單要靠人同步,而**人上一次沒同步**(cygdrive 進表之後
+    # 這裡沒跟上,直到探針量出 `findall -> []`)。所以同步這件事交給紅燈:
+    # `TestCygdriveIsExtractedAndBlocked::test_every_mount_in_the_table_is_extractable`
+    # —— 下一個掛載點只要進表,那條就紅。**註解不是機制,紅燈才是。**
+    r"|/(?:home|tmp|var|etc|usr|opt|mnt|cygdrive|root)[^\s'\"<>|;]*)")
 
 # 保護項後面允許出現的字元 —— 用來把「前綴」與「剛好開頭相同的別的名字」分開。
 # 少了這個邊界,`D:\notes1` 會擋掉 `D:\notes123`,而誤擋累積起來規則會被關掉(F-031)。
 _BOUNDARY = set("/\\\"' \t;&|)>,")
 
 # 磁碟形態的 POSIX 掛載點 —— **展開(variants)與收斂(_canon)共用這一張表**。
-# 加一個掛載點(如日後 cygdrive 有實例)兩側同時獲得;
-# 兩側同表是增量 review F-a 之後的**構造**,一致性另有雙向耦合測試釘著。
-_POSIX_DRIVE_MOUNTS = ("mnt",)
+# 加一個掛載點,**這兩側**同時獲得;兩側同表是增量 review F-a 之後的**構造**,
+# 一致性另有雙向耦合測試釘著。
+#
+# ⚠ **「兩側」是字面意思,不含第三側。** 擷取(`ABS_PATH` 的頂層目錄白名單)
+# **不由本表生成**,要另外加一格。本註解的前一版寫「加一個掛載點(如日後
+# cygdrive 有實例)兩側同時獲得」,而票 80 立案時**把它讀成了整條路徑都涵蓋** ——
+# 於是票面把成本估成「共表加一格,近零成本」,實測是 `ABS_PATH.findall` 回 `[]`,
+# 兩處都要加。**寫得準確的註解仍然會被讀成它沒說的那件事**,
+# 因為讀的人要的是結論,而「兩側」在當下讀起來就像「兩邊都好了」。
+# 現在同步由 `test_every_mount_in_the_table_is_extractable` 釘著。
+_POSIX_DRIVE_MOUNTS = ("mnt", "cygdrive")
 
 # MSYS(`/c/…`)與掛載形態(`/mnt/c/…`)的磁碟形態。單一字母 + 邊界才算 ——
 # `/mnt/data` 是真的 mnt 路徑,不是磁碟。
@@ -320,6 +336,14 @@ def level2_hit(text, project_dir):
     刪令 → 擋)。後兩格更正自量化 8/25 對帳 —— 該份誤列為未涵蓋,
     以 live probe 實測為準。
 
+    **cygdrive(`/cygdrive/d/x`)自 2026-08-25 起在此格**(票 80 裁 A 落地)。
+    補的是**兩處**:`_POSIX_DRIVE_MOUNTS` 加一格(收斂/展開兩側自動獲得)
+    **與** `ABS_PATH` 的頂層目錄白名單加一格(擷取側,不由該表生成)。
+    票面原估「共表加一格,近零成本」,依據是該表旁註解的「兩側同時獲得」——
+    **那句話是對的,而它沒說擷取是第三側**;動工前的唯讀探針量到
+    `ABS_PATH.findall("rm -rf /cygdrive/d/x") -> []` 才現形。
+    兩處的同步現由 `test_every_mount_in_the_table_is_extractable` 釘著。
+
     ### 已實測未涵蓋 —— 分兩欄標方向:讀的人對誤擋與漏擋的容忍度不同,
     並列在同一張表會誤判嚴重度
 
@@ -340,11 +364,12 @@ def level2_hit(text, project_dir):
 
     **漏擋方向(不出聲、真操作穿過 —— 比誤擋重)**
 
-    - cygdrive(`/cygdrive/d/x`)與 bash 寫法的 UNC(`//server/share/x`):
-      `ABS_PATH` 擷取不到 = 不在本判定的視野裡,2026-08-25 量化
-      live probe 實測放行。F-050 的「等實際誤擋實例」門檻不適用 ——
-      那條講的是誤擋面;漏擋不產生抱怨,等不到實例。
-      已開票:framework-updates/80。
+    - bash 寫法的 UNC(`//server/share/x`):`ABS_PATH` 擷取不到 =
+      不在本判定的視野裡,2026-08-25 量化 live probe 實測放行。
+      **票 80 裁 A 明訂不動**:`//` 與 `https://` 的 `//` 撞形是設計題,
+      而設計題不該卡住同票裡一個近零成本的洞。**仍 open。**
+      F-050 的「等實際誤擋實例」門檻不適用 —— 那條講的是誤擋面;
+      漏擋不產生抱怨,等不到實例。票:framework-updates/80。
 
     ### 未取樣(無樣本,不做宣稱)
 

@@ -623,5 +623,109 @@ class TestCoverageDeclarationIsThreeStateNotTwoState:
         assert "PowerShell 磁碟形態" in self.DOC
         assert "PS 停止解析符" in self.DOC
 
-    def test_cygdrive_and_unc_point_at_ticket_80(self):
+    def test_unc_still_points_at_ticket_80(self):
+        """**本條在票 80 裁 A 落地時改名**(原 `test_cygdrive_and_unc_point_at_ticket_80`)。
+
+        改名的理由不是整潔:cygdrive 已補、UNC 未動,舊名把**兩個狀態不同的
+        東西**綁在一個斷言裡,而斷言只驗得到「80 這個字串還在」——
+        cygdrive 若哪天回歸,這條照樣綠。**一個名字涵蓋兩種狀態,
+        等於讓其中一種失去釘子。**(票 04 那筆「引用一個不存在的測試名」的鄰居:
+        那筆是釘子不存在,本筆是釘子存在但指著兩個東西。)
+        """
         assert "framework-updates/80" in self.DOC
+
+    def test_cygdrive_has_moved_out_of_the_leak_direction(self):
+        """票 80 裁 A:cygdrive 補完之後**不得再列在漏擋方向**。
+
+        負控 —— 沒有這一條的話,只要有人把宣告改回去、或補了行為卻忘了改宣告,
+        沒有東西會出聲。宣告由測試撐著,不由文字撐著(票 79 第二次覆蓋的判準句)。
+        """
+        leak = self.DOC.split("漏擋方向")[1]
+        assert "cygdrive" not in leak, "cygdrive 已補,不該還在漏擋方向那一欄"
+        assert "UNC" in leak, "UNC 未動,必須留在漏擋方向"
+
+
+class TestCygdriveIsExtractedAndBlocked:
+    """票 80 **裁 A**(2026-08-25):只補 cygdrive 一格,UNC 兩面不動。
+
+    **動工時實測推翻了票面的成本估計。** 票面(與上一輪的盤點回報)寫
+    「`_POSIX_DRIVE_MOUNTS` 共表加一格 —— 構造已為它留位」,依據是
+    `g1_guard.py:93` 的註解「加一個掛載點兩側同時獲得」。
+    唯讀探針量到的實況:
+
+        ABS_PATH.findall("rm -rf /cygdrive/d/x")  ->  []
+
+    **`/cygdrive/d/x` 根本沒被擷取。** 那句註解裡的「兩側」指的是
+    `_canon()`(收斂)與 `variants()`(展開),而**擷取是第三側** ——
+    它住在 `ABS_PATH` 的頂層目錄白名單裡(`home|tmp|var|etc|usr|opt|mnt|root`),
+    那張白名單**不由 `_POSIX_DRIVE_MOUNTS` 生成**。
+    收斂側再認得也沒用:沒進視野的東西,判斷根本沒發生。
+
+    所以本刀是**兩處各加一格**,不是一處。而下面
+    `test_every_mount_in_the_table_is_extractable` 是這次的產出裡
+    真正重要的那一條:它把「表與擷取白名單要同步」從**註解**變成**紅燈**。
+    註解不是機制 —— 上一個掛載點靠人記得,而人沒記得。
+    """
+
+    # 合成路徑,沿本檔既有慣例(`c:\proj`)。**不得寫真實專案路徑** ——
+    # 本檔標 `copy`,會裝進每個下游;第一版這裡寫了本機絕對路徑,
+    # `test_the_shipped_tree_is_clean` 當場擋下(F-082 家族,個人 pattern #1)。
+    PROJ = r"c:\proj"
+
+    def test_cygdrive_is_extracted_by_abs_path(self):
+        """第一層:進不了視野,後面全都免談。"""
+        got = g1.ABS_PATH.findall("rm -rf /cygdrive/d/x")
+        assert "/cygdrive/d/x" in got, "擷取不到:%r" % (got,)
+
+    def test_cygdrive_canonicalises_to_the_drive_form(self):
+        """第二層:收斂側要把它折成與 `/d/x`、`/mnt/d/x` 同一個正典形。"""
+        assert g1._canon("/cygdrive/d/x") == "d:/x"
+
+    def test_cygdrive_is_blocked_at_level_two(self):
+        """第三層(端到端):量化 2026-08-25 live probe 實測放行的那一發。"""
+        assert g1.level2_hit("rm -rf /cygdrive/d/x", self.PROJ) is not None
+
+    def test_a_cygdrive_path_inside_the_project_is_still_allowed(self):
+        """負控:補擷取不得把專案內的刪除也擋掉 —— 那是誤擋,方向相反。
+
+        專案是 `c:\\proj`,所以 `/cygdrive/c/proj/…` 收斂後應判專案內。
+        沒有這一條的話,「擋得更多」會被誤讀成「修好了」。
+
+        **本條與上面 `PROJ` 那行是同一次 F-082 命中的兩處**,而第一發只修了
+        `PROJ` —— 隔 24 行的同檔同類原地不動,掃描器第二次跑才叫出來。
+        `F-085` 逐字:「修的時候人就在那個檔案裡,**我剛剛看過這個檔案**
+        感覺像是查過了」。記在犯案現場,不搬去別的檔案。
+        """
+        assert g1.level2_hit("rm -rf /cygdrive/c/proj/build/x", self.PROJ) is None
+
+    def test_every_mount_in_the_table_is_extractable(self):
+        """**本刀的機制條** —— 表裡的每一個掛載點,`ABS_PATH` 都必須擷取得到。
+
+        這一條補的是 `test_every_form_canon_recognizes_is_also_expanded`
+        涵蓋不到的那一側。那條耦合測試釘住 `_canon` ↔ `variants` 兩側,
+        **在 cygdrive 這一發是綠的** —— 因為它從表推導,而表加了格之後
+        兩側都自動跟上;唯獨擷取側不跟,而它不在那條測試的視野裡。
+        **一條從表推導的測試,只保證表推導得到的那幾側。**
+
+        下一個掛載點加進表裡,這一條會紅,逼人同時去補白名單。
+        """
+        for mount in g1._POSIX_DRIVE_MOUNTS:
+            cmd = "rm -rf /%s/d/x" % mount
+            got = g1.ABS_PATH.findall(cmd)
+            assert "/%s/d/x" % mount in got, \
+                "表裡有 %r,但 ABS_PATH 擷取不到:%r" % (mount, got)
+
+    @pytest.mark.parametrize("cmd", [
+        "rm -rf //server/share/x",
+        r"Remove-Item \\server\share\x -Recurse",
+    ])
+    def test_unc_is_deliberately_left_open(self, cmd):
+        """**負控:本刀只收 cygdrive。** UNC 兩面照裁 A 不動,仍是漏擋。
+
+        這條斷言的是**現況**,不是期望行為 —— 與票 04 那條 `xfail` 不同體例,
+        理由是它會在票 80 的 UNC 那一半落地時**主動變紅**,
+        而那正是我們要的:有人補了 UNC 卻沒回來收票面,這裡會叫。
+        寫成 `xfail(strict)` 也可以,但那會讓「本刀未做」看起來像「本刀失敗」。
+        """
+        assert g1.level2_hit(cmd, self.PROJ) is None, \
+            "UNC 被擋了 —— 若是刻意補的,請同時更新票 80 與本條"
