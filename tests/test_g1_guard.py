@@ -402,3 +402,90 @@ class TestLevelTwoIsUnchanged:
         """
         assert g1._is_scratch(r"C:\Users\X\AppData\Local\Temp\y") is False
         assert g1._is_scratch("/TMP/x") is False
+
+
+class TestMsysAndWslFormsOfTheProjectAreProjectInternal:
+    """framework-updates/79 缺陷①:MSYS / WSL 形態的專案路徑要判**專案內**。
+
+    修前:`ABS_PATH` 擷取得到 `/c/…`(它的註解自己寫「git bash 形態」),
+    但包含性判定只正規化反斜線與大小寫 —— `/c/users/...` 永遠比不上
+    `c:/users/...`,於是**擷取得到卻比不上,被判專案外而擋**。
+    比「擷取不到」更糟:擷取不到只是沒進視野,這裡是判斷發生了而且判錯。
+
+    而 `variants()` 早就會做 `C:\\x → /c/x` 的互轉,只給第一級用 ——
+    TSI-035 形狀:一組本該一起的知識只在一邊。修法是兩側共用同一個
+    `_canon()`,一份知識一個住處。
+
+    **每一筆負對照都來自 2026-08-25 對部署版的實證誤擋**(F-050:
+    不憑推測加案例),探針編號見 framework-updates/79 票面。
+    """
+
+    PROJ = r"c:\Users\u\proj"
+
+    @pytest.mark.parametrize("cmd", [
+        "rm -rf /c/Users/u/proj/build",                # 探針 A1
+        "cd /c/Users/u/proj && rm -rf build/",         # 探針 A4:cd 的路徑被判外
+        "rm -rf /C/Users/u/proj/build",                # 探針 A5:大寫磁碟代號
+        "rm -rf /mnt/c/Users/u/proj/build",            # 探針 B1:WSL 形態
+    ])
+    def test_a_posix_spelling_of_the_project_passes(self, cmd):
+        assert g1.level2_hit(cmd, self.PROJ) is None, cmd
+
+    def test_a_msys_project_dir_also_canonicalizes(self):
+        """proj 那一側也要過同一個函式 —— 兩側共用才是 TSI-035 的解。"""
+        assert g1.level2_hit("rm -rf C:/Users/u/proj/build",
+                             "/c/Users/u/proj") is None
+
+    @pytest.mark.parametrize("cmd", [
+        "rm -rf /d/somewhere/x",       # 既有回歸集同款:真外部 MSYS
+        "rm -rf /mnt/d/x",             # WSL 真外部
+    ])
+    def test_a_genuinely_external_posix_drive_still_blocks(self, cmd):
+        """方向 B:正規化只把**專案自己**的別種寫法收進來,外部照擋。"""
+        assert g1.level2_hit(cmd, self.PROJ) is not None, cmd
+
+    def test_a_real_mnt_directory_is_not_mistaken_for_a_drive(self):
+        """`/mnt/data/x` 是真的 mnt 路徑,不是磁碟形態 —— 不得被轉壞。"""
+        assert g1.level2_hit("rm -rf /mnt/data/x", self.PROJ) is not None
+
+
+class TestQuotedProseDoesNotPairAVerb:
+    """framework-updates/79 缺陷②:引號裡的**動詞**不配對,引號裡的**路徑**照算。
+
+    修前:動詞與路徑各自全文搜尋、無引號約束 ——
+    `git commit -m "上次 rm -rf /home/x 被擋"` 的散文自己配對成擋。
+    G1 擋住了「描述 G1 擋了什麼」,而 friction log 正是寫閘門行為的文件,
+    這個假陽性會系統性打在它身上(量化 2026-08-25 實證,成本 = 要人開終端機)。
+
+    收窄的只有動詞面,方向是「該放的沒放」= 維持誤擋,不會多放真操作。
+    已知殘留:heredoc 內文的動詞 + 路徑仍會誤擋 —— 守備宣告在 guard docstring。
+    """
+
+    PROJ = r"c:\proj"
+
+    @pytest.mark.parametrize("cmd", [
+        'git commit -m "上次 rm -rf /home/x 被擋"',        # 探針 C2
+        "git commit -m '先跑了 rm -rf /home/x 才發現'",     # 單引號同款
+        'echo "rm -rf /etc/passwd 這種要擋" && git push',
+    ])
+    def test_a_verb_inside_quotes_is_prose_not_a_command(self, cmd):
+        assert g1.level2_hit(cmd, self.PROJ) is None, cmd
+
+    def test_a_quoted_path_after_an_unquoted_verb_still_blocks(self):
+        """裁決條件 b 的關鍵反控:`rm -rf "/home/x"` 是真操作,引號路徑照算。"""
+        assert g1.level2_hit('rm -rf "/home/x"', self.PROJ) is not None
+
+    def test_unbalanced_quotes_fall_back_to_blocking(self):
+        """裁決條件 a:引號掃描失敗(未閉合)→ 退回現行為,往擋的方向倒。
+
+        掃不動就當作沒有引號 —— 誤差方向是維持誤擋(看得見、會被抱怨),
+        不是靜默放行。與 `_is_scratch` 契約違約的方向同一條。
+        """
+        assert g1.level2_hit('echo "oops && rm -rf /home/x',
+                             self.PROJ) is not None
+
+    def test_an_escaped_quote_inside_double_quotes_does_not_end_the_span(self):
+        r"""`"…\"…rm…"` —— 跳脫的雙引號不結束區間,動詞仍在散文裡。"""
+        assert g1.level2_hit(
+            'git commit -m "他說 \\"rm -rf /home/x\\" 被擋"',
+            self.PROJ) is None

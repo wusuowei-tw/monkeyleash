@@ -89,6 +89,68 @@ ABS_PATH = re.compile(
 # 少了這個邊界,`D:\notes1` 會擋掉 `D:\notes123`,而誤擋累積起來規則會被關掉(F-031)。
 _BOUNDARY = set("/\\\"' \t;&|)>,")
 
+# MSYS(`/c/…`)與 WSL(`/mnt/c/…`)的磁碟形態。單一字母 + 邊界才算 ——
+# `/mnt/data` 是真的 mnt 路徑,不是磁碟。
+_DRIVE_FORM = re.compile(r"^/(?:mnt/)?([a-z])(?=/|$)")
+
+
+def _canon(p):
+    """第二級**包含性判定**用的正規化:斜線、小寫,加上把 MSYS `/c/…` 與
+    WSL `/mnt/c/…` 轉成 `c:/…`。**proj 與擷取路徑兩側都必須過同一個函式。**
+
+    修的是 framework-updates/79 缺陷①:`ABS_PATH` 擷取得到 `/c/…`
+    (它的註解自己寫「git bash 形態」),而舊比對只正規化反斜線 ——
+    `/c/users/…` 永遠比不上 `c:/users/…`,**擷取得到卻比不上,判專案外而擋**。
+    session 內每條 Bash 指令都以 `cd /c/…` 開頭,等於全面誤擋(量化 2026-08-25)。
+
+    同一份「一個路徑會被寫成哪些樣子」的知識,第一級住在 `variants()`
+    (清單條目 → 各形態,方向是**展開**);這裡是**收斂**(各形態 → 一個
+    正典形)。TSI-035 的教訓是兩側不能各自維護一半 —— 所以磁碟形態的
+    認定收在 `_DRIVE_FORM` 一處,兩個方向都以它為準。
+    """
+    p = p.replace("\\", "/").rstrip("/").lower()
+    m = _DRIVE_FORM.match(p)
+    if m:
+        p = m.group(1) + ":" + p[m.end():]
+    return p
+
+
+def _quote_spans(text):
+    """單/雙引號區間的 [(start, end)] 清單;**掃描失敗(未閉合)回 None**。
+
+    修的是 framework-updates/79 缺陷②:動詞與路徑各自全文搜尋、無引號約束,
+    `git commit -m "上次 rm -rf /home/x 被擋"` 的**散文**自己配對成擋 ——
+    G1 擋住了「描述 G1 擋了什麼」,而 friction log 正是寫閘門行為的文件。
+
+    語意照 shell:雙引號內 `\\` 跳脫下一個字元;單引號內無跳脫。
+    這是一個刻意極小的 lexer,**只用來收窄動詞面**(見 level2_hit):
+    誤差最壞是「該放的沒放」= 維持誤擋(看得見、會被抱怨),不會多放真操作。
+    回 None 時呼叫端把整條當成沒有引號 —— 往擋的方向倒,
+    與 `_is_scratch` 契約違約的方向同一條。
+    """
+    spans = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch not in "'\"":
+            i += 1
+            continue
+        j = i + 1
+        closed = False
+        while j < n:
+            if ch == '"' and text[j] == "\\":
+                j += 2
+                continue
+            if text[j] == ch:
+                closed = True
+                break
+            j += 1
+        if not closed:
+            return None              # 未閉合 —— 掃描失敗,呼叫端退回現行為
+        spans.append((i, j + 1))
+        i = j + 1
+    return spans
+
 
 def variants(path):
     """一個 Windows 路徑會被寫成的各種樣子,全部要比對得到。
@@ -210,13 +272,32 @@ def level1_hit(text, entries):
 
 
 def level2_hit(text, project_dir):
-    """破壞性動詞 + 專案外的絕對路徑。回傳 (動詞, 路徑) 或 None。"""
-    m = DESTRUCTIVE.search(text)
+    """破壞性動詞 + 專案外的絕對路徑。回傳 (動詞, 路徑) 或 None。
+
+    ## 守備範圍宣告(framework-updates/79;綠燈要說得出驗的是哪一面)
+
+    - **動詞**:引號區間內的不算(散文,見 `_quote_spans`);
+      引號掃描失敗 → 全文都算(往擋倒)。
+    - **路徑**:**引號內外都算** —— `rm -rf "/home/x"` 是真操作,
+      收窄的只有動詞面,路徑面一寸不縮。
+    - **已知殘留(裁決登記)**:heredoc 內文的動詞 + 路徑**仍會誤擋** ——
+      heredoc 沒有引號可認,而解析 heredoc 邊界就是半套 shell parser,
+      比零涵蓋更危險(R7 同一句)。撞到時的出口與其他誤擋相同:人自己開終端機。
+    - 包含性判定兩側都過 `_canon()`;cygdrive 與 UNC 是擷取不到(漏),
+      不在本判定的視野裡,登記於票 79。
+    """
+    spans = _quote_spans(text)
+    m = None
+    for cand in DESTRUCTIVE.finditer(text):
+        if spans is not None and any(s <= cand.start(1) < e for s, e in spans):
+            continue                 # 動詞在引號裡 —— 是散文,不是指令
+        m = cand
+        break
     if not m:
         return None
-    proj = (project_dir or "").replace("\\", "/").rstrip("/").lower()
+    proj = _canon(project_dir or "")
     for raw in ABS_PATH.findall(text):
-        p = raw.replace("\\", "/").rstrip("/").lower()
+        p = _canon(raw)
         if proj and (p == proj or p.startswith(proj + "/")):
             continue
         if _is_scratch(p):
