@@ -105,8 +105,10 @@ def _canon(p):
 
     同一份「一個路徑會被寫成哪些樣子」的知識,第一級住在 `variants()`
     (清單條目 → 各形態,方向是**展開**);這裡是**收斂**(各形態 → 一個
-    正典形)。TSI-035 的教訓是兩側不能各自維護一半 —— 所以磁碟形態的
-    認定收在 `_DRIVE_FORM` 一處,兩個方向都以它為準。
+    正典形)。**兩側各有自己的正則 —— 一致性不是構造保證,是被測試釘住的**:
+    `TestVariantsAndCanonCoverTheSameForms` 斷言展開出去的每個形態收斂回同一個
+    正典形(本 docstring 第一版宣稱「認定收在一處」,code-review 照出那是
+    願望不是構造 —— 說「構造保證」之前先確認那真的是構造)。
     """
     p = p.replace("\\", "/").rstrip("/").lower()
     m = _DRIVE_FORM.match(p)
@@ -124,9 +126,14 @@ def _quote_spans(text):
 
     語意照 shell:雙引號內 `\\` 跳脫下一個字元;單引號內無跳脫。
     這是一個刻意極小的 lexer,**只用來收窄動詞面**(見 level2_hit):
-    誤差最壞是「該放的沒放」= 維持誤擋(看得見、會被抱怨),不會多放真操作。
+    誤差方向必須是「該放的沒放」= 維持誤擋(看得見、會被抱怨)。
     回 None 時呼叫端把整條當成沒有引號 —— 往擋的方向倒,
     與 `_is_scratch` 契約違約的方向同一條。
+
+    **含 `$(` 或反引號的雙引號區間不算散文**(code-review F1)。
+    bash 與 PowerShell 的雙引號都做命令替換 —— `"$(rm -rf …)"` 是
+    **會執行的真操作**,本函式第一版把它當散文放行,是 fail-open 回歸。
+    單引號兩邊都不替換,維持散文。代價:散文裡寫 `$(` 會維持誤擋,方向正確。
     """
     spans = []
     i, n = 0, len(text)
@@ -147,7 +154,9 @@ def _quote_spans(text):
             j += 1
         if not closed:
             return None              # 未閉合 —— 掃描失敗,呼叫端退回現行為
-        spans.append((i, j + 1))
+        body = text[i + 1:j]
+        if not (ch == '"' and ("$(" in body or "`" in body)):
+            spans.append((i, j + 1))
         i = j + 1
     return spans
 
@@ -167,6 +176,13 @@ def variants(path):
         drive, rest = m.group(1), m.group(2).replace("\\", "/")
         out.add("/%s/%s" % (drive.lower(), rest))
         out.add("/%s/%s" % (drive.upper(), rest))
+        # WSL 形態(framework-updates/79 code-review F2)。
+        # 第二級的 `_canon` 認得 `/mnt/x/…`,第一級的展開就也要有 ——
+        # 兩側認不同組形態的話,本票在收斂側教會的寫法,**無豁免的那一級**
+        # 反而不認得。兩側的一致由
+        # `TestVariantsAndCanonCoverTheSameForms` 釘住(耦合測試,TSI-035 機制解)。
+        out.add("/mnt/%s/%s" % (drive.lower(), rest))
+        out.add("/mnt/%s/%s" % (drive.upper(), rest))
     return [v.lower() for v in out if v]
 
 
@@ -285,7 +301,17 @@ def level2_hit(text, project_dir):
       比零涵蓋更危險(R7 同一句)。撞到時的出口與其他誤擋相同:人自己開終端機。
     - 包含性判定兩側都過 `_canon()`;cygdrive 與 UNC 是擷取不到(漏),
       不在本判定的視野裡,登記於票 79。
+    - **已知殘留二(code-review F4,方向安全)**:PowerShell 的反斜線是
+      路徑字元不是跳脫,散文結尾是 `…\\"` 時 lexer 會誤判未閉合 → 退回
+      全文比對 → 維持誤擋。分不同 shell 的語意要知道 tool_name,本層拿不到。
+    - **已知殘留三(code-review F6/F7,方向安全)**:動詞與路徑的配對仍
+      跨引號邊界 —— 未引號的良性動詞(`rm old.txt`)可與引號散文裡的
+      外部路徑配對成擋,且訊息報的是散文那個路徑。收窄路徑面會違反
+      裁決條件 b(引號路徑照算),留待有實例再裁。
     """
+    if not DESTRUCTIVE.search(text):
+        return None                  # 常態路徑零成本(code-review F5):
+                                     # 沒有動詞就不必掃引號
     spans = _quote_spans(text)
     m = None
     for cand in DESTRUCTIVE.finditer(text):

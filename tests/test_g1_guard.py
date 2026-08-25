@@ -489,3 +489,49 @@ class TestQuotedProseDoesNotPairAVerb:
         assert g1.level2_hit(
             'git commit -m "他說 \\"rm -rf /home/x\\" 被擋"',
             self.PROJ) is None
+
+    @pytest.mark.parametrize("cmd", [
+        'echo "$(rm -rf /home/x)"',
+        'echo "`rm -rf /home/x`"',
+        'git commit -m "log: $(rm -rf /home/x)"',
+    ])
+    def test_command_substitution_inside_quotes_is_not_prose(self, cmd):
+        """code-review F1(fail-open 回歸):雙引號裡的 `$(…)` 與反引號**會執行**。
+
+        引號法第一版把整個雙引號區間當散文 —— 而 bash 與 PowerShell 的
+        雙引號都做命令替換,`"$(rm -rf /home/x)"` 是真操作不是描述。
+        修法:含 `$(` 或反引號的雙引號區間**不算散文**(往擋倒;
+        代價是「散文裡寫 $( 」維持誤擋,方向與裁決條件 a 相同)。
+        修前 baseline(全文搜尋)本來就擋這三條 —— 這是回歸,不是新願望。
+        """
+        assert g1.level2_hit(cmd, self.PROJ) is not None, cmd
+
+    def test_single_quoted_substitution_stays_prose(self):
+        """單引號裡 `$(…)` **不執行**(bash 與 PS 皆然)—— 維持散文判定。"""
+        assert g1.level2_hit("git commit -m 'log: $(rm -rf /home/x) 被擋'",
+                             self.PROJ) is None
+
+
+class TestVariantsAndCanonCoverTheSameForms:
+    """code-review F2:展開側(`variants`,第一級)與收斂側(`_canon`,第二級)
+    必須認得同一組磁碟形態 —— 否則本票在第二級教會的寫法,第一級不認得。
+
+    實證洞:保護條目 `D:\\datastore`,指令 `touch /mnt/d/datastore/x` ——
+    `variants()` 沒有 WSL 形態,level1 回 None,而它是**無豁免**的那一級。
+
+    耦合測試是 TSI-035 的機制解:兩側各自維護清單的話,下一個形態
+    加進 `_DRIVE_FORM` 時不會有東西提醒 `variants()` —— 這條測試就是那個東西。
+    """
+
+    def test_the_wsl_form_hits_level_one(self):
+        assert g1.level1_hit("touch /mnt/d/datastore/x",
+                             [r"D:\datastore"]) is not None
+
+    def test_every_variant_canonicalizes_back_to_the_entry(self):
+        """展開出去的每一個形態,收斂回來必須是同一個正典形。"""
+        for v in g1.variants(r"D:\datastore"):
+            assert g1._canon(v) == "d:/datastore", v
+
+    def test_the_msys_form_still_hits_level_one(self):
+        assert g1.level1_hit("touch /d/datastore/x",
+                             [r"D:\datastore"]) is not None
