@@ -589,3 +589,39 @@ class TestPowershellBacktickEscapeIsNotSubstitution:
     def test_a_backtick_pair_is_still_substitution(self):
         assert g1.level2_hit('echo "`rm -rf /home/x`"',
                              self.PROJ) is not None
+
+
+class TestCoverageDeclarationIsThreeStateNotTwoState:
+    """framework-updates/79 對帳(量化 live probe,2026-08-25):守備範圍宣告
+    改寫,不動行為 —— 這一支測的是**文字本身**,不是 `level2_hit` 的判定。
+
+    改寫原因:「不宣稱窮盡」裁決不解除、改寫為三態(已實測涵蓋 /
+    已實測未涵蓋,分方向 / 未取樣),理由是量化拿與部署版同 sha256 的
+    guard 直呼 `level2_hit` 做了十案實測(A–J),把舊宣告裡兩格
+    寫錯的方向改正:PowerShell 磁碟形態(`Remove-Item D:\\x -Recurse`)與
+    `--%` 停止解析符原本誤列未涵蓋,實測都擋,應在「已實測涵蓋」;
+    cygdrive 與 UNC 是真漏擋(不出聲、真操作穿過),與 heredoc 等三條
+    誤擋殘留方向相反,並列同一張表會誤判嚴重度,所以分兩欄。
+
+    宣稱由測試撐著,不由文字撐著(本票第二次覆蓋落地時追認的判準句)——
+    這支測試把「文字確實改了」變成可重跑的紅綠燈,不是只憑 diff 目視。
+    """
+
+    DOC = g1.level2_hit.__doc__
+
+    def test_the_declaration_names_three_states_not_exhaustiveness(self):
+        assert "已實測涵蓋" in self.DOC
+        assert "已實測未涵蓋" in self.DOC
+        assert "未取樣" in self.DOC
+
+    def test_covered_and_uncovered_are_split_into_two_directions(self):
+        assert "誤擋方向" in self.DOC
+        assert "漏擋方向" in self.DOC
+
+    def test_ps_disk_form_and_stop_parsing_are_corrected_to_covered(self):
+        """量化 8/25 對帳把這兩格誤列未涵蓋;live probe H/I 兩案實測都擋。"""
+        assert "PowerShell 磁碟形態" in self.DOC
+        assert "PS 停止解析符" in self.DOC
+
+    def test_cygdrive_and_unc_point_at_ticket_80(self):
+        assert "framework-updates/80" in self.DOC
