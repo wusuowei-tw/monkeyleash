@@ -64,6 +64,24 @@ A2(同路徑 Windows 形態)exit=0 對照;D1/D2 真外部仍擋。
   兩方向的持久防護改由 `tests/test_g1_guard.py`(copy 桶,隨每個 repo 跑)承擔,
   verify 側案例登記為候選(先開 `tests/test_g1_verify.py` 紅燈再動)。
 
+## 覆蓋與散布(2026-08-25 落地)
+
+- **cp 覆蓋(Jeff)**:備份 `.working`、`cp` 覆蓋、`git status --short` 零輸出。
+  覆蓋前核對 `deployed == HEAD~1 canon: True`(行尾正規化後逐位元)。
+- **live 探針(真觸發,非測試)**:
+  - 正向:`git rm --cached /home/g1-live-probe-79/does-not-exist` →
+    被**部署版**擋下,訊息來自 `~/.claude/hooks/g1_guard.py` 那份(G1/專案外破壞性動作;
+    本行第一版寫了家目錄字面被 leak_scan 擋下,改描述式)。
+    第一發用裸 `rm` 被 repo 前哨 R7 先擋 —— 那是 gate.py 的訊息,不算 G1 探針,故換 `git rm`(R7 放行前綴)。
+  - 負向:`git commit -m "上次 rm -rf /home/x 被擋"`(缺陷②原始形狀)→ 穿過 G1 抵達 git,
+    `nothing to commit`,無副作用。修前這條 exit=2。
+- **sync 下發**(F-118 半套:落地前後各記 HEAD 與 status):
+  - 量化(`0afc141`,前置髒格僅 `data_collector`):落 2 檔(`g1_guard.py`、`tests/test_g1_guard.py`)+ provenance,hash 重驗過。
+  - 影音(`091ae27`,前置樹乾淨):落 **6 檔** —— 本票 2 檔外,另 4 檔(`gate.py`、`friction-log.md`、`test_bash_write.py`、`test_gate.py`)是**前幾輪的 copy 桶收斂**,sync 語意如此,如實列出供影音視窗對帳。
+  - 兩邊 ask 桶(`portable-manifest`;量化另有 `adr/0012`)**未動**,照設計要人決定。
+  - 下游樹上是未 commit 的變更 —— **由各自視窗自行 commit**,本輪不代提交(F-118)。
+- **未完**:演練筆電那份 `~/.claude/hooks/g1_guard.py` 另走 ADR 0009 第 3–4 步(machine-init)。
+
 ## 對帳待辦(裁 ⑤)
 
 - [ ] 量化該次原始擋下訊息到手後對帳;對上之前**不宣稱兩缺陷已窮盡**
