@@ -895,3 +895,80 @@ class TestEStatusShowsRulesThatHaveNoClassificationsYet:
         assert per["R2"]["total"] == 76
         assert per["R2"]["classified"] == 0
         assert per["R2"]["unclassified"] == 76
+
+
+class TestFTheThresholdsAnnounceThatTheyAreNotAGate:
+    """票 67 / `F-126` —— 三條門檻是**報表**,不是閘門,而輸出要自己說出來。
+
+    ## 事實(2026-08-26 逐點追蹤)
+
+    `MIN_CLASSIFIED` / `MAX_FALSE_POSITIVE_RATE` / `MIN_DECIDABLE_RATE`
+    算出 `d["promotable"]`,而**那個值全庫只有一個讀取點**:
+    `print_status` 拿它選「可轉正」或「留影子」兩個字串。
+    `main()` 只有 `ShadowLogError` 回 1;`gate.py` 沒有 import 本模組。
+
+    更深一層:`shadow_active()` 是 **per-repo 的布林值**,三個呼叫點
+    (`gate.py:2145` / `:2180` / `:2538`)全是裸的 `if shadow_active():`,
+    **沒有規則參數**。所以 ADR 0012 的「晉升 per-rule,不全局」未實作,
+    而**「晉升」這個動作本身也不存在** —— 實際會發生的只有到期。
+
+    ## 為什麼要一條測試而不是只改註解
+
+    > **報表與閘門在文件裡長得一模一樣**,因為兩者都用「條件…才可…」的句式。
+
+    「可轉正」三個字讀起來就是一道門的判決。裁決(2026-08-26)是
+    **保留為報表、不補實作成閘門**,而那個決定只有在**輸出自己說得出來**時
+    才擋得住下一個人重新誤讀 —— 註解不是機制,而這一層的「機制」
+    就是輸出字串本身。
+    """
+
+    def test_the_status_output_says_it_is_a_report_not_a_gate(
+            self, tmp_path, capsys):
+        recs = [_rec("R7", "刻意 refuse") for _ in range(10)]
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        sr.print_status(str(p))
+        out = capsys.readouterr().out
+        assert "報表" in out and "非閘門" in out, \
+            "輸出沒有說出自己是報表:%r" % out
+
+    def test_the_verdict_word_does_not_stand_alone(self, tmp_path, capsys):
+        """**「可轉正」不得單獨出現。**
+
+        它是本檔最容易被誤讀成判決的三個字。要嘛不用它,
+        要嘛旁邊就有一句話說明沒有任何東西會因為它而改變行為。
+        """
+        recs = [_rec("R7", "刻意 refuse") for _ in range(10)]
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        sr.print_status(str(p))
+        out = capsys.readouterr().out
+        if "可轉正" in out:
+            assert "報表" in out or "不改變" in out or "非閘門" in out, \
+                "印了「可轉正」卻沒有任何一句話說它不是閘門"
+
+    def test_the_docstring_records_the_single_read_site(self):
+        """**docstring 要說出那個追蹤結果**,不只說「這是報表」。
+
+        一句沒有證據的宣稱,下一個人改動時不會相信它;
+        而「`promotable` 只有一個讀取點」是**可複驗的**,他自己就能查一次。
+        """
+        doc = (sr.promotion_status.__doc__ or "") + (sr.print_status.__doc__ or "")
+        assert "報表" in doc, "docstring 沒有標明報表性質"
+        assert "promotable" in doc, "docstring 沒有指出那個值本身"
+
+    def test_a_promotable_rule_still_computes_the_same_booleans(
+            self, tmp_path):
+        """**負控:標注不得改變計算。**
+
+        本刀只加字,不動判定 —— 三條門檻算出來的 `promotable`
+        必須與標注前逐位元組相同。沒有這一條的話,「順手改一下」
+        會在一次措辭調整裡靜默改掉門檻語意。
+        """
+        recs = [_rec("R7", "刻意 refuse") for _ in range(10)]
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        per = sr.promotion_status(str(p))
+        d = per["R7"]
+        assert d["classified"] == 10
+        assert d["decidable"] == 10
+        assert d["fp_rate"] == 0.0
+        assert d["decidable_rate"] == 1.0
+        assert d["promotable"] is True
