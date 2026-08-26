@@ -420,6 +420,23 @@ def promotion_status(path):
             d["undecidable"] += 1
         elif c == TRUE_POSITIVE_CLASS:
             d["true_positives"] += 1
+    # **每一條出現過的規則都要有鍵,即使它一筆都還沒分類。**(票 67 同族,第三層)
+    #
+    # 修前:`per` 只在上面那個迴圈遇到**有 classification 的紀錄**時才建鍵,
+    # 而 `print_status` 走 `for rule in sorted(per)` —— 於是一條規則只要
+    # 一筆都沒分類過,它在表上**整行不存在**,與「這條規則從來沒有記錄過」
+    # 逐字相同:都是不存在。
+    #
+    # 量化 2026-08-25 實測就是這個形狀:日誌 476 筆、表上只有 R7 一行(總 400),
+    # 差的 76 筆不是被歸進 R7,是整行沒印。**而這份輸出正是 9/15 晉升決策的依據。**
+    #
+    # 種在這裡(不是在列印層補旁路)是刻意的:回傳值缺那條規則的話,
+    # **任何別的消費者**(CI 檢查、批次卡工具)照樣看不到它。
+    # 資料一直都在 —— `totals` 上面已經數過每一筆了,丟掉它的是建鍵時機。
+    for rule in totals:
+        per.setdefault(rule, {"classified": 0, "false_positives": 0,
+                              "true_positives": 0, "deliberate": 0,
+                              "undecidable": 0})
     for rule, d in per.items():
         d["total"] = totals.get(rule, d["classified"])
         d["unclassified"] = d["total"] - d["classified"]
@@ -467,6 +484,14 @@ def print_status(path):
     print("  (可判定率 = 那個分母 ÷ 總筆數 —— **未判定的餘量看得見**,票 67)")
     for rule in sorted(per):
         d = per[rule]
+        if d["classified"] == 0:
+            # **零分類單獨印一行。** 走完整格式的話會印出
+            # 「假陽率 0.0% 可判定率 0.0% -> 留影子」—— 三個數字全是
+            # **除以零的預設值**,而它們看起來與「量過了,結果是 0」一模一樣。
+            # 那正是本修法要消掉的東西,不能在同一支函式裡又製造一次。
+            print("  %-4s 總 %3d  **零分類** -> 無資料(這 %d 筆還沒有人判過)"
+                  % (rule, d["total"], d["total"]))
+            continue
         print("  %-4s 總 %3d  已分類 %3d  未判定 %3d"
               "  真陽 %3d  刻意 refuse %3d  誤報 %3d  無法判定 %3d"
               % (rule, d["total"], d["classified"], d["unclassified"],

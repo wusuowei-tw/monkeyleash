@@ -795,3 +795,103 @@ class TestETheErrorTypeIsItsOwn:
 
     def test_it_is_not_just_an_alias_for_exception(self):
         assert sr.ShadowLogError is not Exception
+
+
+class TestEStatusShowsRulesThatHaveNoClassificationsYet:
+    """**同一個病在第三層** —— 這一次是 per-rule。
+
+    上面 `TestDStatusSeparatesEmptyFromUnclassified` 修的是**整份日誌**那一層:
+    「讀到了但沒分類」不得與「什麼都沒讀到」講同一句話。
+    **而 per-rule 那一層還壓著同一件事。**
+
+    `promotion_status` 先算全量 `totals`(每條規則各幾筆),但 `per` 只在
+    **遇到有 `classification` 的紀錄時**才 `setdefault` 建鍵;
+    `print_status` 走的是 `for rule in sorted(per)`。
+
+    > 於是**一條規則只要一筆都沒分類過,它在表上就不存在** ——
+    > 與「這條規則從來沒有記錄過」**逐字相同:都是不存在**。
+
+    量化 2026-08-25 的實測正是這個形狀:日誌 476 筆,表上只有 R7 一行
+    (總 400)。**差的 76 筆不是被歸進 R7,是整行沒有印。**
+
+    ### 為什麼這是必修而不是美化
+
+    這份輸出**就是 9/15 晉升決策的依據**。一條有 76 筆待判的規則
+    看起來像不存在,決策者不會知道有東西要判 ——
+    **留白被讀成蓋章**,與那 72 筆「無法判定」是同一句話。
+
+    而它是同一支工具、同一族的**第二次**:票 63 才剛修過
+    「讀取失敗偽裝成空日誌」。**修好一層之後,要問的是下一層有沒有同一個洞** ——
+    這一次沒有人回頭問,是靠對帳時「476 與 400 對不上」才撞出來的,
+    而**兩個數字剛好都被印出來**是運氣,不是設計。
+    """
+
+    def test_a_rule_with_no_classifications_still_appears(self, tmp_path, capsys):
+        """正向:R2 有 76 筆全未分類,它必須出現在輸出裡。"""
+        recs = ([_rec("R7", "刻意 refuse") for _ in range(10)]
+                + [_rec("R2") for _ in range(76)])
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        sr.print_status(str(p))
+        assert "R2" in capsys.readouterr().out, "零分類的規則整行不見了"
+
+    def test_the_line_carries_the_count_not_just_the_name(self, tmp_path, capsys):
+        """只印規則名不夠 —— **決策者要知道有多少待判**,那是工作量。"""
+        recs = ([_rec("R7", "刻意 refuse") for _ in range(10)]
+                + [_rec("R2") for _ in range(76)])
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        out = capsys.readouterr().out
+        sr.print_status(str(p))
+        out = capsys.readouterr().out
+        assert "76" in out, "沒說出那條規則有幾筆待判"
+
+    def test_zero_classified_differs_from_absent(self, tmp_path, capsys):
+        """**本類的核心負控。**
+
+        「R2 有 76 筆全未分類」與「日誌裡根本沒有 R2」必須是兩段不同的話。
+        沒有這一條的話,一個「把所有零分類規則都印成同一句罐頭」的實作也會全綠。
+        """
+        with_r2 = ([_rec("R7", "刻意 refuse") for _ in range(10)]
+                   + [_rec("R2") for _ in range(76)])
+        p1 = _write(tmp_path / "a.jsonl", with_r2)
+        sr.print_status(str(p1))
+        out_with = capsys.readouterr().out
+
+        p2 = _write(tmp_path / "b.jsonl",
+                    [_rec("R7", "刻意 refuse") for _ in range(10)])
+        sr.print_status(str(p2))
+        out_without = capsys.readouterr().out
+
+        assert out_with != out_without, "有 76 筆待判與根本沒這條規則,輸出一樣"
+        # **差異必須是 R2 本身,不是別的東西。**
+        # 只斷言 `!=` 的話,這一條在修好之前就會綠 —— 兩份日誌的
+        # 「讀到 N 筆」那一行本來就不同(86 vs 10)。
+        # 那是 F-103「因為錯的理由而通過」:負控通過了,而它證明的不是要證明的事。
+        assert "R2" in out_with and "R2" not in out_without
+
+    def test_a_classified_rule_still_prints_its_full_row(self, tmp_path, capsys):
+        """負控:加了零分類那一行,不得把原本的晉升表擠掉(票 63 的同款負控)。"""
+        recs = ([_rec("R7", "刻意 refuse") for _ in range(10)]
+                + [_rec("R2") for _ in range(76)])
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        sr.print_status(str(p))
+        out = capsys.readouterr().out
+        assert "假陽率" in out and "可判定率" in out, "原本的 per-rule 表被擠掉了"
+
+    def test_totals_already_knew_about_the_hidden_rule(self, tmp_path):
+        """**釘住根因,不只釘住症狀。**
+
+        資料一直都在 —— `promotion_status` 的 `totals` 迴圈數過每一筆。
+        丟掉它的是 `per` 只在有分類時建鍵。所以這一條斷言:
+        **修法必須讓那條規則進得了回傳值**,而不是在列印層另外補一個旁路。
+
+        差別在哪:旁路版的 `promotion_status` 回傳值仍然缺那條規則,
+        於是**任何別的消費者**(未來的 CI 檢查、批次卡工具)照樣看不到它。
+        """
+        recs = ([_rec("R7", "刻意 refuse") for _ in range(10)]
+                + [_rec("R2") for _ in range(76)])
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        per = sr.promotion_status(str(p))
+        assert "R2" in per, "promotion_status 的回傳值裡沒有零分類的規則"
+        assert per["R2"]["total"] == 76
+        assert per["R2"]["classified"] == 0
+        assert per["R2"]["unclassified"] == 76

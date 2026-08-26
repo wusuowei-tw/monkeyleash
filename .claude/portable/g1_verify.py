@@ -85,6 +85,27 @@ LEVEL2_REGRESSION = [
     ("root 帶點",           r'rm -rf /root.bak/x'),
     ("暫存區的鄰居",        r'rm -rf /tmpdata/x'),
     ("暫存區名稱加後綴",    r'rm -rf /tmp.bak/x'),
+    ("cygdrive 形態",       r'rm -rf /cygdrive/d/x'),
+]
+
+# **第三桶:已知缺口。** 語意是「**目前放行**,而它改變時要被告知」——
+# 不是「應該放行」。
+#
+# 為什麼 `PASS_THROUGH` 裝不下它:那一桶的斷言是「擋了就是誤擋」,
+# 把已知漏擋放進去等於把**缺口編碼成規格** —— 哪天有人補好 UNC,
+# 驗收工具會把那個修復報成誤擋。**方向剛好相反。**
+#
+# 為什麼不直接放進 `LEVEL2_REGRESSION`:那會讓它現在就紅,
+# 而本工具是 exit code 驅動的,一紅全紅 —— 等於把整個驗收關掉。
+#
+# 這是 `xfail(strict=True)` 的形狀,而那個形狀在本庫已經證明可用:
+# `tests/test_g1_guard.py` 的票 04 三條(`/srv`、`/data`、`/backup`)就是它。
+# 差別只在本工具沒有 pytest,所以自己實作那個語意:
+# **放行 -> 印「已知缺口」並通過;擋下 -> 記為不合格,逼人回來收票面。**
+#
+# ⚠ 進這一桶的門檻:必須有**票號**。沒有票的缺口不叫已知缺口,叫沒人管的洞。
+KNOWN_GAPS = [
+    ("bash 寫法 UNC", r'rm -rf //server/share/x', "票 80(裁 A 明訂不動)"),
 ]
 
 
@@ -182,6 +203,20 @@ def main(guard):
             print("      實得:%s" % (err.splitlines()[0] if err else "(無訊息 = 放行)"))
             failures.append(label + "(第二級回歸)")
 
+    print("\n=== 已知缺口:目前放行,改變時要出聲 ===")
+    for label, cmd, ticket in KNOWN_GAPS:
+        rc, err = run(guard, bash(cmd))
+        if rc == 0:
+            print("  %-22s 放行(已知缺口,%s)" % (label, ticket))
+        else:
+            # **擋下不是好消息,是「票面過期了」的訊號。**
+            # 有人補好了缺口而沒回來收票 —— 那正是本桶要抓的事件。
+            print("  %-22s **擋下了** —— 缺口可能已被補上,請回頭收 %s"
+                  % (label, ticket))
+            print("      指令:%s" % cmd)
+            print("      實得:%s" % (err.splitlines()[0] if err else "(無訊息)"))
+            failures.append(label + "(已知缺口變成擋下,票面未更新)")
+
     print("\n=== 應放行 ===")
     for label, cmd in PASS_THROUGH:
         rc, err = run(guard, bash(cmd))
@@ -208,6 +243,12 @@ def main(guard):
     print("全部通過:%d 條保護路徑各命中自己那一條、子目錄涵蓋、"
           "3 個相鄰名稱不誤中、%d 條第二級回歸擋下、fail-closed 成立。"
           % (len(entries), len(LEVEL2_REGRESSION)))
+    # **通過不等於沒有缺口。** 綠燈要說得出它沒驗到什麼,
+    # 否則「全部通過」會被讀成「全面涵蓋」——而那是票 79 那輪的原題。
+    if KNOWN_GAPS:
+        print("已知缺口 %d 項(**不在上述涵蓋內**,各有票):%s"
+              % (len(KNOWN_GAPS),
+                 "、".join("%s → %s" % (lb, tk) for lb, _c, tk in KNOWN_GAPS)))
     return 0
 
 
