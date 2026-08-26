@@ -87,6 +87,9 @@ C2、C3 各自跑 `python .claude/hooks/gate.py --pre-commit` 與 `pytest tests/
 
 > 以下是草稿,中文版照此翻回。數字一律不寫死。
 
+> ⚠ **這是 2026-08-23 的 v1 草稿,已被續裁與後續 commit 取代;
+> 現行內容見 `README.md`,不要拿這份比對現況。**(標注不同步,不更新內容 —— F-036)
+
 ```
 # agent-gates
 
