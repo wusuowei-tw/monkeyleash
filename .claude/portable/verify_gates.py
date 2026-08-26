@@ -20,6 +20,7 @@ S5「安裝流程不另測」的涵蓋就是假的 —— 那是 F-018 的形狀
 
 import importlib.util
 import io
+import re
 import json
 import os
 import shutil
@@ -102,6 +103,30 @@ def scenario_r6(target):
         f.write("not/in/the/tree.py\n")
 
 
+def scenario_r9(target):
+    """在 friction log 末尾追加一個**已經存在的號**(票 83)。
+
+    取「已存在的號」而不是寫死 `F-001`:每個安裝的 repo 用自己的前綴
+    (`TSI-`、`TSA-`…),寫死上游的前綴會讓這個情境在下游**永遠觸發不了**,
+    而它仍然會印「擋下 OK」—— 那是最糟的一種綠(F-023 家族)。
+    取不到號就明說取不到,不假裝驗過。
+    """
+    log = os.path.join(target, "docs", "agents", "friction-log.md")
+    existing = None
+    with io.open(log, encoding="utf-8") as f:
+        for line in f:
+            m = re.match(r"^##\s+([A-Za-z]+-\d+)(?:\s|$|[^\w-])", line)
+            if m:
+                existing = m.group(1)
+                break
+    if not existing:
+        raise SystemExit(
+            "\n[R9 情境] %s 裡找不到任何發號標題 —— 造不出撞號情境。\n"
+            "這不是通過,是**驗不到**:沒有號可以複製,就沒有東西可以撞。" % log)
+    with io.open(log, "a", encoding="utf-8", newline="\n") as f:
+        f.write("\n## %s 情境造出來的撞號(verify_gates)\n" % existing)
+
+
 def scenario_r8(target):
     """生產程式碼 import research/ —— R8 擋(在 implement 站,避免被 R2 範圍先擋)。
 
@@ -130,6 +155,7 @@ SCENARIOS = {
     "R6": scenario_r6,
     "R7": scenario_r7,
     "R8": scenario_r8,
+    "R9": scenario_r9,
 }
 
 

@@ -1270,6 +1270,76 @@ def logged_exemption_backed(rel_path, base):
     return False
 
 
+FRICTION_LOG = os.path.join(ROOT, "docs", "agents", "friction-log.md")
+
+# 發號用的標題行:`## F-123 …`、`## TSI-038 …`。
+# **前綴必須是字母、號碼必須緊接在 `## ` 之後** —— 這兩個條件一起,
+# 把「發一個號」與「提到一個號」分開:
+#   `## F-118 甲`                 -> 發號,算
+#   `## 併記於 F-118(…):乙`      -> 提到,不算(號碼不在開頭)
+#   `見 F-005 與 F-005 的討論`     -> 提到,不算(不是 `## ` 開頭)
+# 本檔自己就有一段 `## 併記於 F-118(…)`,它刻意寫成這樣正是為了不被本條誤判。
+_FRICTION_HEADING = re.compile(r"^##\s+([A-Za-z]+-\d+)(?:\s|$|[^\w-])")
+
+
+def check_friction_numbers(path=None):
+    """權威層規則(票 83):同一份 friction log 裡不得有兩個相同的號。
+
+    **它已經撞過一次**(2026-08-26):兩個視窗各發了一個 `F-122`,
+    兩次都經過 pre-commit、兩次都綠。抓到它靠的是有人為了發下一個號去查最大號,
+    順手看到重複 —— **下一次沒有人去查最大號時,它不會被發現。**
+
+    ## 為什麼這一條適合進權威層(判準寫死,免得被拿去論證別的)
+
+    **零誤報**(兩個一樣的號就是撞號,沒有灰色地帶)、
+    **零判斷**(不必理解那兩則寫了什麼)、**極便宜**(一次掃描 + 一個 dict)。
+
+    對照:stale status 偵測器**不該**用同一個理由進權威層 —— 它要判
+    「票面說的與實際做的一不一致」,而「實際做了什麼」本身要**推論**,
+    **推論會錯,而錯在權威層等於擋住做對事的人**,那種規則最後會被整條關掉。
+
+    > **進權威層的門檻不是「重要」,是「零誤報 + 零判斷 + 便宜」。**
+
+    ## 範圍:只查重複
+
+    **不查連號** —— 缺號合法(後到者改號會留下空洞,見發號規則第 4 節)。
+    **不查格式**、**不查跨 repo**(下游用自己的前綴,`TSI-001` 與 `F-001`
+    是不同的字串,天然不衝突)。**一條檢查一件事** ——
+    混進一個會誤報的子判定,整條的可信度就跟著它走。
+
+    **fail-closed**:讀不到一律當違規,不當作乾淨。
+    """
+    target = path or FRICTION_LOG
+    try:
+        with io.open(target, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except Exception as e:
+        return ["[R9] 讀不到 friction log(%s):%s\n"
+                "     讀不到一律當違規,不當作乾淨 —— 一份掃不到的清單給不出綠燈。"
+                % (rel(target), e)]
+    seen = {}
+    dupes = {}
+    for lineno, line in enumerate(lines, 1):
+        m = _FRICTION_HEADING.match(line)
+        if not m:
+            continue
+        num = m.group(1)
+        if num in seen:
+            dupes.setdefault(num, [seen[num]]).append(lineno)
+        else:
+            seen[num] = lineno
+    out = []
+    for num in sorted(dupes):
+        at = "、".join("第 %d 行" % n for n in dupes[num])
+        out.append(
+            "[R9] %s 裡的 %s 發了兩次以上(%s)。\n"
+            "     處置照發號規則第 4 節:**後到者改號**(以 commit 順序為準),\n"
+            "     原號留痕、引用一併改指。原號不回收。\n"
+            "     缺號是合法的,所以改號留下的空洞不必補。"
+            % (rel(target), num, at))
+    return out
+
+
 def check_legacy_list():
     """權威層規則:凍結清單裡每一筆都必須在 LEGACY_GO_LIVE 的樹裡。
 
@@ -2534,6 +2604,7 @@ def mode_pre_commit():
     violations += check_third_axis_mount()
     violations += check_to_spec_override()
     violations += check_legacy_list()
+    violations += check_friction_numbers()
     if violations:
         if shadow_active():
             # 影子:不擋,逐筆寫進 shadow-log(每筆一個規則,per-rule 晉升要逐條算)。
