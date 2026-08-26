@@ -540,5 +540,58 @@ test_a_mixed_target_field_is_not_silently_bucketed
 3. **這張表是我自己標的標籤在驗我自己的判準。** 標籤本身沒有第三方確認 ——
    #2 與 #3 的「真實性質」是我從指令原文讀的,而**原文只存在於對話紀錄**
    (上游 enforce 不記帳,票 49 提案要修的正是這個)。
+
+---
+
+## 核准與**實作前置**(2026-08-26 裁決一)
+
+**機械層第二版:核准。實作前先量一件事。**
+
+> **拿那 130 筆跑一次,看 A / B / C 的實際分佈。**
+> 若 **C(人判)佔到九成,機械層省不到人力,那就不該實作** —— 直接人判更省。
+> **先量再決定要不要蓋,不要蓋完才發現它沒省到。**
+
+這一條把上面三個但書變成了一個**動作**,而不只是一個免責聲明:
+但書說「50% 不可外推」,裁決說「那就去量真的那個數」。
+
+> **一個標了但書的數字,如果沒有跟著一個去量真值的動作,
+> 但書就只是讓提出者免責,不會讓決策變好。**
+
+### 量測指令(唯讀,在量化 repo 開終端機 —— `.dev/` G1 擋我)
+
+```
+python -c "import json,re,collections;
+rs=[json.loads(l) for l in open('.dev/shadow-log.jsonl',encoding='utf-8') if l.strip()];
+d=[r for r in rs if r.get('classification')=='刻意 refuse'];
+MARK='無法可靠切分';
+def bucket(m):
+    inside=re.search(r'位置\((.*?)\)。',m or '');
+    f=inside.group(1) if inside else '';
+    has_mark=MARK in f;
+    others=[t for t in f.split('、') if t and MARK not in t];
+    if not has_mark and others: return 'A(->①候選)'
+    if has_mark and not others: return 'B(->②候選)'
+    return 'C(人判)';
+print('刻意 refuse 共',len(d));
+print(collections.Counter(bucket(r.get('message','')) for r in d))"
+```
+
+**這段是一次性量測腳本,不是判準的實作** —— 判準的實作要照上面那三條測試
+紅燈先行,而**現在還不知道要不要實作**。
+
+**⚠ 這段腳本本身也還沒在語料上跑過**(它讀的是日誌欄位,而我讀不到日誌)。
+照新慣例,它的輸出**第一次拿到時要先對四筆語料核一次** ——
+若它對那四筆的分桶與上表不符,先修腳本再看分佈。
+
+### 決策門檻(先寫下來,免得看到數字才定)
+
+| C 的佔比 | 建議 |
+|---|---|
+| **≥ 90%** | **不實作**。人判 130 筆,機械層的維護成本大於它省的 |
+| 40% – 90% | **實作**,但同刀要量「機械層省下多少筆」並記進票面 |
+| **≤ 40%** | 實作,且值得考慮把它接進 `shadow_review` 當一個 `--suggest` 模式 |
+
+**門檻寫在看到數字之前**,這一格是刻意的 ——
+**先看數字再定門檻的話,門檻會長成數字的形狀。**
 - 修改晉升門檻或分類定義(ADR 0012)
 - 互動模式 `review()` 的行為(只加不改)

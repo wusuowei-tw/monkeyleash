@@ -2435,3 +2435,104 @@ class TestTheAuthorityLayerDoesNotTreatAGitlinkAsSource:
             self._assert_parity(repo, sc)
         assert "gitlink" in str(caught.value) or "staged 清單" in str(caught.value), \
             "紅是紅了,但不是被一致性斷言擋下的:%s" % caught.value
+
+
+class TestFrictionNumbersAreUnique:
+    """票 83 —— friction 號的唯一性,權威層檢查。
+
+    **它已經撞過一次**(2026-08-26):兩個視窗各發了一個 `F-122`,
+    `721cb8f` 與 `0b17cae` **都經過 pre-commit,兩次都綠**。
+    抓到它靠的是有人為了發下一個號去查最大號,順手看到 `uniq -d` 回了兩個 122 ——
+    **下一次沒有人去查最大號時,它不會被發現。**
+
+    ## 為什麼這一條適合進權威層(判準寫死,免得被拿去論證別的)
+
+    **零誤報**(兩個一樣的號就是撞號,沒有灰色地帶)、
+    **零判斷**(不必理解那兩則寫了什麼)、**極便宜**(一次掃描 + 一個 set)。
+
+    對照:票 53 登記的 stale status 偵測器**不該**用同一個理由進權威層 ——
+    它要判「票面說的與實際做的一不一致」,而「實際做了什麼」本身要推論,
+    **推論會錯,而錯在權威層等於擋住做對事的人**,那種規則最後會被整條關掉。
+
+    > **進權威層的門檻不是「重要」,是「零誤報 + 零判斷 + 便宜」。**
+
+    ## 範圍:只查重複
+
+    不查連號(改號會留下空洞,見發號規則第 4 節)、不查格式、不查跨 repo。
+    **一條檢查一件事** —— 混進一個會誤報的子判定,整條的可信度就跟著它走。
+    """
+
+    def _log(self, tmp_path, body):
+        p = tmp_path / "friction-log.md"
+        p.write_text(body, encoding="utf-8")
+        return str(p)
+
+    def test_a_duplicate_number_is_a_violation(self, tmp_path, monkeypatch):
+        """正向:同一個號出現兩次 → 違規。"""
+        path = self._log(tmp_path,
+                         "## F-001 甲\n\n內文\n\n## F-002 乙\n\n## F-001 丙\n")
+        v = gate.check_friction_numbers(path)
+        assert v, "撞號沒有被抓到"
+
+    def test_the_message_names_which_number(self, tmp_path):
+        """**訊息要說出是哪一個號** —— 一份 log 幾百則,
+        「有撞號」而不說哪一個等於要人自己再掃一次(票 13 的判準)。"""
+        path = self._log(tmp_path, "## F-007 甲\n\n## F-007 乙\n")
+        v = gate.check_friction_numbers(path)
+        assert v and "F-007" in v[0], v
+
+    def test_a_clean_log_passes(self, tmp_path):
+        """負控一:沒撞號就不得報。"""
+        path = self._log(tmp_path, "## F-001 甲\n\n## F-002 乙\n\n## F-003 丙\n")
+        assert gate.check_friction_numbers(path) == []
+
+    def test_a_gap_in_numbering_is_not_a_violation(self, tmp_path):
+        """**負控二:缺號合法。** 改號會留下空洞(發號規則第 4 節:
+        原號不回收),把連號也查進來的話本條就不再是零誤報的。"""
+        path = self._log(tmp_path, "## F-001 甲\n\n## F-003 丙\n\n## F-009 己\n")
+        assert gate.check_friction_numbers(path) == []
+
+    def test_a_companion_note_heading_is_not_a_collision(self, tmp_path):
+        """**負控三:併記段不算撞號。**
+
+        本庫實際有一段標題是 `## 併記於 F-118(…)` —— 它**刻意不**寫成
+        `## F-118 …` 正是為了不被本檢查判成撞號。
+        判定對象是**發號用的標題行**(`^## F-<數字>`),不是任何提到號碼的行。
+        """
+        path = self._log(tmp_path,
+                         "## F-118 甲\n\n## 併記於 F-118(2026-08-26):乙\n")
+        assert gate.check_friction_numbers(path) == []
+
+    def test_an_inline_mention_is_not_a_collision(self, tmp_path):
+        """負控四:內文引用重複是正常的,不得誤判。"""
+        path = self._log(tmp_path,
+                         "## F-005 甲\n\n見 F-005 與 F-005 的討論。\n\n## F-006 乙\n")
+        assert gate.check_friction_numbers(path) == []
+
+    def test_a_downstream_prefix_is_handled_by_its_own_namespace(self, tmp_path):
+        """下游用自己的前綴,`TSI-001` 與 `F-001` **不衝突**。"""
+        path = self._log(tmp_path, "## F-001 甲\n\n## TSI-001 乙\n")
+        assert gate.check_friction_numbers(path) == []
+
+    def test_a_duplicate_downstream_number_is_still_caught(self, tmp_path):
+        """而同一個前綴內撞號照樣要抓 —— 否則判定就只服務上游。"""
+        path = self._log(tmp_path, "## TSI-001 甲\n\n## TSI-001 乙\n")
+        v = gate.check_friction_numbers(path)
+        assert v and "TSI-001" in v[0], v
+
+    def test_an_unreadable_log_is_a_violation_not_a_pass(self, tmp_path):
+        """**fail-closed**:讀不到不得靜默通過(家規)。"""
+        v = gate.check_friction_numbers(str(tmp_path / "does-not-exist.md"))
+        assert v, "讀不到檔案竟然回報乾淨(fail-open)"
+
+    def test_the_rule_is_actually_invoked_at_the_authoritative_layer(
+            self, monkeypatch):
+        """**最強的那一條**(照 R6 的先例):驗規則真的被 pre-commit 呼叫,
+        不只是函式回對值。沒有這條的話,一個寫好卻沒接上的檢查會全綠。"""
+        monkeypatch.setattr(gate, "check_friction_numbers",
+                            lambda *a, **k: ["假違規"])
+        assert gate.mode_pre_commit() == 1, "pre-commit 沒有呼叫 check_friction_numbers"
+
+    def test_the_shipped_log_is_clean(self):
+        """對**本庫現行的** friction-log 跑一次 —— 正對照,不是只測 tmp_path。"""
+        assert gate.check_friction_numbers() == []
