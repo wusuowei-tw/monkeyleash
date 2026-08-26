@@ -267,6 +267,11 @@ docs/tickets/                   skip
 docs/going-public-known-items.md generate
 # 委外審計的委託書是這個 repo 的工作紀錄,同 docs/tickets/ 的理由。
 docs/audits/                    skip
+# 交接檔記的是**這一組人在這個時點的處境**(誰不在、哪些決定被推遲到回來之後),
+# 那是 per-repo 的狀態,不是框架內容 —— 同 docs/tickets/ 的理由。
+# **明列而不是靠「沒被提到」**:未分類會讓 sync fail-closed(票 15),
+# 而那條規矩對本表自己一樣適用。
+docs/handover/                  skip
 docs/agents/issue-tracker.md    copy
 docs/agents/domain.md           copy
 # 摩擦記錄是這個 repo 走出來的歷史,但那些判準是這套東西**最可攜的資產**,
