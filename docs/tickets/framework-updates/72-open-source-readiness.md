@@ -15,7 +15,7 @@
 |---|---|
 | 全史 blob | 677 blob / 194 則 commit 訊息,個人 pattern 17 條 + 通用 10 條,**不豁免 SELF_PATHS**。命中 58 筆全是掃描器自身(`leak_scan.py` 55 + `leak-patterns.txt` 3),其餘 **0** |
 | 裸字樣反控(不靠偵測器) | 家目錄真值 0、機器名 0;`friction-log.md` 30 個歷史版本殘留 `C:\\Users\\<user>\\OneDrive\<工作區>`,使用者名是通用英文字、工作區已是佔位符 |
-| 身分欄位(枚舉) | 388 筆全是 `jeff273314 <…@users.noreply.github.com>` |
+| 身分欄位(枚舉) | 388 筆全是 `<舊帳號> <…@users.noreply.github.com>` |
 | 下游真名 | `台股資訊收集` 現樹 15 檔 23 行 / 歷史 89 blob;`台股分析師影音` 現樹 5 檔 7 行 / 歷史 58 blob;commit 訊息 5 則 |
 
 ## 四裁(2026-08-23)
@@ -33,7 +33,7 @@
 ## 修復批(寫入輪)
 
 ### ① `LICENSE`
-MIT,版權行 `Copyright (c) 2026 jeff273314`。標準 MIT 全文,不改字。
+MIT,版權行 `Copyright (c) 2026 <舊帳號>`。標準 MIT 全文,不改字。
 
 ### ② `THIRD_PARTY_NOTICES.md`
 - `.agents/skills/` **39 檔 / 13 目錄**來自 `github.com/mattpocock/skills`(MIT,上游有 LICENSE 檔):
@@ -123,10 +123,16 @@ the agent cannot edit.
 
 ## Quickstart
 
-    git clone https://github.com/jeff273314/agent-gates
+    git clone https://github.com/<舊帳號>/agent-gates
     cd agent-gates
     sh bootstrap.sh          # wires .githooks/ via core.hooksPath (once per clone)
     python -m pytest -q      # run the framework's own tests
+
+> **★ 2026-08-27 加註(票 84;原文不改,照 F-036)**:上面那個 clone URL 裡的帳號
+> 已遮蔽,而**那個 repo 本身也已經不存在** —— `agent-gates` 於 2026-08-27 刪除
+> (票 84 硬條件二:force-push **不會**清掉舊物件,舊 commit 仍可用 sha 開啟,
+> 實測 11 / 11 解得開、其中 8 筆 author 仍是舊名)。**現行位置見 README。**
+> 這一行留著是因為它是當時的事實;加這一句是因為讀的人會照著去試。
 
 Install into another repository:
 
@@ -202,7 +208,15 @@ by `.claude/patches/`; see `THIRD_PARTY_NOTICES.md`.
 
 **更名 `monkeyleash` 提前**:C4 排在 C3 之前,README 直接以新名出生。README 加:
 標題 `# monkeyleash`、tagline `No monkeypatch, no fake greens.`、一行 `formerly agent-gates`;
-clone URL 用 `github.com/jeff273314/monkeyleash`(GitHub 端 rename 公開日由 Jeff 在 UI 做,舊 URL 自動轉址)。
+clone URL 用 `github.com/<舊帳號>/monkeyleash`(GitHub 端 rename 公開日由 Jeff 在 UI 做,舊 URL 自動轉址)。
+
+> **★ 2026-08-27 更正(票 84;原文不改,照 F-036)**:上面那句「**舊 URL 自動轉址**」
+> **已於 2026-08-27 經實測推翻**。實際情形是:GitHub 改名後**個人檔案頁不轉址,直接 404**;
+> **只有儲存庫路徑會轉址,而且只到舊名被他人認領為止**。
+> 而本案更早一步失效 —— 該 repo 已被刪除,連儲存庫路徑的轉址也不存在。
+> **當時為什麼會這樣寫**:那是把「GitHub 對 repo 改名的轉址」推廣成「對帳號改名也一樣」,
+> 一個沒有查證就外推的說法。**遮蔽解決曝光,加註解決錯誤 —— 兩件事不合成一件。**
+> 連帶:9/1 **不再有 rename 這一步**(新 repo 直接叫 `monkeyleash`)。
 "What this is" 節尾加掛名一行:skills 建於 Matt Pocock 的開源 skills,閘門本體為本 repo 原創。中文版同義照翻。
 
 **C4 執行判準**:識別字面 6 處全改;`[tool.agent-gates]` 段名的讀者查過 ——
