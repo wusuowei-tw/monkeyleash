@@ -10,6 +10,104 @@
 
 ---
 
+# 零、⚠ 第一個實質發現:**題目本身現在做不到**(2026-08-28)
+
+**CI 側拿不出可比對的收集清單。**
+
+`.github/workflows/tests.yml` 的「跑測試」步驟跑的是 `pytest -q`,**不是
+`--collect-only`** —— 它的輸出給得出**數字**(passed / deselected / xfailed),
+**給不出節點 id 清單**。
+
+> **所以第一節寫的「兩邊 `--collect-only` 的清單取差集」,
+> 在今天的 workflow 下只有左手邊。**
+
+**這一格從語料 README 升上票面**(裁決 2026-08-28)。理由:
+它活在 `.scratch/` 裡的話,`/.scratch/` 是 gitignored ——
+**不進版控、換機器就沒有,而下一個開工的人會先讀票面**。
+一個「題目做不到」的發現放在一個不會被讀到的地方,等於沒發現;
+下一輪會以為語料齊了就開始取差集,**做到一半才看到右手邊是空的**。
+
+## 零之一、處置:**改 `tests.yml` 加一個 `--collect-only` 步驟**
+
+**裁准**(2026-08-28),**排 8/31 動手,不是立刻** ——
+本票時鐘是 9/1 前,而 8/28 剩餘時間歸第 1 級(搬家不可逆線)。
+
+### 兩個條件(核准附加,不是建議)
+
+**(a) job / workflow 名稱不得改動。**
+9/1 要設的 **Require status checks 是照名稱綁的** ——
+名稱一變,那條保護規則會靜默地不再對應任何檢查
+(規則還在、而它守的東西不見了)。
+**改完要實測確認 `tests` 這個名稱仍出現在 CI 結果裡**,不能只看 diff。
+
+**(b) 那一步只收集不執行,不得影響現有 `pytest` 步驟的旗標或結論。**
+新步驟自己紅不紅是另一回事;**它不得讓原本會綠的那一步變紅或變綠**。
+
+### 也要更正第五節
+
+原本寫「不改 `.github/workflows/tests.yml`」—— **那一條在本裁決之後不再成立**,
+見第五節的更正。
+
+---
+
+## 零之二、待驗**假說**(總指揮端推導,本輪只驗了本機那一側)
+
+> **⚠ 這是假說,不是結論。不得拿它取消「零之一」的 `--collect-only` 步驟。**
+
+**推導**:CI 形態下兩邊總收集數看起來相同 ——
+
+| | 算式 | 總數 |
+|---|---|---|
+| 本機(win32) | 1051 passed + 3 skipped + 1 deselected + 3 xfailed | **1058** |
+| CI(ubuntu) | 1054 passed + 0 skipped + 1 deselected + 3 xfailed | **1058** |
+
+而 `1051 + 3 = 1054`,疑似就是**「3 支在 win32 被 skip、在 ubuntu 跑且通過」**。
+若成立,原本的「差 12」是拿**本機無旗標(1070)**比**CI 有旗標(1058)**得到的,
+**是口徑不同,不是測試不見**。
+
+### ⚠ 硬條件:**數字相同不等於集合相同**
+
+那 3 支**可能是三支不同的測試**。兩個 1058 各自閉合,不蘊含它們裝著同一批東西 ——
+這與第二節「`10 + 3 − 1 = 12` 只是算術,不是歸因」是**同一個錯誤的第二次機會**。
+
+### 本機那一側:**已量,不是推的**(2026-08-28,commit `b31a641`)
+
+三支全部在 `tests/test_gate.py::TestSkillMirrorSingleRule`:
+
+```
+tests/test_gate.py::TestSkillMirrorSingleRule::test_intact_symlink_passes
+tests/test_gate.py::TestSkillMirrorSingleRule::test_broken_symlink_is_blocked
+tests/test_gate.py::TestSkillMirrorSingleRule::test_symlink_pointing_outside_canonical_is_blocked
+```
+
+skip 理由字串,三支相同:**`此環境無法建立 symlink`**
+(`pytest -rs` 原始輸出的路徑含使用者名與工作區資料夾名,已遮蔽;
+照 `F-116`,遮了就不得再稱原始)。
+
+**而它們是【執行期】skip,不是 collect 期 skip** —— 原始碼裡是
+`if not self._try_symlink(...): pytest.skip(...)`,寫在**測試函式本體內**,
+不是 `@pytest.mark.skipif`。
+
+### ★ 因此:**`--collect-only` 回答不了這個假說**(兩個問題要兩把不同的尺)
+
+執行期 skip 的測試**兩邊都會被收集到** —— 它們在兩份 `--collect-only` 清單裡
+**長得完全一樣**,差集是空的。
+
+| 問題 | 要用的工具 |
+|---|---|
+| 「哪些測試只在一邊被**收集**」 | `--collect-only` 兩邊取差集(零之一那一步) |
+| 「哪些測試兩邊都收到、但**結果不同**」 | CI 側要 `-rs`(或 `-v`)才報得出 skip 的清單 |
+
+**這一格不取消零之一,它是零之一的補充** ——
+第一節的驗收本來就列了**三類**差集,而第 3 類(「兩邊都收集到、但結果不同」)
+**`--collect-only` 從來就答不了**。今天才發現這件事,是因為
+**沒有人真的去看第 3 類要用什麼量**。
+
+> **待驗**:CI 側加上 `-rs`(或等價的)之後,那 3 支 skip 是不是就是上面那三支。
+> **在那之前,上面的推導留在假說。**
+
+---
+
 ## 一、要做什麼
 
 **兩邊 `pytest --collect-only` 的清單取差集,逐條列出:**
@@ -86,4 +184,27 @@
 ## 五、不做的事
 
 - **不修那個差。** 本票只負責讓它有名字;要不要對齊是另一張票。
-- 不改 `.github/workflows/tests.yml`。
+- ~~不改 `.github/workflows/tests.yml`。~~
+  **→ 2026-08-28 裁決推翻:准改,但只加一個 `--collect-only` 步驟,附兩個條件,排 8/31。
+  見「零之一」。** 舊文不刪(`F-036`)—— 它被寫進過票面,而讀的人會拿它當範圍界線。
+
+  **推翻的理由寫在這裡而不是只寫在零之一**:立案時寫「不改 workflow」是對的,
+  因為當時以為兩邊清單都拿得到;**發現拿不到之後,那條界線擋住的不是範圍蔓延,
+  是本票自己的題目**。一條界線的正當性隨著它擋住的東西改變而改變。
+
+## 六、語料(2026-08-28,只存不分析)
+
+`.scratch/ticket85-corpus-2026-08-28/` —— 取樣時工作樹乾淨,
+HEAD `a6473a2de649bc5e2288bb933f91cc19464c2f8b`,遠端同值。
+
+```
+README.md                    取樣條件、兩邊數字原樣抄錄、上面那一格限制
+local-collect-plain.txt      pytest --collect-only -q(無旗標)   1070 collected
+local-collect-ci-shaped.txt  + CI 的 --ignore / --deselect        1057/1058 (1 deselected)
+local-meta.txt               commit / 時間 / 工作樹狀態 / 版本 / platform
+ci-run-33131319384.log       gh run view --log,311 行
+```
+
+⚠ **`/.scratch/` 是 gitignored** —— 這份語料**不進版控、換機器就沒有**。
+所以票面上這幾節寫的是**結論與限制**,不是「去看語料」。
+(這正是「零」那一節要升上票面的同一個理由。)
