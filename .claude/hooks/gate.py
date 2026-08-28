@@ -2091,6 +2091,95 @@ def shadow_active(today=None):
     return today <= min(clamp, until)
 
 
+def _same_path(a, b):
+    """兩個路徑指的是不是同一個地方。**正規化分隔符與大小寫再比。**
+
+    指標檔寫的是 `UPSTREAM_ROOT=C:/projects/agent-gates`(正斜線,由人手維護),
+    而 `ROOT` 在 Windows 上是反斜線。不正規化的話,錨在它**唯一該生效的 repo**
+    上永遠比不中 —— 而那個失效是**靜默**的:規則還在、還被呼叫、永遠回「沒事」。
+    那正是 F-042 家族(守衛的「不在」與守衛的「放行」長得一模一樣)。
+    """
+    try:
+        return (os.path.normcase(os.path.abspath(a)) ==
+                os.path.normcase(os.path.abspath(b)))
+    except Exception:
+        return False
+
+
+def upstream_shadow_violation():
+    """**上游 repo 不得處於影子狀態。** 回 `(違規訊息 or None, 說明 or None)`。
+
+    票 89 第 1 條(來源:`docs/audits/2026-08-28-f110-inventory.md` 第 1 條)。
+
+    ## 要防的事
+
+    `.dev/shadow.json` 存在 -> `shadow_active()` 為真 -> 整個上游閘門
+    **從「擋」退回「只記不擋」**。而它不會有任何跡象:
+    **那不是錯誤狀態,那是影子模式的正常狀態。**
+    票 49 第一階段(R7 攔截帳本)整個建立在「上游全程 enforce」這個前提上 ——
+    這一項一旦被好心補上,那本帳從此一筆都不會再長,而它看起來仍然正常。
+
+    `docs/machine-init.md` 第 3 項與 `docs/handover/2026-09-11.md` 那一格
+    都逐字寫了「不會有東西叫」。**本函式就是那個「東西」。**
+
+    ## 為什麼不給它一個 R 編號
+
+    R 系列問的是「**這一次寫入 / 這一個檔案**允不允許」—— 逐檔、逐次。
+    本條問的是「**這個 repo 現在的狀態下,閘門還算不算數**」,
+    與 `authoritative_layer()` 那個通知同一類:**前提,不是規則**。
+    硬塞一個 R 編號會讓 `rule_codes()` 多出一條逐檔規則,而它不是那種東西。
+
+    ## 錨,以及它宣告的守備範圍
+
+    錨是 `read_upstream_root() == ROOT`。**它擋得住「好心補上」,
+    擋不住「決定要關掉」** —— `~/.claude/upstream-roots.txt` 目前沒有 G1 保護,
+    改一行就能讓本條對本 repo 失效。
+
+    **那是宣告的守備範圍,不是缺陷。** 「好心補上」的形狀是:換機器時逐項對照
+    備份清單,而一個**刻意不存在**的檔案與一個**忘記複製**的檔案在清單上
+    長得一模一樣,於是把它建起來 —— 那個人不會去改錨,他根本不知道有這條規則。
+    已知缺口有票號(**票 89 自己**),出口是第二階段(git 背書的錨,時鐘 9/11)。
+
+    ## 三個分支,以及為什麼中間那個不能反過來
+
+    - **錨讀不到** -> **不擋,但出聲**。fail-closed 會擋掉每一個沒有
+      `upstream-roots.txt` 的下游(那在下游是常態缺席),那是災難;
+      fail-open 則是靜默失效。**印一行**把靜默拿掉,而不引入誤擋。
+    - **錨讀得到但不是本 repo** -> **放行,而且不出聲**。
+      `shadow.json` 存在是 ADR 0012 設計的**合法狀態**;
+      一條「一律擋」的規則會在三天後擋到每一個開了影子的下游,
+      **而它會讓正控全綠** —— 所以反控是硬條件,不是加分項。
+    - **錨指向本 repo 且檔案在** -> **擋**。
+
+    沒有 `shadow.json` 時**兩個方向都安靜** —— 一個每次都印的提醒
+    會訓練人忽略它(F-031),而那時本來就沒有事情要說。
+    """
+    if not os.path.exists(SHADOW_STATE):
+        return None, None
+
+    root = read_upstream_root()
+    if root is None:
+        return None, (
+            "[六站閘門/未生效] 這個 repo 有 %s,而讀不到上游錨 %s ——\n"
+            "     「上游不得處於影子狀態」這條檢查**未生效**,本次沒有判定。\n"
+            "     (不擋:錨在下游是常態缺席,擋了會擋掉每一個下游。\n"
+            "      印這一行是因為靜默失效與「檢查過沒事」長得一模一樣。)\n"
+            % (rel(SHADOW_STATE), rel(UPSTREAM_ROOTS)))
+
+    if not _same_path(root, ROOT):
+        return None, None
+
+    return (
+        "[六站閘門/上游影子] 上游 repo 出現 %s ——\n"
+        "     整個閘門會從「擋」退回「只記不擋」,而那不是錯誤狀態,\n"
+        "     是影子模式的正常狀態,所以除了這一行以外沒有東西會說。\n"
+        "     票 49 的 R7 攔截帳本建立在「上游全程 enforce」上:\n"
+        "     這個檔存在的每一分鐘,那本帳都不會成長,而它看起來仍然正常。\n"
+        "     上游錨:%s = %s\n"
+        "     這個檔在上游是**刻意不存在**的 —— 見 docs/machine-init.md 第 3 項。\n"
+        % (rel(SHADOW_STATE), rel(UPSTREAM_ROOTS), root)), None
+
+
 def rule_of(msg):
     """從擋下訊息取規則代號(R\\d+)。取不到回 '?'。"""
     m = re.search(r"\[(R\d+)", msg or "")
@@ -2437,6 +2526,15 @@ def mode_hook():
         # 那是最廉價的繞法,而且沒有人會發現。
         _err("[六站閘門/fail-closed] 讀不懂 PreToolUse 輸入(%s)—— 一律擋下。\n" % e)
         return 2
+    # **票 89:在任何規則之前。** 影子開著的那段期間,agent 的每一次寫入
+    # 都已經不受 enforce 保護了 —— 等到 commit 才說已經太晚。
+    up_v, up_note = upstream_shadow_violation()
+    if up_note:
+        _err(up_note)
+    if up_v:
+        _err("[六站閘門/前哨] %s" % up_v)
+        return 2
+
     ti = payload.get("tool_input") or {}
 
     # R7 —— Bash/PowerShell 的寫入一律收口回檔案工具。
@@ -2821,6 +2919,16 @@ def staged_paths(cwd=None, gitlinks=None):
 
 def mode_pre_commit():
     """權威判定:掃 staged 檔案 + R4 副本一致性 + R5 第三軸掛載點。"""
+    # **票 89:放在最前面,而且刻意不進 `violations`。**
+    # 走一般那條路的話,影子開著時會被寫進 shadow-log 並回 0 ——
+    # 而本條要偵測的**正是影子開著這件事**,於是它永遠不可能觸發。
+    # 一條只在它不需要的時候才生效的檢查比沒有檢查更糟:它會被當成有守。
+    up_v, up_note = upstream_shadow_violation()
+    if up_note:
+        _err(up_note)
+    if up_v:
+        _err("\n[六站閘門/pre-commit] commit 已擋下:\n\n  %s\n" % up_v)
+        return 1
     gitlinks = []
     try:
         staged = staged_paths(gitlinks=gitlinks)

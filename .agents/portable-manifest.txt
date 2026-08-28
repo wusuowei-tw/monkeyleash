@@ -123,6 +123,29 @@ tests/test_verify_gates.py      copy
 # 「帶走測試卻不帶走它驗的東西」那個形狀在這裡不成立。
 # 測試本身不碰真實帳本:全部用手造的紀錄串列,只有 CLI 那半讀檔案。
 tests/test_ledger_verify.py     copy
+# 票 89 第 3 條:`KNOWN_GAPS` 每一項必須有票號。**出貨**:它驗的
+# `.claude/portable/g1_verify.py` 落在 `.claude/portable/` 前綴底下(標 copy),
+# 所以下游一定有那個 list —— 「帶走測試卻不帶走它驗的東西」那個形狀不成立。
+# **本檔不讀保護清單**:只 import 模組並讀 `KNOWN_GAPS` 常數,
+# `protected_entries()` 不在 import 期被呼叫(票 88 八之一的界線 A)。
+tests/test_g1_verify.py         copy
+# 票 89 第 2 條:`0013` 起的 ADR 必須帶前綴。
+#
+# **標 skip,而不是 copy —— 這一筆正是「帶走測試卻不帶走它驗的檔案」那個形狀。**
+# `docs/adr/` 標 `ask`(見下方決策紀錄:2026-08-19 從 copy 改的止血),
+# 而 `ask` 桶**安裝時不帶過去**(`install.py`)。所以下游多半沒有 `docs/adr/`,
+# 或有一份只裝著自己 ADR 的目錄 —— 兩種情形下
+# `test_the_frozen_whitelist_still_matches_reality`(要求 0001–0012 各有檔案)
+# 都是**註定紅**,而那條紅燈與「下游違反了命名規則」長得一模一樣。
+#
+# **不改成「找不到就 skip」** —— 票 16:測試從 pass 轉 skip 沒有東西會出聲,
+# 那是把一條註定紅換成一條註定靜默,方向更糟。
+#
+# ⚠ **代價明寫:下游因此完全沒有 ADR 裸號檢查。**
+# 已登記在票 89(第二節之二的限制欄),不是留白。
+# **到期條件**:票 66(未搬遷守衛)落地、`docs/adr/` 改回 `copy` 的那一輪,
+# 回來把本筆改成 `copy`,並把上面那條凍結白名單改成「本 repo 的框架層 ADR」。
+tests/test_adr_numbering.py     skip
 # 影子日誌讀取的出聲失敗(票 63)。**出貨**:它驗的
 # `.claude/portable/shadow_review.py` 落在 `.claude/portable/` 前綴底下(標 copy),
 # 所以下游一定有;而**被它守住的那個缺陷正是在下游現形的**

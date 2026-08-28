@@ -2536,3 +2536,159 @@ class TestFrictionNumbersAreUnique:
     def test_the_shipped_log_is_clean(self):
         """對**本庫現行的** friction-log 跑一次 —— 正對照,不是只測 tmp_path。"""
         assert gate.check_friction_numbers() == []
+
+
+class TestUpstreamMustNotBeInShadowMode:
+    """票 89 第 1 條 —— **上游 repo 不得處於影子狀態**,而違反的當下要有東西叫。
+
+    由來:`docs/audits/2026-08-28-f110-inventory.md` 第 1 條。
+    `.dev/shadow.json` 存在 -> `shadow_active()` 為真 -> 整個上游閘門從「擋」
+    退回「只記不擋」;而**那不是錯誤狀態,那是影子模式的正常狀態**,
+    所以到今天為止沒有任何東西會說。票 49 的攔截帳本整個建立在
+    「上游全程 enforce」這個前提上 —— 這一項被好心補上,那本帳從此
+    一筆都不會再長,而它看起來仍然正常。
+
+    ## 錨與威脅模型(票 89 一之三,寫進測試免得下一個人以為它更強)
+
+    錨是 `read_upstream_root() == ROOT`。它**擋得住「好心補上」,
+    擋不住「決定要關掉」** —— `~/.claude/upstream-roots.txt` 沒有 G1 保護,
+    改一行就能讓本規則失效。那是宣告的守備範圍,不是缺陷;
+    已知缺口的票號是票 89 自己,出口是第二階段(git 背書的錨,9/11)。
+
+    ## 三條硬條件,每一條都有自己的測試
+
+    1. **不得對下游生效** —— `shadow.json` 存在是影子模式的**合法**狀態。
+       一條「一律擋」的實作會在三天後擋到每一個開了影子的下游,
+       **而它會讓正控全綠**(票 22 Phase 2 第 7 條紅燈的同一句話)。
+    2. **錨讀不到時不擋,但出聲** —— fail-closed 會擋到每一個沒有那個檔的下游;
+       fail-open 是 `F-042` 家族(守衛的「不在」與「放行」長得一樣)。
+       所以兩個斷言都要:**不擋** 且 **有那一行輸出**。
+       只驗「不擋」的話,一個什麼都不做的實作也會綠。
+    3. **影子分支不得吞掉這一條** —— 這是最容易寫錯的一格:
+       `mode_pre_commit` 在有違規且 `shadow_active()` 為真時會寫 shadow-log 並回 0。
+       本規則若走那條路,它**永遠不可能觸發** —— 它要偵測的正是影子開著這件事。
+    """
+
+    def _anchor(self, monkeypatch, value):
+        monkeypatch.setattr(gate, "read_upstream_root", lambda: value)
+
+    def _shadow_file(self, monkeypatch, tmp_path, exists):
+        p = tmp_path / "shadow.json"
+        if exists:
+            io.open(p, "w", encoding="utf-8").write('{"until": "2099-01-01"}')
+        monkeypatch.setattr(gate, "SHADOW_STATE", str(p))
+        return p
+
+    # ── 正控 ──────────────────────────────────────────────────────────
+    def test_upstream_with_a_shadow_state_file_is_a_violation(
+            self, monkeypatch, tmp_path):
+        self._anchor(monkeypatch, gate.ROOT)
+        self._shadow_file(monkeypatch, tmp_path, exists=True)
+        v, note = gate.upstream_shadow_violation()
+        assert v, "上游有 shadow.json 竟然沒有違規"
+        assert "shadow.json" in v
+
+    # ── 🔴 反控:不得對下游生效 ────────────────────────────────────────
+    def test_a_downstream_repo_with_a_shadow_state_file_is_untouched(
+            self, monkeypatch, tmp_path):
+        """**少了這一條,一個「一律擋」的實作也會讓正控全綠。**"""
+        self._anchor(monkeypatch, str(tmp_path / "some-other-upstream"))
+        self._shadow_file(monkeypatch, tmp_path, exists=True)
+        v, note = gate.upstream_shadow_violation()
+        assert v is None, "下游開影子被擋了 —— 那是影子模式的合法狀態:%r" % (v,)
+
+    def test_upstream_without_the_file_is_clean(self, monkeypatch, tmp_path):
+        self._anchor(monkeypatch, gate.ROOT)
+        self._shadow_file(monkeypatch, tmp_path, exists=False)
+        assert gate.upstream_shadow_violation() == (None, None)
+
+    def test_the_anchor_is_compared_after_normalising_separators_and_case(
+            self, monkeypatch, tmp_path):
+        """指標檔寫的是正斜線(`UPSTREAM_ROOT=C:/projects/...`),
+        而 `ROOT` 在 Windows 上是反斜線。**不正規化就永遠比不中**,
+        於是規則在它唯一該生效的 repo 上靜默失效。"""
+        self._anchor(monkeypatch, gate.ROOT.replace(os.sep, "/").upper())
+        self._shadow_file(monkeypatch, tmp_path, exists=True)
+        v, _ = gate.upstream_shadow_violation()
+        assert v, "只差路徑寫法就比不中 —— 錨在它唯一該生效的地方失效了"
+
+    # ── 🔴 錨讀不到:不擋,但出聲 ──────────────────────────────────────
+    def test_an_unreadable_anchor_does_not_block(self, monkeypatch, tmp_path):
+        """fail-closed 會擋到每一個沒有 `upstream-roots.txt` 的下游 = 災難。"""
+        self._anchor(monkeypatch, None)
+        self._shadow_file(monkeypatch, tmp_path, exists=True)
+        v, _ = gate.upstream_shadow_violation()
+        assert v is None, "錨讀不到就擋,會擋掉每一個下游"
+
+    def test_an_unreadable_anchor_still_says_so(self, monkeypatch, tmp_path):
+        """**而它不得靜默** —— 靜默失效是 `F-042` 家族。"""
+        self._anchor(monkeypatch, None)
+        self._shadow_file(monkeypatch, tmp_path, exists=True)
+        _, note = gate.upstream_shadow_violation()
+        assert note, "錨讀不到卻什麼都沒說 —— 規則靜默失效"
+        assert "未生效" in note
+
+    def test_the_note_is_silent_when_there_is_nothing_to_say(
+            self, monkeypatch, tmp_path):
+        """錨讀不到**而且**沒有 shadow.json 時不必吵 ——
+        一個每次都印的提醒會訓練人忽略它(F-031)。"""
+        self._anchor(monkeypatch, None)
+        self._shadow_file(monkeypatch, tmp_path, exists=False)
+        assert gate.upstream_shadow_violation() == (None, None)
+
+    # ── 接線:規則真的在通行路上 ──────────────────────────────────────
+    def test_the_rule_is_actually_invoked_at_the_authoritative_layer(
+            self, monkeypatch):
+        """**最強的那一條**(照 R6 / R9 的先例):驗規則真的被 pre-commit 呼叫,
+        不只是函式回對值。沒有這條的話,一個寫好卻沒接上的檢查會全綠 ——
+        票 27 逐字:手動呼叫一支檢查,不等於那支檢查在通行路上。"""
+        monkeypatch.setattr(gate, "upstream_shadow_violation",
+                            lambda: ("假違規:上游處於影子狀態", None))
+        assert gate.mode_pre_commit() == 1, \
+            "pre-commit 沒有呼叫 upstream_shadow_violation"
+
+    def test_the_rule_is_actually_invoked_at_the_sentinel(
+            self, monkeypatch):
+        """前哨也要接 —— **權威層才擋就已經太晚**:
+        影子開著的那段期間,agent 的每一次寫入都已經不受 enforce 保護了。"""
+        monkeypatch.setattr(gate, "upstream_shadow_violation",
+                            lambda: ("假違規:上游處於影子狀態", None))
+
+        class _Stdin:
+            buffer = io.BytesIO(json.dumps(
+                {"tool_name": "Write",
+                 "tool_input": {"file_path": "README.md", "content": "x"}}
+            ).encode("utf-8"))
+
+        monkeypatch.setattr(gate.sys, "stdin", _Stdin())
+        assert gate.mode_hook() == 2, "前哨沒有呼叫 upstream_shadow_violation"
+
+    # ── 🔴 影子分支不得吞掉它 ────────────────────────────────────────
+    def test_shadow_mode_cannot_swallow_this_particular_violation(
+            self, monkeypatch):
+        """**它要偵測的正是影子開著這件事。**
+
+        走一般 `violations` 那條路的話:影子開著 -> 寫 shadow-log -> 回 0,
+        於是這條規則**永遠不可能觸發**,而測試若只驗函式回傳值會全綠。
+        """
+        monkeypatch.setattr(gate, "upstream_shadow_violation",
+                            lambda: ("假違規:上游處於影子狀態", None))
+        monkeypatch.setattr(gate, "shadow_active", lambda *a, **k: True)
+        assert gate.mode_pre_commit() == 1, \
+            "影子分支把「上游處於影子狀態」這條違規吞掉了"
+
+    # ── 活體正對照 ────────────────────────────────────────────────────
+    def test_the_live_repo_is_not_in_shadow_mode(self):
+        """對**本庫現行狀態**跑一次 —— 正對照,不是只測 tmp_path。
+
+        這一條同時是那份「刻意不存在」的機器化身:
+        `docs/machine-init.md:170-186` 與交接檔 :110-130 說它必須不存在,
+        而在本條之前**沒有任何東西在看**。
+
+        ⚠ `SHADOW_STATE` 被 conftest 的 autouse fixture 指到 tmp,
+        所以這裡讀**真實路徑**,不讀模組常數 —— 否則驗的是 fixture,不是 repo。
+        """
+        real = os.path.join(str(ROOT), ".dev", "shadow.json")
+        assert not os.path.exists(real), (
+            "上游出現了 .dev/shadow.json —— 整個閘門會從『擋』退回『只記不擋』,"
+            "而票 49 的攔截帳本會靜默停止成長。見 docs/machine-init.md:170")
