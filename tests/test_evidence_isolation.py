@@ -27,7 +27,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 # 紅燈紀錄由紀錄器在真實執行後追加,是機制的正常產出,不是污染。
 EXPECTED_TO_GROW = {"test-runs.jsonl"}
 
-EVIDENCE_FIELDS = ("SHADOW_LOG", "SHADOW_STATE", "EXEMPTION_LOG", "PROVENANCE")
+EVIDENCE_FIELDS = ("SHADOW_LOG", "SHADOW_STATE", "EXEMPTION_LOG", "PROVENANCE",
+                   # 票 49:攔截帳本。`INTERCEPT_LOG` 是**基底檔名**,月檔由它推出來
+                   # —— 蓋住基底就蓋住整族,隔離不必知道輪替怎麼命名。
+                   "INTERCEPT_LOG", "INTERCEPT_SUMMARY")
 
 
 def _load():

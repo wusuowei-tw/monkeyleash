@@ -2171,16 +2171,250 @@ def log_shadow(msg, at_commit, command=None):
            "rule": rule_of(msg), "at_commit": at_commit,
            "verdict": "would-block",
            "message": (msg or "").splitlines()[0] if msg else ""}
-    if command and command.strip():
-        raw = command.encode("utf-8", "replace")
-        # **不加鹽**:同一條指令在不同 repo 要對得起來。它是指紋不是密碼。
-        rec["cmd_sha256"] = hashlib.sha256(raw).hexdigest()
-        rec["cmd_verb"] = command_verb(command)
-        rec["cmd_len"] = len(command)
+    rec.update(cmd_fingerprint(command))
     try:
         _append_jsonl(SHADOW_LOG, rec)
     except Exception:
         pass
+    return rec
+
+
+# ── 攔截帳本(票 49 第一階段)──────────────────────────────────────────
+#
+# **`gate-exemptions.jsonl` 是豁免帳本,不是攔截帳本。** `log_exemptions()`
+# 第一行是 `if not bucket: return`,而 `bucket` 是「這次判定**用到的豁免**」——
+# 空的就直接返回,**而沒有動用任何豁免的單純攔截是最常見的那一種**。
+# 它回答的是「哪些後門被走過」,不是「閘門今天攔了幾次、攔了什麼」。
+#
+# R7 更極端:enforce 分支只有 `_err`,**一筆都不寫**。上游沒有 `shadow.json`
+# → 全程 enforce → **每天在產生無紀錄的攔截**。而 9/15 那份 0.0% 假陽率是拿
+# 量化的影子紀錄算的,**上游的 R7 誤擋結構上不可能進入那個母體**。
+#
+# **不併進 `gate-exemptions.jsonl`,兩個理由都是硬的:**
+#   1. **schema 不相容** —— `exemption_record()` 的鍵是豁免形狀的
+#      (`file` / `module` / `declared_in` / `reason`),全部來自 `ex` 那個豁免物件。
+#      一次 R7 攔截**沒有 `file`**(它的觸發物是指令),四個鍵全部填不出來。
+#   2. **會弄壞 `ledger_verify` 的鏈驗證** —— 那支工具逐筆讀
+#      `content_hash` → `result_hash` 串成鏈、逐段驗接續(v2 的存在理由)。
+#      插進一筆沒有這兩個欄位的紀錄,鏈就斷在那裡,而那條鏈是
+#      票 58 / 票 47 三次有界突變的收尾依據。
+#
+# > **把兩種語意塞進同一個檔,省下的是一個檔名,付出的是一支已經在用的驗證工具。**
+#
+# **不進版控**(裁決 2026-08-26),改列進控制檔備份清單第 10 處。三個理由:
+# (a) `message` 全文含本機路徑,而開源在即 → 進版控等於天天撞 `leak_scan`,
+#     那不是「記了」是「記了但推不上去」,**而它看起來像有**;
+# (b) 誤擋頻率未知,大量 diff 噪音會讓人先關掉紀錄,再也量不到頻率 ——
+#     **它要量的東西,正是會導致它被關掉的東西**;
+# (c)「換機器會沒」該由備份解決,**不該用版控代替備份**。
+# 這不是永久裁定:日後要進版控,前置是 `message` 先做路徑遮罩。
+
+INTERCEPT_LOG = os.path.join(ROOT, ".dev", "intercepts.jsonl")   # 證據(基底檔名)
+INTERCEPT_SUMMARY = os.path.join(ROOT, ".dev", "intercepts-summary.jsonl")
+
+# 保留原始紀錄的月數:**當月 + 前一月**。
+# 這是**推導出來的,不是挑的**:只留當月的話,每月 1 號手上幾乎沒有原始資料;
+# 留到前一月,則任何時點都保證**至少有一個完整日曆月**可分析。
+# **它是滿足「任何時點 ≥1 完整月」的最小值。**
+# 特別寫出推導,是因為這條線上剛出過事 —— `F-124`:`MAX_FALSE_POSITIVE_RATE
+# = 0.05` 至今查不到出處,而它靠**被引用**取得權威。
+# **一個沒有推導的常數,寫下的當天就開始變成傳說。**
+INTERCEPT_KEEP_MONTHS = 2
+
+# 摘要裡收容「沒有指令」那些紀錄的鍵。
+# **與紀錄層面的規矩方向相反,而那是刻意的**:紀錄層面缺席不填 `N/A`
+# (值會被統計、被當成「有記錄」);摘要**是統計**,漏掉它們會讓
+# `sum(by_verb) < count` 而沒有人看得出差額去了哪。
+CMD_VERB_ABSENT = "<無指令>"
+
+
+def cmd_fingerprint(command):
+    """指令的指紋三欄(票 68)。給不出來時回**空 dict**,不是三個 `N/A`。
+
+    抽成函式是為了讓影子側與 enforce 側**算的是同一組欄位** ——
+    9/15 評估要把兩邊的樣本合起來看,而兩份各自算的欄位會各自漂移
+    (`F-125` 的形狀:同一個參數在兩處各自演化,而沒有東西會說話)。
+    """
+    if not command or not command.strip():
+        return {}
+    raw = command.encode("utf-8", "replace")
+    # **不加鹽**:同一條指令在不同 repo 要對得起來。它是指紋不是密碼。
+    return {"cmd_sha256": hashlib.sha256(raw).hexdigest(),
+            "cmd_verb": command_verb(command),
+            "cmd_len": len(command)}
+
+
+def intercept_path(month):
+    """某個月的攔截帳本路徑:`intercepts.jsonl` → `intercepts-2026-08.jsonl`。
+
+    **月檔名從基底常數推出來,不另外寫一個常數** —— 測試與換機器的隔離
+    只要蓋住 `INTERCEPT_LOG` 就蓋住整族,不必知道輪替怎麼命名。
+    """
+    stem, ext = os.path.splitext(INTERCEPT_LOG)
+    return "%s-%s%s" % (stem, month, ext)
+
+
+def _intercept_months():
+    """磁碟上現有的月檔:`{"2026-08": 路徑}`。
+
+    摘要檔(`intercepts-summary.jsonl`)**對不上這個形狀**,所以不會被當成
+    月檔再滾一次 —— 那會把長期訊號吃掉,而且無聲。
+    """
+    stem, ext = os.path.splitext(INTERCEPT_LOG)
+    pat = re.compile(r"^%s-(\d{4}-\d{2})%s$"
+                     % (re.escape(os.path.basename(stem)), re.escape(ext)))
+    folder = os.path.dirname(INTERCEPT_LOG) or "."
+    out = {}
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return out
+    for name in names:
+        m = pat.match(name)
+        if m:
+            out[m.group(1)] = os.path.join(folder, name)
+    return out
+
+
+def _kept_months(now):
+    """保留期內的月份集合。
+
+    **用月序號減,不用天數減** —— 「今天減 30 天」在 2 月與 8 月給出不同答案,
+    而跨年時「月份減一」會算出第 0 月。兩個坑都在這一行裡排掉。
+    """
+    n = now.year * 12 + (now.month - 1)
+    out = set()
+    for back in range(max(1, INTERCEPT_KEEP_MONTHS)):
+        y, m = divmod(n - back, 12)
+        out.add("%04d-%02d" % (y, m + 1))
+    return out
+
+
+def _summarised_months():
+    """已經滾成摘要的月份。**滾動因此可以重跑而不重複計數** ——
+    摘要寫成了但刪檔失敗時就會重跑。"""
+    out = set()
+    try:
+        with io.open(INTERCEPT_SUMMARY, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if rec.get("month"):
+                    out.add(rec["month"])
+    except (IOError, OSError):
+        pass
+    return out
+
+
+def _summarise_month(month, path, now):
+    """一個月檔 → **每條規則一行**摘要。
+
+    **明寫的取捨:滾動會丟掉個別紀錄的 `message` 全文與 `cmd_sha256`。**
+    所以要拿來分類的月份,**必須在它被滾掉之前處理** ——
+    這是一個真的損失,不是無痛壓縮。
+    """
+    tally = {}
+    try:
+        with io.open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if rec.get("kind") == "summary":
+                    continue
+                slot = tally.setdefault(rec.get("rule") or "?",
+                                        {"count": 0, "by_verb": {}})
+                slot["count"] += 1
+                verb = rec.get("cmd_verb") or CMD_VERB_ABSENT
+                slot["by_verb"][verb] = slot["by_verb"].get(verb, 0) + 1
+    except (IOError, OSError):
+        return []
+    stamp = now.isoformat()
+    return [{"kind": "summary", "month": month, "rule": rule,
+             "count": s["count"], "by_verb": s["by_verb"], "rolled_at": stamp}
+            for rule, s in sorted(tally.items())]
+
+
+def roll_intercepts(now=None):
+    """把超過保留期的月檔滾成摘要,**原始刪除**。回傳被滾掉的月份。
+
+    **這是構造,不是排程或紀律** —— 在 `log_intercept()` 寫入前跑,
+    所以沒有「要記得去整理」這件事。
+
+    為什麼一定要有(核准附加條件 a,**必做不是可選**):它 append-only、
+    不進版控,而 **enforce 下誤擋是常態**,所以它會一直長;而它是備份清單
+    第 10 項、要**手動複製**到新機器 —— **一個越來越難複製的檔案,
+    最後會被跳過。** 這是 `F-031` 的形狀換一個地方出現:F-031 是被煩到
+    關掉規則,本則是被煩到跳過備份。**受害者不同,而後者不會有人發現**
+    (規則被關掉時大家都知道;備份沒複製到,要到需要它的那天才知道)。
+
+    **摘要不刪**:一行約 100 bytes、一年 12 行,不會成為複製的障礙,
+    而它是「誤擋頻率隨時間怎麼變」唯一的長期訊號。
+    """
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    keep = _kept_months(now)
+    done = _summarised_months()
+    rolled = []
+    for month, path in sorted(_intercept_months().items()):
+        if month in keep:
+            continue
+        if month not in done:
+            for rec in _summarise_month(month, path, now):
+                _append_jsonl(INTERCEPT_SUMMARY, rec)
+        os.remove(path)
+        rolled.append(month)
+    return rolled
+
+
+def log_intercept(msg, command=None, at_commit=False, now=None):
+    """把一筆**真的擋下來**的攔截寫進當月帳本。append-only。
+
+    欄位沿用票 68 已經定案的指紋三欄(`cmd_sha256` / `cmd_verb` / `cmd_len`),
+    **不發明新的** —— 影子側與 enforce 側因此可以用同一組欄位對帳,
+    9/15 評估時兩邊的樣本能合併看。**不記指令原文**(票 68 的裁決)。
+
+    `message` 記**全文**(`log_shadow` 只記第一行):分類時要判「擋得對不對」,
+    而**規則碼判不出來** —— 票 31:114 已經記過這一格,帳本存的是 `blocked_by`
+    規則碼、不是訊息全文,於是判不出是哪一種擋。
+
+    **失敗方向:記不下來仍然擋,但要多印一行說帳本壞了。**
+    方向與 `log_exemptions` 相反、結論相同:那邊是「記不下來的豁免不算數」,
+    所以 `SystemExit(2)`;這邊本來就要擋,所以**不改判定** ——
+    但**不得靜默**,否則「擋了但沒記」會安靜發生,而那正是本票要消掉的東西。
+    """
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    rec = {"ts": now.isoformat(), "rule": rule_of(msg),
+           "at_commit": bool(at_commit)}
+    rec.update(cmd_fingerprint(command))
+    rec["message"] = msg or ""
+
+    # 整理失敗**不得吃掉這一筆** —— 記錄比整理重要。但也不得無聲:
+    # 沒被收掉的月檔會一直長,而那正是輪替要防的事。
+    try:
+        roll_intercepts(now=now)
+    except Exception as e:
+        _err("[閘門/帳本] 攔截帳本輪替失敗(%s):%s\n"
+             "     這一筆仍然會記 —— 記錄比整理重要。但舊月檔沒有被收掉,\n"
+             "     它會一直長,而一個越來越難複製的檔案最後會被跳過。\n"
+             % (rel(INTERCEPT_LOG), e))
+
+    path = intercept_path(now.strftime("%Y-%m"))
+    try:
+        _append_jsonl(path, rec)
+    except Exception as e:
+        _err("[閘門/帳本] 攔截無法記帳(%s):%s\n"
+             "     **這次仍然擋** —— 記錄失敗不改判定,下面那條才是判定結果。\n"
+             "     但這一次攔截沒有留下紀錄:R7 的誤擋率因此少一個樣本,\n"
+             "     而 9/15 轉正要靠它。\n" % (rel(path), e))
     return rec
 
 
@@ -2217,6 +2451,11 @@ def mode_hook():
                 # 其餘兩處(檔案寫入前哨、pre-commit)手上沒有指令,欄位缺席是對的。
                 log_shadow(msg, at_commit=False, command=command)
                 return 0
+            # **記在 `_err` 之前**,而且刻意如此:記不下來要能影響輸出。
+            # 放在後面的話,「擋了但沒記」與「擋了也記了」在終端機上長得一樣,
+            # 而前者正是本票(49)要消掉的東西 —— 這一格是 R7 在 enforce 下
+            # 唯一的紀錄,9/15 轉正的誤擋率要靠它才估得出來。
+            log_intercept(msg, command=command)
             # **不套 sentinel_footer()**:那句話說「繞過前哨仍會在 commit 被擋」,
             # 對 R7 是假的 —— commit 看不到工具呼叫,只看得到 staged 檔案。
             # 宣稱有第二道而實際沒有,比沒有第二道更危險(ADR 0008)。

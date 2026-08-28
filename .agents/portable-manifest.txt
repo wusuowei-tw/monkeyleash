@@ -108,6 +108,13 @@ tests/test_edit_result.py       copy
 tests/test_scanner.py           copy
 tests/test_sync.py              copy
 tests/test_evidence_isolation.py copy
+# R7 enforce 側的攔截帳本(票 49 第一階段)。**出貨**:它驗的
+# `log_intercept()` / `roll_intercepts()` 住在 `.claude/hooks/gate.py`(標 copy),
+# 而帳本本身(`.dev/intercepts-YYYY-MM.jsonl`)每個裝了框架的 repo 各自產生 ——
+# 「帶走測試卻不帶走它驗的東西」那個形狀在這裡不成立。
+# 測試本身不碰真實帳本:`ledger` fixture 把 `INTERCEPT_LOG` 指到 tmp,
+# 而 conftest 的隔離 fixture 是第二道(票 18)。
+tests/test_intercepts.py        copy
 tests/test_user_layer.py        copy
 tests/test_verify_gates.py      copy
 # 帳本鏈驗證工具的測試(票 47 收尾)。**出貨**:它驗的

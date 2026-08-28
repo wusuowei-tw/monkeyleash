@@ -62,6 +62,11 @@ def _isolate_live_gate_state(tmp_path, monkeypatch):
         "SHADOW_STATE": tmp_path / "shadow.json",
         "EXEMPTION_LOG": tmp_path / "gate-exemptions.jsonl",
         "PROVENANCE": tmp_path / "provenance.jsonl",
+        # 票 49:攔截帳本。`INTERCEPT_LOG` 是**基底檔名**,月檔由
+        # `intercept_path()` 從它推出來 —— 蓋住基底就蓋住整族,
+        # 隔離不必知道輪替怎麼命名(新增一種月檔不必回來改這裡)。
+        "INTERCEPT_LOG": tmp_path / "intercepts.jsonl",
+        "INTERCEPT_SUMMARY": tmp_path / "intercepts-summary.jsonl",
     }
     for mod in _loaded_gate_modules():
         for name, path in fields.items():
