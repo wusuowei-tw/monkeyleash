@@ -2602,15 +2602,59 @@ class TestUpstreamMustNotBeInShadowMode:
         self._shadow_file(monkeypatch, tmp_path, exists=False)
         assert gate.upstream_shadow_violation() == (None, None)
 
-    def test_the_anchor_is_compared_after_normalising_separators_and_case(
+    def test_the_anchor_tolerates_a_different_separator(
             self, monkeypatch, tmp_path):
-        """指標檔寫的是正斜線(`UPSTREAM_ROOT=C:/projects/...`),
+        """指標檔寫的是正斜線(`UPSTREAM_ROOT=C:/projects/...`,由人手維護),
         而 `ROOT` 在 Windows 上是反斜線。**不正規化就永遠比不中**,
-        於是規則在它唯一該生效的 repo 上靜默失效。"""
+        於是規則在它唯一該生效的 repo 上靜默失效。
+
+        ⚠ **在 POSIX 上這一條是恆真的**(`os.sep` 就是 `/`,替換後沒變)——
+        寫在這裡是因為它守的是 Windows 那一面,而上游就住在 Windows。
+        **不要把它讀成「分隔符處理在所有平台都驗過了」。**
+        """
+        self._anchor(monkeypatch, gate.ROOT.replace(os.sep, "/"))
+        self._shadow_file(monkeypatch, tmp_path, exists=True)
+        v, _ = gate.upstream_shadow_violation()
+        assert v, "只差分隔符寫法就比不中 —— 錨在它唯一該生效的地方失效了"
+
+    def test_case_folding_follows_the_platform_not_a_guess(
+            self, monkeypatch, tmp_path):
+        """大小寫**跟著平台走**,不是無條件折疊。
+
+        本條的第一版寫死了「大寫也要比中」,那是**把開發機的檔案系統
+        當成世界的性質** —— 本機(Windows)全綠,CI(Linux)當場紅。
+        `F-109` 家族的另一面:那不是一個會過期的數字,是一個**只在一種平台成立的斷言**。
+
+        - **Windows**:檔案系統不分大小寫 -> 大寫寫法**必須**比中
+        - **POSIX**:分大小寫 -> 大寫是**另一個路徑**,**必須不比中**
+
+        後者不是將就,是正確性:無條件折疊會讓一個 Linux 下游
+        (路徑只差大小寫)被誤判成上游,然後被擋。
+
+        ⚠ **不用 `os.path.normcase` 去算期望值** —— 那是拿衍生欄位
+        驗它的來源欄位,恆真(`F-114`)。這裡把兩個平台的**語意**分別寫死。
+        """
         self._anchor(monkeypatch, gate.ROOT.replace(os.sep, "/").upper())
         self._shadow_file(monkeypatch, tmp_path, exists=True)
         v, _ = gate.upstream_shadow_violation()
-        assert v, "只差路徑寫法就比不中 —— 錨在它唯一該生效的地方失效了"
+        if os.name == "nt":
+            assert v, "Windows 檔案系統不分大小寫,大寫寫法竟然比不中"
+        else:
+            assert v is None, (
+                "POSIX 分大小寫,大寫是另一個路徑,不得比中 —— "
+                "無條件折疊會把 Linux 下游誤判成上游")
+
+    def test_a_genuinely_different_path_never_matches(
+            self, monkeypatch, tmp_path):
+        """**平台無關的那一條**:真的不同的路徑,任何平台都不得比中。
+
+        上面兩條各自只在一種平台上有內容;少了這一條,
+        一個「永遠回 True」的 `_same_path` 在**兩邊都會綠**。
+        """
+        self._anchor(monkeypatch, str(tmp_path / "definitely-not-the-upstream"))
+        self._shadow_file(monkeypatch, tmp_path, exists=True)
+        v, note = gate.upstream_shadow_violation()
+        assert v is None and note is None
 
     # ── 🔴 錨讀不到:不擋,但出聲 ──────────────────────────────────────
     def test_an_unreadable_anchor_does_not_block(self, monkeypatch, tmp_path):
