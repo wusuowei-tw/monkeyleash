@@ -317,6 +317,10 @@ Get-FileHash $src -Algorithm SHA256 | Select-Object -ExpandProperty Hash
 > 在 cp950 主控台會 `UnicodeEncodeError` 崩掉(票 62,已立案未修)——
 > 你會看到一個編碼錯誤,而不是驗收結果。
 
+> ### 🔴 **第 2、3、4 項與 `upstream-roots.txt` 在新機器上是「第一次建檔」 ——
+> ### 建檔前先讀本節末的「一之零」:用什麼指令建,決定它們有沒有 BOM。**
+> **`g1-protected.txt` 是四份裡唯一真的會被 BOM 咬到的**(讀取端用 `utf-8`,不是 `utf-8-sig`)。
+
 ### 2. G1 保護清單 `g1-protected.txt`
 
 | | |
@@ -343,6 +347,76 @@ Get-FileHash $src -Algorithm SHA256 | Select-Object -ExpandProperty Hash
 | **格式** | 純文字,**每行一條 regex**;`#` 註解。放「會揭露我是誰」的具體形狀。範例:<br>`(?i)<你的使用者名稱>`<br>`<券商或雇主名>`<br>`<資料目錄>/<備份資料夾>` |
 | **誰提供** | **你手動**。通用形狀在 repo 的 `.claude/portable/leak-patterns.txt`(公開);個人 token 住這份(不進版控),`leak_scan.py` 掃時把兩份聯集。 |
 | **缺席時** | **不 fail-closed**(個人 pattern 本來跟人走,別台機器沒有很正常)。`leak_scan` 會**顯式警告**(stderr `[洩漏偵測/警告] 找不到個人 pattern 清單…`)後只用通用 pattern 繼續 —— 涵蓋比你以為的小,但不擋。**對比**:通用那份(repo 內)缺 → **fail-closed**、直接擋。 |
+
+### 🔴 一之零、**這四份檔在新機器上是「第一次建檔」,而建檔指令決定它們有沒有 BOM**
+
+**適用第 2、3、4 項與 `upstream-roots.txt`** —— 新機器上這四份**都不存在**,
+所以每一份都會被「第一次建立」,**而那正好是 PowerShell 寫出 BOM 的那個情況**。
+
+#### 實測(2026-08-28,合成檔,四種寫法)
+
+```
+Set-Content -Encoding UTF8              前三位元組 239,187,191   BOM: True    🔴
+Add-Content -Encoding UTF8(檔不存在)    239,187,191             BOM: True    🔴
+Add-Content -Encoding UTF8(檔已存在)     90, 90, 70              BOM: False   ✓
+[IO.File]::WriteAllLines                 90, 90, 84              BOM: False   ✓
+```
+
+> ### **`Add-Content` 只有在【檔案已經存在】時才安全,而新機器上一個都不存在。**
+> 一條指令的安全性取決於一個**沒有寫在指令旁邊的前提**(`F-146` 併記)。
+
+#### 🔴 後果不對稱 —— **四份裡只有一份真的會中招**(2026-08-29 讀原始碼實查)
+
+**⚠ 不要把四份寫成同一句「都會壞」。** 逐一查過讀取端:
+
+| 檔 | 讀取端 | 編碼 | 有 BOM 時 |
+|---|---|---|---|
+| **`g1-protected.txt`** | `g1_guard.protected_entries()` | **`utf-8`** | 🔴 **BOM 黏進第一條路徑** → **那條路徑靜默失去保護**(票 92;**現況實測無 BOM**) |
+| `shadow-clamp.txt` | `gate.read_shadow_clamp()` | `utf-8-sig` | ✅ 免疫 |
+| `leak-patterns.local.txt` | `leak_scan._read_patterns()` | `utf-8-sig` | ✅ 免疫 |
+| `upstream-roots.txt` | `gate.read_upstream_root()` | `utf-8-sig` | ✅ 免疫 |
+
+**三份免疫不是巧合** —— 它們的 docstring 逐字寫著為什麼改用 `utf-8-sig`
+(「fail-closed 系統的故障是隱形的,輸入端的坑要在進門前排掉」)。
+
+> ### 🔴 **而唯一沒跟上那個慣例的讀取端,是 G1 自己 —— 它讀的正是【保護清單】。**
+>
+> 第一條受保護路徑被 BOM 汙染之後:清單上有那一行、`ls` 看得到、行數正確,
+> **而那條路徑不再被保護,沒有任何東西會說。**
+> 這與 `F-139`(第一級擋不住 `~` 寫法,而它保護的第一個對象就是自己)
+> **是同一個形狀的第二個實例:受害者是守衛自己。**
+>
+> **⚠ 已開票:票 92**(2026-08-29,時鐘 9/11,**不排上線前** —— 那是動守衛)。
+>
+> **🔴 而現況是:目前【沒有】BOM。** 實測(2026-08-29,裁決者在自己的終端機):
+> `g1-protected.txt` 前三位元組 = **`35, 32, 71`**(`# G`),**不是** `239,187,191`。
+> **⇒ 這是理論風險,不是現況。** 本節擋的是**入口**(新機器上第一次建檔的那一刻),
+> 而**修法在票 92**。兩件事不要混為一談:
+> **入口是紀律,修法是機制,而現在兩者都還沒到位 —— 只是它也還沒發作。**
+
+#### ⇒ 四份一律用這個寫法建檔(**不要用 `Set-Content` / `Add-Content`**)
+
+```powershell
+[IO.File]::WriteAllLines($p, $lines, (New-Object Text.UTF8Encoding($false)))
+```
+
+`UTF8Encoding($false)` 的 `$false` 就是「不寫 BOM」。
+
+#### 驗收(**四份各做一次,建完馬上做**)
+
+```powershell
+(Get-Content -Encoding Byte -TotalCount 3 $p) -join ','
+# 通過條件:**不是** 239,187,191
+```
+
+> **為什麼四份都要驗,而不是只驗會中招的那一份**:
+> 「哪一份免疫」取決於**讀取端現在選了哪個編碼** ——
+> 那是一個可以被改掉的實作細節,而改的人不會知道有一份清單在依賴它。
+> **驗三個位元組的成本是零,而依賴一個別處的實作選擇是一筆看不見的帳。**
+
+**★ 這一格的價值在於:它在新機器上會發生四次,而四次都不會出聲。**
+
+---
 
 ### 5. `settings.json` 的 G1 掛載設定
 
