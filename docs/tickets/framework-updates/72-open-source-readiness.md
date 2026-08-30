@@ -66,9 +66,31 @@ MIT,版權行 `Copyright (c) 2026 <舊帳號>`。標準 MIT 全文,不改字。
 結論:rename 的硬成本是 **3 處識別字面 + 3 處測試字串**;其餘是散文。GitHub 端 rename 會自動轉址舊 URL。**動作等名字定案另裁。**
 
 ### ⑤ GitHub 公開日(由 Jeff 在 UI 點,屆時給逐步)
-Settings → Branches / Rulesets(`master`):Require PR、Require status checks(`tests`)、Block force-push & deletion。
-Settings → Actions → General:Workflow permissions = Read repository contents;
-Fork PR workflows = **Require approval for all outside collaborators**。
+
+**★ 2026-08-30:五項【逐項標明它防的是什麼】,不再用一句集體理由涵蓋。**
+理由:2026-08-30 用一句集體理由讀這五項,推出了一個錯的結論
+(「③ 整組都是外洩類」→ 差點據此升方案)。**分類是這次踩到的坑的正解。**
+
+| # | 設定 | 類 | 失效需要什麼 | 現況(2026-08-30 實讀) | 排在 |
+|---|---|---|---|---|---|
+| 1 | Actions → General → Workflow permissions = Read repository contents | **外洩** | 不需要任何人動作 | ✅ `read`(GET 回值) | 已完成 |
+| 2 | Actions → General → Fork PR workflows = Require approval for all outside collaborators | **外洩** | **不需要任何人動作** —— 外面的人自己就能發起 PR | 🔴 私有下此設定**不存在**(422) | **票 84 第 3 步** |
+| 3 | Branches / Rulesets(`master`):Require PR | 寫入 | 要有**寫入權限的主體**動作 | 403,待公開 | 票 84 第 4 步 |
+| 4 | Branches / Rulesets(`master`):Require status checks(`tests`) | 寫入 | 同上 | 403,待公開 | 票 84 第 4 步 |
+| 5 | Branches / Rulesets(`master`):Block force-push & deletion | 寫入 | 同上 | 403,待公開 | 票 84 第 4 步 |
+
+**第 2 項排在寫入類三項之前**,因為它是唯一不需要窗口內有人動作就會失效的。
+
+**窗口期(翻公開 → 三保護設完)的殘餘曝險,2026-08-30 實測封頂**:
+`0 secret / 0 variable / 0 environment`;唯一的 workflow `tests.yml` 用的是
+`pull_request`**不是** `pull_request_target`;檔面 `permissions: contents: read`。
+
+> **第 2 項設為最嚴檔,是為了讓兩個【公開前不可量】的行為問題變成不必回答,
+> 而不是為了回答它們。**
+
+⚠ **原「兩開關 2026-08-27 已設」為誤記** —— repo 自 2026-08-27 建立起即為 private,
+第 2 項在寫下那一刻不可能為真。逐步與失敗處置見**票 84 順序區塊與 §4-12**,本處不複寫(`F-122`)。
+
 本機 `.github/workflows/tests.yml` 已是 `contents: read` + action 釘 40 位 sha(由 `tests/test_ci_workflow.py` 守)。
 
 ---
