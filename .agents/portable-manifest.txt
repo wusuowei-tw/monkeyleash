@@ -78,6 +78,10 @@ bootstrap.sh                    skip
 # 代價:框架每新增一個檔案,各目標 repo 要人手動補一行。接受。
 .agents/portable-manifest.txt   ask
 scripts/skills-update.sh        copy
+# 票 84 專用的一次性探針(寫死 wusuowei-tw/monkeyleash、寫死那組 sha、
+# 讀本 repo 的 commit-map)。**標 skip 不標 copy**:照抄到下游,它會去打
+# 一個與那個 repo 無關的遠端,而且永遠通過 —— 一個永遠綠的檢查比沒有檢查更糟。
+scripts/ticket84-old-sha-probe.py skip
 
 # ── 綁死這個 repo,必須重新產生 ────────────────────────────────
 .agents/legacy-no-redlight.txt  generate
