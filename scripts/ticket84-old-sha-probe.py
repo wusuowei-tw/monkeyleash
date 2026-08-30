@@ -4,7 +4,7 @@
 用法:
     python scripts/ticket84-old-sha-probe.py --mode auth --shas all   # 第 0 步 a 組
     python scripts/ticket84-old-sha-probe.py --mode anon --shas root  # 第 2a 步 秒級絆線
-    python scripts/ticket84-old-sha-probe.py --mode anon --shas all   # 第 4a 步 全掃
+    python scripts/ticket84-old-sha-probe.py --mode anon --shas all --slice 1-55   # 4a' 第 1 批
 
 **當天不得臨場改寫這支腳本。** 它進版控的理由就是這一句
 (2026-08-30 乾跑:臨場把 `gh api` 換成直連 API 才把 236 條壓到 131s,
@@ -79,6 +79,10 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["auth", "anon"], required=True)
     ap.add_argument("--shas", choices=["all", "root"], required=True)
+    ap.add_argument("--slice", dest="rng", default=None, metavar="N-M",
+                    help="只取舊欄第 N 到第 M 條(1 起算,含兩端)。"
+                         "依【檔案出現順序】切,不排序、不隨機、不去重、不挑選 —— "
+                         "順序來自檔案本身,不來自跑的人。只對 --shas all 有效。")
     ap.add_argument("--head", default=None,
                     help="auth 模式的端點活性控:從 GitHub UI 手抄的 HEAD(F-152)")
     a = ap.parse_args(argv)
@@ -108,6 +112,18 @@ def main(argv):
             return 2
 
     targets = old_shas() if a.shas == "all" else [ROOT]
+    if a.rng:
+        if a.shas != "all":
+            print("!! --slice 只對 --shas all 有效"); return 2
+        try:
+            lo, hi = [int(x) for x in a.rng.split("-", 1)]
+        except Exception:
+            print("!! --slice 格式是 N-M(例:1-55)"); return 2
+        if not (1 <= lo <= hi <= len(targets)):
+            print("!! --slice 超出範圍:清單共 %d 條,收到 %s" % (len(targets), a.rng))
+            return 2
+        targets = targets[lo - 1:hi]          # 1 起算,含兩端
+        print("== 批次 %d-%d,共 %d 條(依檔案出現順序,未排序未挑選) ==" % (lo, hi, len(targets)))
     print("== 探測 %d 條 (%s) ==" % (len(targets), a.mode))
 
     res, notes, t0 = {}, [], time.time()

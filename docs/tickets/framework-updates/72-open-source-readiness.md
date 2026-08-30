@@ -75,9 +75,14 @@ MIT,版權行 `Copyright (c) 2026 <舊帳號>`。標準 MIT 全文,不改字。
 |---|---|---|---|---|---|
 | 1 | Actions → General → Workflow permissions = Read repository contents | **外洩** | 不需要任何人動作 | ✅ `read`(GET 回值) | 已完成 |
 | 2 | Actions → General → Fork PR workflows = Require approval for all outside collaborators | **外洩** | **不需要任何人動作** —— 外面的人自己就能發起 PR | 🔴 私有下此設定**不存在**(422) | **票 84 第 3 步** |
-| 3 | Branches / Rulesets(`master`):Require PR | 寫入 | 要有**寫入權限的主體**動作 | 403,待公開 | 票 84 第 4 步 |
-| 4 | Branches / Rulesets(`master`):Require status checks(`tests`) | 寫入 | 同上 | 403,待公開 | 票 84 第 4 步 |
-| 5 | Branches / Rulesets(`master`):Block force-push & deletion | 寫入 | 同上 | 403,待公開 | 票 84 第 4 步 |
+| 3 | Branches / Rulesets(`master`):Require PR | 寫入 | 要有**寫入權限的主體**動作 | ❌ **經裁決不裝(2026-08-31)** —— 理由見票 84 | — |
+| 4 | Branches / Rulesets(`master`):Require status checks(`tests`) | 寫入 | 同上 | ❌ **經裁決不裝(2026-08-31)** —— 只在走 PR 時生效,與第 3 項綁在一起 | — |
+| 5 | Branches / Rulesets(`master`):**Block force-push** + **Block deletion** | 寫入 | 同上 | 403,待公開。⚠ **要勾「也管管理員」** | 票 84 第 4b 步 |
+
+> **★ 2026-08-31 更正:寫入類由三項改為兩項。**
+> `Require PR` 與 `Require status checks` **經裁決不裝** —— 逐字理由見
+> 票 84「第 4b 步由三項改為兩項」。**本處不複寫(`F-122`)。**
+> ⚠ 要裝的兩項**都要勾「也管管理員」** —— 不勾等於對唯一的推送者無效。
 
 **第 2 項排在寫入類三項之前**,因為它是唯一不需要窗口內有人動作就會失效的。
 
