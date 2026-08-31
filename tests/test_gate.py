@@ -231,6 +231,69 @@ class TestExtensionDenylist:
         assert wrong not in msg, "同時指了兩份清單,認知成本沒省掉"
 
 
+class TestIsSourcePathResolvesDotDotBeforeMatching:
+    """framework-updates/82:`is_source_path` 取 `r.split("/")[0]` 當 top,
+    **比對前不做 normpath**。
+
+    `docs/../pkg/thing.py` 的 top 是 `docs` -> 判成非原始碼 -> **R2/R3 不管它**。
+    方向是 fail-open:**該管的檔案不被管**。
+
+    這與同一個 repo 裡 `g1_guard._is_scratch()` 的判準是同一條(`F-051`):
+    **任何用子字串或前綴放行的地方,都要先解 `..`。**
+    那句話寫在 `_is_scratch()` 的 docstring 裡 ——
+    **同一份判準寫在 A 模組的註解裡,不會讓 B 模組變安全。註解不是機制。**
+    """
+
+    @pytest.mark.parametrize("rel_path", [
+        "scripts/../pkg/thing.py",
+        "docs/../pkg/thing.py",
+        "tests/../pkg/thing.py",
+        r"docs\..\pkg\thing.py",
+    ])
+    def test_a_path_that_climbs_back_out_is_still_source(self, rel_path):
+        assert gate.is_source_path(rel_path) is True, (
+            "**該被 R2/R3 管的檔案被判成非原始碼**:%s —— "
+            "top 是 `..` 前面那一段,而 `..` 收斂之後它根本不在那個目錄底下"
+            % rel_path)
+
+    @pytest.mark.parametrize("rel_path,expect", [
+        ("pkg/thing.py", True),          # 一般原始碼
+        ("docs/x.py", False),            # 真的在 docs 底下
+        ("docsx/thing.py", True),        # 邊界:相鄰名稱不誤中
+        ("tests/test_gate.py", False),   # 真的在 tests 底下
+        ("docs/a/../x.py", False),       # 收斂後仍在 docs 底下
+    ])
+    def test_the_ordinary_answers_do_not_change(self, rel_path, expect):
+        """**反控。** 修法不得把判定往任何一個方向整體推。"""
+        assert gate.is_source_path(rel_path) is expect, rel_path
+
+
+class TestBothLayersNormalizeAndNeitherIsLoadBearingAlone:
+    """**兩層都在,哪一層失效都還有另一層。**
+
+    `is_source_path` 生產上只有一個呼叫點,而餵它的 `r` 來自 `rel()` ——
+    `os.path.relpath(os.path.abspath(path), ROOT)`,**`abspath` 已經把 `..` 收掉了**。
+    另一個消費端吃的是 `git diff --cached --name-only`,git 的輸出也是正規化的。
+
+    **所以票 82 修的是函式契約的洞,不是活洞。** 而「呼叫端剛好也洗」這件事
+    在修之前**沒有任何測試在守** —— 它只存在於讀過那兩處程式碼的人腦子裡。
+    改一次 `rel()`(例如為了效能拿掉 `abspath`),第二層就沒了,
+    **而那時沒有東西會說**。這一組測試就是那個「有東西會說」。
+    """
+
+    def test_rel_collapses_dotdot_before_the_matcher_ever_sees_it(self):
+        r = gate.rel(os.path.join(gate.ROOT, "docs", "..", "pkg", "thing.py"))
+        assert ".." not in r.split("/"), (
+            "`rel()` 不再收斂 `..` —— 第二層沒了,而 `is_source_path` 是唯一剩下的:%s" % r)
+        assert r == "pkg/thing.py", r
+
+    def test_the_two_layers_agree_on_the_same_input(self):
+        """兩層各自的答案要一致 —— 不一致代表有一層在做另一層以為它沒做的事。"""
+        raw = os.path.join(gate.ROOT, "docs", "..", "pkg", "thing.py")
+        assert gate.is_source_path(gate.rel(raw)) is True
+        assert gate.is_source_path("docs/../pkg/thing.py") is True
+
+
 class TestNonSourceListsAreWellFormed:
     """三份清單的形狀 —— 清單一長,判準就會漂移。"""
 

@@ -19,6 +19,7 @@ import hashlib
 import io
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -1497,8 +1498,23 @@ def is_source_path(rel_path):
 
     抽成函式不只為了可讀:豁免清單要能斷言「裡面每一項本來都會被 R3 管」,
     而那個斷言若在測試裡自帶一份判定邏輯,測的就是它自己的副本(ADR 0003)。
+
+    **先解 `..` 再比對**(framework-updates/82,`F-051`):`top` 取的是第一段,
+    而 `docs/../pkg/thing.py` 的第一段是 `docs` —— 判成非原始碼,**R2/R3 不管它**。
+    方向是 fail-open:**該管的檔案不被管**。
+    判準與 `g1_guard._is_scratch()` 那一句逐字相同,而那句話寫在別的模組裡 ——
+    **同一份判準寫在 A 模組的註解裡,不會讓 B 模組變安全。註解不是機制。**
+
+    ⚠ **這一層不是唯一的一層。** 生產上唯一的呼叫點餵進來的 `r` 來自 `rel()`,
+    而 `rel()` 的 `abspath` 已經把 `..` 收掉了;另一個消費端吃的是
+    `git diff --cached --name-only`,git 的輸出也是正規化的。
+    **所以本函式修的是契約,不是一個活著的洞** ——
+    而兩層都在的意義是「哪一層失效都還有另一層」,
+    那件事由 `TestBothLayersNormalizeAndNeitherIsLoadBearingAlone` 守著。
     """
     r = rel_path.replace("\\", "/")
+    if r:
+        r = posixpath.normpath(r)
     top = r.split("/")[0] if "/" in r else ""
     return not (top in NON_SOURCE_DIRS
                 or PROTOTYPE_RE.match(r)
