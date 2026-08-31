@@ -139,6 +139,103 @@ BOM 黏在第一條路徑前面 ⇒ 那條路徑**再也不會被命中**。而�
 **⇒ 有票號(本票)但不進那一桶。** 這兩件事不是同一件,
 本票的存在已經滿足「不是沒人管的洞」那個門檻。
 
+## ✅ 八、落地(2026-08-31)
+
+**站別 `implement`,紅燈先行。** 與票 88 同一支檔(`g1_guard.py`),**分兩刀**:
+票 88 那一刀動的是 `_canon()` / `variants()`(比對面),本刀動的是
+`protected_entries()`(讀取面)——**兩個缺口不在同一個函式上,commit 分得開。**
+
+### 八之一、🔴 今天的旁證:**同一批檔案裡已經有一個帶 BOM 的**
+
+第二節寫著「目前沒有 BOM,這是理論風險」。**那句話今天仍然成立,而旁證變強了。**
+
+2026-08-31 量備份暫存夾裡的四個使用者層控制檔複本(**量的是複本,
+不是 `~/.claude/`** —— 票 88 §八之一 界線 A):
+
+| 檔 | 前四位元組 | BOM |
+|---|---|---|
+| `userlayer--shadow-clamp.txt` | **`239,187,191,35`** | 🔴 **有** |
+| `userlayer--g1-protected.txt` | `35,32,71,49`(`# G1`) | 無 |
+| `userlayer--leak-patterns.local.txt` | `35,32,229,128` | 無 |
+| `userlayer--upstream-roots.txt` | `35,32,228,184` | 無 |
+
+> ### **這台機器上真的有人用「會寫 BOM 的方式」建過控制檔 ——
+> ### 只是剛好建的是那個免疫的。**
+
+`shadow-clamp.txt` 的讀取端是 `utf-8-sig`,所以那個 BOM 無害、
+而且**從來沒有人發現它在那裡**。換句話說:寫 BOM 的那個習慣**已經在這台機器上發生過**,
+它沒有出事只是因為**中招的檔剛好不是保護清單**。
+
+**而新機器上第一次建 `g1-protected.txt`(筆電劇本第 07 步)正是同一種寫法。**
+⇒ 這不是「有一天可能會」,是「**同一個動作已經做過,只是落在別的檔上**」。
+
+### 八之二、修法:**一個關鍵字**
+
+```python
+io.open(PROTECTED_LIST, encoding="utf-8")      ->  encoding="utf-8-sig"
+```
+
+同族的另外三個讀取端早就這樣做,理由逐字是
+「fail-closed 系統的故障是隱形的,輸入端的坑要在進門前排掉」。
+**沒跟上那個慣例的是 G1 自己,而它讀的正是保護清單。**
+
+### 八之三、測試(紅燈先行,5 條)
+
+`TestABomOnTheListDoesNotSilentlyDropTheFirstEntry` ——
+**造一份真的帶 BOM 的清單**(前三位元組 `239,187,191`),
+monkeypatch `PROTECTED_LIST` 過去。
+
+| 條 | 驗什麼 | 紅/綠 |
+|---|---|---|
+| `test_the_fixture_really_carries_a_bom` | **先證明 fixture 本身是對的** —— 否則後面測的是別的東西 | 綠(前提) |
+| `test_the_first_entry_is_still_protected` | 第一條路徑仍被 `level1_hit` 命中 | 🔴 **紅** |
+| `test_no_entry_carries_the_bom_character` | 回來的條目不含 `\ufeff` | 🔴 **紅** |
+| `test_the_second_entry_was_never_affected` | **對照** —— 只有第一條會中 | 綠 |
+| `test_a_list_without_a_bom_behaves_identically` | **反控** —— 無 BOM 的行為一個字都不變 | 綠 |
+
+> ### ⚠ **不得用「現在沒有 BOM 所以沒事」當通過。**
+> 現況無 BOM 是一個**會變的事實**,而測試要釘的是**變了以後仍然守得住**。
+
+**紅燈**:`2 failed, 3 passed`,訊息說的是後果:
+
+```
+**保護清單的第一條路徑靜默失去保護** —— BOM 黏在第一行上,
+清單上有那一行、行數正確、g1_verify 照樣全綠,
+而那條路徑不再被擋,沒有任何東西會說
+```
+
+**綠燈**:`103 passed, 3 xfailed`(`tests/test_g1_guard.py`)/
+全套 **1123 passed / 3 skipped / 3 xfailed**(`F-109`:基準與數字一起寫,基底見收刀 commit)。
+
+---
+
+## 🔴 九、AC —— **本票【尚未】滿足**
+
+### ☐ AC-1:Jeff 手動覆蓋(**驗收條件,不是備註**)
+
+> ### **AC 未滿足,直到 Jeff 完成 `~/.claude/hooks/g1_guard.py` 的手動覆蓋
+> ### (ADR 0009 四步)並跑過 `g1_verify` 全綠。**
+
+**改 repo 內的 `.claude/portable/g1_guard.py` 不會讓任何一台機器變安全** ——
+實際在守的是 `~/.claude/hooks/g1_guard.py`,三個 repo 共用,
+而 agent 結構上碰不到它。**前五次都是這樣,沒有一次例外。**
+
+**⚠ 今天不做 cp。**
+
+### ☐ AC-2:copy 桶的下游同步(**三張票共用**)
+
+`.claude/hooks/` 與 `.claude/portable/` 都是 copy 桶,
+`tests/test_gate.py` 與 `tests/test_g1_guard.py` 也是 ——
+**收刀前要 sync 兩個下游,兩支測試一併帶過去。⚠ 今天不做 sync。**
+
+### ☐ AC-3:`KNOWN_GAPS`
+
+第六節裁定本輪不放進 `KNOWN_GAPS`。**缺口補上之後,那一格要一併確認不需要登記。**
+
+### ☑ AC-4:紅燈先行 + 綠燈 + 全套(**已完成 2026-08-31**)
+
+---
+
 ## 七、本票不做
 
 - **不改編碼、不動 `KNOWN_GAPS`、不碰 `~/.claude/`**(界線 A,票 88 §八之一)

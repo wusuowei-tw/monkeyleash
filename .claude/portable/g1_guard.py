@@ -279,7 +279,14 @@ def protected_entries():
     """
     try:
         out = []
-        for n, line in enumerate(io.open(PROTECTED_LIST, encoding="utf-8"), 1):
+        # framework-updates/92:**`utf-8-sig`,不是 `utf-8`。** 同族的另外三個
+        # 使用者層讀取端(`read_shadow_clamp` / `_read_patterns` / `read_upstream_root`)
+        # 早就這樣做,理由逐字是「fail-closed 系統的故障是隱形的,輸入端的坑要在
+        # 進門前排掉」。沒跟上的是 G1 自己,而它讀的正是保護清單:BOM 黏在第一行
+        # 就讓**第一條路徑靜默失去保護** —— 清單上有那一行、行數正確、
+        # `g1_verify` 照樣全綠。`g1-protected.txt` 是新機器上第一次建檔的四份之一,
+        # 而 PowerShell 最自然的兩種寫法都寫 BOM(`F-146` 實測)。
+        for n, line in enumerate(io.open(PROTECTED_LIST, encoding="utf-8-sig"), 1):
             raw = line.split("#", 1)[0].strip()
             if not raw:
                 continue

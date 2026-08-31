@@ -260,6 +260,71 @@ class TestFailClosedIsPreserved:
         assert "沒有任何有效條目" in reason, "把空清單說成讀不到:%r" % reason
 
 
+class TestABomOnTheListDoesNotSilentlyDropTheFirstEntry:
+    """framework-updates/92:**`protected_entries()` 用 `utf-8` 讀,不是 `utf-8-sig`。**
+
+    同族的另外三個使用者層讀取端(`gate.read_shadow_clamp`、
+    `leak_scan._read_patterns`、`gate.read_upstream_root`)**都已改用 `utf-8-sig`**,
+    而且 docstring 逐字寫著理由。**沒跟上那個慣例的讀取端,是 G1 自己 ——
+    而它讀的正是保護清單。**
+
+    BOM 黏在第一行 -> 第一條路徑變成 `\ufeffC:\\…` -> `variants()` 展開的每一個
+    形態都帶著那個字元 -> **那條路徑不再被保護,而清單上有那一行、
+    行數正確、`ls` 看得到、`g1_verify` 照樣全綠。**
+
+    ⚠ **不得用「現在沒有 BOM 所以沒事」當通過。** 這一組測試造一份**真的帶 BOM**
+    的清單(前三位元組 `239,187,191`),斷言第一條路徑**仍然擋得住**。
+    現況無 BOM 是一個**會變的事實**:`g1-protected.txt` 是新機器上第一次建檔的
+    四份之一,而 PowerShell 最自然的兩種寫法都寫 BOM(`F-146` 實測)。
+    """
+
+    ENTRIES = (r"C:\db_backups", r"D:\datastore")
+
+    def _write(self, tmp_path, bom):
+        lst = tmp_path / "g1-protected.txt"
+        body = ("%s\n%s\n" % self.ENTRIES).encode("utf-8")
+        lst.write_bytes((b"\xef\xbb\xbf" if bom else b"") + body)
+        return lst
+
+    def test_the_fixture_really_carries_a_bom(self, tmp_path):
+        """先證明 fixture 本身是對的 —— 否則後面三條測的是別的東西。"""
+        assert list(self._write(tmp_path, True).read_bytes()[:3]) == [239, 187, 191]
+
+    def test_the_first_entry_is_still_protected(self, tmp_path, monkeypatch):
+        lst = self._write(tmp_path, True)
+        monkeypatch.setattr(g1, "PROTECTED_LIST", str(lst))
+        entries, reason = g1.protected_entries()
+        assert reason is None, "清單讀不動:%r" % reason
+        assert g1.level1_hit(r"cp x C:/db_backups/y", entries) is not None, (
+            "**保護清單的第一條路徑靜默失去保護** —— BOM 黏在第一行上,"
+            "清單上有那一行、行數正確、g1_verify 照樣全綠,"
+            "而那條路徑不再被擋,沒有任何東西會說")
+
+    def test_no_entry_carries_the_bom_character(self, tmp_path, monkeypatch):
+        """讀取端的直接斷言:回來的條目裡不得有 `\ufeff`。"""
+        monkeypatch.setattr(g1, "PROTECTED_LIST",
+                            str(self._write(tmp_path, True)))
+        entries, _ = g1.protected_entries()
+        assert entries and all("\ufeff" not in e for e in entries), entries
+
+    def test_the_second_entry_was_never_affected(self, tmp_path, monkeypatch):
+        """**對照。** 只有第一條會中 —— 這一條在修之前就是綠的。"""
+        monkeypatch.setattr(g1, "PROTECTED_LIST",
+                            str(self._write(tmp_path, True)))
+        entries, _ = g1.protected_entries()
+        assert g1.level1_hit(r"cp x D:/datastore/y", entries) is not None
+
+    def test_a_list_without_a_bom_behaves_identically(self, tmp_path, monkeypatch):
+        """**反控。** 改編碼不得改變無 BOM 清單的任何行為。"""
+        monkeypatch.setattr(g1, "PROTECTED_LIST",
+                            str(self._write(tmp_path, False)))
+        entries, reason = g1.protected_entries()
+        assert reason is None
+        assert entries == list(self.ENTRIES), entries
+        assert g1.level1_hit(r"cp x C:/db_backups/y", entries) is not None
+        assert g1.level1_hit(r"cp x C:/db_backups_other/y", entries) is None
+
+
 class TestAbsPathExtraction:
     """`ABS_PATH` 是**共用比對基礎**,不是 `_is_scratch` 私有的。
 
