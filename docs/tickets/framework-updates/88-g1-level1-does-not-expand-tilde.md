@@ -624,7 +624,40 @@ rm -rf <專案>/../../Windows/System32                     -> 放行  🔴
 
 ## 🔴 十一、AC —— **本票【尚未】滿足**
 
-### ☐ AC-1:Jeff 手動覆蓋(**本票的驗收條件,不是備註**)
+### ☑ AC-1:Jeff 手動覆蓋 —— **已完成 2026-08-31**
+
+**證據三段(缺一不可):**
+
+| # | 誰做 | 結果 |
+|---|---|---|
+| ① | **Jeff** cp | 來源 `sha256 = 33CA8E52…4701C8` / `Length = 28197`,與 repo 現算一致;備份 **`.working6`**(目錄裡原有 `.working` / 2 / 3 / 4 / 5);覆蓋後三格全對:目標檔 `sha256` 一致、`Length 28197`、`git status --porcelain` **完全無輸出** |
+| ② | **Jeff** 跑 `g1_verify` | 34 條保護路徑全 `OK`、11 條第二級回歸全擋、三個鄰居放行、`Write` 擋下、fail-closed `exit=2`、應放行三條 `exit=0`。**並且它自己來要求收本票**(見票 92 AC-3) |
+| ③ | **agent** live 探針(ADR 0009 第 4 步) | 見下 |
+
+**③ live 探針 —— 真的觸發,不是跑測試;一次觀測一個受測項:**
+
+```
+$ rm -rf "C:\projects\agent-gates\..\..\g1_probe_nonexistent_20260831"
+[G1/專案外破壞性動作] `rm` 指向專案目錄以外的路徑:C:\projects\agent-gates\..\..\g1_probe_nonexistent_20260831
+     專案目錄:c:/projects
+
+$ ls ~/.claude/g1-protected.txt
+[G1/保護清單] 這個指令碰到受保護的路徑:C:\Users\<使用者>\.claude\g1-protected.txt
+```
+
+**兩支探針都由 `C:/Users/<使用者>/.claude/hooks/g1_guard.py` 擋下** ——
+**那是 Jeff 剛蓋上去的那一份,不是 repo 裡的。**
+
+> **⚠ (a) 這支探針真的能分辨修法有沒有生效**:修之前
+> `_canon()` 不解 `..`,`c:/projects/agent-gates/../../…` 仍以 `c:/projects/` 開頭
+> → 專案豁免收下 → **放行**。修之後 normpath 到 `c:/…` → 專案外 → 擋。
+> **目標刻意選一個不存在的路徑** —— 萬一沒擋,`rm -rf` 也是 no-op。
+
+> **⚠ BOM 那一件(票 92)live 探針驗不到**,明講不湊:要驗它得**把 BOM 寫進真的保護清單**,
+> 那既是破壞性動作、也違反界線 A。它由 `tests/test_g1_guard.py` 的
+> `TestABomOnTheListDoesNotSilentlyDropTheFirstEntry`(帶 BOM 的 fixture)守著。
+
+### ☑ AC-1(原文,保留)
 
 > ### **AC 未滿足,直到 Jeff 完成 `~/.claude/hooks/g1_guard.py` 的手動覆蓋
 > ### (ADR 0009 四步)並跑過 `g1_verify` 全綠。**
