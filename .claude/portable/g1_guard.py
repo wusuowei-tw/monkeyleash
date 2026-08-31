@@ -132,8 +132,23 @@ def _canon(p):
     code-review 照出那是願望不是構造;第二版改成「靠測試釘」,增量 review
     再照出那條測試只釘單向。現在:構造共表 + **雙向**耦合測試
     (`TestVariantsAndCanonCoverTheSameForms`)並存。
+
+    **先解 `..` 再比對**(framework-updates/88 那一刀補,`F-051`):
+    少了這一步,`<專案>/../../<目標>` 收斂後仍以 `<專案>/` 開頭 ——
+    第二級的專案目錄豁免收下它,**而它實際碰到的是專案外**。
+    這不是新機制:同一支檔案的 `_is_scratch()` 早就這樣做,
+    它的 docstring 逐字寫著「先解 `..` 再比對」。
+    **同檔、隔四十行、只解了一個**(2026-08-31 由 framework-updates/82 的
+    `F-051` 半徑掃描掃出)。
+
+    **展開前導 `~`**(framework-updates/88 本題):`~/.claude/x` 與
+    `C:/Users/<你>/.claude/x` 是同一個地方的兩種寫法,而第一級**不解析指令**
+    —— 所以認定側要認得它,展開側(`variants()`)要產出它。**兩側同一份知識。**
     """
+    p = os.path.expanduser(p) if p[:1] == "~" else p
     p = p.replace("\\", "/").rstrip("/").lower()
+    if p:
+        p = posixpath.normpath(p)
     m = _DRIVE_FORM.match(p)
     if m:
         p = m.group(1) + ":" + p[m.end():]
@@ -213,6 +228,14 @@ def variants(path):
         out.add("/%s/%s" % (drive, rest))
         for mount in _POSIX_DRIVE_MOUNTS:
             out.add("/%s/%s/%s" % (mount, drive, rest))
+    # framework-updates/88:家目錄底下的條目再補 `~/…` 與 `~\\…` 兩種寫法。
+    # 展開的責任在**條目這一側**,不是在比對時去解析指令字串 ——
+    # 第一級的判定不解析指令(解析會失敗,而失敗的解析就是洞)。
+    home = _canon(os.path.expanduser("~"))
+    if home and (c == home or c.startswith(home + "/")):
+        rest = c[len(home):].lstrip("/")
+        out.add(("~/" + rest) if rest else "~")
+        out.add(("~\\" + rest.replace("/", "\\")) if rest else "~")
     return [v for v in out if v]
 
 

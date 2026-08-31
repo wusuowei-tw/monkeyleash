@@ -19,6 +19,7 @@
 import ast
 import importlib.util
 import io
+import os
 import pathlib
 import warnings
 
@@ -290,6 +291,85 @@ class TestAbsPathExtraction:
         """守住上面那條不是「什麼都抓」:`rm .cache/x.json` 裡的 `/x.json`
         不得被當成絕對路徑 —— 那是第一次驗收就抓到的誤擋。"""
         assert g1.ABS_PATH.findall("rm -rf build/ && rm .cache/x.json") == []
+
+
+class TestTheTildeFormOfAHomeEntryIsAlsoBlocked:
+    """framework-updates/88:**第一級不展開 `~`,而它保護的第一個對象就是自己。**
+
+    實測(2026-08-28,同一台機器、同一個 session、同一個檔案):
+
+        cat "C:\\Users\\<使用者>\\.claude\\g1-protected.txt"   -> 擋下,正確
+        wc -l ~/.claude/g1-protected.txt                    -> **沒有被擋**
+
+    先排除動詞:第一級**不分讀寫**,兩條都是無害讀取。**差別只在寫法。**
+
+    修法照 `variants()` 既有的職責(「一個路徑會被寫成哪些樣子」)——
+    家目錄底下的條目要多一個 `~/…` 形態,**不是在比對時去展開指令字串**。
+    """
+
+    def _home_entry(self):
+        # 只算字串,不讀 `~/.claude/` 底下任何東西(票 88 §八之一 界線 A)。
+        return os.path.join(os.path.expanduser("~"), ".claude",
+                            "g1-protected.txt")
+
+    def test_the_full_path_form_is_blocked(self):
+        """**對照。** 這一條在修之前就是綠的 —— 它證明差別只在寫法。"""
+        e = self._home_entry()
+        assert g1.level1_hit("cat %s" % e, [e]) == e
+
+    def test_the_tilde_form_is_blocked_too(self):
+        e = self._home_entry()
+        assert g1.level1_hit("wc -l ~/.claude/g1-protected.txt", [e]) == e, (
+            "`~/` 寫法穿過了第一級 —— 而第一級無豁免、不分讀寫,"
+            "它保護的第一個對象正是這份清單自己")
+
+    def test_a_tilde_lookalike_is_not_falsely_blocked(self):
+        """**反控。** `~` 展開不得退化成子字串比對。"""
+        e = self._home_entry()
+        for cmd in ("wc -l ~foo/.claude/g1-protected.txt",
+                    "wc -l x~/.claude/g1-protected.txt"):
+            assert g1.level1_hit(cmd, [e]) is None, cmd
+
+    def test_a_non_home_entry_gains_no_tilde_form(self):
+        """**反控。** 不在家目錄底下的條目不得長出 `~/…` 變體。"""
+        assert not [v for v in g1.variants(r"D:\datastore")
+                    if v.startswith("~")]
+
+
+class TestTraversalOutOfTheProjectDirIsNotExempt:
+    """**`_canon()` 沒有解 `..`,而專案目錄豁免用它比對前綴。**
+
+    `<proj>/../../<目標>` 收斂之後仍以 `<proj>/` 開頭 -> 判成專案內 ->
+    **第二級放行一個專案外的破壞性動作。**
+
+    這與同一支檔案裡 `_is_scratch()` 的 traversal 洞是**同一個判準**
+    (`F-051`),而那一個已經解了:它的 docstring 逐字寫著
+    「**先解 `..` 再比對**」。**同檔、隔四十行、只解了一個。**
+
+    2026-08-31 由 framework-updates/82 的 `F-051` 半徑掃描掃出。
+    """
+
+    PROJ = r"c:\proj"
+
+    @pytest.mark.parametrize("path", [
+        r"c:/proj/../../Windows/System32",
+        r"c:\proj\..\..\Windows\System32",
+        r"c:/proj/sub/../../../etc/passwd",
+    ])
+    def test_a_path_that_escapes_the_project_is_still_blocked(self, path):
+        assert g1.level2_hit("rm -rf %s" % path, self.PROJ) is not None, (
+            "**專案外的破壞性動作被當成專案內而放行**:%s ——"
+            " 它以 `%s/` 開頭,所以專案目錄豁免收下了它,"
+            "而 `..` 收斂之後它根本不在專案裡。第二級沒有擋。" % (path, self.PROJ))
+
+    @pytest.mark.parametrize("path", [
+        r"c:/proj/build",
+        r"c:/proj/sub/../build",
+        r"c:/proj",
+    ])
+    def test_a_path_that_stays_inside_the_project_still_passes(self, path):
+        """**反控。** 修法不得把專案內的動作一起擋掉。"""
+        assert g1.level2_hit("rm -rf %s" % path, self.PROJ) is None, path
 
 
 class TestLevelTwoIsUnchanged:
