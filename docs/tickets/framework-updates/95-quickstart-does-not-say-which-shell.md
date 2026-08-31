@@ -1,6 +1,6 @@
 # 95 — quickstart 沒有告訴 Windows 讀者要用哪個殼
 
-**狀態**:**立案**(2026-08-31)。**不擋發文,不擋上線(上線已完成)。**
+**狀態**:**README 兩份已修(2026-08-31);`docs/machine-init.md` 已補。剩:文章那一句(不進版控,由 Jeff 改)。**
 **時鐘**:**上線之後**
 **站別**:立案時 `implement`;動工前重設 `ticket_id`
 **前置**:票 27(權威層沒接上 git)、票 58(bootstrap 三道 fail-closed)
@@ -62,6 +62,23 @@ CI 也用 `sh bootstrap.sh` 跑得好好的。**它沒有壞。**
 
 ## 四、驗收
 
-- [ ] 兩份 README 同步(英 / 繁,內容對等)
-- [ ] 補的那句話**不寫死條數、不寫死平台清單** —— 照票 51 D3 的先例
-- [ ] ⚠ 文章那一句同樣要補(**文章不進版控,由 Jeff 改,不在本票範圍**)
+- [x] **兩份 README 同步(英 / 繁,內容對等)** —— 2026-08-31 落地,補在**前提節**,
+      不是指令方塊後面(**讀者是先看前提才照著打**)
+- [x] **補的那句話不寫死條數、不寫死平台清單** —— 只點名 Windows 這一個實測過的情況
+- [x] **`docs/machine-init.md:604` 同步**(優先序在兩份 README 之後,同輪一起做)
+- [ ] ⚠ **文章那一句**(**文章不進版控,由 Jeff 改,不在本票範圍**)
+
+### 落地內容(逐字)
+
+```
+README.md(前提節)
+- **On Windows, run the `bootstrap.sh` line in Git Bash** (bundled with Git for
+  Windows) — PowerShell has no `sh`. Everything else runs in any shell.
+
+README.zh-TW.md(前提節)
+- **Windows 請在 Git Bash 裡跑 `bootstrap.sh` 那一行**(裝 git 時會一起裝)——
+  PowerShell 沒有 `sh` 這個指令。其餘指令任何殼都跑得動。
+```
+
+**`bootstrap.sh` 一個位元組都沒有動**,也沒有加 `.ps1`、沒有在腳本裡偵測殼 ——
+照本票第三節寫死的那條。

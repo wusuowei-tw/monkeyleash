@@ -36,6 +36,8 @@ themselves, the ledger, and the friction log — is original to this repo.
 - Python ≥ 3.10, git
 - Claude Code (the `PreToolUse` hook layer targets it; the `pre-commit`
   layer works with any git client)
+- **On Windows, run the `bootstrap.sh` line in Git Bash** (bundled with Git for
+  Windows) — PowerShell has no `sh`. Everything else runs in any shell.
 
 ## Quickstart
 

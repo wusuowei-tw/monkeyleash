@@ -601,7 +601,7 @@ certutil -hashfile "%USERPROFILE%\.claude\shadow-clamp.txt" SHA256
 
 | | |
 |---|---|
-| **啟用** | 在 repo 根目錄跑 `sh bootstrap.sh` —— 一行 `core.hooksPath` config,**每個 clone 一次**。零接觸不可能:git 刻意不讓 clone 自動執行任何東西。 |
+| **啟用** | 在 repo 根目錄跑 `sh bootstrap.sh` —— 一行 `core.hooksPath` config,**每個 clone 一次**。零接觸不可能:git 刻意不讓 clone 自動執行任何東西。 **⚠ Windows 請在 Git Bash 裡跑**(裝 git 時會一起裝)—— PowerShell 沒有 `sh` 這個指令。 |
 | **驗收** | `python -m pytest tests/test_gate.py::TestAuthorityLayerIsWired` —— 其中 `test_this_repo_itself_is_wired` 問的是「**現在、這台機器上**接上了沒」,不是「框架的邏輯對不對」。 |
 | **缺席時** | 紅燈,訊息直接給修法(`sh bootstrap.sh`)。**這是刻意讓它吵的** —— 靜默缺席正是票 27 的整件事。 |
 

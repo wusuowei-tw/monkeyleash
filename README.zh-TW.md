@@ -36,6 +36,8 @@ improve-codebase-architecture);強制層 —— 閘門本身、帳本、
 
 - Python ≥ 3.10、git
 - Claude Code(`PreToolUse` 那一層是為它寫的;`pre-commit` 那一層任何 git 客戶端都適用)
+- **Windows 請在 Git Bash 裡跑 `bootstrap.sh` 那一行**(裝 git 時會一起裝)——
+  PowerShell 沒有 `sh` 這個指令。其餘指令任何殼都跑得動。
 
 ## 快速開始
 
