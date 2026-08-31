@@ -98,6 +98,94 @@
 > 在設定頁上長得一樣。**這正是 `F-152` 的形狀:設定是假設,讀回來才是量測。**
 
 
+### ✅ 窗口關閉(2026-08-31T00:21:43Z UTC)
+
+**第 1 步至第 4b 步全部完成並複讀通過。凍結解除。**
+
+| 步 | 複讀值(**已認證 GET,不是憑設定頁**) |
+|---|---|
+| 1 翻公開 | `visibility: public` · `private: false` |
+| 2a 匿名絆線 | 匿名正控 `200` · 舊根 `45a8d16437…` → **`422`** · `exit 0` |
+| 3 Fork PR 核准 | `approval_policy: "all_external_contributors"` ✅ **最嚴檔** |
+| 4b ruleset | 見下 |
+| 窗口內 fork | `forks_count 0` · `network_count 0` · `subscribers_count 0` **無人 fork** |
+
+### 4b ruleset 逐項複讀
+
+```
+id            21887125
+name          master-protect
+target        branch
+enforcement   active
+bypass_actors []                                   <- 空
+conditions    ref_name.include = ["~DEFAULT_BRANCH"]
+rules         [{"type":"deletion"},{"type":"non_fast_forward"}]   <- 恰好兩條
+```
+
+**不該出現而出現的:無。** `update` **不在**清單裡、`creation` **不在**清單裡
+(`update` 若在而 bypass 為空,所有人都不能推 master,包括 Jeff)。
+
+### 🔴 「也管管理員」在新版介面**不是一個勾選框**(`F-154`)
+
+**票面原本寫的是「兩項都要勾【也管管理員】」,而實際介面不是那樣。**
+
+> ### **新版 ruleset 介面沒有那個勾 —— 對應的是 `Bypass list` 保持為空。**
+
+**這是 `F-154` 的又一個實例**:「要勾一個選項」這個寫法為真所依賴的條件
+(**舊版 branch protection 介面**)沒有跟著它一起寫下來,
+於是它搬到新版介面上就變成了一句**找不到對象的指示**。
+**原文照 `F-036` 保留在上方,不刪。**
+
+### ★ 而「bypass_actors 為空」本身也只是設定值 —— 另外量了一次
+
+```
+GET /repos/wusuowei-tw/monkeyleash/rules/branches/master
+   當前已認證身分:wusuowei-tw(owner / admin)
+   對這個身分生效的規則:
+     type=deletion          ruleset_id=21887125  source=wusuowei-tw/monkeyleash
+     type=non_fast_forward  ruleset_id=21887125  source=wusuowei-tw/monkeyleash
+```
+
+**⇒ 兩條規則對【管理員本人】生效 —— 這是量到的,不是從 `bypass_actors: []` 推的。**
+**設定是假設,讀回來才是量測(`F-152`)。**
+
+### ⚠ 行為驗證這一格:**dry-run 量不到,而我沒有為了驗證去做真的 force push**
+
+```
+git push --force-with-lease --dry-run origin master
+   -> Everything up-to-date        (exit 0)
+   本機 HEAD == origin/master,rev-list --left-right --count = 0 0
+```
+
+**凍結期間沒有東西可推,所以伺服器端從未評估過那條規則。**
+**能量到的**:規則存在、狀態 active、bypass 為空、**且對管理員身分生效**(上一格)。
+**量不到的**:一次真的 `--force` 會不會被擋 ——
+**要量它就得真的推一次,而那與規則要防的事情是同一個動作。**
+
+> **這一格誠實留白,不用一個量不到的東西換一個綠燈。**
+> 下一次正常推送會順帶證明「規則不擋正常推送」(反控),
+> 而正控(force-push 被擋)**留在未量測狀態,登記,不修**。
+
+### Jeff 回報的螢幕字樣(逐字存檔)
+
+```
+第 3 步   Require approval for all external contributors
+第 4b 步  Ruleset Name        = master-protect
+          Enforcement status  = Active
+          Bypass list         = empty
+          Target branches     = Default
+          勾選                = Restrict deletions · Block force pushes
+          其餘                = 全未勾
+```
+
+### 登記(不在窗口內處理,另裁)
+
+`allowed_actions: "all"` 與 `sha_pinning_required: false` —— **repo 層級不限制第三方
+action、不強制釘 sha**。兩者**不在票 72 ⑤ 的五項裡**,也不在第 3 / 4b 步的動作清單裡。
+**實際曝險被 `tests.yml` 自己蓋住**(兩個 action 都釘 40 位 sha,`test_ci_workflow.py` 守著)。
+**要不要收緊 repo 層級的天花板,窗口關閉之後另裁。**
+
+
 ### 🔒 凍結宣告(2026-08-31,翻公開之前)
 
 > ### **從 `--slice` 那一次推送的 CI 綠起,到第 4b 步完成為止:
