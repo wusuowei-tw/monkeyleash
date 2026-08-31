@@ -387,12 +387,14 @@ _gdrive_upload_2026-08-28/
 | | |
 |---|---|
 | **對象** | `C:\projects\_gdrive_upload_2026-08-28\README.md`(備份清單本體) |
-| **時點** | **2026-08-29 12:4x (+0800)**(第 4 版) |
-| **大小** | **33,079 B** |
-| **sha256** | **`05eef6d32f4b957b138e01298928eb1c31a2ad180b538343ed48414c117561e9`** |
+| **時點** | **2026-08-31 (+0800)**(**第 5 版**) |
+| **大小** | **35,175 B** |
+| **sha256** | **`ca35795c08b495917ae48cf6a7f9de72ba915056413889c39fff9acaac7234b6`** |
+| ⚠ 同日更正 | 本版一度算出 `de3e5cb3…` —— 那一版把日期誤寫成 `2026-09-01`(指令標題誤寫,`F-154` 實例 #5)。**同日改回 `2026-08-31`,長度不變(35,175 B)而雜湊改變** —— **這正是「只看大小會過關」的形狀**:改動與檔案長度無關時,只有雜湊看得見它。`de3e5cb3…` 作廢,勿用。 |
 | 前四位元組 | `35, 32, 228, 184`(`# ` + `上` 的 UTF-8 首兩碼)—— 純 markdown、無 BOM |
-| 前三版(**已作廢,勿用**) | 24,408 B(第一次上傳的那一版)、26,039 B / `5f6b757b…`、30,890 B / `0571e5bf…`、31,633 B / `c4668d2e…`(**雲端上現在放著的是這一版 —— 已驗證 OK=12,但本輪又改了**) |
-| ⚠ **本輪狀態** | **本機比雲端新一版。** 需要再跑一次整包重傳重驗 —— **而這是本輪最後一次編輯**,見 §十二 |
+| **第 5 版改了什麼** | 只動「**還原時**」一節:與筆電劇本建立**互指**,並修掉兩處已經對不上的引用 —— ① `leak-patterns.local.txt` 的處置寫的是「一定要用**還原**」,而劇本第 09 步 2026-08-28 已改判為「**合併**」(票 91 / 本票 §七),**兩份正本互相矛盾**;② 指到「劇本第 07、**10** 步」,而第 10 步是 `settings.json` 的掛載,`upstream-roots.txt` 是**第 11 步**。另補兩條:四個控制檔的 **BOM 建檔/驗收**,以及 `g1-protected` / `upstream-roots` 是**重新決定**(不是還原,`sha256` 對得上反而是紅旗)。**指紋表的十二列一列都沒動。** |
+| 前四版(**已作廢,勿用**) | 24,408 B(第一次上傳的那一版)、26,039 B / `5f6b757b…`、30,890 B / `0571e5bf…`、31,633 B / `c4668d2e…`(**雲端上現在放著的仍是這一版**)、**33,079 B / `05eef6d3…`(第 4 版)** |
+| 🔴 **本輪狀態(2026-08-31)** | **本機比雲端新【兩】版**(雲端 = 第 3 版 31,633 B;本機 = 第 5 版)。需要一次**整包重傳重驗** —— 而**這一輪不動筆電、不上傳**,所以這一格是**開著的**,不是關掉的。<br>⚠ 第 4 版當時寫著「這是本輪最後一次編輯」,而 **8/31 這一輪又改了一次** —— 那句話管的是**那一輪**,不是這個檔的一生。**§十二那道閘門要在【每一次上傳前】跑,不是「已經跑過了」。** |
 
 ### 為什麼記在票面,而不是暫存夾裡另開一個一行檔
 
@@ -573,3 +575,101 @@ agent 原本建議「**只重傳 `README.md` 一個檔**」。**裁決者改判�
 **⚠ 仍然沒有觸發器**(同 §十二 的誠實標註):沒有東西會在收工時叫。
 **這一條把「什麼時候」從不確定變成確定,沒有把「誰來叫」從無變成有。**
 
+
+---
+
+## ✅ 十三、**路線裁決:走隨身碟**(2026-08-31,Jeff)
+
+> ### **硬條件四(現階段一律用隨身碟)沒有被推翻過。**
+> 8/29 走雲端是**例外**,而本票 §八 自己寫著
+> 「證明的是**這一次**沒被轉檔,不是**以後不會**」。
+> 隨身碟這條路**沒有轉檔那個失效面** —— **少一個失效模式,
+> 而驗收腳本兩條路都適用。**
+
+**⇒ 本次重傳走隨身碟。** 雲端那一份維持在第 3 版(31,633 B),**不再更新** ——
+它不是現況,而本票 §十 的「本輪狀態」那一格在隨身碟這一輪跑完之前**保持開著**。
+
+### 十三之一、Jeff 照著做:**隨身碟版重傳**(四步)
+
+**對象**:`C:\projects\_gdrive_upload_2026-08-28\`(**12 個檔**:
+`README.md` + `control-files\` 8 個 + `shadow-baselines\` 3 個)。
+
+#### 第 0 步 —— 上傳閘門(不相等就停,不要往下走)
+
+```powershell
+(Get-FileHash -LiteralPath 'C:\projects\_gdrive_upload_2026-08-28\README.md' -Algorithm SHA256).Hash
+# 期望:CA35795C08B495917AE48CF6A7F9DE72BA915056413889C39FFF9ACAAC7234B6
+# 與本票 §十 的值比對。不相等 => 有人又改了 README,先查清楚。
+```
+
+#### 第 1 步 —— **整包 12 檔**複製到隨身碟(不是只有 `README.md`)
+
+```powershell
+Copy-Item -LiteralPath 'C:\projects\_gdrive_upload_2026-08-28' -Destination '<隨身碟>:\' -Recurse
+```
+
+> **`F-150`:「只傳一個」必然變成「只驗一個」,因為【沒有傳上去的檔驗不了】。**
+> 條款是**整包傳、整包驗**,兩個動詞都要。
+
+#### 第 2 步 —— 從隨身碟**複製回一個乾淨的新資料夾**
+
+```powershell
+Copy-Item -LiteralPath '<隨身碟>:\_gdrive_upload_2026-08-28' -Destination 'C:\projects\_gdrive_verify_2026-08-31' -Recurse
+```
+
+**要複製回來,不能直接對隨身碟上那份跑驗收** —— 那樣量到的是「寫進去的」,
+不是「讀得回來的」。**§十一 那句「上傳完成是一個動作的結束,可還原是一個性質」
+在隨身碟上一樣成立。**
+
+#### 第 3 步 —— 驗收(唯讀,只印表)
+
+```powershell
+$src = 'C:\projects\_gdrive_upload_2026-08-28'       # 本機正本
+$dl  = 'C:\projects\_gdrive_verify_2026-08-31'       # 剛複製回來的
+
+$srcFiles = Get-ChildItem -LiteralPath $src -Recurse -File
+$rows = foreach ($f in $srcFiles) {
+    $rel = $f.FullName.Substring($src.Length + 1)
+    $d   = Join-Path $dl $rel
+    if (-not (Test-Path -LiteralPath $d)) {
+        [pscustomobject]@{ 檔=$rel; 大小=''; 前四位元組=''; 結果='MISSING' }
+        continue
+    }
+    $b4 = (Get-Content -LiteralPath $d -Encoding Byte -TotalCount 4) -join ','
+    $hs = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash
+    $hd = (Get-FileHash -LiteralPath $d          -Algorithm SHA256).Hash
+    $r  = if ($b4 -eq '80,75,3,4') { 'CONVERTED(docx)' }
+          elseif ($hs -eq $hd)     { 'OK' }
+          else                     { 'MISMATCH' }
+    [pscustomobject]@{ 檔=$rel; 大小=(Get-Item -LiteralPath $d).Length; 前四位元組=$b4; 結果=$r }
+}
+$srcRel = $srcFiles | ForEach-Object { $_.FullName.Substring($src.Length + 1) }
+$extra  = Get-ChildItem -LiteralPath $dl -Recurse -File |
+          ForEach-Object { $_.FullName.Substring($dl.Length + 1) } |
+          Where-Object { $srcRel -notcontains $_ }
+
+$rows | Format-Table -AutoSize
+'OK        {0}' -f ($rows | Where-Object 結果 -eq 'OK').Count
+'MISMATCH  {0}' -f ($rows | Where-Object 結果 -eq 'MISMATCH').Count
+'MISSING   {0}' -f ($rows | Where-Object 結果 -eq 'MISSING').Count
+'CONVERTED {0}' -f ($rows | Where-Object 結果 -eq 'CONVERTED(docx)').Count
+'多出      {0}' -f $extra.Count
+```
+
+**通過條件:`OK = 12`,其餘四格全 `0`。**
+
+> ### ⚠ **`CONVERTED` 那一格在隨身碟上永遠是 0 —— 而它【留在腳本裡】。**
+> 拿掉的話,**將來有人改走雲端就少了一道**,而那個人不會知道曾經有過這一格。
+> **一格恆為 0 的檢查,成本是零;而把它拿掉的成本要等到路線改變的那一天才付。**
+> (它抓的是 §八 那件:下載端前四位元組 `80,75,3,4` = zip 標頭 = docx。)
+
+### 十三之二、⚠ 為什麼驗收腳本**寫在票面裡**,而不是新增一個 `.ps1`
+
+`0d87011`(2026-08-30)那次 CI 紅的原因逐字:**「新腳本沒有可攜標記 ——
+而本機綠是因為它當時還沒被追蹤」**。**在上線當天為了一份四步操作而新增一個
+進版控的腳本,會把一個已知會踩的坑再踩一次。**
+
+> **票面進版控、有 diff、有歷史,而且不會被任何一道守衛當成新的可攜物件。**
+> 這與 §十 把 `README.md` 的指紋放在票面上,是同一個理由。
+
+**跑完之後**:回本票 §十 把「本輪狀態」那一格關掉,並記下驗收日與 `OK = 12`。
