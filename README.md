@@ -46,6 +46,9 @@ themselves, the ledger, and the friction log — is original to this repo.
     sh bootstrap.sh          # wires .githooks/ via core.hooksPath (once per clone)
     python -m pytest -q      # run the framework's own tests
 
+The last command ends with `1 failed` (`TestLegacyNoRedlightList`) — that is a
+known gap, not a broken install. CI skips this one; see ticket 54 for why.
+
 Install into another repository:
 
     python .claude/portable/install.py <path-to-target-repo>

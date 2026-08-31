@@ -46,6 +46,9 @@ improve-codebase-architecture);強制層 —— 閘門本身、帳本、
     sh bootstrap.sh          # 用 core.hooksPath 接上 .githooks/(每個 clone 一次)
     python -m pytest -q      # 跑框架自己的測試
 
+最後那行跑完會剩一條紅(`TestLegacyNoRedlightList`)—— 那是**已知的缺口,
+不是你裝壞了**。雲端那邊把這一條跳過了,原因見票 54。
+
 裝進另一個 repo:
 
     python .claude/portable/install.py <目標 repo 路徑>
