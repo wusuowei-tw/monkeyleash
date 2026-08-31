@@ -122,6 +122,8 @@ There is no per-repo switch: once installed, every rule is active (`docs/adr/001
   A fresh clone is **silent** about it until `bootstrap.sh` runs.
 - Personal leak patterns (`~/.claude/leak-patterns.local.txt`) stay on the
   author's machine by design; CI scans with the generic patterns only.
+  The two sides therefore scan with different pattern sets — when they
+  disagree, find out which set was used, then fix whichever side is wrong.
 - Gate messages are currently in Traditional Chinese.
 - Skill mirrors under `.claude/skills/` are hard links or symlinks depending
   on the platform; R4 cannot assume either.

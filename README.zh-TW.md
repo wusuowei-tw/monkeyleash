@@ -113,8 +113,9 @@ improve-codebase-architecture);強制層 —— 閘門本身、帳本、
 
 - 權威層住在 `.git/hooks/`,git 永遠不版控它。
   新 clone 在跑 `bootstrap.sh` 之前**完全靜默**,沒有東西會說權威層不在。
-- 個人洩漏 pattern(`~/.claude/leak-patterns.local.txt`)依設計留在作者機器上;
-  CI 只用通用 pattern 掃。
+- 個人洩漏 pattern(`~/.claude/leak-patterns.local.txt`)依設計留在作者的
+  機器上,CI 只用通用 pattern 掃。兩邊因此用著不同的 pattern 集合 ——
+  不一致的時候,先查是哪一組在跑,再修錯的那一邊。
 - 閘門訊息目前是繁體中文。
 - `.claude/skills/` 的鏡像依平台是硬連結或 symlink;R4 不得假設任一形態。
 
