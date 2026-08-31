@@ -230,11 +230,33 @@ top 是 `..` 前面那一段,而 `..` 收斂之後它根本不在那個目錄底
 **⚠ 本票不需要 Jeff 手動 cp**(那是 `g1_guard.py` 才有的,票 88 / 92 的 AC-1)——
 `gate.py` 走的是安裝與 sync,不是 `~/.claude/hooks/` 那條人工路徑。
 
-### ☐ AC-2:第二半(`F-051` 半徑掃描的其餘起點)
+### ☐ AC-2:第二半(`F-051` 半徑掃描的其餘起點)—— **已掃,兩份都中**
 
-本票範圍節列的起點清單裡,`NON_SOURCE_*` 三份與 `TICKET_DIRS` 已隨本刀涵蓋;
-**`BASH_ALLOWED_CMDS` / `BASH_ALLOWED_TARGETS` 兩份未掃** ——
-它們比對的是指令詞元不是路徑,形狀不同,**要不要納入半徑是另一個判斷**。
+本票範圍節列的起點清單裡,`NON_SOURCE_*` 三份與 `TICKET_DIRS` 已隨本刀涵蓋。
+**`BASH_ALLOWED_CMDS` / `BASH_ALLOWED_TARGETS` 2026-08-31 掃了 —— 而它們也中。**
+
+**⚠ 原本判斷「它們比對的是指令詞元不是路徑,形狀不同」。實測推翻了那個判斷。**
+
+| 函式 | 實測 | 結果 |
+|---|---|---|
+| `_target_allowed()`<br>(`BASH_ALLOWED_TARGETS`) | `/tmp/../etc/passwd`<br>`.dev/../.claude/hooks/gate.py`<br>`build/../../Windows/System32` | **三筆全 ALLOW** 🔴 |
+| 同上(對照) | `src/x.py` | deny ✅ |
+| `_allowed_cmd_prefix()`<br>(`BASH_ALLOWED_CMDS`) | `python .claude/../evil.py` | **ALLOW** 🔴 |
+| 同上(對照) | `gitfoo push` / `pipx run x` / `python evil.py` | 三筆全 deny ✅ |
+
+**`_target_allowed()` 用的是【子字串包含】而不是前綴**(`needle in haystack`),
+**完全沒有正規化** —— `.dev/../.claude/hooks/gate.py` 因為含 `/.dev/` 就拿到豁免,
+**那等於一條寫向守衛自己的 Bash 指令,靠 `.dev/` 的豁免過關。**
+
+`BASH_ALLOWED_CMDS` 只有 `python .claude/` 那一項是**路徑形態的前綴**
+(唯一以 `/` 結尾的),而票 76 A1 補的邊界只管相鄰名稱(`gitfoo`),**不管 `..`**。
+
+> ### **⇒ `F-051` 半徑到今天為止:掃到 4 處,補了 2 處。**
+> 已補:`is_source_path`(本票)、`g1_guard._canon`(票 88)。
+> **未補:`_target_allowed`、`_allowed_cmd_prefix` —— 登記,本輪不做。**
+
+**⚠ 本輪只登記不修**:它們動的是 R7 / Bash 那一側的許可面,
+**與本票的 R2/R3 判定面不是同一個爆炸半徑**,而今天已經動了兩支守衛。
 
 ### ☑ AC-3:紅燈先行 + 綠燈 + 全套(**已完成 2026-08-31**)
 

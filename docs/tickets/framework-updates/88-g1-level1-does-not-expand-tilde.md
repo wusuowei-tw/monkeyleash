@@ -636,6 +636,9 @@ rm -rf <專案>/../../Windows/System32                     -> 放行  🔴
 
 **⚠ 今天不做 cp** —— 那是人的動作。
 
+> **⚠ 這一格是 `g1_guard.py` 專有的,票 82 沒有。** `gate.py` 走的是安裝與 sync,
+> **不走 `~/.claude/hooks/` 那條人工路徑** —— sync 那一輪不要把三張票當成同一種。
+
 ### ☐ AC-2:copy 桶的下游同步(**三張票共用**)
 
 `.claude/hooks/` 與 `.claude/portable/` 都是 **copy 桶**,
