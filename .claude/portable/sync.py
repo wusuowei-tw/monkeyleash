@@ -30,12 +30,23 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import manifest                                             # noqa: E402
 import claude_md                                            # noqa: E402
+import friction_heading                                     # noqa: E402
 
 FRICTION = "docs/agents/friction-log.md"
 PROVENANCE = ".dev/provenance.jsonl"
 FRICTION_LOCAL = "docs/agents/friction-local.md"
 
-HEADING = re.compile(r"^## (\S+)", re.M)
+# framework-updates/98:本檔原本自帶 `^## (\S+)` —— **鬆**,`## ` 之後第一個
+# 非空白詞就算號碼,於是 `## 併記於 F-118(…)` 被解析成一個叫 `併記於` 的號碼。
+# friction log 裡有兩則那樣的標題(兩個**不同**的號),`refuse_if_duplicate_headings`
+# 因此判定「同一個號碼出現兩次」而拒絕整次更新(2026-08-31 實測,exit=1)。
+#
+# **本檔沒有壞** —— exit=1 + 說出缺的前提 = fail-closed 正確作動。
+# 壞的是判準的對象,所以修法不是放寬它,是與 R9 看同一份判準。
+# 那一份住在 `friction_heading.py`(portable 側唯一一份);
+# `gate.py:1283` 另有一份語意相同的,**刻意不共用**(票 42),
+# 兩者由 `tests/test_gate.py::TestBothHeadingCriteriaAgree` 釘住行為一致。
+HEADING = friction_heading.HEADING
 
 # ── `generate` 桶裡的**混血**條目(票 53)────────────────────────────────────
 #

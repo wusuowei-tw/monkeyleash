@@ -90,6 +90,107 @@ def target(tmp_path):
     return root
 
 
+class TestItDoesNotCarryItsOwnCopyOfTheHeadingCriterion:
+    """framework-updates/98:**`verify_gates.py` 不得再自帶發號標題的正則字面。**
+
+    在本票之前,`scenario_r9` 裡有一行與 `.claude/hooks/gate.py:1283` **逐字相同**
+    的正則 —— portable 這一側因此有**兩份**字面(另一份在 `sync.py`,而且是鬆的)。
+    現在兩處都改用 `.claude/portable/friction_heading.py` 的那一份,全庫 3 份 -> 2 份。
+
+    ## 這條測試的三句限制,寫出來免得它被讀成別的東西
+
+    1. **本條是「關於沒有什麼」的斷言,對修法中立。**
+       它不說要用哪個模組、不說要怎麼取得判準 —— 只說「這裡不再有一份自己的字面」。
+       任何正確的修法都讓它保持綠;只有「又長出一份」才讓它紅。
+    2. **它守的是「不要再長出第五份字面」,不是行為。**
+       行為那一半由 `tests/test_gate.py::TestBothHeadingCriteriaAgree` 釘住
+       (兩份判準對同一組標題行給出相同判定)。
+       本條刻意不碰行為 —— 舊字面與新常數對任何輸入答案都一樣,**行為上取不到紅**。
+    3. **共用常數若搬家,本條不受影響。**
+       哪天那份判準從 `friction_heading.py` 併去別的模組,本條照樣綠 ——
+       這正是本檔檔頭那句「斷言實作的話,換一種同樣正確的修法會讓這條測試假紅」
+       要避開的東西。所以本條只斷言**缺席**,不斷言**出處**。
+
+    ## 斷言對象是**程式碼**,不是註解或 docstring
+
+    本票在 `verify_gates.py` 留下的註解**沒有帶那個字面**,而且應該保持那樣。
+    但若將來有人在註解或 docstring 裡引用它(例如解釋修法的由來),
+    **本條不該因此變紅** —— 註解裡的一份字面不會被執行,它不是第五份實作。
+    所以判定走 `ast`:只看程式碼裡的字串常數,docstring 與註解都排除。
+    """
+
+    SRC = os.path.join(PORTABLE, "verify_gates.py")
+    NEEDLE = "^##"
+
+    def _code_string_literals(self):
+        """回傳這支檔案裡**程式碼**用到的字串常數(排除 docstring;註解本來就不是常數)。"""
+        import ast as _ast
+        tree = _ast.parse(io.open(self.SRC, encoding="utf-8").read(),
+                          filename=self.SRC)
+        docstrings = set()
+        for node in _ast.walk(tree):
+            if isinstance(node, (_ast.Module, _ast.ClassDef,
+                                 _ast.FunctionDef, _ast.AsyncFunctionDef)):
+                body = getattr(node, "body", None) or []
+                if (body and isinstance(body[0], _ast.Expr)
+                        and isinstance(body[0].value, _ast.Constant)
+                        and isinstance(body[0].value.value, str)):
+                    docstrings.add(id(body[0].value))
+        out = []
+        for node in _ast.walk(tree):
+            if (isinstance(node, _ast.Constant) and isinstance(node.value, str)
+                    and id(node) not in docstrings):
+                out.append(node.value)
+        return out
+
+    def test_no_heading_regex_literal_remains_in_the_code(self):
+        offenders = [lit for lit in self._code_string_literals()
+                     if self.NEEDLE in lit]
+        assert not offenders, (
+            "verify_gates.py 的程式碼裡還有發號標題的正則字面:%r —— "
+            "portable 這一側只該有一份(framework-updates/98)。"
+            "同缺陷的兩份實作必然漂開(F-058 家族)。" % (offenders,))
+
+    def test_the_check_ignores_docstrings_and_comments(self):
+        """**釘住上面那條看的是程式碼,不是散文。**
+
+        沒有這條的話,`test_no_heading_regex_literal_remains_in_the_code` 可能
+        其實是在對整個檔案做字串搜尋 —— 那樣的話,任何一句**解釋**這個修法的
+        註解都會把它變紅,而那是假紅。
+
+        用**合成樣本**驗機制,不依賴 `verify_gates.py` 當下的內容:
+        一份把那個字面只放在 docstring 與註解裡的原始碼,萃取器必須回空;
+        而把它放進程式碼時,萃取器必須抓到。**兩個方向都驗,否則恆真。**
+        """
+        import ast as _ast
+
+        def extract(src):
+            tree = _ast.parse(src)
+            docs = set()
+            for node in _ast.walk(tree):
+                if isinstance(node, (_ast.Module, _ast.ClassDef,
+                                     _ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    body = getattr(node, "body", None) or []
+                    if (body and isinstance(body[0], _ast.Expr)
+                            and isinstance(body[0].value, _ast.Constant)
+                            and isinstance(body[0].value.value, str)):
+                        docs.add(id(body[0].value))
+            return [n.value for n in _ast.walk(tree)
+                    if isinstance(n, _ast.Constant) and isinstance(n.value, str)
+                    and id(n) not in docs]
+
+        prose_only = u"\n".join([
+            u'"""說明:舊版用的是 ^## 開頭的正則。"""',
+            u'# 註解也提到 ^## 這個字面',
+            u'x = 1',
+        ])
+        assert not [l for l in extract(prose_only) if self.NEEDLE in l], (
+            "萃取器吃到了 docstring 或註解 —— 那會讓解釋修法的散文變成假紅")
+
+        in_code = u"\n".join([u'import re', u'P = re.compile(r"^##x")'])
+        assert [l for l in extract(in_code) if self.NEEDLE in l], (
+            "萃取器連程式碼裡的字面都抓不到 —— 上一條會恆綠")
+
 class TestScenarioR4LeavesTheTargetClean:
     """`scenario_r4` 跑完再 `restore()`,target 必須回到乾淨。"""
 

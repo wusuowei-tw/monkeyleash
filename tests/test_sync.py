@@ -587,6 +587,63 @@ class TestDuplicateFrictionHeadingsAreRefused:
         sync.update(str(src), str(dst), apply=True)
 
 
+class TestAProseHeadingIsNotAnEntryNumber:
+    """framework-updates/98:**`## 併記於 F-118(…)` 不是一個叫 `併記於` 的號碼。**
+
+    本檔原本自帶 `^## (\\S+)` —— `## ` 之後第一個非空白詞就算號碼。
+    上游的 friction log 裡有**兩則**以 `## 併記於 ` 開頭的標題
+    (`F-118` 與 `F-145`,兩個**不同**的號),於是
+    `refuse_if_duplicate_headings` 判定「`併記於` 出現 2 次」而**拒絕整次更新**
+    —— 2026-08-31 實測,`exit=1`,而那個誤判從 2026-08-29 起就存在。
+
+    **`sync` 沒有壞**:`exit=1` + 說出缺的前提 = fail-closed 正確作動。
+    壞的是判準的對象。所以修法不是放寬它,是與 R9 看同一份判準
+    (`.claude/portable/friction_heading.py`)。
+
+    **本條是行為紅**:它對著 HEAD 版的 `sync.py` 跑會紅,對著修好的跑會綠。
+    「兩份判準一不一致」是另一個問題,由
+    `tests/test_gate.py::TestBothHeadingCriteriaAgree` 回答。
+    """
+
+    def _log(self, root, body):
+        _w(root, "docs/agents/friction-log.md", body)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "log")
+
+    PROSE_LOG = (u"# Friction\n\n"
+                 u"## F-118 甲\n"
+                 u"## 併記於 F-118(2026-08-26):那次相撞真的發生了\n"
+                 u"## F-145 乙\n"
+                 u"## 併記於 F-145(2026-08-29):裁決者側採用的處置\n")
+
+    def test_two_prose_headings_are_not_a_duplicate_number(self, pair):
+        """**兩則 `## 併記於 …` 不是撞號** —— 它們提到的是兩個不同的號。"""
+        src, dst = pair
+        self._log(src, self.PROSE_LOG)
+        self._log(dst, u"# Friction\n\n## F-118 甲\n")
+        sync.update(str(src), str(dst), apply=True)
+
+    def test_a_prose_heading_is_not_collected_as_a_number(self):
+        """直接問判準本身:`## 併記於 …` 不得被擷取成一個號碼。"""
+        assert sync.HEADING.match(
+            u"## 併記於 F-118(2026-08-26):那次相撞真的發生了") is None
+        assert sync.HEADING.match(u"## 這份規則(附決策)") is None
+
+    def test_a_real_issuing_heading_still_is(self):
+        """**反控**:修窄之後,真的發號標題照樣認得,擷取到的還是號碼本身。"""
+        m = sync.HEADING.match(u"## F-118 甲")
+        assert m is not None and m.group(1) == u"F-118"
+
+    def test_a_real_duplicate_is_still_refused(self, pair):
+        """**反控**:修窄不得把這道護欄關掉 —— 真的撞號照樣拒絕。"""
+        src, dst = pair
+        self._log(src, u"# Friction\n\n## F-050 甲\n## F-050 乙\n")
+        self._log(dst, u"# Friction\n\n## F-050 甲\n")
+        with pytest.raises(sync.Refused) as e:
+            sync.update(str(src), str(dst), apply=True)
+        assert "F-050" in str(e.value), e.value
+
+
 class TestProvenanceCertifiesIdentityNotWrites:
     """**判準是「它與上游一致」,不是「我寫了它」。**
 

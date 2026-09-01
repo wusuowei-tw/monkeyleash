@@ -32,6 +32,7 @@ SRC_ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
 import install  # noqa: E402
+import friction_heading  # noqa: E402  (發號標題判準,與 sync 同一份)
 
 
 def sh(args, cwd, check=True):
@@ -115,7 +116,10 @@ def scenario_r9(target):
     existing = None
     with io.open(log, encoding="utf-8") as f:
         for line in f:
-            m = re.match(r"^##\s+([A-Za-z]+-\d+)(?:\s|$|[^\w-])", line)
+            # framework-updates/98:本行原本自帶一份與 `gate.py:1283` **逐字相同**
+            # 的正則 —— portable 這一側因此有兩份字面(另一份在 sync.py)。
+            # 改用共用的那一份,portable 側 2 -> 1。
+            m = friction_heading.HEADING.match(line)
             if m:
                 existing = m.group(1)
                 break
