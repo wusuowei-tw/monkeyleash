@@ -1,6 +1,7 @@
 # 98 — `sync` 與 R9 讀的不是同一份「發號標題」判準,而鬆的那一份把散文標題當成號碼
 
-**狀態**:**implement**(2026-09-01 立案即動工,同日裁決)
+**狀態**:**done(2026-09-01 收票)** —— 落地 commit `baf50cc`(碼)+ `305c21b`(票面)
+~~**implement**(2026-09-01 立案即動工,同日裁決)~~(`F-036` 保留舊文)
 **時鐘**:**9/11** —— **它卡著票 88 / 92 / 82 的 AC-2**(sync 兩個下游),而那三張的時鐘都是 9/11
 **站別**:立案時 `implement`;**動工前 `ticket_id` 由 Jeff 切到 `98`** —— 見第八節
 **前置**:票 42(兩份實作的界線,`tests/test_gate.py:2460` docstring)、票 83(R9 進權威層)、票 17(sync 差集對同號多則是盲的)、`F-051`、`F-058`
@@ -135,6 +136,19 @@ portable 那側:`sync.py` → `manifest` / `claude_md`;`verify_gates.py` → `in
    2026-08-31 已對上游與影音掃過(上游 3 個非號碼標題、影音 1 個、影音−上游差集 0),
    **量化那一份沒掃**(當輪紀律禁止碰量化,票 21 在那裡跑)。
    **沒掃完就對量化 apply,等於在一份沒驗過號碼唯一性的表上做差集。**
+
+   **⚠ 同一格併記(2026-09-01):「走完的 dry-run 不寫任何東西」仍【未證明】。**
+   本票修好之後,對影音的 dry-run **走過了撞號那一關**,而**擋在下一關**:
+
+   ```
+   [更新/拒絕] 目標的正典段與來源不同(1 個條目)—— 那一段各 repo 應當完全相同:
+     CLAUDE.md(FRAMEWORK 界線之間)
+        出口:`python .claude/portable/sync.py <目標> --regenerate-canon`
+   ```
+
+   **兩次拒絕都發生在任何寫入路徑之前**,所以量到的「五樣基準逐項相同」證明的是
+   「**一次被拒絕的** dry-run 沒寫」,不是「**一次走完的** dry-run 沒寫」。
+   **⇒ 這一格與量化那一格是同一族的前置條件,都要在 apply 之前補上。**
 3. **sync 流程的三格缺口 —— 標 `candidate`,不另開票**:
    ① **觸發器**:沒有任何東西會在上游改動後叫人跑 sync(這次是 8/29 壞到 8/31 才被發現);
    ② **下游落後量測**:沒有常設的東西在量兩個下游落後幾刀;
@@ -236,13 +250,65 @@ portable 那側:`sync.py` → `manifest` / `claude_md`;`verify_gates.py` → `in
 > ### **四次都是同一個動作:量了一個對象,把結論說成一族。**
 > 而四次都不是被別人抓到的 —— 是**下一次真的去量**的時候現形的。
 
+### 九之五、⚠ 帳本裡有一筆**假紅**,而 R3 分不出它
+
+`.dev/test-runs.jsonl` 在 `tests/test_verify_gates.py` 名下有兩筆 red:
+
+```
+01:44:11  failed_tests: ["<collection error>"]                       ← 假紅
+01:44:35  failed_tests: ["TestItDoesNotCarry…::test_no_heading_…"]   ← 真紅
+```
+
+**前一筆不算數**:它的起因是我第一版把 `ROOT` 寫錯(那個測試檔用的是 `PORTABLE`)——
+**測試自己壞掉,不是實作紅。** 兩筆的 `impl_hash` 都是 HEAD 版
+(`f29418ff…df03`),所以 R3 這一次不會因此判錯,**但帳面上確實有一筆假紅。**
+
+> ### **可搬走的觀察(只登記,不開票):
+> 帳本把「測試自己壞掉」與「新模組還不存在」都記成 `<collection error>`,
+> 而 R3 分不出這兩者。**
+
+前者是**應該修掉的錯**,後者是**新模組紅燈的正常形狀**(`conftest.py` 的
+`pytest_collectreport` 逐字寫著「新模組的第一次紅燈幾乎都是這種」)。
+兩者在 `failed_tests` 欄位上長得一模一樣,而 `impl_exists` 只在後者為 `False`
+—— **所以現有欄位其實分得出一部分,而 R3 沒有用它來分**。
+
+**為什麼不開票**:它今天沒有造成錯判(兩筆同 `impl_hash`),
+而要修得先想清楚「一個壞掉的測試該不該算紅」——
+**那是設計題,不是缺陷**(`F-149`:嚴重度不要跑在證據前面)。
+
 ---
 
-## 七、驗收
+## ✅ 七、驗收(2026-09-01 全數通過)
 
-- [ ] 共用常數落地,`sync.py` 與 `verify_gates.py` 兩處改用它(3 份 → 2 份)
-- [ ] 一致性測試 + 負控(只改壞一份必須紅)
-- [ ] 全套綠
-- [ ] 負控:真的重複號碼仍會被 sync 擋
-- [ ] 負控:`verify_gates` 那一側行為沒變
-- [ ] `gate.py` 一個字未動
+### ① 字面 3 → 2,對帳綠,負控會咬
+
+| 驗什麼 | 證據 |
+|---|---|
+| **字面 3 → 2** | `grep -rn '\^##' .claude/portable/*.py` 只剩 `friction_heading.py:47` 一份**程式碼**字面(另兩筆命中是說明用的散文)。`gate.py:1283` 那份**獨立保留**(票 42) |
+| **對帳綠** | `tests/test_gate.py::TestBothHeadingCriteriaAgree` —— **`11 passed`**(修前 `2 failed, 9 passed`) |
+| **負控會咬** | 刻意把 portable 側換回鬆的 `^## (\S+)` → 對帳**當場紅 2 條**;還原後 `sha256` 相同(`78a0933c…07fd`),對帳回綠 |
+| **配對測試** | `tests/test_friction_heading.py` **`10 passed`**(含邊界:`## F-118x 甲` 不得被讀成 `F-118`) |
+| **`gate.py` 一個字未動** | 本票三刀的 `--stat` 裡沒有 `.claude/hooks/gate.py` |
+| **全套** | **`1161 passed / 3 skipped / 3 xfailed`** |
+
+### ② 真的撞號仍被擋,而真實的 friction-log 放行
+
+**負控一(真撞號仍被擋)** —— 合成樣本兩則 `## F-999`,`refuse_if_duplicate_headings` 拒絕:
+
+```
+測試樣本 的 docs/agents/friction-log.md 有重複的條目號碼,…
+     F-999 出現 2 次,在第 3、7 行
+```
+
+**反控** —— 一份含**兩個** `## 併記於 …`(不同號)的樣本**放行**;
+真實的 `docs/agents/friction-log.md` 對 `refuse_if_duplicate_headings` 也**放行**。
+🔴 全程**未修改 `friction-log.md` 任何一行**,樣本造在 repo 外、驗完刪除。
+
+**負控二(`verify_gates` 行為沒變)** —— 它原本讀 friction-log 取**第一個發號標題**的號碼
+來造撞號情境;舊 inline 正則與新共用常數對真實 friction-log 取到的**都是 `F-001`**。
+
+**端到端**:修好之後對影音跑 dry-run,**走過了撞號那一關**
+(改前 `exit=1` 停在「`併記於` 出現 2 次」;改後停在 `CLAUDE.md` 正典段,見六之二)。
+
+**負控三** —— `manifest.explicit_mark` 對
+`.claude/portable/friction_heading.py` 與 `tests/test_friction_heading.py` **都回 `copy`**。
