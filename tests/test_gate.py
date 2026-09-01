@@ -294,6 +294,91 @@ class TestBothLayersNormalizeAndNeitherIsLoadBearingAlone:
         assert gate.is_source_path("docs/../pkg/thing.py") is True
 
 
+class TestBothHeadingCriteriaAgree:
+    """framework-updates/98:**`sync` 與 R9 讀的不是同一份「發號標題」判準。**
+
+    R9(`gate.py:1283` 的 `_FRICTION_HEADING`)**嚴**:前綴必須是字母、
+    號碼必須緊接 `## `。`sync.py:38` 的 `HEADING` **鬆**:`## ` 之後
+    第一個非空白詞就算號碼。於是 `## 併記於 F-118(…)` 在 R9 眼裡是「提到」,
+    在 sync 眼裡是一個叫 `併記於` 的號碼 —— 而 friction log 裡有**兩則**那樣的
+    標題(`F-118` 與 `F-145`,兩個不同的號),**sync 因此拒絕了整次更新**
+    (2026-08-31 實測,`exit=1`)。
+
+    `gate.py:1283` 上面那段註解**逐字寫著**那個寫法是刻意的:
+    「本檔自己就有一段 `## 併記於 F-118(…)`,它刻意寫成這樣正是為了不被本條誤判。」
+    **⇒ sync 抓到的正是 R9 刻意排除的那一類。**
+
+    ## 為什麼是「兩份」而不是「一份」
+
+    `gate.py` 那份**刻意不與 portable 共用**(票 42,理由見
+    `test_both_staged_listings_agree_on_a_gitlink` 的 docstring):
+    權威層要依賴最少的東西,**讓它 import `portable/` 會多一個失效點,
+    而閘門起不來的樣子跟沒裝一模一樣(全靜默)**。
+    所以本條測的是**兩份的行為一致**,不是字面相同 —— 與那條 gitlink 對帳同族。
+
+    ## ⚠ 為什麼比對的對象是 `sync.HEADING`,不是那個新模組
+
+    要問的是「**sync 實際上用什麼判準**」。直接比對新模組的話,
+    新模組自己一定與 `gate.py` 一致(它是照著寫的),而 `sync` 還在用舊字面時
+    這條測試會**綠** —— 那正是本票要抓的缺陷,而它會從測試的視野裡消失。
+    **判準要釘在使用端,不是釘在定義端。**
+    """
+
+    # (標題行, R9 是否判定它為「發號」)
+    CORPUS = [
+        (u"## F-118 甲", True),
+        (u"## TSI-038 前哨在場的三段驗收", True),
+        (u"## 併記於 F-118(2026-08-26):那次相撞真的發生了", False),
+        (u"## 這份規則(附決策)", False),
+        (u"見 F-005 與 F-005 的討論", False),
+    ]
+
+    def _sync_side(self):
+        """載入 `sync.py`,回它實際使用的那個判準。"""
+        import importlib.util
+        path = ROOT / ".claude" / "portable" / "sync.py"
+        spec = importlib.util.spec_from_file_location("sync_under_test", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.HEADING
+
+    def _gate_says(self, line):
+        return gate._FRICTION_HEADING.match(line) is not None
+
+    @pytest.mark.parametrize("line,expected", CORPUS)
+    def test_the_authoritative_side_matches_the_corpus(self, line, expected):
+        """**先釘住 R9 那一份自己是對的** —— 否則「兩邊一致」也可能是一起錯。"""
+        assert self._gate_says(line) is expected, line
+
+    @pytest.mark.parametrize("line,expected", CORPUS)
+    def test_both_sides_agree_on_the_same_line(self, line, expected):
+        theirs = self._sync_side().match(line) is not None
+        mine = self._gate_says(line)
+        assert theirs is mine, (
+            "兩份判準對同一行給出不同答案:%r —— R9=%s / sync=%s。"
+            "同缺陷的兩份實作必然漂開(F-058 家族),而這一次漂的後果是:"
+            "sync 把一個散文標題當成條目號碼,拒絕整次更新。"
+            % (line, mine, theirs))
+
+    def test_the_parity_check_itself_goes_red_when_one_side_drifts(self):
+        """**釘住上面那條會咬。**
+
+        沒有這條的話,`test_both_sides_agree_on_the_same_line` 只是一句
+        「兩邊相等」的宣稱 —— 它可能因為**任何**理由恆真(兩邊都回 None、
+        兩邊其實是同一個物件、斷言寫錯方向),而
+        **恆真的斷言與有效的斷言在測試輸出上長得一模一樣。**
+
+        做法:拿一份**刻意寫鬆**的正則當假的 sync 側,斷言對帳**必須**抓到它。
+        """
+        import re as _re
+        drifted = _re.compile(r"^## (\S+)")
+        caught = [line for line, _ in self.CORPUS
+                  if (drifted.match(line) is not None) != self._gate_says(line)]
+        assert caught, (
+            "拿一份公認鬆的正則當對照,對帳竟然一個差異都沒抓到 —— "
+            "那代表這組語料分辨不出鬆緊,對帳斷言是恆真的")
+
+
 class TestNonSourceListsAreWellFormed:
     """三份清單的形狀 —— 清單一長,判準就會漂移。"""
 
