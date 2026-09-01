@@ -165,6 +165,79 @@ portable 那側:`sync.py` → `manifest` / `claude_md`;`verify_gates.py` → `in
 
 ---
 
+## ✅ 九、落地紀錄(2026-09-01)
+
+| 刀 | 內容 |
+|---|---|
+| `c86876e` | 開票 |
+| `8c2d555` | 紅燈先行:`friction_heading.py`(新)、`tests/test_friction_heading.py`(新)、對帳測試 |
+| `baf50cc` | 甲′ 落地:`sync.py` / `verify_gates.py` 改用共用判準 + 兩條配對紅燈 + manifest 一行 |
+
+**全庫字面 3 份 → 2 份**:`gate.py:1283`(獨立,票 42)與 `friction_heading.py:47`。
+全套 **1161 passed / 3 skipped / 3 xfailed**。
+
+### 九之一、🔴 **本票全程【前哨未掛】—— 這是所有綠燈所依賴的條件**
+
+`.claude/settings.json` 的掛載是
+`python "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py"`,而
+**`$CLAUDE_PROJECT_DIR` 是 session 根,不是 repo 根**。
+
+本票這幾輪的 session 開在 **`c:/projects`**,而 repo 在 **`c:/projects/agent-gates`**
+⇒ 掛載指向 `c:/projects/.claude/hooks/gate.py`,**那個路徑不存在**。
+
+> ### **⇒ 整輪 R7 未生效;R2 / R3 全部由 pre-commit(權威層)擋下,不是前哨。**
+
+**這是 `F-154` 的形狀**:本票每一次「測試綠、commit 過」都**依賴一個沒有被寫下來的條件**
+——「前哨在不在場」。而那個條件在本輪是**不成立**的,只是恰好不影響結論
+(權威層擋住了該擋的兩次)。
+
+**它不是本票的缺陷,是票 86 的實例。** 指向 **票 86**(前哨在 session 根不是 repo 時整層不在場)。
+
+**⇒ 收票後本視窗關閉,下一個視窗開在 `c:/projects/agent-gates`。**
+
+### 九之二、R3 擋了兩次,兩次都擋對
+
+| # | 擋下的訊息 | 缺口在哪 | 處置 |
+|---|---|---|---|
+| 1 | `.claude/portable/friction_heading.py`:**找不到對應測試**(`tests/test_friction_heading.py`) | 指令沒指定配對測試,只指定了對帳測試住 `tests/test_gate.py` | 另建配對測試檔;**對帳測試留在原處**。兩者問的是不同問題:一條問「這份判準自己對不對」,一條問「兩份一不一致」——**一致可能是一起錯** |
+| 2 | `.claude/portable/sync.py`:`tests/test_sync.py` **沒有一筆紅燈屬於當前票 98** | 對帳測試證明「兩份一致」,**但沒有證明 sync 那條拒絕路徑的行為變了** | 兩支實作各補一條配對紅燈,都對著 HEAD 版取(`git checkout HEAD -- <單一路徑>`,還原後 `sha256` 逐一核對) |
+
+> **兩次都不是誤擋。** 第二次尤其值得記:**對帳綠燈證明不了行為變了** ——
+> 而如果沒有 R3,這一刀會帶著「一致但沒人驗過行為」的狀態進版控。
+
+### 九之三、`verify_gates` 那條是**結構紅**,不是行為紅
+
+舊 inline 字面與新共用常數**對任何輸入答案一樣**,所以**行為上取不到紅**。
+能紅的只有結構:那個檔案裡還有沒有一份自己的字面。
+
+**只寫甲,不寫乙:**
+
+| | 斷言 | 為什麼 |
+|---|---|---|
+| **甲(寫了)** | `verify_gates.py` 的**程式碼**裡不得再有那個正則字面 | **「關於沒有什麼」的斷言,對修法中立** —— 任何正確的修法都讓它綠,只有「又長出一份」才紅 |
+| **乙(沒寫)** | 必須引用 `friction_heading.HEADING` | **會假紅**:共用常數哪天搬家,它就紅而程式碼是對的。而 `tests/test_verify_gates.py` 的檔頭逐字警告過這一種:「**斷言實作的話,換一種同樣正確的修法會讓這條測試假紅**」 |
+
+斷言走 `ast`,**只看程式碼裡的字串常數,docstring 與註解排除** ——
+將來有人在註解裡引用那個字面來解釋由來,本條不該因此變紅。
+配一條**合成樣本**的機制負控(散文裡有→必須不抓;程式碼裡有→必須抓),**兩個方向都驗**。
+
+### 九之四、⚠「量了一個、推廣到另一個」—— 今天第四次
+
+偵察時量了 `manifest.explicit_mark('.claude/portable/friction_heading.py')` → `copy`
+(目錄那一行涵蓋),**然後把結論推廣到測試檔** ——
+而 `tests/` **沒有目錄標記**,每個測試檔都要個別列。
+兩條既有測試因此紅(`test_every_file_under_tests_is_marked_or_explicitly_excluded`、
+`test_every_tracked_file_is_classified`),補一行 `tests/test_friction_heading.py  copy` 才綠。
+
+**今天前三次**:① 引 ADR 0007 的**標題**當內容(實際出處是票 42);
+② 說 `gate.py` 反向 import portable「是既有方向」,而量到的是**根本沒有任何方向**;
+③ 說 `BASH_ALLOWED_*` 兩份「形狀不同」,跑了之後四處全中(`F-154` #9)。
+
+> ### **四次都是同一個動作:量了一個對象,把結論說成一族。**
+> 而四次都不是被別人抓到的 —— 是**下一次真的去量**的時候現形的。
+
+---
+
 ## 七、驗收
 
 - [ ] 共用常數落地,`sync.py` 與 `verify_gates.py` 兩處改用它(3 份 → 2 份)
