@@ -53,17 +53,39 @@ framework-updates/99。
 """
 
 import argparse
+import datetime
 import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 
 UNRECORDED = u"未記錄"
 UNPROVEN = u"未證明"
+NO_FUNC = u"未記錄(該 repo 的 gate 無此函式)"
+DEAD_SHA = u"未記錄(sha 不在上游歷史,可能為票 84 改寫前)"
+
+# Sync Health 比對的三個檔。**枚舉,不是 pattern** ——
+# 這是一個封閉集合(閘門、守衛、守衛的測試),而
+# **比對的漏是未知的,枚舉的漏是不存在的**(CLAUDE.md 的常駐檢查項)。
+SYNC_WATCHED = (
+    ".claude/hooks/gate.py",
+    ".claude/portable/g1_guard.py",
+    "tests/test_g1_guard.py",
+)
 
 _GATE_CACHE = {}
+
+
+def now_iso():
+    """現在。**抽成函式是為了讓它可以被換掉** ——
+
+    否則 `test_generated_line_comes_from_the_clock` 只能斷言「長得像時間」,
+    而一個從檔案讀出來的舊時間戳**也長得像時間**。
+    """
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -164,12 +186,114 @@ def _rel(root, path):
         return path
 
 
+def _has(gate, name):
+    """那個 root 的 gate 有沒有這個東西。
+
+    **下游裝的是舊版框架,缺函式是常態不是例外狀況。**
+    少了這一問,一個 root 的舊 gate 會讓**整份** `--all` 變成一個 traceback ——
+    而讀的人看到的是工具壞了,不是「那一格算不出來」。
+    """
+    return hasattr(gate, name)
+
+
+def _p(gate, name):
+    """那個 root 的 gate 宣告的某條路徑。沒有這個常數回 None。
+
+    **每一個 `gate.X` 都要走這裡。** 直接寫 `gate.EXEMPTION_LOG` 的話,
+    一個舊版 gate 會讓**整份** `--all` 變成 traceback ——
+    而 `--all` 的重點正是「跨版本的 repo 一起看」,所以舊版是常態不是意外。
+    """
+    v = getattr(gate, name, None)
+    return v if isinstance(v, str) and v else None
+
+
+def _stage_of(gate):
+    if not _has(gate, "load_stage"):
+        return NO_FUNC, None
+    try:
+        s, t = gate.load_stage()
+        return s, t
+    except Exception:
+        return UNRECORDED, None
+
+
+def _feature_of(gate):
+    if not _has(gate, "load_feature"):
+        return None
+    try:
+        return gate.load_feature()
+    except Exception:
+        return None
+
+
+def _last_where(recs, pred):
+    """最後一筆符合條件的紀錄。沒有回 None。"""
+    for rec in reversed(recs or []):
+        if pred(rec):
+            return rec
+    return None
+
+
+def _latest_intercept_month(gate):
+    """磁碟上最新的攔截月檔。回傳 `(月份, 紀錄)`;一個都沒有回 `(None, None)`。
+
+    **檔名形狀從產生端問出來,不是我猜的** —— 拿一個假月份餵
+    `gate.intercept_path()`,再從回傳值反推前後綴。
+    寫死 `intercepts-YYYY-MM.jsonl` 的話,上游哪天改了輪替命名,
+    這裡會安靜地一個檔都找不到,而「找不到」與「沒有攔截」印出來一樣。
+    """
+    if not _has(gate, "intercept_path"):
+        return None, None
+    token = u"@@MONTH@@"
+    try:
+        probe = gate.intercept_path(token)
+    except Exception:
+        return None, None
+    d, base = os.path.dirname(probe), os.path.basename(probe)
+    if token not in base:
+        return None, None
+    pre, post = base.split(token, 1)
+    pat = re.compile(u"^%s(\\d{4}-\\d{2})%s$" % (re.escape(pre), re.escape(post)))
+    months = []
+    try:
+        for name in os.listdir(d):
+            m = pat.match(name)
+            if m:
+                months.append(m.group(1))
+    except Exception:
+        return None, None
+    if not months:
+        return None, None
+    latest = max(months)
+    return latest, (_read_jsonl(gate.intercept_path(latest)) or [])
+
+
+def _latest_per_file(runs, ticket):
+    """這張票底下,**每個測試檔的最新一筆**。回傳 `{檔: 紀錄}`。
+
+    帳本是追加式,同一個檔會有很多筆。問「還有什麼是紅的」要看最新一筆,
+    **不是「有沒有紅過」** —— 後者會讓每個轉綠的檔永遠留在紅名單裡,
+    而一份永遠不會變空的紅名單,讀的人三天後就不看了。
+    """
+    out = {}
+    for rec in runs or []:
+        if ticket and rec.get("ticket_id") != ticket:
+            continue
+        f = rec.get("test_file")
+        if f:
+            out[f] = rec
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # 五段
 # ─────────────────────────────────────────────────────────────────────────
 
 def _repository(root, gate):
     out = [_head(u"Repository")]
+    # 判準 1:**這份輸出是算出來的,不是存下來的。**
+    # 印出算的時刻,讀的人才分得出「現況」與「某一次的快照」。
+    out.append(_line(u"generated", now_iso(), u"status.now_iso()"))
     out.append(_line(u"root", root, u"argv --root / cwd 往上找 .claude/hooks/gate.py"))
 
     head = _git(root, ["rev-parse", "--short", "HEAD"])
@@ -198,18 +322,21 @@ def _repository(root, gate):
                 counts = u"behind %s / ahead %s" % (parts[0], parts[1])
     out.append(_line(u"ahead/behind", counts, src))
 
-    stage, ticket = gate.load_stage()
+    stage, ticket = _stage_of(gate)
     out.append(_line(u"stage", stage, u"gate.load_stage()"))
     out.append(_line(u"ticket_id", ticket if ticket else UNRECORDED, u"gate.load_stage()"))
-    out.append(_line(u"feature", gate.load_feature() or UNRECORDED, u"gate.load_feature()"))
+    out.append(_line(u"feature", _feature_of(gate) or UNRECORDED, u"gate.load_feature()"))
 
+    pipeline = _p(gate, "PIPELINE")
     updated = UNRECORDED
-    try:
-        with io.open(gate.PIPELINE, encoding="utf-8-sig") as f:
-            updated = _field(json.load(f), "updated")
-    except Exception:
-        updated = UNRECORDED
-    out.append(_line(u"pipeline updated", updated, _rel(root, gate.PIPELINE)))
+    if pipeline:
+        try:
+            with io.open(pipeline, encoding="utf-8-sig") as f:
+                updated = _field(json.load(f), "updated")
+        except Exception:
+            updated = UNRECORDED
+    out.append(_line(u"pipeline updated", updated,
+                     _rel(root, pipeline) if pipeline else NO_FUNC))
     return out
 
 
@@ -219,14 +346,17 @@ def _enforcement(root, gate):
     # ── authority:**帳本,不是裁決**(判準 5)────────────────────────
     # 「hook 檔在不在」與「權威層真的跑過」是兩件事。前者在 clone 之後
     # 恆為假(`.git/hooks/` 不進版控),後者留得下痕跡。所以值取帳本。
-    recs = _read_jsonl(gate.EXEMPTION_LOG)
-    val = UNRECORDED
-    if recs:
-        at_commit = [r for r in recs if r.get("at_commit") is True]
-        if at_commit:
-            val = u"%s" % _field(at_commit[-1], "ts")
-    out.append(_line(u"authority", val,
-                     u"%s 最後一筆 at_commit=true" % _rel(root, gate.EXEMPTION_LOG)))
+    # **標籤是 `authority ledger` 不是 `authority`。**
+    # 同一段裡有兩個 authority 來源,而它們回答的不是同一個問題:
+    # 帳本答「跑過沒」,`core.hooksPath` 答「設定指向哪」。
+    # 共用一個裸標籤會讓讀的人以為那是一個結論 —— 判準 5 不准印結論。
+    ex_log = _p(gate, "EXEMPTION_LOG")
+    recs = _read_jsonl(ex_log) if ex_log else None
+    last_commit = _last_where(recs, lambda r: r.get("at_commit") is True)
+    out.append(_line(u"authority ledger",
+                     _field(last_commit, "ts") if last_commit else UNRECORDED,
+                     u"%s 最後一筆 at_commit=true" % _rel(root, ex_log)
+                     if ex_log else NO_FUNC))
 
     hooks_path = _git(root, ["config", "core.hooksPath"])
     if hooks_path:
@@ -254,6 +384,15 @@ def _enforcement(root, gate):
                      u"%s; config resolves from %s; mounted: %s" % (cmd, root, UNPROVEN),
                      _rel(root, settings)))
 
+    # 前哨的**動作**那一半 —— `at_commit=false` 的豁免紀錄是 PreToolUse 跑過的痕跡。
+    # 與上一行並存不矛盾:上一行答「設定解得到什麼」,這一行答「它跑過沒」。
+    # **設定解得到什麼,不代表 hook 跑的是它**(裁 D),所以兩行都要,各帶各的來源。
+    last_agent = _last_where(recs, lambda r: r.get("at_commit") is False)
+    out.append(_line(u"outpost ledger",
+                     _field(last_agent, "ts") if last_agent else UNRECORDED,
+                     u"%s 最後一筆 at_commit=false" % _rel(root, ex_log)
+                     if ex_log else NO_FUNC))
+
     out.append(_line(u"g1",
                      u"使用者層 hook,repo 內無設定; mounted: %s" % UNPROVEN,
                      u"(無 —— 本檔不讀 ~/.claude)"))
@@ -261,23 +400,29 @@ def _enforcement(root, gate):
     # ── skill mirror:直接呼叫純判定,**不走會寫 .cache 的那一支** ────
     # `mount_violations_cached()` 會寫 `.cache/mount-check.json`(gate.py:2791),
     # 而判準 1 說 projection 不存 —— 一支「看一下現況」的工具不得留下檔案。
-    try:
-        v = gate.skill_mirror_violations(
-            os.path.join(root, ".agents", "skills"),
-            [os.path.join(root, ".claude", "skills"), os.path.join(root, "skills")])
-        mirror = u"違規 %d 筆" % len(v)
-        if v:
-            mirror += u":%s" % u" / ".join(str(x).splitlines()[0] for x in v[:3])
-    except Exception as e:
-        mirror = u"%s(%s)" % (UNRECORDED, e)
+    if not _has(gate, "skill_mirror_violations"):
+        mirror = NO_FUNC
+    else:
+        try:
+            v = gate.skill_mirror_violations(
+                os.path.join(root, ".agents", "skills"),
+                [os.path.join(root, ".claude", "skills"), os.path.join(root, "skills")])
+            mirror = u"違規 %d 筆" % len(v)
+            if v:
+                mirror += u":%s" % u" / ".join(str(x).splitlines()[0] for x in v[:3])
+        except Exception as e:
+            mirror = u"%s(%s)" % (UNRECORDED, e)
     out.append(_line(u"skill mirror", mirror,
                      u"gate.skill_mirror_violations(.agents/skills, [.claude/skills, skills])"))
 
-    shadow_state = getattr(gate, "SHADOW_STATE", "")
-    try:
-        active = gate.shadow_active()
-    except Exception:
-        active = UNRECORDED
+    shadow_state = _p(gate, "SHADOW_STATE") or ""
+    if not _has(gate, "shadow_active"):
+        active = NO_FUNC
+    else:
+        try:
+            active = gate.shadow_active()
+        except Exception:
+            active = UNRECORDED
     out.append(_line(u"shadow",
                      u"active=%s; %s 存在=%s" % (
                          active, _rel(root, shadow_state),
@@ -289,38 +434,59 @@ def _enforcement(root, gate):
 def _evidence(root, gate, ticket):
     out = [_head(u"Evidence")]
 
-    runs = _read_jsonl(gate.RUN_LOG)
+    run_log = _p(gate, "RUN_LOG")
+    runs = _read_jsonl(run_log) if run_log else None
     if runs is None:
         val = UNRECORDED
     else:
-        mine = [r for r in runs if ticket and r.get("ticket_id") == ticket]
-        red = len([r for r in mine if r.get("result") == "red"])
-        green = len([r for r in mine if r.get("result") == "green"])
+        latest = _latest_per_file(runs, ticket)
+        red = len([r for r in latest.values() if r.get("result") == "red"])
+        green = len([r for r in latest.values() if r.get("result") == "green"])
         last = runs[-1] if runs else None
         tail = (u"最後一筆 %s=%s @ %s" % (_field(last, "test_file"),
                                           _field(last, "result"),
                                           _field(last, "time"))
                 if last else UNRECORDED)
-        val = u"本票 red %d / green %d;%s;全套結果:%s(帳本不記全套)" % (
+        val = u"本票(每檔最新一筆)red %d / green %d;%s;全套結果:%s(帳本不記全套)" % (
             red, green, tail, UNRECORDED)
-    out.append(_line(u"test-runs", val, _rel(root, gate.RUN_LOG)))
+    out.append(_line(u"test-runs", val,
+                     _rel(root, run_log) if run_log else NO_FUNC))
 
-    month = _git(root, ["log", "-1", "--format=%cd", "--date=format:%Y-%m"])
-    if not month:
-        import datetime
-        month = datetime.date.today().strftime("%Y-%m")
-    ipath = gate.intercept_path(month)
-    irecs = _read_jsonl(ipath)
-    if irecs is None:
-        ival = u"無當月攔截(檔不存在)"
+    # ── intercepts 印**兩行**,不是一行 ────────────────────────────────
+    # 合成一行的話,「這個月還沒有人被擋」與「這個 repo 從來沒有攔截紀錄」
+    # 會印出**逐字相同**的一句話 —— 而前者是正常,後者代表前哨可能沒在跑。
+    #
+    # Day 2 選了「用最後一次 commit 的月份」當唯一的月,而那個選擇讓
+    # Day 2 的負控空轉:移走的 8 月檔根本不在讀取路徑上(當月是 9 月)。
+    # **不選月份**:當月照當月印,另外印一行「最新存在月」。
+    month = datetime.date.today().strftime("%Y-%m")
+    if not _has(gate, "intercept_path"):
+        out.append(_line(u"intercepts (當月)", NO_FUNC, u"gate.intercept_path()"))
+        out.append(_line(u"intercepts (最新存在月)", NO_FUNC, u"gate.intercept_path()"))
+        cur_path = None
     else:
-        last = irecs[-1] if irecs else None
-        ival = u"%d 筆" % len(irecs)
-        if last:
-            ival += u";最後一筆 %s @ %s" % (_field(last, "rule"), _field(last, "ts"))
-    out.append(_line(u"intercepts", ival, _rel(root, ipath)))
+        cur_path = gate.intercept_path(month)
+        cur = _read_jsonl(cur_path)
+        out.append(_line(u"intercepts (當月)",
+                         u"%d 筆" % len(cur) if cur is not None else u"檔不存在",
+                         _rel(root, cur_path)))
 
-    ex = _read_jsonl(gate.EXEMPTION_LOG)
+    latest, lrecs = _latest_intercept_month(gate)
+    if cur_path is None:
+        pass
+    elif latest is None:
+        lval, lsrc = UNRECORDED, _rel(root, gate.intercept_path(u"YYYY-MM"))
+        out.append(_line(u"intercepts (最新存在月)", lval, lsrc))
+    else:
+        last = lrecs[-1] if lrecs else None
+        lval = u"%s %d 筆" % (latest, len(lrecs))
+        if last:
+            lval += u";末筆 %s@%s" % (_field(last, "rule"), _field(last, "ts"))
+        lsrc = _rel(root, gate.intercept_path(latest))
+        out.append(_line(u"intercepts (最新存在月)", lval, lsrc))
+
+    ex_log = _p(gate, "EXEMPTION_LOG")
+    ex = _read_jsonl(ex_log) if ex_log else None
     if ex is None:
         exval = UNRECORDED
     else:
@@ -328,23 +494,40 @@ def _evidence(root, gate, ticket):
         last = ex[-1] if ex else None
         exval = u"總 %d 筆;outcome=blocked %d 筆;最後一筆 %s" % (
             len(ex), blocked, _field(last, "ts") if last else UNRECORDED)
-    out.append(_line(u"exemptions", exval, _rel(root, gate.EXEMPTION_LOG)))
+    out.append(_line(u"exemptions", exval,
+                     _rel(root, ex_log) if ex_log else NO_FUNC))
 
-    prov = getattr(gate, "PROVENANCE", "")
+    prov = _p(gate, "PROVENANCE")
     pval = (u"存在" if prov and os.path.exists(prov)
             else u"%s(上游無此檔屬正常)" % UNRECORDED)
-    out.append(_line(u"provenance", pval, _rel(root, prov)))
+    out.append(_line(u"provenance", pval,
+                     _rel(root, prov) if prov else NO_FUNC))
     return out
 
 
+def _ticket_dirs(root, gate, feature):
+    """`gate.TICKET_DIRS` 展開後**存在的**那些目錄。**不重述那份清單。**
+
+    模板不吃參數也不當掉 —— 別的 repo 的 gate 可能把它寫成固定路徑,
+    而一個 `TypeError` 會讓整份輸出消失,只為了一格算不出來。
+    """
+    dirs = []
+    for tmpl in (getattr(gate, "TICKET_DIRS", None) or ()):
+        try:
+            rel = tmpl % feature
+        except TypeError:
+            rel = tmpl
+        d = os.path.join(root, rel.replace("/", os.sep))
+        if os.path.isdir(d):
+            dirs.append(d)
+    return dirs
+
+
 def _find_ticket_file(root, gate, feature, ticket):
-    """票檔在哪。`gate.TICKET_DIRS` 兩個位置都找 —— **不重述那份清單**。"""
+    """票檔在哪。**所有存在的票目錄都找**,不是取第一個。"""
     if not feature or not ticket:
         return None
-    for tmpl in gate.TICKET_DIRS:
-        d = os.path.join(root, (tmpl % feature).replace("/", os.sep))
-        if not os.path.isdir(d):
-            continue
+    for d in _ticket_dirs(root, gate, feature):
         for name in sorted(os.listdir(d)):
             if name.startswith(str(ticket)) and name.endswith(".md"):
                 return os.path.join(d, name)
@@ -387,12 +570,8 @@ def _ticket(root, gate, feature, ticket):
     # 取第一個的話,`.scratch/<feature>/issues` 存在但空的時候會印
     # 「有 0 / 無 0」—— 而那個輸出與「真的沒有票」長得一模一樣。
     # 實測在本 repo 就是這樣(票在 `docs/tickets/`,而 `.scratch/` 那個空目錄先被選中)。
-    have, miss, dirs = 0, 0, []
-    if feature:
-        for tmpl in gate.TICKET_DIRS:
-            cand = os.path.join(root, (tmpl % feature).replace("/", os.sep))
-            if os.path.isdir(cand):
-                dirs.append(cand)
+    have, miss = 0, 0
+    dirs = _ticket_dirs(root, gate, feature) if feature else []
     for d in dirs:
         for name in sorted(os.listdir(d)):
             if not name.endswith(".md"):
@@ -411,33 +590,41 @@ def _ticket(root, gate, feature, ticket):
 
 def _derived(root, gate, stage, ticket):
     out = [_head(u"Derived")]
-    try:
-        allowed = gate.stage_allows_src_write(stage)
-        val = u"yes" if allowed else u"no"
-    except Exception as e:
-        val = u"%s(%s)" % (UNRECORDED, e)
+    # **缺函式是常態,不是例外狀況** —— 下游裝的是舊版框架。
+    # 用 try/except 包住不夠:那會把「這個 root 的 gate 比較舊」與
+    # 「函式在但算錯了」混成同一句話,而兩者的處置完全不同。
+    if not _has(gate, "stage_allows_src_write"):
+        val = NO_FUNC
+    else:
+        try:
+            val = u"yes" if gate.stage_allows_src_write(stage) else u"no"
+        except Exception as e:
+            val = u"%s(%s)" % (UNRECORDED, e)
     out.append(_line(u"src write allowed in %s" % stage, val,
                      u"gate.stage_allows_src_write() <- .agents/pipeline-stages.yaml"))
 
-    runs = _read_jsonl(gate.RUN_LOG)
+    run_log = _p(gate, "RUN_LOG")
+    runs = _read_jsonl(run_log) if run_log else None
     if runs is None or not ticket:
-        red = UNRECORDED
+        red = green = UNRECORDED
     else:
-        files = []
-        for r in runs:
-            if r.get("ticket_id") == ticket and r.get("result") == "red":
-                f = r.get("test_file")
-                if f and f not in files:
-                    files.append(f)
-        red = u" / ".join(files) if files else u"(無)"
-    out.append(_line(u"tests red under ticket %s" % (ticket or UNRECORDED), red,
-                     _rel(root, gate.RUN_LOG)))
+        latest = _latest_per_file(runs, ticket)
+        reds = sorted(f for f, r in latest.items() if r.get("result") == "red")
+        greens = sorted(f for f, r in latest.items() if r.get("result") == "green")
+        red = u" / ".join(reds) if reds else u"(無)"
+        green = u" / ".join(greens) if greens else u"(無)"
+    src = (u"%s 每檔最新一筆" % _rel(root, run_log)) if run_log else NO_FUNC
+    out.append(_line(u"tests red under ticket %s" % (ticket or UNRECORDED), red, src))
+    out.append(_line(u"tests green under ticket %s" % (ticket or UNRECORDED), green, src))
 
-    try:
-        rules = u" ".join(sorted(gate.rule_codes(), key=lambda c: int(c[1:])))
-    except Exception:
-        rules = UNRECORDED
-    out.append(_line(u"rules defined", rules or UNRECORDED, u"gate.rule_codes()"))
+    if not _has(gate, "rule_codes"):
+        rules = NO_FUNC
+    else:
+        try:
+            rules = u" ".join(sorted(gate.rule_codes(), key=lambda c: int(c[1:])))
+        except Exception:
+            rules = UNRECORDED
+    out.append(_line(u"rules defined", rules or u"(無)", u"gate.rule_codes()"))
     return out
 
 
@@ -449,8 +636,8 @@ def render(root):
     """算一次現況,回傳多行字串。**不寫任何檔案**(判準 1)。"""
     root = os.path.abspath(root)
     gate = load_gate(root)
-    stage, ticket = gate.load_stage()
-    feature = gate.load_feature()
+    stage, ticket = _stage_of(gate)
+    feature = _feature_of(gate)
 
     blocks = [
         _repository(root, gate),
@@ -460,6 +647,99 @@ def render(root):
         _derived(root, gate, stage, ticket),
     ]
     return u"\n\n".join(u"\n".join(b) for b in blocks) + u"\n"
+
+
+def _sync_health(upstream, downstreams):
+    """跨 repo 那一段(判準 7)。**對下游零寫入。**
+
+    只用三種讀:`git`(下游的 `-C` 唯讀查詢)、`io.open`、`sync.file_hash`。
+    `sync.py` 裡會寫檔的那些(`_write_bytes` / `write_provenance` /
+    `regenerate_canon` / `update(apply=True)`)**一個都不叫**。
+
+    **落後幾刀在上游算**,不在下游算 —— 距離是「上游從那一刀走了幾步」,
+    而下游的 repo 裡根本沒有上游的歷史。
+    """
+    out = [_head(u"Sync Health")]
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import sync                                          # noqa: E402
+        file_hash = sync.file_hash
+    except Exception as e:
+        out.append(_line(u"sync", u"%s(%s)" % (UNRECORDED, e), u"sync.file_hash"))
+        return out
+
+    out.append(_line(u"upstream", upstream, u"--root #1"))
+
+    for i, down in enumerate(downstreams, 2):
+        tag = u"[%d]" % i
+        out.append(_line(u"%s downstream" % tag, down, u"--root #%d" % i))
+
+        prov = os.path.join(down, ".dev", "provenance.jsonl")
+        recs = _read_jsonl(prov)
+        sha = _field(recs[-1], "upstream_commit") if recs else UNRECORDED
+        out.append(_line(u"%s upstream commit" % tag, sha,
+                         u"%s 末筆" % prov.replace("\\", "/")))
+
+        # **不做換算。** 那個 sha 可能是票 84 改寫身分之前的,
+        # 而換算需要 commit-map —— 猜一個距離出來比印「未記錄」糟得多。
+        if sha == UNRECORDED:
+            behind = UNRECORDED
+        elif _git(upstream, ["cat-file", "-e", "%s^{commit}" % sha]) is None:
+            behind = DEAD_SHA
+        else:
+            n = _git(upstream, ["rev-list", "--count", "%s..HEAD" % sha])
+            behind = u"%s 刀" % n if n is not None else UNRECORDED
+        out.append(_line(u"%s behind" % tag, behind,
+                         u"git rev-list --count <sha>..HEAD @ 上游"))
+
+        # 下游的 ahead/behind 用**現有** origin ref —— **未 fetch**。
+        # 這句標註不是客套:沒 fetch 的話那個 ref 停在上次 fetch 的時點,
+        # 而「ahead 0」看起來像同步,實際只是很久沒問過。
+        br = _git(down, ["rev-parse", "--abbrev-ref", "HEAD"])
+        cnt = _git(down, ["rev-list", "--left-right", "--count",
+                          "origin/%s...HEAD" % br]) if br else None
+        parts = cnt.split() if cnt else []
+        out.append(_line(u"%s downstream origin" % tag,
+                         (u"behind %s / ahead %s(未 fetch)" % (parts[0], parts[1])
+                          if len(parts) == 2 else u"%s(未 fetch)" % UNRECORDED),
+                         u"git rev-list --left-right --count origin/%s...HEAD @ 下游"
+                         % (br or u"?")))
+
+        # **兩邊都印,不只印結論。** `same` 這個字唯一能被反駁的方式
+        # 就是把兩個雜湊擺出來讓人自己比。
+        for rel in SYNC_WATCHED:
+            up_h = file_hash(os.path.join(upstream, rel.replace("/", os.sep)))
+            dn_h = file_hash(os.path.join(down, rel.replace("/", os.sep)))
+            if up_h is None or dn_h is None:
+                verdict = UNRECORDED
+            else:
+                verdict = u"same" if up_h == dn_h else u"drift"
+            out.append(_line(u"%s %s" % (tag, rel),
+                             u"up=%s down=%s %s" % (
+                                 (up_h or UNRECORDED)[:12], (dn_h or UNRECORDED)[:12],
+                                 verdict),
+                             u"sync.file_hash(行尾正規化後 sha256)"))
+    return out
+
+
+def render_all(roots):
+    """多個 root 各算一份,**第一個視為上游**。判準 8。
+
+    每個 root 走**自己的** `gate.py`(裁 C)。這裡不用 subprocess ——
+    `load_gate()` 已經 per-root 各載一份模組,而模組名帶 root 的雜湊,
+    所以兩個 root 的常數不會互相蓋掉。
+    (subprocess 那條路留給「下游的 gate 連 import 都會炸」的情形,
+     目前沒有實例,**不預先實作** —— 一個沒有實例的分支測不到,
+     而測不到的分支與不存在的分支一樣不可靠。)
+    """
+    roots = [os.path.abspath(r) for r in roots]
+    blocks = []
+    for i, r in enumerate(roots, 1):
+        blocks.append(u"=== [%d] %s ===" % (i, r))
+        blocks.append(render(r))
+    if len(roots) >= 2:
+        blocks.append(u"\n".join(_sync_health(roots[0], roots[1:])) + u"\n")
+    return u"\n".join(blocks)
 
 
 def find_root(start=None):
@@ -481,19 +761,21 @@ def main(argv=None):
     except Exception:
         pass
 
-    p = argparse.ArgumentParser(description=u"repo 證據的 projection(票 99 v1)")
-    p.add_argument("--root", default=None,
-                   help=u"要看的 repo 根;預設從 cwd 往上找 .claude/hooks/gate.py")
-    # --all 是 Day 3(判準 7、8):跨 repo 要用 subprocess 逐 root 跑同一支,
-    # 讓各 repo 的 gate 自己答。在單 repo 這一刀假裝支援它,會產生一個
-    # 「看起來跨了 repo 而其實只讀了一個」的輸出。
+    p = argparse.ArgumentParser(description=u"repo 證據的 projection(票 99)")
+    # **`--root` 可重複** —— 給第二個以上就是 `--all`,第一個視為上游。
+    # 沒有另設一個 `--all` 旗標:那會多出「給了 --all 卻只有一個 root」
+    # 這種要處理的組合,而它沒有意義。**root 的數量自己就是那個開關。**
+    p.add_argument("--root", action="append", default=None,
+                   help=u"要看的 repo 根,可重複;預設從 cwd 往上找 .claude/hooks/gate.py。"
+                        u"給兩個以上時第一個視為上游,並印 Sync Health")
     args = p.parse_args(argv)
 
-    root = args.root or find_root()
-    if not root:
+    roots = args.root or ([find_root()] if find_root() else [])
+    roots = [r for r in roots if r]
+    if not roots:
         sys.stderr.write(u"找不到 repo 根(往上都沒有 .claude/hooks/gate.py)\n")
         return 2
-    sys.stdout.write(render(root))
+    sys.stdout.write(render_all(roots) if len(roots) > 1 else render(roots[0]))
     return 0
 
 

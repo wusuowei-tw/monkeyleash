@@ -275,7 +275,7 @@ EXEMPTION_LOG = os.path.join(ROOT, ".dev", "gate-exemptions.jsonl")
 RUN_LOG = os.path.join(ROOT, ".dev", "test-runs.jsonl")
 PROVENANCE = os.path.join(ROOT, ".dev", "provenance.jsonl")
 SHADOW_STATE = os.path.join(ROOT, ".dev", "shadow.json")
-TICKET_DIRS = ("docs/tickets/__FEATURE__",)
+TICKET_DIRS = ("docs/tickets/%s",)
 INTERCEPT_LOG = os.path.join(ROOT, ".dev", "intercepts.jsonl")
 
 
