@@ -1054,6 +1054,42 @@ def load_stage_defs():
 UNREADABLE_STAGE = "__unreadable__"
 
 
+def _declares_src_write(stage_def):
+    """這一筆站定義有沒有宣告 `allows_src_write`。**判準的唯一字面在這裡。**
+
+    抽成一個字的函式看起來像多餘,而它擋的是一種特定的漂移:
+    原本同一個判準在 `check()` 裡有**兩個**寫法(一個 set comprehension、
+    一個 `next(...)` 的條件),改其中一個不會讓另一個出聲。
+    """
+    return bool(isinstance(stage_def, dict) and stage_def.get("allows_src_write"))
+
+
+def writable_stage_ids(stages):
+    """這份定義裡,哪些站宣告了可寫原始碼。回傳 id 的集合。"""
+    return {s.get("id") for s in stages if _declares_src_write(s)}
+
+
+def stage_allows_src_write(stage_id):
+    """這一站可以寫原始碼嗎。回傳 bool。**票 99 裁 A。**
+
+    為什麼要有名字:consumer(票 99 的 `status`)要問這件事,而在此之前
+    判準只 inline 在 `check()` 裡。沒有名字的話,問的人只有兩條路 ——
+    拿候選路徑一條一條餵 `check()`(用「擋不擋」反推「能不能寫」),
+    或**自己組一份判定**。後者會長出第二份判準,而兩份必然漂開(`F-058` 家族)。
+
+    **`status` 只呼叫,不重述。** 這一句是票 99 的判準 2,而它需要一個可呼叫的東西
+    才成立 —— 少了本函式,那句話就只是一句話。
+
+    **fail-closed**:定義檔讀不到(`load_stage_defs()` 回 err)、或站名不在定義裡,
+    一律 False。`pipeline.json` 是可被手改的執行期狀態,打錯一個字就會出現
+    定義檔裡沒有的站名 —— **那時的正確答案是「不准寫」,不是「查無此站所以隨便」。**
+    """
+    stages, _flow, err = load_stage_defs()
+    if err:
+        return False
+    return stage_id in writable_stage_ids(stages)
+
+
 def parse_hook_payload(raw):
     """把 PreToolUse 的原始位元組解成 payload。**明確 utf-8,失敗就丟例外。**
 
@@ -1867,7 +1903,7 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
                 "      而狀態目錄被 gitignore,`git status` 不會告訴你。)\n"
                 "     修好 pipeline.json 再繼續。" % (r, rel(PIPELINE), PIPELINE))
 
-    writable = {s["id"] for s in stages if s.get("allows_src_write")}
+    writable = writable_stage_ids(stages)
 
     # 路徑範圍寫入(research 站):allows_src_write 綁**路徑**不綁階段。
     # 宣告了 src_write_scope 的站,只能寫該範圍底下 —— 範圍外一律擋,不分時點。
@@ -1888,7 +1924,7 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
     elif at_commit:
         # 前置站 = 第一個可寫站之前的所有站。停在那裡卻在交原始碼,代表寫在該寫之前。
         ids = [s["id"] for s in stages]
-        first_writable = next((i for i, s in enumerate(stages) if s.get("allows_src_write")), len(ids))
+        first_writable = next((i for i, s in enumerate(stages) if _declares_src_write(s)), len(ids))
         pre_implement = set(ids[:first_writable]) - {"idle"}
         if stage in pre_implement:
             return ("[R2/commit] %s:current_stage='%s' 是前置站,卻要提交原始碼。\n"
