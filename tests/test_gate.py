@@ -2884,3 +2884,105 @@ class TestUpstreamMustNotBeInShadowMode:
         assert not os.path.exists(real), (
             "上游出現了 .dev/shadow.json —— 整個閘門會從『擋』退回『只記不擋』,"
             "而票 49 的攔截帳本會靜默停止成長。見 docs/machine-init.md:170")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 票 99 裁 A —— 「當前 stage 允許寫 src 嗎」要有一支具名函式
+#
+# 現況:這個判準 inline 在 `check()` 裡(`:1870` 的 set comprehension、
+# `:1891` 的 `first_writable`),**沒有名字**。
+# 於是任何想問這個問題的 consumer(票 99 的 `status`)只有兩條路:
+#   1. 拿候選路徑一條一條餵 `check()` —— 那是用「擋不擋」去反推「能不能寫」
+#   2. 自己組一份判定 —— **那就長出第二份判準**,而兩份必然漂開(F-058 家族)
+# 兩條都不行,所以抽一支具名函式出來,`check()` 改呼叫它。
+#
+# 🔴 本區塊寫下的當下,`gate.stage_allows_src_write` **不存在** —— 這是票 99 的
+#    第二筆紅燈,形狀是 AttributeError。
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestStageAllowsSrcWrite:
+    """裁 A:把 `check()` 裡的 inline 判準抽成 `gate.stage_allows_src_write(stage_id)`。
+
+    **這一組不驗新行為。** R2 的行為由既有那些測試守著,抽函式不得改變它們 ——
+    本組驗的是「那個判準有沒有名字、拿不拿得到、壞掉時往哪一邊倒」。
+    """
+
+    def _stages_yaml(self, tmp_path, text):
+        p = tmp_path / "pipeline-stages.yaml"
+        with io.open(str(p), "w", encoding="utf-8") as f:
+            f.write(text)
+        return str(p)
+
+    # ── 甲、宣告了就是 True,沒宣告就是 False ──────────────────────────
+    def test_a_stage_that_declares_it_may_write_source(self, tmp_path, monkeypatch):
+        """守的是判準 2(只呼叫不重述):consumer 要問這件事得有一支函式可呼叫。"""
+        monkeypatch.setattr(gate, "STAGES_DEF", self._stages_yaml(tmp_path, u"""
+stages:
+  - id: X
+    skill: implement
+    allows_src_write: true
+  - id: Y
+    skill: grill
+"""))
+        assert gate.stage_allows_src_write("X") is True
+
+    def test_a_stage_without_the_field_may_not(self, tmp_path, monkeypatch):
+        """守的是判準 2:欄位缺席不等於允許 —— 那是 R2 的整個重點。"""
+        monkeypatch.setattr(gate, "STAGES_DEF", self._stages_yaml(tmp_path, u"""
+stages:
+  - id: X
+    skill: implement
+    allows_src_write: true
+  - id: Y
+    skill: grill
+"""))
+        assert gate.stage_allows_src_write("Y") is False
+
+    # ── 乙、不認得的站名 -> False ─────────────────────────────────────
+    def test_an_unknown_stage_is_refused(self, tmp_path, monkeypatch):
+        """守的是判準 4(算不出來不得寫成通過)—— 這一層的 fail-closed 面。
+
+        `pipeline.json` 是可被手改的執行期狀態,打錯一個字就會出現一個
+        定義檔裡沒有的站名。**那時的正確答案是「不准寫」,不是「查無此站所以隨便」。**
+        """
+        monkeypatch.setattr(gate, "STAGES_DEF", self._stages_yaml(tmp_path, u"""
+stages:
+  - id: X
+    skill: implement
+    allows_src_write: true
+"""))
+        assert gate.stage_allows_src_write("no_such_stage") is False
+        assert gate.stage_allows_src_write(gate.UNREADABLE_STAGE) is False
+
+    # ── 丙、定義檔讀不到 -> False ─────────────────────────────────────
+    def test_an_unreadable_definition_refuses(self, tmp_path, monkeypatch):
+        """守的是判準 4:`load_stage_defs()` 回 err 時一律 False。
+
+        `load_stage_defs` 自己已經 fail-closed(回 `stages=[]` + err),
+        而**「呼叫端有沒有照著倒」是另一件事** —— 一個把空清單讀成
+        「沒有任何限制」的呼叫端會把 fail-closed 翻成 fail-open,而且完全無聲。
+        """
+        monkeypatch.setattr(gate, "STAGES_DEF", str(tmp_path / "no-such-file.yaml"))
+        stages, _flow, err = gate.load_stage_defs()
+        assert err, "前提不成立:這個路徑應該讀不到"
+        assert stages == []
+        assert gate.stage_allows_src_write("X") is False
+
+    # ── 丁、結構紅:`check()` 不得再留第二份判準 ───────────────────────
+    def test_check_no_longer_carries_an_inline_copy(self):
+        """**守的是「不長第二份判準」,不是行為。**
+
+        抽函式最常見的失敗不是抽錯,是**抽了但沒接** —— 新函式在旁邊,
+        `check()` 照舊用它自己那份 inline 的。那時甲乙丙三條全綠
+        (新函式自己是對的),而生產路徑一個字都沒變。
+        **行為測試看不見這種失敗,因為行為確實沒變。**
+
+        ⚠ 這條驗的是原始碼字面,所以它會被無害的改寫弄紅(例如換個變數名)。
+        那是刻意的代價:字面比對誤報的方向是「叫一次去看一眼」,
+        而漏報的方向是「第二份判準活著而沒有人知道」。
+        """
+        import inspect
+        src = inspect.getsource(gate.check)
+        assert 'allows_src_write")}' not in src, (
+            "`check()` 裡還留著 inline 的 set comprehension —— "
+            "抽出來的函式沒有被接上,生產路徑仍然走第二份判準")

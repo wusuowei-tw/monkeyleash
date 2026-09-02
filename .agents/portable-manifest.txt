@@ -100,6 +100,7 @@ tests/test_redlight.py          copy
 tests/test_manifest.py          copy
 tests/test_claude_md.py         copy
 tests/test_friction_heading.py  copy
+tests/test_status.py            copy
 tests/test_apply_patches.py     copy
 tests/test_bash_write.py        copy
 tests/test_gate_boundaries.py   copy
