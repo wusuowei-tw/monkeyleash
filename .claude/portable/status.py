@@ -274,15 +274,50 @@ def _latest_per_file(runs, ticket):
     帳本是追加式,同一個檔會有很多筆。問「還有什麼是紅的」要看最新一筆,
     **不是「有沒有紅過」** —— 後者會讓每個轉綠的檔永遠留在紅名單裡,
     而一份永遠不會變空的紅名單,讀的人三天後就不看了。
+
+    **沒有票號時回空 dict(fail-closed,票 100)。** 原本寫成
+    `if ticket and rec.get(...)`,票號 falsy 時整個過濾被短路,
+    於是「這張票底下」變成「全部」—— 而函式名與這段 docstring 都還宣稱前者。
+    守在這裡而不是守在呼叫端:呼叫端的守衛救不了下一個呼叫者,
+    而他不會知道要補,因為名字已經跟他保證篩過了。
     """
+    if not ticket:
+        return {}
     out = {}
     for rec in runs or []:
-        if ticket and rec.get("ticket_id") != ticket:
+        if rec.get("ticket_id") != ticket:
             continue
         f = rec.get("test_file")
         if f:
             out[f] = rec
     return out
+
+
+def _waterline_commits(recs):
+    """provenance 的**水位線**:每個 `path` 最新一筆憑證的 commit,去重(票 100)。
+
+    回傳 list,保留首次出現的順序(要印給人看,順序穩定才對得回去)。
+
+    **為什麼不是末筆**:憑證是**逐檔發**的(`sync.write_provenance` 一次迴圈寫 N 筆),
+    追加不覆蓋,而那四個欄位裡**沒有時間戳也沒有批次號**。
+    所以 `recs[-1]` 只代表「最後一個被寫進去的 path」——
+    由它推導出來的距離,是一個由單一 path 決定的數字,卻會被讀成整個下游的落後量。
+
+    同 path 後寫的蓋前寫的,與 `_latest_per_file` 同一個「追加式帳本問最新」的形狀。
+    """
+    latest = {}
+    for rec in recs or []:
+        p = rec.get("path")
+        c = rec.get("upstream_commit")
+        if p and c:
+            latest[p] = c
+    seen, order = set(), []
+    for p in latest:
+        c = latest[p]
+        if c not in seen:
+            seen.add(c)
+            order.append(c)
+    return order
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -436,8 +471,14 @@ def _evidence(root, gate, ticket):
 
     run_log = _p(gate, "RUN_LOG")
     runs = _read_jsonl(run_log) if run_log else None
+    # **守衛與 `_derived` 同式**(票 100)。兩式並存本身就是缺陷:
+    # 同一個問題在同一支檔案裡有兩種答案時,讀的人會以為那是刻意的區別。
+    # 無票時**不得**印帶「本票」字樣的數字 —— 那不是缺值,是一個錯的宣稱,
+    # 而帶著票面語氣的數字,讀的人會直接引用。
     if runs is None:
         val = UNRECORDED
+    elif not ticket:
+        val = u"%s(無當前票)" % UNRECORDED
     else:
         latest = _latest_per_file(runs, ticket)
         red = len([r for r in latest.values() if r.get("result") == "red"])
@@ -680,17 +721,37 @@ def _sync_health(upstream, downstreams):
         out.append(_line(u"%s upstream commit" % tag, sha,
                          u"%s 末筆" % prov.replace("\\", "/")))
 
+        # ── waterline:**加一行,不換一行**(票 100)────────────────────
+        # 上面那行是一個誠實的觀測(來源欄自己寫著「末筆」),刪掉它換一個新的,
+        # 會讓「本來印什麼」在事後查不到。所以水位線另起一行。
+        wl = _waterline_commits(recs)
+        wl_src = u"%s 每 path 最新一筆 upstream_commit 去重" % prov.replace("\\", "/")
+        if not wl:
+            wl_val = UNRECORDED
+        elif len(wl) == 1:
+            wl_val = wl[0]
+        else:
+            # **不挑一個。** 挑哪一個都是猜,而猜出來的距離
+            # 長得跟量出來的一模一樣。N 個都印出來,讓人自己看。
+            wl_val = u"%d 個不同 commit(未收齊):%s" % (
+                len(wl), u" ".join(c[:12] for c in wl))
+        out.append(_line(u"%s waterline" % tag, wl_val, wl_src))
+
         # **不做換算。** 那個 sha 可能是票 84 改寫身分之前的,
         # 而換算需要 commit-map —— 猜一個距離出來比印「未記錄」糟得多。
-        if sha == UNRECORDED:
+        #
+        # **距離對 waterline 算,不對末筆算**(票 100):末筆是位置,水位線才是狀態。
+        if not wl:
             behind = UNRECORDED
-        elif _git(upstream, ["cat-file", "-e", "%s^{commit}" % sha]) is None:
+        elif len(wl) > 1:
+            behind = u"%s(%d 個不同 commit,未收齊)" % (UNRECORDED, len(wl))
+        elif _git(upstream, ["cat-file", "-e", "%s^{commit}" % wl[0]]) is None:
             behind = DEAD_SHA
         else:
-            n = _git(upstream, ["rev-list", "--count", "%s..HEAD" % sha])
+            n = _git(upstream, ["rev-list", "--count", "%s..HEAD" % wl[0]])
             behind = u"%s 刀" % n if n is not None else UNRECORDED
         out.append(_line(u"%s behind" % tag, behind,
-                         u"git rev-list --count <sha>..HEAD @ 上游"))
+                         u"git rev-list --count <waterline sha>..HEAD @ 上游"))
 
         # 下游的 ahead/behind 用**現有** origin ref —— **未 fetch**。
         # 這句標註不是客套:沒 fetch 的話那個 ref 停在上次 fetch 的時點,
