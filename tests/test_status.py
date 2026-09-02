@@ -40,6 +40,7 @@ import json
 import os
 import pathlib
 import shutil
+import subprocess
 import sys
 
 import pytest
@@ -230,9 +231,14 @@ class TestTicketStatusLineIsVerbatim:
 class TestAuthorityIsALedgerNotAVerdict:
 
     def test_authority_line_is_unrecorded_without_a_ledger(self, tmp_path):
-        """守判準 5:權威層在不在**由帳本說**;沒有帳本就是「未記錄」,不是「沒裝」。"""
+        """守判準 5:權威層在不在**由帳本說**;沒有帳本就是「未記錄」,不是「沒裝」。
+
+        ⚠ Day 3 標籤從 `authority` 改成 `authority ledger` —— 因為同一段裡
+        現在有兩個 authority 來源(帳本 / `core.hooksPath`),而
+        `authority:` 這個裸標籤讀起來像「權威層的狀態」,那正是判準 5 不准印的東西。
+        """
         out = render(_make_root(tmp_path, with_exemptions=None))
-        assert _value_of(out, u"authority") == UNRECORDED
+        assert _value_of(out, u"authority ledger") == UNRECORDED
 
     def test_authority_line_cites_the_commit_time_record(self, tmp_path):
         """負控:帳本裡有 `at_commit=true` 的一筆時,那一行要帶得出它的 `ts`。"""
@@ -244,7 +250,340 @@ class TestAuthorityIsALedgerNotAVerdict:
              "outcome": "granted", "ticket": "82"},
         ]
         out = render(_make_root(tmp_path, with_exemptions=recs))
-        val = _value_of(out, u"authority")
+        val = _value_of(out, u"authority ledger")
         assert val != UNRECORDED, out
         assert ts in val, (
             u"權威層那一行要指得出**哪一筆**紀錄 —— 只說「有」等於一個無從反駁的摘要\n%s" % out)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Day 3 —— 四補(generated / 標籤 / outpost 帳本 / intercepts 兩行 /
+#          每檔最新一筆)+ `--all` + Sync Health
+#
+# 🔴 本區塊寫下的當下,`render_all` 與 `now_iso` 都不存在,而 v1 的欄位名
+#    仍是 `authority` / 單行 `intercepts` —— 這是票 99 Day 3 的紅燈。
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 假 gate:**刻意沒有 `stage_allows_src_write`**。
+# 下游裝的是舊版框架,而「舊版沒有這個函式」正是 `--all` 一定會遇到的情形 ——
+# 那時的正確行為是印「未記錄」,不是整份輸出崩掉。
+FAKE_GATE = u'''# -*- coding: utf-8 -*-
+import os
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PIPELINE = os.path.join(ROOT, ".dev", "pipeline.json")
+EXEMPTION_LOG = os.path.join(ROOT, ".dev", "gate-exemptions.jsonl")
+RUN_LOG = os.path.join(ROOT, ".dev", "test-runs.jsonl")
+PROVENANCE = os.path.join(ROOT, ".dev", "provenance.jsonl")
+SHADOW_STATE = os.path.join(ROOT, ".dev", "shadow.json")
+TICKET_DIRS = ("docs/tickets/__FEATURE__",)
+INTERCEPT_LOG = os.path.join(ROOT, ".dev", "intercepts.jsonl")
+
+
+def load_stage():
+    return ("__STAGE__", "__TICKET__")
+
+
+def load_feature():
+    return "__FEATURE__"
+
+
+def intercept_path(month):
+    stem, ext = os.path.splitext(INTERCEPT_LOG)
+    return "%s-%s%s" % (stem, month, ext)
+
+
+def shadow_active(today=None):
+    return False
+
+
+def skill_mirror_violations(canon, mirrors):
+    return []
+
+
+def rule_codes(source_path=None):
+    return set()
+'''
+
+
+def _make_fake_root(tmp_path, name, stage, ticket, feature=u"fake"):
+    """造一個只有**假 gate** 的 root。用來證明各 root 走各自的 gate。"""
+    root = tmp_path / name
+    (root / ".dev").mkdir(parents=True)
+    (root / ".claude" / "hooks").mkdir(parents=True)
+    with io.open(str(root / ".dev" / "pipeline.json"), "w", encoding="utf-8") as f:
+        json.dump({"current_stage": stage, "feature": feature,
+                   "ticket_id": ticket}, f)
+    body = (FAKE_GATE.replace(u"__STAGE__", stage)
+                     .replace(u"__TICKET__", ticket)
+                     .replace(u"__FEATURE__", feature))
+    with io.open(str(root / ".claude" / "hooks" / "gate.py"), "w", encoding="utf-8") as f:
+        f.write(body)
+    return str(root)
+
+
+def _git(root, *args):
+    return subprocess.run(["git"] + list(args), cwd=root, capture_output=True)
+
+
+def _make_git_root(tmp_path, name, files):
+    """造一個**真的 git repo**(Sync Health 要算 commit 距離,假不了)。"""
+    root = _make_root_dir(tmp_path, name, files)
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.invalid")
+    _git(root, "config", "user.name", "t")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "one")
+    return root
+
+
+def _make_root_dir(tmp_path, name, files):
+    root = tmp_path / name
+    root.mkdir(parents=True)
+    for rel, text in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with io.open(str(p), "w", encoding="utf-8") as f:
+            f.write(text)
+    return str(root)
+
+
+class TestGeneratedComesFromTheClock:
+
+    def test_generated_line_comes_from_the_clock(self, tmp_path, monkeypatch):
+        """守判準 1(projection 不存):時間來自時鐘,不來自任何被存下來的檔。
+
+        一個從檔案讀出來的時間戳,會在檔案沒更新時**看起來像剛剛算的**,
+        而那正是「存起來的現況」最危險的地方。
+        """
+        root = _make_root(tmp_path)
+        monkeypatch.setattr(status, "now_iso", lambda: u"2999-01-01T00:00:00+00:00")
+        out = render(root)
+        assert _value_of(out, u"generated") == u"2999-01-01T00:00:00+00:00", out
+
+
+class TestTheBareAuthorityLabelIsGone:
+
+    def test_the_bare_authority_label_is_gone(self, tmp_path):
+        """守判準 5:`authority:` 這個裸標籤讀起來像「權威層的狀態」。
+
+        同一段裡現在有兩個 authority 來源(帳本 / `core.hooksPath`),
+        而**它們回答的不是同一個問題** —— 一個是「跑過沒」,一個是「設定指向哪」。
+        共用一個標籤會讓讀的人以為那是一個結論。
+        """
+        out = render(_make_root(tmp_path))
+        bare = [ln for ln in _lines(out) if ln.strip().startswith(u"authority:")]
+        assert bare == [], u"裸標籤 authority: 還在:%s" % bare
+        assert _value_of(out, u"authority ledger") is not None, out
+        assert _value_of(out, u"authority config") is not None, out
+
+
+class TestOutpostHasALedgerLineToo:
+
+    def test_outpost_ledger_is_unrecorded_without_a_ledger(self, tmp_path):
+        """守判準 4:沒有帳本就是未記錄。"""
+        out = render(_make_root(tmp_path, with_exemptions=None))
+        assert _value_of(out, u"outpost ledger") == UNRECORDED
+
+    def test_outpost_ledger_cites_the_last_agent_time_record(self, tmp_path):
+        """守判準 5:前哨**跑過沒**由帳本說 —— `at_commit=false` 那些是它的痕跡。
+
+        設定那一行仍然是 `mounted: 未證明`(裁 D):
+        **設定解得到什麼,與 hook 跑的是不是它,是兩件事。**
+        兩行並存不矛盾 —— 它們回答不同的問題,而各自帶自己的來源。
+        """
+        agent_ts = u"2026-09-02T00:44:52.652814+00:00"
+        recs = [
+            {"ts": agent_ts, "tool": "Edit", "at_commit": False, "outcome": "granted"},
+            {"ts": u"2026-09-02T00:45:39.047247+00:00", "tool": "pre-commit",
+             "at_commit": True, "outcome": "granted"},
+        ]
+        out = render(_make_root(tmp_path, with_exemptions=recs))
+        assert agent_ts in _value_of(out, u"outpost ledger"), out
+        assert u"mounted: 未證明" in _value_of(out, u"outpost"), out
+
+
+class TestInterceptsPrintsTwoLines:
+
+    def _root_with_month(self, tmp_path, month):
+        root = _make_root(tmp_path)
+        rec = {"ts": u"2026-08-28T00:12:55+00:00", "rule": "R7",
+               "at_commit": False, "cmd_verb": "printf"}
+        with io.open(str(pathlib.Path(root) / ".dev" / ("intercepts-%s.jsonl" % month)),
+                     "w", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        return root
+
+    def test_two_lines_not_one(self, tmp_path):
+        """守判準 3/4:**「當月」與「最新存在月」是兩個問題,不得合成一格。**
+
+        合成一格的話,一個從未被攔截過的月份會印「檔不存在」,
+        而那與「這個 repo 從來沒有攔截紀錄」**逐字相同** ——
+        兩件事差很多:前者是正常,後者是前哨可能沒在跑。
+        """
+        out = render(self._root_with_month(tmp_path, u"2026-08"))
+        assert _value_of(out, u"intercepts (當月)") is not None, out
+        assert _value_of(out, u"intercepts (最新存在月)") is not None, out
+
+    def test_latest_existing_month_names_the_file_and_the_last_record(self, tmp_path):
+        out = render(self._root_with_month(tmp_path, u"2026-08"))
+        val = _value_of(out, u"intercepts (最新存在月)")
+        assert u"2026-08" in val and u"R7" in val, val
+
+    def test_latest_existing_month_changes_when_the_file_goes_away(self, tmp_path):
+        """**變異控制** —— 檔案消失,那一行必須跟著變。
+
+        少了這一格,一支永遠印同一句話的實作會讓上面兩條全綠
+        (票 99 Day 2 的負控就是這樣空轉的:移走的檔案根本不在讀取路徑上)。
+        """
+        root = self._root_with_month(tmp_path, u"2026-08")
+        before = _value_of(render(root), u"intercepts (最新存在月)")
+        os.remove(str(pathlib.Path(root) / ".dev" / "intercepts-2026-08.jsonl"))
+        after = _value_of(render(root), u"intercepts (最新存在月)")
+        assert before != after, (
+            u"檔案移走之後那一行沒有變 —— 它讀的不是這個檔\nbefore=%s\nafter=%s"
+            % (before, after))
+        assert after == UNRECORDED, after
+
+    def test_no_month_file_at_all_is_unrecorded(self, tmp_path):
+        out = render(_make_root(tmp_path))
+        assert _value_of(out, u"intercepts (最新存在月)") == UNRECORDED
+
+
+class TestTestsUnderTicketUsesTheLatestRecordPerFile:
+
+    def test_a_file_that_went_red_then_green_counts_as_green(self, tmp_path):
+        """守判準 5:帳本是追加式,**同一個檔會有很多筆** ——
+        「這張票底下還有什麼是紅的」問的是**每個檔的最新一筆**,不是有沒有紅過。
+
+        用「有沒有紅過」的話,任何轉綠的檔都會永遠留在紅名單裡,
+        而一份永遠不會變空的紅名單,讀的人三天後就不看了。
+        """
+        root = _make_root(tmp_path)
+        recs = [
+            {"test_file": "tests/test_a.py", "time": "2026-09-02T01:00:00+00:00",
+             "result": "red", "ticket_id": "99"},
+            {"test_file": "tests/test_a.py", "time": "2026-09-02T02:00:00+00:00",
+             "result": "green", "ticket_id": "99"},
+            {"test_file": "tests/test_b.py", "time": "2026-09-02T03:00:00+00:00",
+             "result": "red", "ticket_id": "99"},
+        ]
+        with io.open(str(pathlib.Path(root) / ".dev" / "test-runs.jsonl"),
+                     "w", encoding="utf-8") as f:
+            for r in recs:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+        out = render(root)
+        red = _value_of(out, u"tests red under ticket 99")
+        green = _value_of(out, u"tests green under ticket 99")
+        assert u"tests/test_a.py" not in red, red
+        assert u"tests/test_a.py" in green, green
+        assert u"tests/test_b.py" in red, red
+
+
+class TestRenderAll:
+
+    def test_every_line_still_carries_a_source(self, tmp_path):
+        """守判準 3 —— `--all` 不是放寬來源規矩的理由。"""
+        roots = [_make_fake_root(tmp_path, "r1", u"grill", u"11"),
+                 _make_fake_root(tmp_path, "r2", u"implement", u"22")]
+        out = status.render_all(roots)
+        offenders = [ln for ln in _lines(out)
+                     if not ln.strip().startswith(u"===") and u"(source:" not in ln]
+        assert offenders == [], u"\n".join(offenders)
+
+    def test_each_root_gets_its_own_section(self, tmp_path):
+        roots = [_make_fake_root(tmp_path, "r1", u"grill", u"11"),
+                 _make_fake_root(tmp_path, "r2", u"implement", u"22")]
+        out = status.render_all(roots)
+        for r in roots:
+            assert r in out, u"節頭沒有印出 root %s\n%s" % (r, out)
+
+    def test_each_root_answers_through_its_own_gate(self, tmp_path):
+        """守裁 C:**各 repo 的 gate 自己答。**
+
+        兩個 root 的假 gate 回不同的 `load_stage()`。輸出兩節的值若相同,
+        代表第二個 root 拿到的是第一個 root 的模組 —— 而那個錯**完全無聲**
+        (規則還在、還被呼叫、永遠回同一個答案)。
+        """
+        roots = [_make_fake_root(tmp_path, "r1", u"grill", u"11"),
+                 _make_fake_root(tmp_path, "r2", u"implement", u"22")]
+        out = status.render_all(roots)
+        assert u"stage: grill" in out, out
+        assert u"stage: implement" in out, out
+
+    def test_a_gate_without_the_new_function_does_not_crash(self, tmp_path):
+        """守判準 4:下游裝的是舊版框架 —— **缺函式是常態,不是例外狀況。**
+
+        崩掉的話,一個 root 的舊 gate 會讓**整份** `--all` 沒有輸出,
+        而讀的人看到的是一個 traceback,不是「那一格算不出來」。
+        """
+        roots = [_make_fake_root(tmp_path, "r1", u"grill", u"11"),
+                 _make_fake_root(tmp_path, "r2", u"implement", u"22")]
+        out = status.render_all(roots)
+        assert u"未記錄(該 repo 的 gate 無此函式)" in out, out
+
+
+class TestSyncHealth:
+
+    def _pair(self, tmp_path, sha=None):
+        up = _make_git_root(tmp_path, "up", {
+            ".claude/hooks/gate.py": u"# upstream gate\n",
+            ".claude/portable/g1_guard.py": u"# guard\n",
+            "tests/test_g1_guard.py": u"# guard test\n",
+        })
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=up,
+                              capture_output=True).stdout.decode().strip()
+        down = _make_root_dir(tmp_path, "down", {
+            ".claude/hooks/gate.py": u"# upstream gate\n",
+            ".claude/portable/g1_guard.py": u"# guard drifted\n",
+            "tests/test_g1_guard.py": u"# guard test\n",
+            ".dev/provenance.jsonl": json.dumps(
+                {"path": "x", "upstream_path": "x",
+                 "upstream_commit": sha or head, "content_hash": "z"}) + "\n",
+        })
+        return up, down, head
+
+    def test_not_printed_for_a_single_root(self, tmp_path):
+        """守判準 7:單 repo 印不出 Sync Health —— **它答不出「跟誰比」。**"""
+        out = render(_make_fake_root(tmp_path, "solo", u"idle", u"1"))
+        assert u"Sync Health" not in out, out
+
+    def test_printed_for_two_or_more_roots(self, tmp_path):
+        up, down, _head = self._pair(tmp_path)
+        out = status.render_all([up, down])
+        assert u"Sync Health" in out, out
+
+    def test_it_names_the_upstream_commit_from_provenance(self, tmp_path):
+        up, down, head = self._pair(tmp_path)
+        out = status.render_all([up, down])
+        assert head[:8] in out, out
+
+    def test_no_provenance_is_unrecorded(self, tmp_path):
+        up = _make_git_root(tmp_path, "up", {".claude/hooks/gate.py": u"# g\n"})
+        down = _make_root_dir(tmp_path, "down", {".claude/hooks/gate.py": u"# g\n"})
+        out = status.render_all([up, down])
+        line = [ln for ln in _lines(out) if u"upstream commit" in ln]
+        assert line and UNRECORDED in line[0], out
+
+    def test_a_sha_outside_upstream_history_is_not_converted(self, tmp_path):
+        """**不做換算。** 那個 sha 可能是票 84 改寫身分之前的,
+        而換算需要 commit-map —— 猜一個距離出來,比印「未記錄」糟得多。
+        """
+        dead = "0" * 40
+        up, down, _head = self._pair(tmp_path, sha=dead)
+        out = status.render_all([up, down])
+        assert u"未記錄(sha 不在上游歷史,可能為票 84 改寫前)" in out, out
+
+    def test_three_files_are_hashed_on_both_sides(self, tmp_path):
+        """守判準 3:**兩邊都印**,不只印一個 same/drift 的結論。
+
+        只印結論的話,讀的人無法自己核對 —— 而「兩邊都印」正是
+        `same` 這個字唯一能被反駁的方式。
+        """
+        up, down, _head = self._pair(tmp_path)
+        out = status.render_all([up, down])
+        for rel in (u".claude/hooks/gate.py", u".claude/portable/g1_guard.py",
+                    u"tests/test_g1_guard.py"):
+            assert rel in out, u"%s 沒有出現\n%s" % (rel, out)
+        assert u"same" in out and u"drift" in out, (
+            u"三檔裡兩檔相同、一檔不同,兩種結論都該出現\n%s" % out)
