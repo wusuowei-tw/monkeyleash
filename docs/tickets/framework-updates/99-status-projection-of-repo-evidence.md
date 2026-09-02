@@ -1,6 +1,7 @@
 # 票 99:`status` 是 repo 證據的 projection —— 算出來,不存起來
 
-**狀態**:**implement**(2026-09-02 立案即動工)
+**狀態**:**done(2026-09-02 收票)**
+~~**狀態**:**implement**(2026-09-02 立案即動工)~~(F-036 體例:舊行不刪)
 
 **時鐘**:**三個工作天**。
 
@@ -446,4 +447,134 @@ commit 當下 stdout 也印出了 `[R2/自我修改豁免] .claude/hooks/gate.py
 **Day 3 待議**:`outpost` 要不要比照 `authority` 也加一行帳本證據
 (`tool=Edit` 的豁免紀錄就是前哨跑過的痕跡)。**本輪不做** ——
 `test_outpost_line_is_never_a_verdict` 釘的是設定那一行,加新行不影響它,
-但那是新判準,要先裁。
+但那是新判準,要先裁。**⇒ Day 3 已裁:加(見第十一節裁 ①)。**
+
+---
+
+## 十一、Day 3 落地與收票(2026-09-02)
+
+三刀:`89b78ef`(紅燈 21)+ `357870a`(轉綠 28)+ 收票這一刀。
+
+### 十一之一、三裁(上一輪待決,本輪照裁執行)
+
+| 裁 | 內容 | 落地 |
+|---|---|---|
+| **①** | `outpost` **加一行帳本證據** | `outpost ledger:` = 帳本最後一筆 `at_commit=false` 的 ts。設定那一行不動,仍 `mounted: 未證明` |
+| **②** | `intercepts` **不選月份,印兩行** | `intercepts (當月)` + `intercepts (最新存在月)` |
+| **③** | 豁免落帳 | 已做(`774cd4f`) |
+
+**裁 ② 的理由值得留著**:Day 2 選了「用最後一次 commit 的月份」當**唯一**的月,
+而那個選擇讓 Day 2 的負控空轉 —— 移走的 8 月檔根本不在讀取路徑上。
+**一個選了月份的實作,會讓「那個月沒有攔截」與「這個 repo 從來沒有攔截」印出同一句話。**
+
+### 十一之二、Day 3 加的四補(全部有紅燈先行)
+
+1. **`generated`** —— 印算的時刻,來自 `status.now_iso()`(可被換掉,所以測得出來)。
+2. **標籤 `authority` → `authority ledger`** —— 同段裡有兩個 authority 來源,
+   而**它們回答的不是同一個問題**;裸標籤讀起來像一個結論。
+3. **`outpost ledger`**(裁 ①)。
+4. **`intercepts` 兩行**(裁 ②)。
+5. **`tests red/green under ticket` 改成每檔最新一筆** ——
+   用「有沒有紅過」的話,轉綠的檔會永遠留在紅名單裡,
+   而**一份永遠不會變空的紅名單,讀的人三天後就不看了**。
+6. **`--all`(`--root` 可重複)+ Sync Health**。
+
+### 十一之三、⚠ 被強制的斷言變更(**不是測試 bug**)
+
+裁 ② 之外,**標籤改名迫使兩條既有測試跟著改**:
+`test_authority_line_is_unrecorded_without_a_ledger` 與
+`test_authority_line_cites_the_commit_time_record` 原本查 `authority:`,
+改查 `authority ledger:`。
+
+所以 Day 3 紅燈那一刀的 21 條 = **19 條新 + 2 條改標籤**,
+commit 訊息 `89b78ef` 已逐字寫明。**「舊 9 條全綠」在 Day 3 不成立,實際是 7 綠 + 2 改。**
+
+### 十一之四、⚠ 修了一個測試 fixture 的 bug(報備)
+
+`FAKE_GATE` 裡我把 `TICKET_DIRS` 寫成 `("docs/tickets/__FEATURE__",)`,
+替換之後變成固定字串,`tmpl % feature` 當場 `TypeError`。
+改回 `("docs/tickets/%s",)`。**這是 fixture 寫錯,不是斷言變更。**
+
+**但它照出了 `status.py` 的一個真缺陷**,而那個缺陷本身值得記:
+`_find_ticket_file` 假設模板一定吃得下 `%`。修法是 `_ticket_dirs()` 用
+`try/except TypeError` 收掉 —— **別的 repo 的 gate 可能把它寫成固定路徑,
+而一個 TypeError 會讓整份輸出消失,只為了一格算不出來。**
+
+### 十一之五、⚠ 同檔同類漏一個(當場撞到 `F-085` 那一族)
+
+把 `gate.<常數>` 改成容錯的 `_p(gate, ...)` 時,`_evidence` 裡的
+`gate.RUN_LOG` 改了,**`_derived` 裡的同一個沒改** —— 相隔約 100 行,同一支檔。
+測試當場紅(5 條 Sync Health),不是靠人看出來的。
+
+修完之後跑 `grep -n "gate\.[A-Z_]*\b" .claude/portable/status.py` 全檔重掃,
+確認**沒有殘留的裸常數存取**。
+**那次 grep 才是處置,前面那次「我剛剛改過這個檔」不是。**
+
+### 十一之六、Sync Health 第一次實跑照出來的三件事
+
+```
+[2] behind: 未記錄(sha 不在上游歷史,可能為票 84 改寫前)
+[3] behind: 未記錄(sha 不在上游歷史,可能為票 84 改寫前)
+```
+
+**一、兩個下游的 provenance 末筆都指向 `1a09650777d23bba…`,而上游沒有這個物件**
+(`git cat-file -t` → `fatal: could not get object info`)。
+票 84 改寫身分之後,下游的 provenance **整份失去可查證性** ——
+這正是票 59(provenance dies when upstream rewrites history)講的事,
+而在此之前**沒有東西會把它說出來**。
+**`status` 不做換算**:換算需要 commit-map,猜一個距離出來比印「未記錄」糟得多。
+
+**二、三個受監視檔在兩個下游**全部** `drift`**:
+
+| 檔 | 上游 | 下游(兩邊同值) |
+|---|---|---|
+| `.claude/hooks/gate.py` | `b6b06c082b53` | `95f001e5e43d` |
+| `.claude/portable/g1_guard.py` | `33ca8e521932` | `7e0e2da2afa4` |
+| `tests/test_g1_guard.py` | `abc2ab0d6018` | `a0038c36974a` |
+
+兩個下游**彼此一致**、與上游**都不同** ⇒ 它們停在同一個較舊的版本,不是各自漂開。
+
+**三、下游的 gate 沒有 `intercept_path` 也沒有 `stage_allows_src_write`**
+(輸出印 `未記錄(該 repo 的 gate 無此函式)`,不是崩掉)。
+**這是 `--all` 唯一真正的設計約束**:跨 repo 看的是**跨版本**的 repo,
+所以「缺函式」是常態不是意外。
+
+### 十一之七、下游零寫入的證據
+
+`--all` 跑前跑後,兩個下游各跑一次 `git status --short`,**逐字相同**:
+
+```
+影音:  M .dev/pipeline.json
+      ?? .scratch/sync-v4-pending.md
+量化:  m data_collector
+```
+
+機制面:Sync Health 只用三種讀 —— `git`(下游的 `-C` 唯讀查詢)、`io.open`、
+`sync.file_hash`(讀碼確認:`io.open(path,"rb")` + `_norm`,純讀)。
+`sync.py` 裡會寫檔的那些(`_write_bytes` / `write_provenance` /
+`regenerate_canon` / `update(apply=True)`)**一個都沒叫**。
+**未 fetch** —— 下游的 ahead/behind 用現有 `origin` ref,輸出逐行標註。
+
+### 十一之八、驗收
+
+> **陌生視窗受試:待貼**
+>
+> 做法:開一個乾淨視窗,**只貼 `status` 輸出**(不貼別的、不解釋),問五題 ——
+> 現在停在哪一站 / 當前票是哪一張 / 樹況 / 上游落後幾刀 / 前哨在不在。
+> 記答對幾格。**答錯的格是 `status` 的缺陷,不是受試者的。**
+> 第 4 題預期答「未記錄(sha 不在上游歷史)」算對;第 5 題答
+> 「設定未證明、但帳本顯示跑過」算對,答「在」或「不在」都算錯。
+>
+> **推送前由 Jeff 做。** 沒做之前這一格不得填「通過」。
+
+### 十一之九、登記(**不在本票**)
+
+| # | 內容 | 為什麼現在不做 |
+|---|---|---|
+| 1 | **Day 2 的負控空轉** | 已由裁 ② + `test_latest_existing_month_changes_when_the_file_goes_away`(變異控制)取代。留這一格是為了記住**一個不可能失敗的控制證明不了任何事** |
+| 2 | **roots 探索** | v1 **明給 `--root`,不建清單檔** —— 一個會被讀的清單檔就是一份會過期的狀態(判準 1)。要自動探索得先裁「從哪裡探索」。**candidate** |
+| 3 | **兩個下游仍在 OneDrive** | 路徑帶空白與中文、且被雲端同步。本票只讀,不受影響;但任何寫入路徑都要先處理它。**candidate** |
+| 4 | 票面狀態行值域統一 | 裁 B,Day 1 就登記了 |
+| 5 | 帳本欄位「全檔是否同欄」全掃 | 裁 F,Day 1 就登記了 |
+| 6 | MCP 介面實作 | 判準 9 |
+| 7 | **下游 provenance 全部指向死 sha** | Sync Health 照出來的,屬票 59 的範圍,不在本票 |
