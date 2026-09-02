@@ -587,3 +587,153 @@ class TestSyncHealth:
             assert rel in out, u"%s 沒有出現\n%s" % (rel, out)
         assert u"same" in out and u"drift" in out, (
             u"三檔裡兩檔相同、一檔不同,兩種結論都該出現\n%s" % out)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 票 100 —— 兩件都不是「算不出來」,是**算出了一個東西然後貼上配不上的標籤**
+# ─────────────────────────────────────────────────────────────────────────
+
+# 甲-2 用的固定資料:兩張票、三個檔,其中 test_a 紅轉綠。
+# **放模組層而不是 fixture**:這組資料要被正控與負控**共用**,
+# 兩支拿到不同的資料的話,「有票那條路沒被改壞」就證不出來。
+TICKET_100_RUNS = [
+    {"test_file": "tests/test_a.py", "time": "2026-09-02T01:00:00+00:00",
+     "result": "red", "ticket_id": "99"},
+    {"test_file": "tests/test_a.py", "time": "2026-09-02T02:00:00+00:00",
+     "result": "green", "ticket_id": "99"},
+    {"test_file": "tests/test_b.py", "time": "2026-09-02T03:00:00+00:00",
+     "result": "red", "ticket_id": "99"},
+    {"test_file": "tests/test_c.py", "time": "2026-09-02T04:00:00+00:00",
+     "result": "green", "ticket_id": "98"},
+]
+
+
+def _write_runs(root, recs):
+    with io.open(str(pathlib.Path(root) / ".dev" / "test-runs.jsonl"),
+                 "w", encoding="utf-8") as f:
+        for r in recs:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+class TestIdleTestRunsLineIsUnrecorded:
+    """票 100 甲-1 —— **沒有當前票時,`test-runs` 行不得帶票面語氣。**
+
+    `_latest_per_file` 的過濾寫成 `if ticket and ...`,票號 falsy 時整個
+    `continue` 分支不執行,於是「這張票底下」變成「全部」——
+    而值仍然標著「本票」。**那不是缺值,是一個錯的宣稱**,
+    而帶著票面語氣的數字讀的人會直接引用。
+    """
+
+    def test_idle_prints_unrecorded_not_this_ticket(self, tmp_path):
+        root = _make_root(tmp_path, stage=u"idle", ticket=None)
+        _write_runs(root, TICKET_100_RUNS)
+
+        out = render(root)
+        val = _value_of(out, u"test-runs")
+        assert val is not None, out
+        assert val.startswith(UNRECORDED), val
+        # **兩個斷言缺一不可。** 只斷言開頭的話,一個印成
+        # 「未記錄;本票 red 0 / green 0」的實作會過關 —— 而那仍然是個謊。
+        assert u"本票" not in val, val
+
+
+class TestLatestPerFileIsFailClosedWithoutTicket:
+    """票 100 甲-2 —— 守在**函式自己**,不是守在呼叫端。
+
+    `_derived` 已經用 `or not ticket` 擋住了,而 `_evidence` 沒有。
+    修呼叫端救不了下一個呼叫者:函式的名字與 docstring 都在跟他保證篩過了。
+    """
+
+    def test_no_ticket_returns_empty(self):
+        assert TICKET_100_RUNS, u"資料是空的話這支測試證不了任何事"
+        assert status._latest_per_file(TICKET_100_RUNS, None) == {}
+
+    def test_with_ticket_still_filters(self):
+        """**負控** —— 防止修法把有票那條路一起關掉。
+
+        一支「永遠回 `{}`」的實作會讓上面那支綠,而它把整行變成裝飾。
+        """
+        got = status._latest_per_file(TICKET_100_RUNS, u"99")
+        assert sorted(got) == ["tests/test_a.py", "tests/test_b.py"], sorted(got)
+        assert got["tests/test_a.py"]["result"] == "green", got["tests/test_a.py"]
+
+
+class TestSyncWaterline:
+    """票 100 乙 —— **末筆是位置,不是水位線。**
+
+    憑證逐檔發、追加不覆蓋、四個欄位裡沒有時間戳,所以 `recs[-1]` 只代表
+    「最後一個被寫進去的 path」。由它推導出來的 `behind`,是一個由單一 path
+    決定的距離,卻被印成整個下游的落後量。
+
+    **自己造 fixture,不改 `TestSyncHealth._pair`** —— 那支單筆 fixture 被六支
+    現有測試共用,而改一個共用 fixture 影響的不只是你正在看的那一支(票 99 十一之四)。
+    """
+
+    FILES = {
+        ".claude/hooks/gate.py": u"# upstream gate\n",
+        ".claude/portable/g1_guard.py": u"# guard\n",
+        "tests/test_g1_guard.py": u"# guard test\n",
+    }
+
+    def _up_two_commits(self, tmp_path, name=u"upw"):
+        """上游造**兩刀**,兩個 sha 都真實存在 —— 否則測到的是 DEAD_SHA 那條路。"""
+        up = _make_git_root(tmp_path, name, dict(self.FILES))
+        first = _git(up, "rev-parse", "HEAD").stdout.decode().strip()
+        with io.open(str(pathlib.Path(up) / "note.txt"), "w", encoding="utf-8") as f:
+            f.write(u"second\n")
+        _git(up, "add", "-A")
+        _git(up, "commit", "-q", "-m", "two")
+        second = _git(up, "rev-parse", "HEAD").stdout.decode().strip()
+        assert first != second
+        return up, first, second
+
+    def _down(self, tmp_path, recs, name=u"downw"):
+        files = dict(self.FILES)
+        files[".dev/provenance.jsonl"] = u"".join(
+            json.dumps(r, ensure_ascii=False) + u"\n" for r in recs)
+        return _make_root_dir(tmp_path, name, files)
+
+    @staticmethod
+    def _rec(path, commit):
+        return {"path": path, "upstream_path": path,
+                "upstream_commit": commit, "content_hash": "z"}
+
+    def test_two_commits_print_count_and_unrecorded_behind(self, tmp_path):
+        """乙-1:兩個 path 帶兩個不同 commit ⇒ **說出「未收齊」,不挑一個。**
+
+        挑哪一個都是猜,而猜出來的距離長得跟量出來的一模一樣。
+        """
+        up, first, second = self._up_two_commits(tmp_path)
+        down = self._down(tmp_path, [self._rec("a", first),
+                                     self._rec("b", second)])
+        out = status.render_all([up, down])
+
+        wl = _value_of(out, u"[2] waterline")
+        assert wl is not None, out
+        assert u"2 個" in wl, wl
+
+        behind = _value_of(out, u"[2] behind")
+        assert behind.startswith(UNRECORDED), behind
+        assert u"未收齊" in behind, behind
+
+        # **末筆那一行一字不改。** 它是一個誠實的觀測(來源欄自己寫著「末筆」),
+        # 刪掉一個觀測換一個新的,會讓「本來印什麼」在事後查不到。
+        assert _value_of(out, u"[2] upstream commit") == second, out
+
+    def test_one_commit_prints_sha_and_behind(self, tmp_path):
+        """乙-2 **負控** —— 兩個 path 同一個 commit ⇒ 照樣算得出刀數。
+
+        沒有這一支的話,一個「永遠印未收齊」的實作會讓乙-1 綠,
+        而它把 Sync Health 整段變成裝飾。
+        """
+        up, first, _second = self._up_two_commits(tmp_path)
+        down = self._down(tmp_path, [self._rec("a", first),
+                                     self._rec("b", first)])
+        out = status.render_all([up, down])
+
+        wl = _value_of(out, u"[2] waterline")
+        assert wl is not None, out
+        assert first[:12] in wl, wl
+        assert u"個不同 commit" not in wl, wl
+
+        assert _value_of(out, u"[2] behind") == u"1 刀", out
