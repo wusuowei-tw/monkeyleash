@@ -1,6 +1,7 @@
 # 票 100:`status` 在 idle 時對 `test-runs` 行印出**錯的宣稱**;Sync Health 的「末筆」不是水位線
 
-**狀態**:**implement**(2026-09-02 落地,見第十一節;裁決乙有半句未實作,見十一之三)
+**狀態**:**done**(2026-09-02 收票;裁決乙第 5 條後半併票 59 (c),見十一之三)
+~~**狀態**:**implement**(2026-09-02 落地,見第十一節;裁決乙有半句未實作,見十一之三)~~
 ~~**狀態**:**candidate**(2026-09-02 立案)~~(F-036 體例:舊行不刪)
 
 **立案**:票 99 收票後的唯讀偵察(2026-09-02)。兩件都在 `status.py`,兩件都不是「算不出來」,
@@ -319,12 +320,14 @@ grep -c '^$'               .dev/test-runs.jsonl   =     0 行
 `("implement", "100")`,經 `gate.load_stage()` 驗讀確認(不自己 parse 那個檔:
 自己 parse 讀到的是「我對那個檔的理解」,不是閘門看到的東西)。
 
-### 十一之一、兩刀
+### 十一之一、三刀
 
 | 刀 | sha | 內容 |
 |---|---|---|
+| 立案 | `31a3318` | 只含本票面(311 行) |
 | 紅燈先行 | `c9a0992` | 只含 `tests/test_status.py`(+150 行,5 支測試) |
-| 落地 | (本刀) | `status.py` + 本票面 |
+| 落地 | `69d8286` | `status.py` + 本票面 |
+| 收票 | (本刀) | 本票面 + 票 59 + 票 66 |
 
 **紅燈那一刀的實作雜湊逐字留存**,證明當時實作未動:
 
@@ -369,6 +372,24 @@ git show HEAD:.claude/portable/status.py | sha256sum
 - **處置**:留給票 59 的 (c) 那一輪一起做(它本來就要處理「上一批還查得到嗎」),
   或另立票。**兩者都不做的話,這半句會停在票面上而沒有東西在管它。**
 
+#### 裁決(2026-09-02,裁決者)—— 走 **A**
+
+**「N > 1 時逐個判死」併入票 59 (c) 的範圍**,不另立票。
+票 59 的〈現況證據(2026-09-02)〉已加上這一格,所以這半句**現在有主詞了**
+——「祈使句要嘛有主詞,要嘛有機制;兩個都沒有就是一句安慰」。
+
+**代價明寫,而且本輪就在付**:
+
+- `N > 1` 時 `behind` 行只印「未記錄(N 個不同 commit,未收齊)」,
+  **看不見死訊號**
+- 唯一還印得出 sha 的是**末筆那一行**,而末筆**不一定是死的那一個**
+- **本輪兩個下游都落在這個代價上**(見十一之五)——
+  影音末筆是活的 `50251de`,它的 15 個死 path 在 `behind` 那一格
+  **完全不會被提到**
+
+**這一段不是把代價寫漂亮就算處置了。** 處置是票 59;
+在票 59 落地之前,這個洞是開著的,而知道它開著的唯一辦法就是讀這一段。
+
 ### 十一之四、登記:R7 把票面 markdown 切成寫入目標(**不主張嚴重度**)
 
 立案那一輪用 `cat > <票檔> <<'EOF'` 寫票面,被 R7 擋下。擋下訊息列出的「寫入目標」是:
@@ -395,3 +416,231 @@ docs/tickets/framework-updates/100-status-lies-when-idle-and-sync-waterline.md�
 本票兩刀都照走。攔截紀錄在 `.dev/intercepts-2026-09.jsonl`。
 
 **不主張嚴重度,也不提出修法** —— 收窄那個解析器正是那句自承說不划算的事。
+
+### 十一之五、waterline **首跑發現**(不裁、不修,本票只登記現場)
+
+實作完成後對兩個下游做了一次唯讀偵察(只 `io.open` 讀
+`.dev/provenance.jsonl`,未 fetch、未跑 `sync` 任何函式;
+兩下游跑前跑後 `git status --porcelain` 逐字相同)。
+
+**waterline 第一次跑就抓到東西,而且兩個下游是同一個形狀。**
+
+| 下游 | 憑證筆數 | 去重 path | waterline | 活著那批 | 停在死 sha 那批 |
+|---|---|---|---|---|---|
+| 影音 | 750 筆 | 111 個 | **2 個 commit** | `50251de…` 96 個 path | `a9242cc97599…` **15 個** |
+| 量化 | 1517 筆 | 105 個 | **2 個 commit** | `1a096507…` 90 個 path | `11613002c2af…` **15 個** |
+
+111 = 96 + 15 ✓;105 = 90 + 15 ✓(單位:**個 path**,去重後)。
+
+**兩邊那 15 個 path 逐字相同,就是 `docs/adr/` 底下的全部 15 份 ADR**
+(`0001`–`0012` + `F-0013` / `F-0014` / `F-0015`)。
+
+死 sha 對到的新 sha 與距離:
+
+- 影音 `a9242cc97599…` → `dbb1fed5b478…`,離 HEAD **211 刀**
+- 量化 `11613002c2af…` → `0db2d151f6d6…`,離 HEAD **166 刀**
+
+**那 15 檔在上游現樹全部存在(15 / 15,`git ls-files --error-unmatch` 全部 exit 0)。**
+所以是**憑證指向死號**,不是檔案不見了。
+
+**manifest 那一側**:逐檔登錄 **0 條**,15 條**全部**由
+`.agents/portable-manifest.txt:294` 的 `docs/adr/  ask` 一筆管。
+
+**成因**:`ask` 桶不自動下傳 ⇒ `sync` 不替那 15 檔**重發憑證** ⇒
+它們停在最後一次人工帶過去的時點 ⇒ 票 84 的身分改寫把那個時點的 sha 換掉了。
+
+#### ★ 主展品
+
+**影音的末筆是 `50251de`,活的。**
+
+所以在本票之前(`behind` 由**末筆**推導),影音那一格會印一個**正常的刀數**,
+畫面上看起來完全健康 —— 而它同時有 **15 個 path 停在一個已經不存在的 commit 上,
+一個字都不會出現**。
+
+量化之所以會叫,只是因為它的末筆 `1a096507` **自己剛好也是死的**。
+
+> **同一個缺陷,一個會叫一個不會叫,而不會叫的那個看起來比較健康。**
+
+#### 裁決(2026-09-02,裁決者)—— 裁 **C:不開新票**
+
+- **現場證據進票 59**(〈現況證據(2026-09-02)〉)
+- **「`ask` 桶的憑證會凍結」這件事登記在票 66**(它本來就要把 `docs/adr/` 改回 `copy`)
+- 票 66 另加一項落地驗收:**改回 `copy` 那次 `--apply` 之後,
+  兩下游的 `waterline` 要回到 1 個 commit**
+
+**⚠ 一併寫下,因為它最容易被下一個人搞反**:
+**票 66 落地之前,`waterline` 印「2 個不同 commit(未收齊)」是正確的訊號,不是噪音。**
+沒有這一句的話,下一個看到它的人會去「修」那個顯示 ——
+而那正是把一個真的偵測到的洞當成誤報關掉,三次 fail-open 的同一種起手式。
+
+### 十一之六、登記(三則,**都不主張嚴重度**)
+
+1. **R7 第二次擋下,同一族。** 偵察那一輪要把 15 條 path 做成表,
+   寫成 bash `for` 迴圈(內含 `;`),被 R7 擋。擋下訊息的目標欄是
+   `(引號或跳脫使目標無法可靠切分)`。出口同十一之四:改寫成 scratchpad 腳本再
+   `python <路徑>`。**照走,沒有改路徑、沒有換工具規避、沒有改流程狀態檔。**
+   —— 與十一之四是同一則自承的第二個標本,合起來看才知道那不是偶發。
+
+2. **`_waterline_commits` 依賴 dict 的插入順序。** 「同 `path` 後寫的蓋前寫的」
+   靠的是 `dict` 保留插入順序,那在 CPython 3.7+ 是語言保證。
+   **但本機跑的是哪個版本,本輪沒有量。**
+   —— 記這一則是因為「3.7+ 有保證」是一個**通則**,
+   而「這台機器是 3.7+」是一個**個案**,我只驗了前者。
+
+3. **「影音比量化多 6 個 path」是我人工差集算出來的,不是工具輸出。**
+   那六個是 `.claude/portable/status.py`、`.claude/portable/friction_heading.py`、
+   `tests/test_friction_heading.py`、`tests/test_status.py`、
+   `tests/test_intercepts.py`、`tests/test_g1_verify.py`。
+   —— 標明來源是因為它**混在一堆工具數字裡**,而人工算的那個
+   看起來跟量出來的一模一樣。
+
+4. **收票刀第一次被洩漏偵測擋下,18 筆(6 行 × 3 條 pattern:`#1` / `#2` / `#17`)。**
+   受影響的是 `[2]` / `[3]` 各自的 `downstream`、`upstream commit`、`waterline` 三行。
+
+   **成因**:裁決者把帶家目錄的 `status --all` 原文抄進收票指令,
+   而那份輸出天生帶著兩個下游的絕對路徑。
+
+   **兩件事都是對的,分開記**:
+   - **偵測對** —— 它擋的是真的個人身分,不是誤報。
+     照 CLAUDE.md 的處置,誤擋才加例外清單;這一次不是誤擋。
+   - **停手對** —— 沒有動 `leak-patterns` 任何一份、沒有讀 `~/.claude/`、
+     沒有改路徑或換工具規避。處置是**遮罩 + 依 `F-116` 撤回「原始」這個宣稱**,
+     見十一之七標題下那則。
+
+   > **值得記下的形狀**:被擋的不是敘述,是**證據本身**。
+   > 一份「越逐字越有效」的證據,和一條「越逐字越危險」的規則,
+   > 在同一行上直接對撞 —— 而 `F-116` 就是為這個對撞寫的:
+   > **兩邊都不放棄,放棄的是「我可以既遮罩又自稱原始」這句話。**
+
+5. **候選(不在本票,不裁不修)**:`Sync Health` 每個下游印**三次**絕對路徑
+   —— `downstream` 一次、`upstream commit` 與 `waterline` 的來源欄各一次。
+
+   來源欄可以改成帶標籤的相對寫法(例如 `[2]/.dev/provenance.jsonl 末筆`,
+   路徑本體只在 `downstream` 那一行出現一次),**把三次縮到一行**。
+
+   好處有兩個,而第二個才是重點:
+   - 輸出短一點
+   - **洩漏面從三行縮到一行** —— 而「一份輸出被貼進票面」是常態動作,
+     不是例外。本次就是一個實例。
+
+   **不在本票做**:它會動 `_line` 的來源欄慣例(判準 3 的地盤),
+   而判準 3 說「沒有來源的行不得印」—— 改寫來源欄要先確認新寫法
+   **仍然讓人回得去查那一格**,那是另一輪的題目。
+
+### 十一之七、驗收(2026-09-02 21:43,機器 UTC 13:43:54)
+
+**材料來源:Jeff 本人在 PowerShell 於 `pipeline.json` 為 idle 的狀態下實跑
+`status --all` 的原文,非 VS 產出。** 上游 head `69d8286`。
+
+> **⚠ 乙段六行含下游絕對路徑,已依 `F-116` 遮罩(佔位符 `<影音根>` / `<量化根>`),
+> 本段不再稱逐字原文;原始輸出留在 2026-09-02 21:43 裁決對話。
+> 遮罩不影響 sha 與 waterline 值。**
+
+**為什麼要標這一句**:本票的作者(agent)自己跑一次也會得到輸出,
+而那個輸出**是從被量的東西身上拿的**——證明的只會是「這個實作跟它自己一致」,
+那件事由構造成立。**驗的材料要從別的地方來**,這裡的「別的地方」是
+另一個人、另一個 shell、另一次執行。
+
+---
+
+#### 甲 —— 上游 `[1]` Evidence 段(**Jeff 本人 PowerShell 實跑,非 VS**)
+
+```
+=== Evidence ===
+test-runs: 未記錄(無當前票)  (source: .dev/test-runs.jsonl)
+intercepts (當月): 2 筆  (source: .dev/intercepts-2026-09.jsonl)
+intercepts (最新存在月): 2026-09 2 筆;末筆 R7@2026-09-02T13:37:25.436870+00:00  (source: .dev/intercepts-2026-09.jsonl)
+exemptions: 總 167 筆;outcome=blocked 1 筆;最後一筆 2026-09-02T00:45:39.047247+00:00  (source: .dev/gate-exemptions.jsonl)
+provenance: 未記錄(上游無此檔屬正常)  (source: .dev/provenance.jsonl)
+```
+
+同一份輸出的 Derived 兩行(**對照組** —— 它本來就是對的那一側):
+
+```
+tests red under ticket 未記錄: 未記錄  (source: .dev/test-runs.jsonl 每檔最新一筆)
+tests green under ticket 未記錄: 未記錄  (source: .dev/test-runs.jsonl 每檔最新一筆)
+```
+
+**甲通過。** 判準三條,逐條對:
+
+| 裁決甲的第幾件 | 要求 | 實測 |
+|---|---|---|
+| (3) | 值以「未記錄」開頭 | `未記錄(無當前票)` ✓ |
+| (3) | 值裡**不含**「本票」 | 整行沒有「本票」二字 ✓ |
+| (2) | `_evidence` 與 `_derived` **同式** | 三行**一致**都印未記錄 ✓ |
+
+第三格是這一節真正要看的東西:**修之前這三行是不一致的**
+—— Evidence 那行印「本票…red N / green M」,Derived 兩行印「未記錄」,
+**而不一致本身沒有任何東西在看**。現在三行同時說同一句話。
+
+**順帶對上一個交叉數**:`intercepts (當月): 2 筆`,末筆
+`R7@2026-09-02T13:37:25`。那 2 筆就是十一之四(立案輪 heredoc)與
+十一之六第 1 則(偵察輪 `for` 迴圈)兩次擋下的落帳 ——
+**票面上寫的兩次,帳本上數得出兩筆。**
+
+---
+
+#### 乙 —— Sync Health 段(**Jeff 本人 PowerShell 實跑,非 VS**)
+
+```
+=== Sync Health ===
+upstream: C:\projects\agent-gates  (source: --root #1)
+[2] downstream: <影音根>  (source: --root #2)
+[2] upstream commit: 50251dea6a4f170db31c1094365d52edd96852ac  (source: <影音根>/.dev/provenance.jsonl 末筆)
+[2] waterline: 2 個不同 commit(未收齊):50251dea6a4f a9242cc97599  (source: <影音根>/.dev/provenance.jsonl 每 path 最新一筆 upstream_commit 去重)
+[2] behind: 未記錄(2 個不同 commit,未收齊)  (source: git rev-list --count <waterline sha>..HEAD @ 上游)
+[2] downstream origin: behind 0 / ahead 0(未 fetch)  (source: git rev-list --left-right --count origin/master...HEAD @ 下游)
+[2] .claude/hooks/gate.py: up=b6b06c082b53 down=b6b06c082b53 same  (source: sync.file_hash(行尾正規化後 sha256))
+[2] .claude/portable/g1_guard.py: up=33ca8e521932 down=33ca8e521932 same  (source: sync.file_hash(行尾正規化後 sha256))
+[2] tests/test_g1_guard.py: up=abc2ab0d6018 down=abc2ab0d6018 same  (source: sync.file_hash(行尾正規化後 sha256))
+[3] downstream: <量化根>  (source: --root #3)
+[3] upstream commit: 1a09650777d23bba6e614dcc3ba08b76be8b2ebb  (source: <量化根>/.dev/provenance.jsonl 末筆)
+[3] waterline: 2 個不同 commit(未收齊):1a09650777d2 11613002c2af  (source: <量化根>/.dev/provenance.jsonl 每 path 最新一筆 upstream_commit 去重)
+[3] behind: 未記錄(2 個不同 commit,未收齊)  (source: git rev-list --count <waterline sha>..HEAD @ 上游)
+[3] downstream origin: behind 0 / ahead 1(未 fetch)  (source: git rev-list --left-right --count origin/master...HEAD @ 下游)
+[3] .claude/hooks/gate.py: up=b6b06c082b53 down=95f001e5e43d drift  (source: sync.file_hash(行尾正規化後 sha256))
+[3] .claude/portable/g1_guard.py: up=33ca8e521932 down=7e0e2da2afa4 drift  (source: sync.file_hash(行尾正規化後 sha256))
+[3] tests/test_g1_guard.py: up=abc2ab0d6018 down=a0038c36974a drift  (source: sync.file_hash(行尾正規化後 sha256))
+```
+
+**乙通過。** 逐條對:
+
+| 裁決乙的第幾條 | 要求 | 實測 |
+|---|---|---|
+| 1 | 每 path 最新一筆的 `upstream_commit` 去重 | 來源欄逐字印出這句判準 ✓ |
+| 3 | `N > 1` 印 N 個 sha,不挑一個 | `[2]` / `[3]` 各印 2 個前 12 碼 ✓ |
+| 3 | `behind` 印「未記錄(N 個不同 commit,未收齊)」 | 兩個下游逐字相同 ✓ |
+| — | 「末筆」那一行**一字不改** | `[2] upstream commit` / `[3] upstream commit` 仍在,來源欄仍寫「末筆」 ✓ |
+
+**而這一份輸出同時就是十一之五那個發現的現場。** 兩件事要分開讀:
+
+- **驗收**問的是「waterline 有沒有照規格印」—— 有。
+- **發現**問的是「它印出來的內容說了什麼」—— 兩個下游各有一批停在死 sha 上,
+  15 個 path,全部是 `docs/adr/`。
+
+> **★ 主展品在這一份輸出裡看得最清楚**:`[2]` 的**末筆**是
+> `50251dea6a4f170db31c1094365d52edd96852ac`,**活的** ——
+> 本票之前那個由末筆推導的 `behind`,會給影音印一個正常的刀數,
+> 而 `a9242cc97599` 那 15 個 path **一個字都不會出現在畫面上**。
+> 現在 waterline 把它擺在同一行的第二個位置。
+
+#### 附帶對上的一件事(**登記,不主張嚴重度**)
+
+`[3]` 三個檔全 `drift`,下游側雜湊是
+`95f001e5e43d` / `7e0e2da2afa4` / `a0038c36974a` ——
+**與票 100 立案前那一輪唯讀偵察量到的量化三個錨點逐字相同**,
+而那一輪是從**量化自己的檔案**算的,這一輪是 `status` 從**兩邊各算一次**印的。
+
+**兩次量測、兩條路徑、同一組值。** 記這一則是因為它是一次**獨立性成立**的例子:
+材料不是從被量的東西身上拿的,所以它證的不只是自洽。
+
+（`[2]` 三檔全 `same`,`up=b6b06c082b53` 是上游 `gate.py` 現版 ——
+影音那三個受監檔與上游一致,與它的 96 個 path 停在 `50251de` 相符。）
+
+---
+
+### 收票
+
+**甲、乙皆通過**,本票轉 **done**。未結的一項是裁決乙第 5 條後半
+(`N > 1` 逐個判死),**已併入票 59 (c) 的範圍**,見十一之三的裁決段 ——
+**它不是被忘掉,是被指派了。**
