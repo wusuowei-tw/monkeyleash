@@ -152,7 +152,10 @@ tree:            clean | <N> 筆              (source: git status --porcelain)
 ahead/behind:    <A>/<B>                     (source: git rev-list --left-right --count)
 
 === Enforcement Health ===
-authority:       <installed | 未記錄>        (source: .git/hooks/pre-commit)
+authority:        <最後一筆 at_commit=true 的 ts | 未記錄>
+                                             (source: .dev/gate-exemptions.jsonl)
+authority config: core.hooksPath=<值>; pre-commit 存在=<是|否>; installed: 未證明
+                                             (source: git config core.hooksPath)
 outpost:         config resolves from <根> / mounted: 未證明
                                              (source: .claude/settings.json)
 g1:              config resolves from <根> / mounted: 未證明
@@ -362,3 +365,85 @@ $ grep -rn "docs/tickets" --include=*.py .claude tests scripts
 
 **這三條寫在這裡是為了讓它們有出處,不是為了讓它們被記得。**
 要被記得得開票 —— 而本票**不代開**。
+
+---
+
+## 十、Day 2 落地(2026-09-02)
+
+兩刀:`4094439`(gate 抽函式)+ 第二刀(`status.py` v1)。
+
+### 十之一、⚠ 前面幾節裡被 Day 2 推翻或更正的東西
+
+**`F-036` 體例:舊文不刪,錯在哪寫在旁邊。**
+
+| 位置 | 舊文 | 實際 | 為什麼要記 |
+|---|---|---|---|
+| 第四節骨架 | ~~`authority: <installed \| 未記錄>  (source: .git/hooks/pre-commit)`~~ | 拆成 `authority`(帳本 ts)+ `authority config`(`core.hooksPath`) | `.git/hooks/` **不進版控、clone 不帶走**,拿它當唯一來源在每個下游都印同一個答案。**能證明權威層跑過的是帳本**,不是設定檔 |
+| 第八節 | 「紅燈兩筆」的條數寫 **7 + 4** | **9 + 5** | 我數錯了。`status` 9 條(c、g 各拆正控/負控),`gate` 5 條(甲拆兩條)。**commit 訊息 `a20bfca` 裡的 7+4 已進歷史,不 amend** |
+| 第三節裁 C | 「住 `.claude/portable/status.py`(manifest 標 `copy`)」 | **不需要加行** | `.agents/portable-manifest.txt:64` 的 `.claude/portable/  copy` 是目錄級標記,最長前綴者勝。實測 `manifest.mark_for('.claude/portable/status.py')` → `'copy'`、`explicit_mark(...)` → `'copy'`(非 DEFAULT 落底)。**加一行冗餘標記等於製造第二個要維護的位置** |
+| 第十節之外 | 「manifest 在 `.claude/portable/portable-manifest.txt`」(Day 2 指令) | **`.agents/portable-manifest.txt`** | 前者不存在 |
+
+### 十之二、Day 2 加的設計決定(票面原本沒有)
+
+| # | 決定 | 為什麼 |
+|---|---|---|
+| 1 | **`status.load_gate(root)` 是公開接縫** | 判準 2 說「只呼叫不重述」,而**「有沒有真的去呼叫」從輸出看不出來** —— 偷讀 `pipeline.json` 的實作印出的字一模一樣。`TestStageComesFromGate` 換掉它、看輸出跟著變 |
+| 2 | **不讀 `~/.claude/`** | G1 掛使用者層,而使用者層不屬於任何 repo。讀了會讓同一份輸出在不同機器上意義不同,**而讀的人分不出來**。所以 `g1` 那行恆為未證明 |
+| 3 | **`skill mirror` 走 `skill_mirror_violations()`,不走 `mount_violations_cached()`** | 後者會寫 `.cache/mount-check.json`(`gate.py:2791`),違反判準 1(projection 不存)。**一支「看一下現況」的工具不得留下檔案** |
+| 4 | **讀票面時 `rstrip("\r\n")`** | 工作樹在 Windows 是 CRLF(`git add` 每次都警告)。不去掉的話輸出多一個看不見的字元,**而比對狀態行原文的人看不出那是行尾** |
+| 5 | **`status coverage` 兩個票位置都算** | 見下 |
+
+### 十之三、實跑抓到的一個缺陷(本輪修掉)
+
+第一次實跑印:
+
+```
+status coverage: 有狀態行 0 檔 / 無 0 檔(未分類)  (source: .scratch/framework-updates/issues)
+```
+
+成因:`gate.TICKET_DIRS` 兩個位置,我取**第一個存在的**;而 `.scratch/framework-updates/issues`
+存在但是**空的**,票在 `docs/tickets/`。
+
+**要緊的不是數字錯,是錯的樣子。**「有 0 / 無 0」與「真的一張票都沒有」**逐字相同** ——
+而 source 欄印出了那個空目錄的名字,是**唯一**露出破綻的地方。
+**這正是判準 3 存在的理由:帶來源的那一格自己說出了它讀錯了地方。**
+
+修法:兩個位置都算。修後 `有狀態行 58 檔 / 無 40 檔`,合計 98 檔 ——
+與 Day 1 的「97 檔 / 57 行」對得上(本票 99 是第 98 檔、第 58 條狀態行)。
+
+### 十之四、⚠ 負控空轉(誠實記下)
+
+Day 2 指令的負控是「把 `.dev/intercepts-2026-08.jsonl` 移出 repo 再跑一次,
+`intercepts` 行必須變成未記錄」。實跑結果:**輸出逐字未變**。
+
+**它不是失敗,是空轉** —— `status` 讀的是**當月**(`2026-09`),
+而 `.dev/intercepts-2026-09.jsonl` 本來就不存在,那一行在移動前後都是
+「無當月攔截(檔不存在)」。**一個不可能失敗的控制證明不了任何事。**
+
+sha256 前後相同(`0802c800bb78044e21299a3f213786a73bd7ca1319fffe42a384345105b6ab70`),無資料變動。
+
+**真正能失敗的負控在 `tests/test_status.py`**:
+`test_present_ledger_is_not_unrecorded`(帳本在 → 不得還是未記錄)與
+`test_authority_line_cites_the_commit_time_record`(有 `at_commit=true` → 要指得出那一筆)。
+兩條都跑在 `tmp_path` 造的 root 上,**檔案有無由測試自己控制**,所以它們會紅。
+
+### 十之五、Day 2 量到的一件事:**前哨與權威層都在**
+
+Day 1 那兩格是「未證明」,而 Day 2 的第一刀留下了痕跡:
+
+```
+$ grep "\"ticket\": \"99\"" .dev/gate-exemptions.jsonl   # 4 筆
+tool=Edit       at_commit=false   × 3   ← 前哨(PreToolUse)在跑
+tool=pre-commit at_commit=true    × 1   ← 權威層在跑
+```
+
+commit 當下 stdout 也印出了 `[R2/自我修改豁免] .claude/hooks/gate.py:…`。
+
+**這不推翻裁 D。** 裁 D 管的是**設定**那一半(「設定解得到什麼」不等於「hook 跑的是它」),
+而帳本管的是**動作**那一半。兩者都印,值不同,來源不同 ——
+`mounted: 未證明` 與 `authority: <ts>` 同時成立,不矛盾。
+
+**Day 3 待議**:`outpost` 要不要比照 `authority` 也加一行帳本證據
+(`tool=Edit` 的豁免紀錄就是前哨跑過的痕跡)。**本輪不做** ——
+`test_outpost_line_is_never_a_verdict` 釘的是設定那一行,加新行不影響它,
+但那是新判準,要先裁。
