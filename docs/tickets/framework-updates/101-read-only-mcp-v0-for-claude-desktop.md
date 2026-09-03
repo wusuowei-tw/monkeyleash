@@ -1,6 +1,7 @@
 # 票 101:唯讀 MCP v0 —— 把 `status` / `ticket` / `friction` 接到 Claude Desktop
 
-**狀態**:**candidate**(2026-09-03 立案)
+**狀態**:**implement**(2026-09-03 核定,六裁逐字入票見第五節;擬稿降級保留於五之一)
+~~**狀態**:**candidate**(2026-09-03 立案)~~(F-036 體例:舊行不刪)
 
 **立案**:票 100 收票後的唯讀偵察(2026-09-03)。動機不是「缺一個功能」,是
 **證據目前只有一個出口**:`status.py` 要在 PowerShell 裡跑,而做判斷的人不在終端機裡。
@@ -247,23 +248,101 @@ $ ls docs/tickets/framework-updates/ | grep -E '^10'
 
 ---
 
-## 五、六裁 A–F
+## 五、裁決(裁決者 2026-09-03 核定)
 
-> **⚠ 措辭來源明寫**:本節六條的**內容**逐項出自裁決者 2026-09-03 的立票指令
-> (①範圍 / ⑤不做 / ④紅燈五條 等),**而條文的文字是本次擬的**,
-> 不是從既有紀錄逐字抄來的 —— 本 repo 沒有更早的 A–F 原文可引。
-> 所以這六條要當**待核准的擬稿**讀,不是已成立的裁決。
-> 依 `CLAUDE.md`「摘要必須包含判準本身,不只計數」,每條都附理由與代價,
-> 讓核准者判的是判準。**收票前要有裁決者本人對這六條的一次明確核准。**
+**以下六條是裁決者本人 2026-09-03 給的原文,逐字入票。** 上一版的 A–F 是 agent 擬稿,
+**不刪不改**,降級保留在本節後半(F-036 體例)。
 
-### 裁 A —— 範圍鎖死在「Claude Desktop + 本機 stdio + 三支唯讀工具」
+> **為什麼原文與擬稿都留**:兩者**不是同一份東西的兩個版本** ——
+> 擬稿是「agent 從指令推出來的」,原文是「裁決者說的」。
+> 只留原文的話,下一個人看不出**當初推錯了哪裡**;
+> 只留擬稿的話,票面會拿一份沒人核准的東西當裁決用。
+> 而**擬稿與原文長得很像**,正是要並排才看得出差異的理由。
+
+### 裁 1 —— SDK **不升**,照 1.27.0 寫;升版**登記候選**
+
+> SDK 不升,照 1.27.0 寫;升版登記候選(`mcp-server-duckdb` 相依)
+
+**代價**:v0 綁在會被上游淘汰的 `FastMCP` 面上;官方 quickstart(2.x)不能當參考,
+**要照第三節那格自己讀已裝套件**。到期訊號見第十節。
+
+### 裁 2 —— server 放 `.claude/portable/mcp_server.py`,manifest 加 `skip` + **一行註解**
+
+> server 放 `.claude/portable/mcp_server.py`,manifest 加 skip + 一行註解,照三則先例;v0 上游專用
+
+「三則先例」= manifest 第 127 / 133 / 156 行(`ledger_verify.py` / `g1_verify.py` /
+`shadow_review.py` 各留一行註解說明它落在 `copy` 前綴底下)。
+
+**代價**:下游要用 MCP 得另外開票。
+
+### 裁 3 —— 呼叫 `status` **走子程序**,argv 前綴寫死,**不 import `render_all`**
+
+> 呼叫 status 走子程序 `[sys.executable, status.py, "--root", …]` argv 前綴寫死,
+> 不 import `render_all`;gate 模組層副作用與 `_git` 動詞**留在子程序**
+
+**⚠ 這一條把第六節第三層的問題從「未證明」變成「不在本行程」。**
+不是把它證明掉,是**把它隔到另一個行程去** ——
+`load_gate()` 的 `exec_module` 與 `_git()` 的 subprocess **都發生在子程序裡**,
+MCP server 這個行程從頭到尾沒有 import 過 `gate`,也沒有自己開過 git。
+
+**代價**:每次 `status_all` 多一次 python 啟動(慢),而且**拿不到結構化資料,只有一串 stdout**。
+裁 B(原樣回傳)本來就不要結構化資料,所以這個代價與裁 B 同向。
+
+### 裁 4 —— 票號比對改「**號碼後接 `-`**」;MCP 側先驗格式,**兩式都試**
+
+> `_find_ticket_file` 比對改「號碼後接 `-`」;MCP `ticket(n)` 先驗 `^\d{1,4}$`,
+> 試 `n` 與 `n.zfill(2)` **皆須邊界命中**,無則回「未記錄(無此票)」**不回檔**;
+> `gate.py:1265` 同族**另開候選票**(權威層)
+
+**⚠ 與擬稿的裁 F 不同的地方**:擬稿只說「不合法回錯」,原文多了
+**`n` 與 `n.zfill(2)` 兩式都試** —— 這一格直接解掉第四節量到的那九筆
+(`ticket("1")` 會先試 `1-`(不中)再試 `01-`(中),回到票 01,而不是票 10)。
+**擬稿沒想到補零這一式,只想到擋掉它。** 兩者的差別是「能用」與「不會錯」。
+
+**代價**:`gate.py:1265` 的同一個洞**這一票不修**(權威層,另開候選)——
+所以豁免判定那一側在本票落地後**仍然是無邊界的**,明寫在第八節。
+
+### 裁 5 —— `friction` 用 `friction_heading.HEADING`,**不碰 `gate` 那份**
+
+> `friction(F-n)` 用 `from friction_heading import HEADING`,
+> 取該標題到下一個 `^##` 之間原文;不碰 gate 那份(票 42)
+
+**代價**:friction log 若出現非 `##` 層級的分隔,切出來的段落會偏長。
+**照票 42 的裁決,這個代價不能用「合併兩份判準」來換。**
+
+### 裁 6 —— 三個 root 由 `claude_desktop_config.json` 的 `args` 傳入;**repo 內不存路徑**
+
+> 三個 root 由 `claude_desktop_config.json` 的 args 傳入;server 只認 `--root`;repo 內不存路徑
+
+**⚠ 這一條同時是洩漏防線。** 票 100 收票那次,下游絕對路徑進了 commit 訊息被洩漏偵測擋下
+(18 筆 = 6 行 × 3 pattern)。**路徑不進 repo,那個入口就不存在** ——
+是構造,不是紀律。
+
+**代價**:換機器要重打三條絕對路徑,而 repo 裡沒有任何東西可以抄。
+處置在 `docs/machine-init.md` 的 `## 四、MCP 註冊`(第十節)。
+
+---
+
+## 五之一、⚠ 核定前的 agent 擬稿(F-036:舊行不刪)
+
+**以下 A–F 是 agent 2026-09-03 從立票指令推出來的擬稿,已被上面六條取代。**
+**保留的用途是對照,不是備援 —— 任何時候以上面的裁 1–6 為準。**
+
+已知推錯的兩處,明寫:
+
+| 擬稿 | 原文 | 差在哪 |
+|---|---|---|
+| 裁 F「不合法回錯」 | 裁 4「`n` 與 `n.zfill(2)` 兩式都試」 | 擬稿只想到**擋掉**補零問題,沒想到**解掉**它 |
+| 裁 D「第三層只能寫『量到 0 筆』」 | 裁 3「留在子程序」 | 擬稿在**證明**那一層,原文**把它隔開** —— 隔開不需要證明 |
+
+#### (擬稿)裁 A —— 範圍鎖死在「Claude Desktop + 本機 stdio + 三支唯讀工具」
 
 **理由**:v0 的目的是把已經算得出來的證據換一個出口,不是長出新的判定邏輯。
 範圍每寬一格,「MCP server 自己會不會說謊」就多一個要守的面。
 
 **代價**:手機 / 網頁上的 Claude 用不到;要用就得等遠端傳輸那一票,而那是另一個安全模型。
 
-### 裁 B —— `status_all` **原樣回傳** `status.py` 的 stdout
+#### (擬稿)裁 B —— `status_all` **原樣回傳** `status.py` 的 stdout
 
 **理由**:`status.py` 的每一行都自帶 `(source: …)`,那是判準 3 的產物。
 MCP 只要動一個字,**來源欄就開始說謊而沒有東西會叫** ——
@@ -272,7 +351,7 @@ MCP 只要動一個字,**來源欄就開始說謊而沒有東西會叫** ——
 **代價**:輸出對聊天視窗來說偏長、不好讀。**這是刻意付的** ——
 可讀性由讀的人自己挑行,可驗證性一旦丟掉就回不來。
 
-### 裁 C —— SDK **停在已裝的 1.27.0**,不升 2.x
+#### (擬稿)裁 C —— SDK **停在已裝的 1.27.0**,不升 2.x
 
 **理由**:兩件事各自成立。(1) 本機 `mcp-server-duckdb` 相依它,升版的爆炸半徑超出本票。
 (2) 更要緊的是第三節那格 —— 官方 quickstart 已經改寫成 2.x 的 `MCPServer` / `httpx2`,
@@ -282,7 +361,7 @@ MCP 只要動一個字,**來源欄就開始說謊而沒有東西會叫** ——
 **代價**:v0 綁在一個會被上游淘汰的 API 面上(`FastMCP`)。升 2.x 是**候選票**,不是本票。
 到期訊號寫在第十節。
 
-### 裁 D —— 零寫入的宣告**分三層寫**,不寫成一句
+#### (擬稿)裁 D —— 零寫入的宣告**分三層寫**,不寫成一句
 
 **理由**:三層各自由不同的東西守,而**把它們寫成一句會讓最弱的那一層繼承最強那一層的可信度**。
 逐層見第六節。
@@ -290,7 +369,7 @@ MCP 只要動一個字,**來源欄就開始說謊而沒有東西會叫** ——
 **代價**:票面變長,而且第三層目前只能寫「量到 0 筆」不能寫「保證沒有」。
 **那個難看正是它誠實的地方。**
 
-### 裁 E —— manifest 加一行 `skip`,v0 **不進下游**
+#### (擬稿)裁 E —— manifest 加一行 `skip`,v0 **不進下游**
 
 **理由**:`.claude/portable/` 整個前綴標 `copy`(manifest:64),不加 `skip` 的話
 每個下游 repo 都會多一支**沒人註冊、沒人跑、沒人維護**的 server 檔。
@@ -299,7 +378,7 @@ MCP 只要動一個字,**來源欄就開始說謊而沒有東西會叫** ——
 **代價**:下游要用 MCP 的話得另外開票。**這正是想要的** ——
 下游要不要有 MCP 是一個決策,不該由一條 `copy` 前綴替他們決定。
 
-### 裁 F —— `ticket` / `friction` 的輸入**先驗格式,不合法回錯不回檔**
+#### (擬稿)裁 F —— `ticket` / `friction` 的輸入**先驗格式,不合法回錯不回檔**
 
 **理由**:見第四節的九筆實測。`startswith` 沒有邊界,而**回錯一份票比回不出來糟得多**:
 回不出來的人會再查,拿到一份**看起來對**的票的人不會。
@@ -412,13 +491,22 @@ MCP 只要動一個字,**來源欄就開始說謊而沒有東西會叫** ——
 
 ### ⑤ 票號邊界（**形狀依第四節的實測改過,原話保留為負控**)
 
-**紅的那一條(現行程式碼下必須 fail)**:
-目錄只含 `10-a.md`(**不含** `1-*.md`)時,`ticket("1")` **必須回錯**,
-不得回 `10-a.md`。—— 這一條打的是第四節量到的那九筆。
+**依裁 4 定案的三格**(全部在 `tests/test_status.py`,對同一個 tmp 目錄
+`10-a.md` + `100-b.md`):
 
-**負控 1(現行行為,本輪不得改壞)**:
-目錄含 `10-a.md` 與 `100-b.md` 時 `ticket("10")` 回 `10-a.md`。
-**這一條現在就是綠的**(第四節實測),留著是為了證明修法沒把它弄紅。
+| 呼叫 | 期望 | 性質 |
+|---|---|---|
+| `_find_ticket_file(…, "10")` | `10-a.md` | **負控** —— 現行就綠,修法不得把它弄紅 |
+| `_find_ticket_file(…, "1")` | **`None`** | **紅的那一條** —— 現行回 `10-a.md` |
+| `_find_ticket_file(…, "100")` | `100-b.md` | **負控** —— 邊界改成 `+"-"` 之後仍要中 |
+
+**修法(裁 4 前半)**:`name.startswith(str(ticket))` → `name.startswith(str(ticket) + "-")`。
+
+**⚠ 補零那一式在 MCP 那一層,不在 `_find_ticket_file` 裡**(裁 4 後半)——
+`_find_ticket_file("1")` 回 `None` 是**正確行為**,由 `mcp_server.ticket()`
+再試一次 `"01"`。**兩層分工要寫清楚**:底層只回答「這個字串有沒有邊界命中」,
+補零是**呼叫者對本 repo 命名慣例的知識**,不該埋進通用查找函式裡
+(下游 repo 不見得補零)。
 
 **負控 2(架構)**:`mcp_server` **不 import `gate`**。
 斷言 import `mcp_server` 之後 `sys.modules` 裡沒有本 repo 的 `gate` 模組。
@@ -436,10 +524,34 @@ MCP 只要動一個字,**來源欄就開始說謊而沒有東西會叫** ——
 
 | 不做 | 性質 | 理由 |
 |---|---|---|
-| **SDK 升 2.x** | **候選票** | 見裁 C。升版的爆炸半徑含 `mcp-server-duckdb`;且 v0 要先能動 |
-| **下游 repo 用 MCP** | **候選票** | 見裁 E。下游要不要有 MCP 是一個決策,不該由 `copy` 前綴代決 |
+| **SDK 升 2.x** | **候選票** | 見裁 1。升版的爆炸半徑含 `mcp-server-duckdb`;且 v0 要先能動 |
+| **下游 repo 用 MCP** | **候選票** | 見裁 2。下游要不要有 MCP 是一個決策,不該由 `copy` 前綴代決 |
+| **`gate.py:1265` 票號比對無邊界** | **候選票(權威層)** | 見下 |
 | **任何寫入類工具** | **架構級原則,永不做** | 見下 |
 | **劇本第 26 步** | **等筆電日** | 見第十節 |
+
+### 🔴 `gate.py:1265` 的同族洞 —— 本票**不修**,另開候選票
+
+裁 4 只修 `status.py` 的 `_find_ticket_file`。**`gate.py:1265` 有語意相同的一份,本票不動它**:
+
+```
+        for name in sorted(os.listdir(abs_d)):
+            if not name.startswith(str(ticket_id)):
+                continue
+```
+
+**為什麼分開**:那一份在**權威層**(R2 豁免判定),而 `CLAUDE.md` 寫著
+「權威層要依賴最少的東西」、「錯在權威層等於擋住做對事的人」。
+改權威層的判定要單獨一票、單獨的紅燈、單獨的驗收 ——
+**搭本票的便車會讓那個改動沒有自己的證據**。
+
+**所以本票落地之後,兩份會暫時不一致**:`status.py` 有邊界,`gate.py` 沒有。
+**這句話要留在票面上** —— `CLAUDE.md` 說「同缺陷的兩份實作必然漂開」,
+而這一次是**知情地、有期限地**讓它漂開,不是忘了。
+
+⚠ **影響面明寫**:`gate.py` 那一份決定 R2 的**豁免**。無邊界的後果是
+`ticket_id = "1"` 時可能撈到票 10 的宣告 —— 方向是**多給豁免**,也就是 **fail-open**。
+本票落地不會讓它變好,也不會讓它變壞。**候選票的時鐘:下一次有人用個位數票號時。**
 
 ### 「寫入類工具永不做」是架構級原則,不是 v0 的範圍取捨
 
@@ -466,23 +578,50 @@ MCP 只要動一個字,**來源欄就開始說謊而沒有東西會叫** ——
 **驗收的材料要從別的地方來**(票 100 收票的同一條紀律)——
 所以驗收**不是** agent 自己跑一次 server 說它通了。
 
-1. **Jeff 本人**手改 `%APPDATA%\Claude\claude_desktop_config.json`,
+1. **Jeff 本人**手改 `claude_desktop_config.json`(位置見下,**不寫死**),
    `args` 帶**三個 `--root` 絕對路徑**(上游 + 兩個下游)。
 2. **重啟 Claude Desktop**（改設定不重啟不生效)。
 3. 在 Desktop 裡叫 `status_all`。
 4. **同時**在 PowerShell 跑 `status --all`。
 5. **兩份逐字比**,`generated` 時間戳除外。
 
-**日誌**:`%APPDATA%\Claude\logs\mcp-server-<name>.log`
-(官方文件逐字:「Files named `mcp-server-SERVERNAME.log` will contain the stderr output
-from the named server. Stdio servers may use stderr for all their logging,
-so these files are not limited to errors.」)。
-`mcp.log` 存連線層的失敗。
+### 🔴 設定檔位置:**從 App 裡取得,不寫死**
 
-**設定檔位置(官方文件逐字,2026-09-03)**:
+**取得方式**:Claude Desktop → **Settings → Developer → Edit Config**。
+那個按鈕會開啟**這台機器上實際生效的那一份**,不存在就順手建一份。
+
+**為什麼不寫死路徑**:Windows 有**兩種安裝形態**,設定檔住不同地方 ——
+
+| 安裝形態 | 設定檔在哪 |
+|---|---|
+| 一般(MSI / exe)安裝 | `%APPDATA%\Claude\` |
+| **Microsoft Store 版** | `Packages` 底下該 App 的 **`LocalCache\Roaming\Claude\`** |
+
+Store 版的路徑含**套件容器目錄**,**本票不寫帳號名、不寫完整路徑** ——
+依裁 6,絕對路徑不進 repo。
+
+⚠ **這一格取代了上一版票面「Windows: `%APPDATA%\Claude\claude_desktop_config.json`」那句。**
+那句是官方文件的逐字,**而官方文件只講了一般安裝那一種** ——
+**它沒有寫錯,是它沒有寫全**,而讀的人分不出這兩者。
+舊句不刪,降級為下方「官方文件原文」一格(F-036)。
+
+**官方文件原文(2026-09-03,https://modelcontextprotocol.io/docs/develop/connect-local-servers)**:
 
 > * **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 > * **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+**`"command"` 用 `python.exe` 的絕對路徑,不用 `uv`** ——
+官方 quickstart 的 `"command": "uv"` 是為 2.x + `uv` 專案佈局寫的(見第三節),
+本專案沒有 `uv` 佈局。絕對路徑用 `where python` 查,**查到什麼寫什麼**,
+不假設 PATH 在 Desktop 的執行環境裡與 PowerShell 相同 ——
+**那正是官方 Warning 說的那件事**(「You may need to put the full path to the `uv` executable」)。
+
+**日誌**:與設定檔**同一個資料夾底下的 `logs\`**,檔名 `mcp-server-<name>.log`
+(官方文件逐字:「Files named `mcp-server-SERVERNAME.log` will contain the stderr output
+from the named server. Stdio servers may use stderr for all their logging,
+so these files are not limited to errors.」)。
+`mcp.log` 存連線層的失敗。**寫成「與設定檔同一個資料夾」而不是 `%APPDATA%\Claude\logs`,
+理由與上面那格一樣** —— Store 版兩者一起搬。
 
 **⚠ 一則官方已知坑,先記著**:若日誌裡出現路徑含 `${APPDATA}` 的錯誤,
 要在 `claude_desktop_config.json` 的 `env` 鍵補上 `%APPDATA%` 的展開值。
