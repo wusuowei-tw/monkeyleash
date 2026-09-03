@@ -2986,3 +2986,154 @@ stages:
         assert 'allows_src_write")}' not in src, (
             "`check()` 裡還留著 inline 的 set comprehension —— "
             "抽出來的函式沒有被接上,生產路徑仍然走第二份判準")
+
+
+# ── 票 102:R1 主路徑的正對照 ────────────────────────────────────────────
+#
+# 清冊(`docs/audits/2026-08-16-rule-inventory.md:415`)逐字:
+#   「**(b) 成立** —— ⚠ 但**只涵蓋 fail-closed 分支**;
+#     **主路徑(規格書含程式碼 → 擋)沒有正控**。
+#     `CORPUS` 裡有那個輸入,但只餵給結構不變式與 trace 測試」
+#
+# **語料在、規則在、測試在,而「這條規則會擋」從來沒有被任何一條斷言問過。**
+# 本檔第 44 / 46 行那兩條夾程式碼的規格書語料,只流向
+# `test_coverage_no_rule_is_skipped_at_the_authoritative_layer`(比 trace 集合差)、
+# `test_every_divergence_is_declared_by_its_rule`(只在兩層分歧時才斷言)——
+# 兩條都不看 `msg` 裡有沒有 `R1`。
+#
+# **口徑(票 102 裁三,逐字)**:
+#   正控 18 條 = 16(8 樣式 × 2 路徑,content 直給)
+#   + 2(每條路徑各一條 content=None 真寫檔到 tmp_path 再讀)。
+
+
+@pytest.fixture
+def spec_root(tmp_path, monkeypatch):
+    """把 ROOT 指到 tmp_path,路徑一律給絕對的。
+
+    理由與 `test_gate_boundaries.py:46-48` 那格相同:`rel()` 走 `abspath`,
+    相對路徑會以 cwd 為基準而不是 ROOT,收斂之後變成 `../..` 開頭,
+    被「repo 外不管」那條(`gate.py:1839`)提早放行 —— **測試會綠,而它沒測到東西**。
+    """
+    monkeypatch.setattr(gate, "ROOT", str(tmp_path))
+    return tmp_path
+
+
+# `CODE_IN_SPEC_RE`(`gate.py:186`)的八個分支,一個樣式一列。
+# 第一支是圍籬(不受 `^` 約束,任何位置都算),其餘七支要 `^\s*<關鍵字>\s`。
+# **樣本刻意各自只命中自己那一支**:`from os import path` 的 `import`
+# 不在行首,所以它是 `from` 的樣本,不是 `import` 的 —— 突變時才歸得了因。
+R1_CODE_SHAPES = [
+    ("fence", "## 問題\n```python\nprint(1)\n```\n"),
+    ("def", "## 問題\ndef f():\n    pass\n"),
+    ("class", "## 問題\nclass A:\n    pass\n"),
+    ("import", "## 問題\nimport os\n"),
+    ("from", "## 問題\nfrom os import path\n"),
+    ("function", "## 問題\nfunction f() { return 1 }\n"),
+    ("const", "## 問題\nconst x = 1\n"),
+    ("let", "## 問題\nlet x = 1\n"),
+]
+
+# `gate.py:1845` 的兩條路徑判定,一條一列。
+# A 是**前綴**(底下任意深度);B 是**完整比對**(`[^/]+` 只吃一層、檔名必須是 spec.md)。
+R1_SPEC_PATHS = ["docs/specs/x.md", ".scratch/f/spec.md"]
+
+R1_FENCE = "## 問題\n```python\nprint(1)\n```\n"
+
+
+class TestASpecCarryingCodeIsBlocked:
+    """**正控 16 條:8 樣式 × 2 路徑,content 直給。**
+
+    這一批走的是**前哨**那條路:呼叫端把內容交出來,gate 不必碰磁碟。
+    """
+
+    @pytest.mark.parametrize("rel_path", R1_SPEC_PATHS)
+    @pytest.mark.parametrize("shape,body", R1_CODE_SHAPES,
+                             ids=[s for s, _ in R1_CODE_SHAPES])
+    def test_every_code_shape_is_blocked_on_every_spec_path(
+            self, spec_root, shape, body, rel_path):
+        msg = gate.check(str(spec_root / rel_path), body)
+        assert msg and "R1" in msg, (
+            "規格書夾了 `%s` 卻沒有被 R1 擋:path=%s msg=%r —— "
+            "**這正是清冊 :415 說的那一格**:語料在 CORPUS 裡,而沒有斷言問過它"
+            % (shape, rel_path, msg))
+
+
+class TestASpecReadFromDiskIsBlockedToo:
+    """**正控 2 條:每條路徑各一,`content=None` 真寫檔再讀。**
+
+    `content is None` 是 **commit 那一側**的形態:內容不由呼叫端給,
+    由 gate 自己 `io.open(os.path.join(ROOT, r))` 讀(`gate.py:1848-1857`)。
+
+    **它與既有那條 fail-closed 正控是相反的一半**:
+    `test_gate_boundaries.py:39-50` 驗的是「讀**不到**時擋」,
+    本批驗的是「讀**得到**而且裡面有碼時擋」——
+    而後者在票 102 之前沒有任何斷言。
+    """
+
+    @pytest.mark.parametrize("rel_path", R1_SPEC_PATHS)
+    def test_a_spec_on_disk_with_code_is_blocked(self, spec_root, rel_path):
+        p = spec_root / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(R1_FENCE, encoding="utf-8")
+        msg = gate.check(str(p), None)
+        assert msg and "R1" in msg, (
+            "從磁碟讀到的規格書夾了程式碼卻放行:path=%s msg=%r" % (rel_path, msg))
+        assert "fail-closed" not in msg, (
+            "擋是擋了,**但走的是 fail-closed 那一支** —— 那條已經有正控了,"
+            "而本條要驗的是「讀得到且有碼」那一格:msg=%r" % msg)
+
+
+class TestR1DoesNotBlockWhatItShouldNotSee:
+    """**反控 4 條。** 每一條都是一個「把判定弄寬」會紅的方向。
+
+    正控只證明規則會動,不證明它動得**不多**:一支「凡是 `docs/specs/`
+    一律擋」的實作會讓上面 18 條全綠,而那是把功能弄壞,不是修好。
+    """
+
+    def test_a_spec_with_only_prose_is_not_blocked(self, spec_root):
+        """反控 1:純散文的規格書不得被擋(語料同 CORPUS 第 43 / 45 行)。"""
+        for rel_path in R1_SPEC_PATHS:
+            msg = gate.check(str(spec_root / rel_path), "## 問題\n只有散文。")
+            assert msg is None, (
+                "純散文的規格書被擋了:path=%s msg=%r —— "
+                "少了這條,一支「凡是規格書路徑一律擋」的實作也會讓正控全綠"
+                % (rel_path, msg))
+
+    def test_a_document_that_is_not_a_spec_never_enters_the_rule(self, spec_root):
+        """反控 2:非規格書路徑不進判定。
+
+        `friction-log.md` 那一格是實害不是假想:它**正是寫閘門行為的文件**,
+        而 `import` 這個字會出現在裡面。同一個形狀已經咬過一次 ——
+        `_quote_spans()` 的 docstring 逐字:「G1 擋住了『描述 G1 擋了什麼』」。
+        """
+        cases = [("docs/agents/friction-log.md", "import 這個字不是程式"),
+                 (".scratch/f/issues/01-x.md", R1_FENCE)]
+        for rel_path, body in cases:
+            msg = gate.check(str(spec_root / rel_path), body)
+            assert "R1" not in (msg or ""), (
+                "非規格書的文件進了 R1 的判定:path=%s msg=%r" % (rel_path, msg))
+
+    def test_a_neighbouring_directory_name_is_not_the_spec_dir(self, spec_root):
+        """反控 3:**前綴要帶邊界**。
+
+        現行 `startswith("docs/specs/")` 帶尾斜線,所以 `docs/specsx/` 不命中。
+        本條釘住它:改成 `startswith("docs/specs")` 的那一天它會紅。
+        同族:`is_source_path` 的 `docsx/thing.py`(本檔 :262)、
+        `g1_guard` 的「前綴要帶邊界」、`CLAUDE.md` 的常駐檢查項。
+        """
+        msg = gate.check(str(spec_root / "docs/specsx/x.md"), R1_FENCE)
+        assert "R1" not in (msg or ""), (
+            "`docs/specsx/` 被當成規格書目錄 —— 前綴少了邊界:msg=%r" % msg)
+
+    def test_the_scratch_form_matches_exactly_one_level(self, spec_root):
+        """反控 4:`.scratch` 那條只吃一層(`[^/]+`),`.scratch/a/b/spec.md` 不進判定。
+
+        ⚠ **它釘的是現行行為,不是理想行為;要不要支援多層是另一件事,本票不裁。**
+
+        寫這一句的理由:一條釘住現行行為的測試,與一條釘住正確行為的測試
+        **長得一模一樣**。不標明的話,下一個想放寬 `.scratch` 判定的人
+        會看到它紅,然後以為自己違反了一條設計決定 —— 而它只是現況的快照。
+        """
+        msg = gate.check(str(spec_root / ".scratch/a/b/spec.md"), R1_FENCE)
+        assert "R1" not in (msg or ""), (
+            "`.scratch/a/b/spec.md` 進了 R1 的判定,而現行正則只吃一層:msg=%r" % msg)
