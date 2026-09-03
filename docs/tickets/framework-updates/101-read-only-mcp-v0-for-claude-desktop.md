@@ -668,6 +668,100 @@ so these files are not limited to errors.」)。
 
 ---
 
+## 十二、🔴 驗收失敗與修復(2026-09-03)
+
+**`c6d07be` 落地、全套 1232 綠,而第一次實機驗收失敗。** 這一節記整件事。
+
+### 十二之一、失敗現場(**材料來自 Jeff,不是 agent 自跑**)
+
+| 觀測 | 值 |
+|---|---|
+| Claude Desktop 叫 `status_all` | **兩次 timed out** |
+| 同一時間 PowerShell `Measure-Command` 直跑 `status.py` | **0.98s** |
+
+**這兩格擺在一起才有意義**:同一份 `status.py`、同一組 root,
+在終端機是 1 秒,在 Desktop 是叫不動。⇒ **不是 `status.py` 慢。**
+
+### 十二之二、成因
+
+`.claude/portable/mcp_server.py` 的 `subprocess.run(...)` **只帶了 `capture_output=True`**,
+沒有 `stdin`。在 MCP stdio server 底下,**沒有重導向 stdin 的子程序會連帶繼承
+server 與客戶端之間那對管線**,於是 `subprocess.run` 等不到結束。
+
+### 十二之三、探針結論(逐項,scratchpad,未進 repo)
+
+| 實驗 | 結果 | 排除了什麼 |
+|---|---|---|
+| `ticket` / `friction` 走協定 | **0.01s 正常** | 不是「server 起不來」,也不是「呼叫工具」壞了 |
+| `initialize` + `list_tools` | **0.76s 成功,三支工具都在** | 握手與註冊都好 |
+| 三個 root 直跑 `status.py` | **0.88s,rc=0** | `status.py` 本身沒問題;OneDrive 路徑也不慢 |
+| 普通父行程下 stdin 三種寫法 | 都 **~1.05s** | ⚠ **單看這一格會得出「stdin 無關」的錯誤結論** |
+| 客戶端過濾成 12 個環境變數 | **1.00s** | 環境變數無關 |
+| 最小 FastMCP server,子程序只是 `print('hi')`,stdin 繼承 | **卡住** | **與 `status.py` 無關** |
+| 同一支,`stdin=DEVNULL` | **1.03s** | 一行修法,已實測 |
+| 客戶端逾時 20s / 40s | 子程序記到 **20.02s / 40.03s** | **是跟著拆線才回來 ⇒ 死鎖,不是慢** |
+
+**最後一格是這一節最要緊的一格。** `60.03s` 那個數字第一次出現時,
+它太接近我設的 60s 逾時 —— **不分清的話會把「永遠不回來」寫成「要跑 60 秒」**,
+而那兩者的嚴重度差一個量級,處置也不同(調 timeout vs 找死鎖)。
+
+⚠ **機制的部分是推的,不是量的**:Windows 上 `subprocess` 只要有任一標準流
+未重導向就會用 `bInheritHandles=True` 交出可繼承 handle。
+**行為是量出來的,`bInheritHandles` 那句是推的** —— 分開寫。
+
+### 十二之四、⚠ 為什麼 1232 支全綠而現場是死的
+
+**兩件事不衝突。** 既有測試**全部是在 pytest 的行程裡直接呼叫那個函式**,
+而 pytest 的 stdin 不是 MCP 管線 ⇒ **那個死鎖在測試環境裡不會發生**。
+
+紅燈④(逐位元組相同)是最貼近的一條,而**它也是 in-process 的**:
+它證的是「這個函式回的字串對」,不是「這支 server 在協定上活著」。
+
+紅燈②釘了 `argv` 前綴,**而現場死掉的原因不在 argv 裡,在 kwargs 裡** ——
+`grep -n 'stdin' tests/test_mcp_server.py` 在修復前是 **0 命中**。
+
+> **判準:測試造的行程環境,證不出真實行程環境裡的事。**
+> 這與「材料要從別的地方來」是同一句話,只是換到行程模型這一面 ——
+> 材料(行程環境)若由測試自己造,它只能證明自洽。
+
+**這也是第六節那三層宣告漏掉的第四層**:第六節逐層問了「誰在守零寫入」,
+**沒有人問「誰在守它跑得起來」**。零寫入守得再好,叫不動就是零。
+
+### 十二之五、修法(`23eccf0` 紅 → 本刀綠)
+
+- 紅燈②' `test_stdin_and_timeout_are_pinned` —— AST 釘 `stdin=subprocess.DEVNULL`
+  與 `timeout=<int>` 兩個 kwarg。**兩件事分開釘,因為它們各自失效**:
+  缺 `stdin` 是這一次的成因,缺 `timeout` 是它變成「永遠等」的原因。
+- 紅燈⑥ `TestLiveStdioServer` —— **真的起一支 stdio server 走協定叫一次**。
+  客戶端跑在子行程裡(不在 pytest 的事件迴圈),
+  **理由不只是與 plugin 打架:客戶端與被測 server 同處一個行程,
+  會讓「行程環境」這個變因回到測試手上,而那正是本節要避開的東西。**
+  兩條負控(`ticket` / `friction` 走同一條線 1s 內回)**是把成因夾出來的那兩支** ——
+  沒有它們,⑥ 的逾時會有兩種讀法,而處置不同。
+- 實作:`stdin=subprocess.DEVNULL, timeout=60`,`TimeoutExpired` 回
+  「未記錄(status 逾時 60s)」—— **說得出上限,不是靜默地等**。
+
+### 十二之六、候選票(**本票不做**)
+
+**`status.py:133` 的 `_git()` 是同族**:也是 `subprocess.run(..., capture_output=True)`
+無 `stdin`。**目前無害,因為裁 3 把它關在子程序裡** ——
+而那是**別的決定順手保護的,不是它自己安全**。
+任何人把 `status.render_all` 改成 in-process import 進 MCP server,同一個死鎖就搬過來。
+
+**到期條件**:有人提「MCP 直接 import status 比較快」的那一刻。
+
+### 十二之七、⚠ 日誌那一格改成「未證明」
+
+`docs/machine-init.md` 的 4-3 原本寫「日誌在與設定檔同一資料夾的 `logs\`」。
+**這台 Store 版機器上實測 `mcp*.log` 命中 0**,三種可能(Store 版寫別處 /
+這版行為不同 / Desktop 沒真正拉起過 server)都沒排除。
+
+**改成「未證明」而不是刪掉的理由**:原句**看起來完全可用**,
+而照著它去找的人會找不到檔,然後懷疑自己路徑打錯。
+**一句找不到對應物的指路,比沒有指路糟。**
+
+---
+
 ## 附:立案時的計數(**帶單位,帶基準**)
 
 - 票檔:`docs/tickets/framework-updates/` **99 個 `.md` 檔**,票號範圍 **01–100**,

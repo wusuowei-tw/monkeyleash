@@ -19,6 +19,37 @@
 移出去之後那個問題與本行程無關,而**無關比證明強** ——
 證明會過期(gate.py 明天可以加一行),隔離不會。
 
+## 🔴 死鎖 —— `subprocess.run` 一定要帶 `stdin=DEVNULL`(2026-09-03 驗收失敗)
+
+在 MCP stdio server 底下開子程序時,**沒有重導向 stdin 的子程序會連帶繼承
+server 與客戶端之間那對管線**,於是 `subprocess.run` 等不到結束。
+
+實測(scratchpad 最小 FastMCP server,從 server 行程內部計時):
+
+    子程序只是 `python -c "print('hi')"`,stdin 繼承  -> 卡住
+    客戶端逾時 20s -> 子程序記到 20.02s;逾時 40s -> 40.03s
+    同一支 server 加 `stdin=DEVNULL`                  -> 1.03s
+
+**它是跟著客戶端拆線才回來的,不是慢** —— 沒有逾時就永遠不回來。
+與 `status.py` 無關:連 `print('hi')` 都卡,差別只有 `stdin`。
+
+排除掉的兩個(各自量過,都不是):子程序的 stdin 種類在**普通父行程**底下
+三種一樣快(1.05s);客戶端把環境變數過濾成 12 個也一樣快(1.00s)。
+
+⚠ **同族一則,現在不痛**:`status.py` 的 `_git()`(`:133`)也是
+`subprocess.run(..., capture_output=True)` 無 `stdin`。目前無害,
+因為裁 3 把它關在子程序裡 —— **那是別的決定順手保護的,不是它自己安全**。
+任何人把 `status.render_all` 改成 in-process import 進來,同一個死鎖就搬過來。
+
+## ⚠ 為什麼 1232 支測試全綠而現場是死的
+
+驗收失敗那一刻,全套**全綠**,Desktop 那一側 `status_all` 兩次 timed out。
+兩件事不衝突:**既有測試都是在 pytest 的行程裡直接呼叫這些函式**,
+而 pytest 的 stdin 不是 MCP 管線,所以那個死鎖在測試環境裡不會發生。
+
+**判準:測試造的行程環境,證不出真實行程環境裡的事。**
+處置是 `tests/test_mcp_server.py::TestLiveStdioServer` —— 真的起一支 server 走協定。
+
 ## 為什麼沒有寫入類工具(架構級,永不做)
 
 這支跑在 Claude Desktop 底下,而 **Desktop 那一側沒有六站閘門** ——
@@ -144,9 +175,20 @@ def status_all() -> str:
     # 寫成 `argv = [...]` 再 `argv.extend(...)` 的話,`subprocess.run(argv)`
     # 的引數在 AST 上只是一個名字,**前綴就釘不住了** ——
     # 而釘不住的時候測試仍然會綠(它只看得到一個 Name),那正是要避免的。
-    proc = subprocess.run(
-        [sys.executable, STATUS_PY, "--root", _ROOTS[0], *_extra_root_args()],
-        capture_output=True)
+    #
+    # 🔴 **`stdin=DEVNULL` 不是保險,是這一行能不能回來的條件**(2026-09-03)。
+    # 沒有它的時候,子程序會連帶繼承 server 與客戶端之間那對管線,
+    # 而 `subprocess.run` **等不到結束** —— 見本檔開頭「死鎖」那一節。
+    # `timeout` 是第二條:修了 stdin 之後,下一個未知的阻塞仍然沒有上限。
+    try:
+        proc = subprocess.run(
+            [sys.executable, STATUS_PY, "--root", _ROOTS[0], *_extra_root_args()],
+            capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
+    except subprocess.TimeoutExpired:
+        # **回一句說得出上限的話,不是靜默地等下去。**
+        # 客戶端那一側看到「逾時」與看到「沒有回音」是兩件事:
+        # 前者讀得出是誰、等了多久;後者只能猜。
+        return u"%s(status 逾時 60s)" % UNRECORDED
 
     out = proc.stdout.decode("utf-8", "replace")
     if proc.returncode != 0:

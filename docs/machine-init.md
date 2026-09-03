@@ -987,14 +987,34 @@ Claude Desktop → **Settings → Developer → Edit Config**。
 
 ### 4-3. 日誌
 
-**與設定檔同一個資料夾底下的 `logs\`**(所以 Store 版的日誌也跟著搬,別去 `%APPDATA%` 找):
+🔴 **未證明 —— 這一格在本機找不到對應的檔,不要照它去找。**
 
-- `mcp-server-monkeyleash.log` —— server 的 **stderr**。
-  stdio server 常把所有 log 都寫 stderr,**所以這個檔裡有東西不代表出錯**。
-- `mcp.log` —— 連線層本身的失敗。
+官方文件說日誌是 `mcp.log` 與 `mcp-server-<name>.log`,
+**而 2026-09-03 在這台 Store 版機器上實測命中 0**:
 
-⚠ 已知坑(官方登記):日誌裡若出現路徑含 `${APPDATA}` 的錯誤,
-要在設定檔的 `env` 鍵補上 `%APPDATA%` 的展開值。
+```
+$ ls .../Claude_<套件容器>/LocalCache/Roaming/Claude/logs/
+claude.ai-web.log   cowork_vm_node.log   main.log   ssh.log      ← 沒有 mcp*
+$ find .../Claude_<套件容器> -iname 'mcp*.log'
+(0 命中)
+```
+
+**三種可能都沒有排除**:(甲) Store 版把 MCP 日誌寫到別處;
+(乙) 這一版 Desktop 的日誌行為與官方文件描述不同;
+(丙) Desktop 尚未真正拉起過那支 server。
+
+**這一格寫成「未證明」而不是刪掉,是因為**:上一版這裡寫的是
+「與設定檔同一個資料夾底下的 `logs\`」—— 那句**看起來完全可用**,
+而照著它去找的人會找不到檔,然後懷疑自己路徑打錯。
+**一句找不到對應物的指路,比沒有指路糟。**
+
+**所以除錯不要靠日誌** —— 靠 4-4 的兩份對比,以及
+`tests/test_mcp_server.py::TestLiveStdioServer`(它自己起一支 server,
+把 stderr 收進 tmp 檔並在失敗時整段貼出,不依賴 Desktop 寫任何日誌)。
+
+⚠ 官方登記的一則已知坑,留著(**它的前提是日誌讀得到**):
+日誌裡若出現路徑含 `${APPDATA}` 的錯誤,要在設定檔的 `env` 鍵補上
+`%APPDATA%` 的展開值。
 
 ### 4-4. 驗收 —— **兩份對比,不是「叫得動就算」**
 
