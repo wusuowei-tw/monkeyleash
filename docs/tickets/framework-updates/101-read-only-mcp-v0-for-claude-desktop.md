@@ -1,6 +1,7 @@
 # 票 101:唯讀 MCP v0 —— 把 `status` / `ticket` / `friction` 接到 Claude Desktop
 
-**狀態**:**implement**(2026-09-03 核定,六裁逐字入票見第五節;擬稿降級保留於五之一)
+**狀態**:**done**(2026-09-03 收票;實機驗收通過,見九之一)
+~~**狀態**:**implement**(2026-09-03 核定,六裁逐字入票見第五節;擬稿降級保留於五之一)~~
 ~~**狀態**:**candidate**(2026-09-03 立案)~~(F-036 體例:舊行不刪)
 
 **立案**:票 100 收票後的唯讀偵察(2026-09-03)。動機不是「缺一個功能」,是
@@ -631,6 +632,80 @@ so these files are not limited to errors.」)。
 **方向 B 是「PowerShell 那條路還在嗎」** —— 本票不動 `status.py` 的 CLI 外殼,
 但第⑤條會動 `_find_ticket_file`,而那支**同時**被 CLI 的 Ticket 區段用著。
 所以驗收要多一格:**修完之後 `status --all` 的 Ticket 區段仍指得到當前票**。
+
+---
+
+## 九之一、🟢 實機驗收結果(2026-09-03,**Jeff 本人**)
+
+**材料來源**:Claude Desktop 起的 server(**不是** agent 起的),
+與 PowerShell 直跑,兩份由裁決者本人取得。
+
+| | 時間(UTC) | 取得方式 |
+|---|---|---|
+| Desktop 叫 `status_all` | `05:31:11Z` | Desktop 自己起 server |
+| PowerShell 直跑 `status.py` | `05:32:18Z` | 同一組三個 root |
+
+**逐行比對:139 行,差異只有兩類 ——**
+
+| 差異 | 行數 | 判定 |
+|---|---|---|
+| `generated` 時間戳 | **3 行** | 預期內(兩次跑相隔 67 秒;第九節本來就寫明除外) |
+| `root` / `upstream` / `outpost` 行的**磁碟機字母大小寫** | 見下 | **非缺陷** |
+
+**其餘逐字相同。** 交叉核對的欄位全部一致:
+
+```
+head        8533249
+ahead       6
+waterline   兩個下游各 2 個 commit(未收齊)
+drift       三檔
+綠燈        36
+```
+
+### 磁碟機字母那一格 —— **非缺陷,但要說出它為什麼會不同**
+
+`c:` 與 `C:` 的差別**來自 argv,不來自程式**:
+
+- Desktop 那一份走 `claude_desktop_config.json` 的 `args`,那裡寫的是**小寫** `c:\projects\...`
+- PowerShell 那一份是人手打的,**大寫** `C:\projects\...`
+
+`status.py` 的 `root` 欄位是 `os.path.abspath(argv --root)` 的**原樣回傳**,
+而 Windows 的 `abspath` **不正規化磁碟機字母大小寫**。
+⇒ 兩份不同**正是「原樣回傳」在做它該做的事**(裁 B),
+**如果兩份一樣,反而表示中間有人正規化過。**
+
+**登記(建議,非缺陷)**:設定檔的磁碟機字母**改成大寫**,
+與 PowerShell 慣用寫法一致 —— 這樣下次逐行比只剩 `generated` 三行,
+**而「只剩三行」比「三行加幾行大小寫」更容易一眼掃完**。
+不改也完全正確。
+
+⚠ **兩份原文不貼進票面**:它們含兩個下游 repo 的絕對路徑(`OneDrive` 底下)。
+依裁 6「repo 內不存路徑」與票 100 的先例(遮成 `<影音根>` / `<量化根>`),
+原文留在裁決對話裡,票面只留可核對的欄位。
+
+### 方向 B 也過了
+
+第九節那一格(「PowerShell 那條路還在嗎」)由上表的 PowerShell 那一份直接證到:
+`status --all` 跑得起來、139 行、Ticket 區段正常。
+
+---
+
+## 九之二、落地六刀
+
+| 刀 | sha | 內容 |
+|---|---|---|
+| 1 立案 | `012087c` | 票檔 538 行 |
+| 2 核定 | `83531f8` | 六裁逐字入票;擬稿降級 |
+| 3 紅燈一 | `3adeb44` | `mcp_server` 收集錯誤 + `_find_ticket_file` 邊界(1 failed / 2 passed) |
+| 4 落地 | `c6d07be` | server + 邊界修 + manifest skip + machine-init 第四節 |
+| 5 紅燈二 | `23eccf0` | stdin/timeout 釘 kwargs + 真起 stdio server(2 failed / 2 passed) |
+| 6 修復 | `8533249` | `stdin=DEVNULL` + `timeout=60`;第十二節 |
+
+**全套最終:1236 passed / 3 skipped / 3 xfailed。**
+
+⚠ **六刀裡有兩組紅綠燈,不是一組。** 第二組(5、6)不是補做 ——
+它是**第一組全綠之後在真實環境失敗**才長出來的,成因與代價寫在第十二節。
+把六刀讀成「一次順利的落地加一點收尾」會漏掉本票最貴的那一課。
 
 ---
 
