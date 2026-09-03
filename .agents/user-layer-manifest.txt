@@ -88,3 +88,20 @@ plugins/                        never
 # G1 hook 本體:正本在 repo 的 .claude/portable/g1_guard.py,
 # 由 ADR 0009 的三步流程覆蓋過去,不走這條門。
 hooks/                          never
+
+# ── 2026-09-03 補登(票 87:匯出被拒,四項未分類)───────────────
+# Claude Code App 的更新結果,不是框架的東西。備份通道:**不需要** ——
+# 下一次更新就覆寫它,它描述的是那一次更新而不是這台機器的形狀。
+.last-update-result.json        never
+# Claude Code 的指令歷史 = 個人資料。復原開發環境不需要它;
+# 要留的話走與 projects/ 同一條封存通道(帶日期 zip -> 雙雲端)。
+history.jsonl                   never
+# Claude Code 的貼上快取 = 個人資料(貼進去的東西原封不動躺在裡面)。
+# **用目錄前綴**,因為裡面的檔名是流水號 —— 逐檔列等於下次多一個檔就又未分類。
+# 備份通道:**沒有,而且不該有** —— 這一項就是不留。
+paste-cache/                    never
+# 2026-08-28 合併 pattern 時留下的備份副本。正本 leak-patterns.local.txt
+# 已在 age 桶,內容由正本涵蓋 —— 這一份**多帶一次就是多一份明文外洩面**。
+# 備份通道:正本(age 桶)。本項登記**待 Jeff 手刪**;刪掉之後這一行才能移除,
+# 而不是反過來(先移除行,檔還在 = 下次匯出又被拒,那才是正確的行為)。
+leak-patterns.local.txt.bak-20260828 never
