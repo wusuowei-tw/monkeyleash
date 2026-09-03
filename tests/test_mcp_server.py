@@ -56,6 +56,16 @@ import mcp_server  # noqa: E402
 EXPECTED_TOOLS = {u"status_all", u"ticket", u"friction"}
 
 
+def _drop_generated(blob):
+    """把 `generated:` 那一行拿掉,其餘一個位元組都不動。
+
+    **切在 `\\n` 上而不是 `splitlines()`** —— `splitlines()` 會把 `\\r` 吃掉,
+    而那正是這條測試要守的東西之一(換行不得被正規化)。
+    """
+    keep = [ln for ln in blob.split(b"\n") if not ln.startswith(b"generated:")]
+    return b"\n".join(keep)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 共用:造一個最小 repo(形狀抄 tests/test_status.py 的 _make_root)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -192,10 +202,24 @@ class TestSubprocessIsPinned:
     """
 
     def _subprocess_calls(self):
+        """**只算 `subprocess.<動詞>`,不是所有叫 `run` 的東西。**
+
+        ⚠ 這一條原本寫成「名字是 run / check_output / call / Popen 就算」,
+        而 `mcp.run(transport="stdio")` **也叫 run** —— 那條判準會把
+        「啟動 server」數成第二個子程序,於是一個正確的實作永遠過不了。
+        判準的對象錯了,不是防線弱。修法是綁**受詞**(`subprocess`),
+        不是把 `run` 從表裡拿掉(拿掉的話 `subprocess.run` 也不算了)。
+        """
         out = []
-        for node, nm in _calls(_server_tree()):
-            if nm in (u"run", u"check_output", u"call", u"Popen"):
-                out.append(node)
+        for node in ast.walk(_server_tree()):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            if not isinstance(f, ast.Attribute):
+                continue
+            if not isinstance(f.value, ast.Name) or f.value.id != "subprocess":
+                continue
+            out.append(node)
         return out
 
     def test_exactly_one_subprocess_call(self):
@@ -264,6 +288,10 @@ class TestBadInputNeverReadsAFile:
     @pytest.mark.parametrize("bad", [u"abc", u"10;rm", u"", u"12345", u"-1", u"1.0"])
     def test_bad_ticket_returns_error_and_opens_nothing(self, bad, no_open, tmp_path):
         mcp_server.set_roots([_make_root(tmp_path)])
+        # ⚠ `_make_root` 自己會 `io.open(..., "w")` 造那個 tmp repo,而 fixture
+        # 在測試本體之前就裝好了 —— 不清的話 `no_open` 一開始就不是空的,
+        # 而那個紅會**指向錯的方向**(看起來像 server 讀了檔)。
+        del no_open[:]
         out = mcp_server.ticket(bad)
         assert u"未記錄" in out, u"不合法輸入 %r 應回未記錄,實際 %r" % (bad, out[:120])
         assert no_open == [], u"不合法輸入 %r 仍開了檔:%r" % (bad, no_open)
@@ -271,6 +299,7 @@ class TestBadInputNeverReadsAFile:
     @pytest.mark.parametrize("bad", [u"F-1; x", u"F1", u"-3", u"F-", u"; rm -rf /"])
     def test_bad_friction_returns_error_and_opens_nothing(self, bad, no_open, tmp_path):
         mcp_server.set_roots([_make_root(tmp_path)])
+        del no_open[:]
         out = mcp_server.friction(bad)
         assert u"未記錄" in out, u"不合法輸入 %r 應回未記錄,實際 %r" % (bad, out[:120])
         assert no_open == [], u"不合法輸入 %r 仍開了檔:%r" % (bad, no_open)
@@ -297,8 +326,18 @@ class TestStatusAllIsVerbatim:
         assert direct.returncode == 0, direct.stderr.decode("utf-8", "replace")
 
         got = mcp_server.status_all()
-        assert got.encode("utf-8") == direct.stdout.replace(b"\r\n", b"\n"), (
-            u"status_all 的輸出與直跑 status.py 不同")
+        # ⚠ 比的是**未經正規化**的原始 bytes(換行不動)。
+        # 這一條原本寫成 `direct.stdout.replace(b"\r\n", b"\n")`,
+        # 也就是**預設 server 會把換行正規化** —— 而裁 B 說「一個位元組都不加工」。
+        # 那樣寫的話,一個做了正規化(= 加工)的實作會**通過**這條測試,
+        # 而測試的名字仍然叫「逐位元組相同」。判準與它宣稱守的東西不一致。
+        #
+        # ⚠ **`generated` 那一行除外**,而且只有那一行 —— 它來自時鐘,
+        # 兩次跑本來就不同(`status.now_iso()`)。這與票 101 第九節的
+        # 實機驗收用同一個排除法,不是為了讓測試綠而放寬的。
+        # **逐行排除,不是整段 normalize**:排除一整類差異會把真正的加工一起放過去。
+        assert _drop_generated(got.encode("utf-8")) == _drop_generated(direct.stdout), (
+            u"status_all 的輸出與直跑 status.py 不是逐位元組相同(generated 行除外)")
 
     def test_unrecorded_tokens_survive(self, tmp_path):
         """「未記錄」這種字不得被 server 改寫。
@@ -445,6 +484,24 @@ class TestServerDoesNotImportGate:
         assert r.stdout.decode("utf-8").strip() == "[]", (
             u"import mcp_server 之後出現 gate 模組:%s"
             % r.stdout.decode("utf-8").strip())
+
+    def test_ticket_dirs_agree_with_gate(self):
+        """對帳:`mcp_server.TICKET_DIRS` 與 `gate.TICKET_DIRS` 必須相同。
+
+        裁 3 要求 server 不 import gate,代價是**票目錄清單多一份副本**。
+        **同缺陷的兩份實作必然漂開**(`F-058` 家族),所以要有東西釘住它。
+
+        釘的方式與 `friction_heading` 那一對同型:**測試這一側 import gate 是可以的**
+        —— 負控守的是 `mcp_server` 這個模組,不是這個測試檔。
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "gate_for_ticketdirs", str(ROOT / ".claude" / "hooks" / "gate.py"))
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        assert tuple(mcp_server.TICKET_DIRS) == tuple(gate.TICKET_DIRS), (
+            u"兩份票目錄清單漂開了:mcp_server=%r gate=%r"
+            % (mcp_server.TICKET_DIRS, gate.TICKET_DIRS))
 
     def test_source_has_no_gate_import(self):
         """靜態面也守一次 —— 上一條驗執行期,這一條驗**意圖**。

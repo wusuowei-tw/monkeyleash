@@ -565,12 +565,29 @@ def _ticket_dirs(root, gate, feature):
 
 
 def _find_ticket_file(root, gate, feature, ticket):
-    """票檔在哪。**所有存在的票目錄都找**,不是取第一個。"""
+    """票檔在哪。**所有存在的票目錄都找**,不是取第一個。
+
+    **前綴要帶邊界**(framework-updates/101 裁 4):比的是 `<號>-`,不是 `<號>`。
+    原本寫 `startswith(str(ticket))`,於是票號 `1` 會命中 `10-*.md` ——
+    真實資料上這一族有九筆(`1`→票 10、`2`→票 20、…、`9`→票 90),
+    因為本 repo 的票號補零到兩位,`1` 這個字串不對應任何票。
+    **回錯一份票比回不出來糟得多**:回不出來的人會再查,
+    拿到一份看起來對的票的人不會。
+
+    ⚠ **補零不在這一層。** `_find_ticket_file("1")` 回 `None` 是正確行為 ——
+    這裡只答「這個字串有沒有邊界命中」,補零是呼叫者對**本 repo 命名慣例**
+    的知識(下游 repo 不見得補零),埋進來會在別的 repo 出錯。
+
+    ⚠ `gate.py` 有語意相同的一份(`:1265`),**本票不修它** ——
+    那一份在權威層,改它要有自己的紅燈與驗收。兩份暫時不一致,
+    是知情的,不是忘了。見票 101 第八節。
+    """
     if not feature or not ticket:
         return None
+    prefix = str(ticket) + "-"
     for d in _ticket_dirs(root, gate, feature):
         for name in sorted(os.listdir(d)):
-            if name.startswith(str(ticket)) and name.endswith(".md"):
+            if name.startswith(prefix) and name.endswith(".md"):
                 return os.path.join(d, name)
     return None
 

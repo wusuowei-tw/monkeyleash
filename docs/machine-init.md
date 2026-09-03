@@ -931,3 +931,83 @@ python .claude/portable/g1_verify.py               # G1 保護清單
 - **空 repo 或小 repo** → **不用開,直接正式上線**。沒有大批既有工作要豁免,影子只是多一層要收的狀態。
 
 影子開著時,正式擋下的訊息帶 `[enforce]` 標示、影子只寫 `.dev/shadow-log.jsonl` 的 `would-block` —— 「現在是影子還是正式」從任一次攔截訊息就讀得出來。
+
+---
+
+## 四、MCP 註冊(把 `status` / `ticket` / `friction` 接到 Claude Desktop)
+
+**票 101,v0 上游專用。** 這一節裝的是**唯讀**投影 —— 三支工具都只讀,
+永遠不會有寫入類工具(理由:Desktop 那一側沒有六站閘門,見票 101 第八節)。
+
+### 4-1. 設定檔在哪 —— **從 App 裡開,不要照抄路徑**
+
+Claude Desktop → **Settings → Developer → Edit Config**。
+
+那個按鈕開的是**這台機器上實際生效的那一份**,不存在就順手建一份。
+
+**為什麼不寫死**:Windows 有兩種安裝形態,設定檔住不同地方 ——
+
+| 安裝形態 | 設定檔所在資料夾 |
+|---|---|
+| 一般(MSI / exe)安裝 | `%APPDATA%\Claude\` |
+| **Microsoft Store 版** | `Packages` 底下該 App 的 **`LocalCache\Roaming\Claude\`** |
+
+官方文件只寫了第一種。**它沒有寫錯,是它沒有寫全** —— 而讀的人分不出這兩者,
+於是會在一個不存在的路徑上建一個永遠不被讀到的檔,
+**而那個檔看起來完全正常**。用 Edit Config 就沒有這個岔路。
+
+⚠ **本節不寫帳號名、不寫完整路徑**(票 101 裁 6):
+絕對路徑不進版控,repo 內一個字都不存。
+
+### 4-2. JSON 形狀
+
+```json
+{
+  "mcpServers": {
+    "monkeyleash": {
+      "command": "<python.exe 的絕對路徑>",
+      "args": [
+        "<mcp_server.py 的絕對路徑>",
+        "--root", "<上游 repo 根>",
+        "--root", "<下游 repo 根 1>",
+        "--root", "<下游 repo 根 2>"
+      ]
+    }
+  }
+}
+```
+
+- **`command` 用 `python.exe` 的絕對路徑**,`where python` 查到什麼寫什麼。
+  **不用 `uv`**(官方 quickstart 那個例子是為 2.x + `uv` 專案佈局寫的,本專案沒有那個佈局),
+  也**不要只寫 `python`** —— Desktop 執行環境的 `PATH` 不保證與 PowerShell 相同,
+  而 PATH 找不到時的錯誤訊息在日誌裡,不在畫面上。
+  這正是 `0-2` 那一節的同一條:**要裝進 hook 實際呼叫的那一支,而那不一定是你以為的那支。**
+- **`--root` 可重複,第一個視為上游。** `ticket` / `friction` **只在第一個 root 找**。
+- server **只認 `--root`**,沒有別的設定入口;沒給就退出碼 2 並寫 stderr。
+
+### 4-3. 日誌
+
+**與設定檔同一個資料夾底下的 `logs\`**(所以 Store 版的日誌也跟著搬,別去 `%APPDATA%` 找):
+
+- `mcp-server-monkeyleash.log` —— server 的 **stderr**。
+  stdio server 常把所有 log 都寫 stderr,**所以這個檔裡有東西不代表出錯**。
+- `mcp.log` —— 連線層本身的失敗。
+
+⚠ 已知坑(官方登記):日誌裡若出現路徑含 `${APPDATA}` 的錯誤,
+要在設定檔的 `env` 鍵補上 `%APPDATA%` 的展開值。
+
+### 4-4. 驗收 —— **兩份對比,不是「叫得動就算」**
+
+1. 改完設定檔 → **完全關閉並重啟 Claude Desktop**(不重啟不生效)。
+2. 在 Desktop 裡叫 `status_all`。
+3. **同時**在 PowerShell 跑 `python .claude\portable\status.py --root <三個 root>`。
+4. **兩份逐字比**,只有 `generated` 那一行可以不同(它來自時鐘)。
+
+**為什麼是「比兩份」而不是「看它有沒有輸出」**:
+`status_all` 的整個價值在於**它端出來的與終端機端出來的是同一份東西**。
+一支自己重新排版、或悄悄接了別的 root 的 server,
+**照樣會給你一頁看起來很對的輸出** —— 而那一頁沒有東西會說它不對。
+
+**方向 B 也要驗**(不是同一個檢查跑兩遍):
+`status.py` 的 CLI 那條路還在嗎 —— 第 3 步本身就是,
+但要確認 **Ticket 區段仍指得到當前票**(票 101 動過 `_find_ticket_file`)。

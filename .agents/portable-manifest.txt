@@ -175,6 +175,14 @@ tests/test_dependency_ceiling.py skip
 # **不出貨**:它驗的是**這台機器的個人 pattern 清單**(不進版控、跟人走)。
 # 出貨到下游只會天生帶紅,同上兩則的形狀。
 tests/test_known_items_regression.py skip
+# **不出貨**(票 101 裁 2):它驗的 `.claude/portable/mcp_server.py` 標 `skip`
+# ——「帶走測試卻不帶走它驗的檔案」那個形狀在這裡**成立**,同 test_adr_numbering 那一筆。
+# 而且更硬一層:本檔在 import 期就 `import mcp_server`,那支 `import mcp`(PyPI 套件),
+# 下游的 `pyproject.toml` 沒有那條相依 —— **collection 就炸**,
+# 而那個紅與「下游把 server 改壞了」長得一模一樣。
+# **到期條件**:下游 MCP 那張候選票落地(屆時下游會有相依也會有 server),
+# 回來把這一筆與 `.claude/portable/mcp_server.py` **一起**改成 copy。
+tests/test_mcp_server.py        skip
 # **不出貨**:它驗的是 `.github/workflows/*.yml`,而那一筆標 `skip`
 # (每個 repo 的 CI 是那個 repo 的事實)。帶走測試卻不帶走它驗的檔案
 # = 到站即紅,同上三則的形狀 —— 而 `test_there_is_at_least_one_workflow`
@@ -329,3 +337,20 @@ CLAUDE.md                       generate
 # 位元碼快取,由來源產生;帶過去只是噪音
 .claude/hooks/__pycache__/    skip
 .claude/portable/__pycache__/ skip
+
+# 唯讀 MCP server(票 101 裁 2)。**v0 上游專用。**
+#
+# **標 skip,而不是讓它繼承 `.claude/portable/` 的 `copy`。**
+# 不加這一筆的話,每個下游 repo 都會多一支**沒人註冊、沒人跑、沒人維護**的
+# server 檔 —— 那不只是浪費:它是一支**看起來已經裝好了**的檔案,
+# 而「有這個檔」與「這台機器接上了 MCP」是兩件事,從檔案樹上分不出來。
+#
+# **另一個理由是相依**:它 `import mcp`(PyPI 套件),而下游的 `pyproject.toml`
+# 沒有那條相依。標 copy 的話下游 `pytest` 會在 `tests/test_mcp_server.py`
+# 的 collection 就炸,而那個紅與「下游把 server 改壞了」長得一模一樣。
+# (`tests/test_mcp_server.py` 同樣標 skip,見上方 tests 區段。)
+#
+# ⚠ **代價明寫:下游要用 MCP 得另外開票。** 這正是想要的 ——
+# 下游要不要有 MCP 是一個決策,不該由一條 `copy` 前綴替他們決定。
+# **到期條件**:下游 MCP 那張候選票落地時,回來重定這一筆。
+.claude/portable/mcp_server.py skip
