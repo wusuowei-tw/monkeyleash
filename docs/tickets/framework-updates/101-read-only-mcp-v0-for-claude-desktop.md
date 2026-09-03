@@ -837,6 +837,228 @@ server 與客戶端之間那對管線**,於是 `subprocess.run` 等不到結束�
 
 ---
 
+## 十三、🔴 CI 紅:相依未宣告(2026-09-03,收票**之後**)
+
+**收票刀 `fedae28` 推上去,CI 立刻紅。** 這一節記它。
+
+### 十三之一、CI 原文(run 33720175725)
+
+```
+pytest	跑測試	##[group]Run python -m pytest -q \
+pytest	跑測試	  --ignore=tests/test_known_items_regression.py \
+pytest	跑測試	  --deselect "tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce"
+pytest	跑測試	==================================== ERRORS ====================================
+pytest	跑測試	__________________ ERROR collecting tests/test_mcp_server.py ___________________
+pytest	跑測試	ImportError while importing test module '/home/runner/work/monkeyleash/monkeyleash/tests/test_mcp_server.py'.
+pytest	跑測試	Traceback:
+pytest	跑測試	tests/test_mcp_server.py:54: in <module>
+pytest	跑測試	    import mcp_server  # noqa: E402
+pytest	跑測試	.claude/portable/mcp_server.py:77: in <module>
+pytest	跑測試	    from mcp.server.fastmcp import FastMCP
+pytest	跑測試	E   ModuleNotFoundError: No module named 'mcp'
+pytest	跑測試	=========================== short test summary info ============================
+pytest	跑測試	ERROR tests/test_mcp_server.py
+pytest	跑測試	!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+pytest	跑測試	1 deselected, 1 error in 1.24s
+pytest	跑測試	##[error]Process completed with exit code 2.
+```
+
+`conclusion: failure`,`headSha: fedae2850c8aa9c854029231c62c274cc8c1ee39`。
+**一支測試都沒跑到** ⇒ 那一輪的 `+37` 差額對帳**一個字都沒證到**。
+
+### 十三之二、成因
+
+`mcp` **沒有宣告在 `pyproject.toml`**,而 CI 裝的是 `python -m pip install -e ".[dev]"`
+(`.github/workflows/*.yml:50`)。`dependencies` 只有 `pyyaml`,`dev` 只有 `pytest`。
+
+**本機測不出來**:桌機早就裝了 `mcp` 1.27.0(`pip show mcp` 的
+`Required-by: mcp-server-duckdb`),所以本機 1236 全綠。
+
+### 十三之三、⚠ 最難看的部分:失效模式我自己寫過,只想到一半
+
+`c6d07be` 的 manifest 註解裡逐字寫著:
+
+```
+# 而且更硬一層:本檔在 import 期就 `import mcp_server`,那支 `import mcp`(PyPI 套件),
+# 下游的 `pyproject.toml` 沒有那條相依 —— **collection 就炸**,
+# 而那個紅與「下游把 server 改壞了」長得一模一樣。
+```
+
+**預測完全正確,而我只把它套在下游身上。** 上游 CI 的執行環境與
+「一個乾淨 clone 的下游」**是同一類** —— 都只裝 `pyproject.toml` 宣告的東西。
+
+`CLAUDE.md`:「**收了一個入口,就回頭問它的同類入口在哪**……
+問法是『這個東西還有哪些同類』,不是『我還想得到什麼』」——
+**這一次只做了前半。** 而做前半的時候感覺**像是做完了**:
+註解寫得很清楚、理由很完整、代價也明寫了,
+唯一沒做的是**把同一句話再套一次在自己身上**。
+
+### 十三之四、這是第十二節那條判準的**第二個實例**
+
+> **測試造的環境,證不出別的環境裡的事。**
+
+第十二節的「別的環境」是 **MCP 行程**(pytest 的 stdin 不是 MCP 管線)。
+這一次的「別的環境」是 **CI**(桌機裝了 `mcp`,CI 沒有)。
+
+**兩次的形狀一模一樣,中間只隔了幾個小時。** 而寫下那條判準的人
+(就是我)**沒有在第二次發生時認出它** —— 這正是 `CLAUDE.md` 那句
+「寫下一條判準,不會讓你在下一次認出它適用」的又一個標本。
+**判準是索引,而『認出這次該查那個索引』本身沒有索引。**
+
+### 十三之五、淨室驗證(**材料來自 Jeff,在 PowerShell 跑**)
+
+`python -m venv` 造一個乾淨 venv,只裝 `pyproject.toml` 宣告的東西。
+**agent 這一側跑不了這一步** —— R7 擋下用絕對路徑呼叫 venv 內 python.exe 的指令
+(白名單比對的是指令名前綴 `python -m pip`,而 venv 一定走絕對路徑),
+**已停手未繞過**,原始擋下訊息留在裁決對話。
+
+**修前(Jeff)** —— ⚠ **一行遮過,見下方註記**:
+
+```
+======================================================= ERRORS ========================================================
+______________________________________ ERROR collecting tests/test_mcp_server.py ______________________________________
+ImportError while importing test module 'C:\projects\agent-gates\tests\test_mcp_server.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\<使用者目錄>\AppData\Local\Programs\Python\Python311\Lib\importlib\__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_mcp_server.py:54: in <module>
+    import mcp_server  # noqa: E402
+    ^^^^^^^^^^^^^^^^^
+.claude\portable\mcp_server.py:77: in <module>
+    from mcp.server.fastmcp import FastMCP
+E   ModuleNotFoundError: No module named 'mcp'
+=============================================== short test summary info ===============================================
+ERROR tests/test_mcp_server.py
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+no tests collected, 1 error in 0.13s
+```
+
+> ⚠ **F-116:遮了就不得再自稱原始。** 上面第 6 行的 `C:\<使用者目錄>\` 原本是
+> 本機的使用者路徑,**被洩漏偵測擋下**(`test_the_shipped_tree_is_clean`,
+> 命中「個人 pattern #1」)。偵測是對的,不是誤報 ——
+> 這份輸出**要跟著 repo 推到 GitHub**,而個人路徑不該在那裡。
+> 除那一行之外一字未動;`no tests collected, 1 error in 0.13s` 與所有行號皆未動。
+
+**與 CI 那份同一個失敗**(同一個 `tests/test_mcp_server.py:54` → `mcp_server.py:77` →
+`ModuleNotFoundError: No module named 'mcp'`)⇒ **淨室重現了 CI**,
+而它是在**本機**重現的 —— 這一格的價值就在這裡:
+CI 的紅只證得出「CI 上會紅」,淨室的紅證得出「**任何只裝宣告相依的環境都會紅**」。
+
+**修後(Jeff)** —— ⚠ **venv 路徑遮過,見下方註記**:
+
+```
+> python.exe -m pip install -e ".[dev]" -q
+(無錯誤;只有 pip 自己的升級提示)
+
+> python.exe -m pytest --collect-only -q tests\test_mcp_server.py
+tests/test_mcp_server.py::TestToolInventory::test_exactly_three_tools
+tests/test_mcp_server.py::TestToolInventory::test_a_missing_tool_would_be_caught
+tests/test_mcp_server.py::TestNoWriteCalls::test_no_write_named_calls_anywhere_in_the_file
+tests/test_mcp_server.py::TestNoWriteCalls::test_every_open_is_read_mode
+tests/test_mcp_server.py::TestSubprocessIsPinned::test_exactly_one_subprocess_call
+tests/test_mcp_server.py::TestSubprocessIsPinned::test_argv_prefix_is_pinned
+tests/test_mcp_server.py::TestSubprocessIsPinned::test_status_path_constant_points_at_the_real_file
+tests/test_mcp_server.py::TestSubprocessIsPinned::test_stdin_and_timeout_are_pinned
+... (中略 22 支) ...
+tests/test_mcp_server.py::TestLiveStdioServer::test_status_all_returns_over_the_wire
+tests/test_mcp_server.py::TestLiveStdioServer::test_ticket_over_the_wire_is_the_negative_control
+tests/test_mcp_server.py::TestLiveStdioServer::test_friction_over_the_wire_is_the_negative_control
+
+34 tests collected in 0.45s
+
+> python.exe -m pip show mcp
+Name: mcp
+Version: 1.29.1
+Summary: Model Context Protocol SDK
+Location: <淨室 venv>\Lib\site-packages
+Required-by:
+
+> python.exe -m pytest -q tests\test_mcp_server.py
+..................................                                       [100%]
+34 passed in 17.08s
+```
+
+> ⚠ **F-116:遮了就不得再自稱原始。** `Location:` 那一行與三條指令的
+> 直譯器絕對路徑原本是 scratchpad 底下的完整路徑(含使用者名),已遮成
+> `<淨室 venv>` / `python.exe`。**版本、條數、耗時、測試名一字未動**;
+> 中略的 22 支是為了篇幅,`--collect-only` 的總數 `34` 就是完整清單的長度。
+
+### 🟡 淨室裝到的是 **1.29.1**,不是 1.27.0 —— 這一格比預期的更有用
+
+`pip` 照 `"mcp>=1.27,<2"` 自己解到區間內最新的合規版。
+
+**所以現在區間裡有兩個版本各自實測過全綠**:
+
+| 版本 | 環境 | 口徑 |
+|---|---|---|
+| `1.27.0` | 桌機 | **既有安裝**(`mcp-server-duckdb` 帶進來的) |
+| `1.29.1` | 淨室 venv | **照這份宣告解出來的** |
+
+**兩者的口徑不同,要分開記**:後者才證得出「**宣告本身可用**」,
+前者只證得出「這台機器上剛好有的那一版可用」。
+**票 101 全程用的是前者,而前者證不出 CI 會不會過** —— 這正是十三之二的成因。
+
+**附帶效果**:1.29.1 已經很靠近區間右端,它全綠 ⇒ **`<2` 擋掉的是 2.x 那個
+已知不同的 API,不是順手把還能用的版本一起關在外面**。
+上限畫在哪裡這件事,本來只有「2.x 已知不同」這個反面理由,
+**現在多了一個正面的**:右端附近是通的。
+
+⚠ **裁 1 的措辭要跟著校正**:裁 1 說「**照 1.27.0 寫**」。
+實作面仍然成立(`FastMCP` 面在 1.27–1.29 都在),
+但「我們跑的是 1.27.0」這句話**從今天起只對桌機成立** ——
+CI 與任何新淨室都會拿到 1.29.x。**票面不改裁 1 的原文**(F-036),
+在這裡記一行:**執行版本是一個區間,不是一個點。**
+
+### 十三之六、修法
+
+`pyproject.toml` 的 `[project.optional-dependencies].dev` 加 `"mcp>=1.27,<2"`,
+`[tool.monkeyleash]` 加 `mcp-ceiling-review = "2026-10-31"`。
+
+**上限 `<2` 的理由與 pytest 那條方向相反**:
+
+| | pytest `<10` | mcp `<2` |
+|---|---|---|
+| 上限守的是 | **已知好的邊界**(9.x 實測全綠,10.x 沒人跑過) | **已知壞的邊界** |
+| 證據 | 兩台機器在 9.x 全綠 | 官方 quickstart 已改成 `MCPServer` + `httpx2`,而 1.27.0 的 `__all__` 裡**沒有** `MCPServer`(第三節實測)⇒ **API 已知不同,2.x 零證據** |
+| 複審日 | `2027-02-15` | `2026-10-31` |
+
+**複審日差這麼多是刻意的**:pytest 的上限在等「新大版本出來、有人去試」,
+**而 mcp 的上限在等一張已經開好的候選票**(升 2.x),那張票有具體內容 ——
+換 import 面、換 HTTP 客戶端。**一個等外界、一個等自己,後者不該給同樣長的繩子。**
+
+`tests/test_dependency_ceiling.py` 照票 34 體例照顧新的一格,
+但**不是複製一份**:三條測試改成 parametrize 過一張 `CAPPED` 清單。
+理由是**同缺陷的兩份實作必然漂開**(`F-058` 家族)——
+複製一份會得到兩組語意相同的實作,改了一組忘了另一組,而兩組都還是綠的。
+
+⚠ **代價明寫**:parametrize 之後 test id 從 `test_x` 變成 `test_x[pytest]` /
+`test_x[mcp]`,而**舊 id 出現在 `.dev/test-runs.jsonl` 的歷史 `failed_tests` 裡,
+那些不會回頭改** —— 查舊紀錄的人會找不到現在的名字。
+本檔在 manifest 標 `skip`,所以影響只在上游。
+
+另外把版本查法從 `pytest.__version__` 換成 `importlib.metadata.version(name)`:
+`__version__` 是**模組自己說的**,中繼資料是**安裝器寫的**,
+而這條測試守的正是「宣告」與「實際裝的」對不對得上 ——
+**要問安裝器那一側,不能問被裝的東西自己**(`F-153`)。
+
+### 十三之七、⚠ 順帶照出的一格(**本票不修,另開候選**)
+
+R7 的 `BASH_ALLOWED_CMDS` 有 `"pip"` 與 `"python -m pip"`,
+理由欄寫著「套件管理器寫 `.venv`,不是本 repo 的來源」——
+**意圖明確包含 venv,而實作恰好擋掉所有 venv 內的呼叫**:
+比對是「這一段是否以指令名開頭」(`gate.py:434-440`),
+而用 venv 一定要走絕對路徑 `<venv>/Scripts/python.exe`,對不上任何前綴。
+
+**這與「前綴要帶邊界」是鄰居,但方向相反** ——
+不是漏放行了危險的東西,是**擋掉了理由欄明說要放行的東西**。
+
+**本票不修**:改 `gate.py` 白名單是動閘門,要單獨一票、單獨紅燈、單獨驗收。
+**到期條件**:下一次有人要在 venv 裡跑淨室驗證的時候(**這一次已經發生過一次了**)。
+
+---
+
 ## 附:立案時的計數(**帶單位,帶基準**)
 
 - 票檔:`docs/tickets/framework-updates/` **99 個 `.md` 檔**,票號範圍 **01–100**,

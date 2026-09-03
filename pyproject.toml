@@ -32,12 +32,40 @@ dev = [
     # 所以它不是單獨存在的:`pytest-ceiling-review` 是它的到期日,
     # `tests/test_dependency_ceiling.py` 在那天之後會紅並給出複審程序。
     "pytest>=8.0,<10",
+    # 票 101:`tests/test_mcp_server.py` 在 import 期就 `import mcp_server`,
+    # 而那支 `from mcp.server.fastmcp import FastMCP`。**沒有這一行,CI 在
+    # collection 就炸** —— 2026-09-03 實測 run 33720175725,
+    # `ModuleNotFoundError: No module named 'mcp'`,一支測試都沒跑到。
+    #
+    # **上限 `<2` 的理由與 pytest 那條方向相反:那條的上限守的是「已知好的邊界」,
+    # 這條守的是「已知壞的邊界」。** 2.x 不是沒證據而已 —— 官方 quickstart 已經
+    # 改成 `from mcp.server import MCPServer` + `httpx2`,而 1.27.0 的
+    # `mcp/server/__init__.py` 的 `__all__` 裡沒有 `MCPServer`(票 101 第三節實測)。
+    # **API 已知不同,而我們一條 2.x 的證據也沒有** ⇒ 上限守的是未知。
+    #
+    # 下限 `>=1.27`:**區間內兩個不同的版本各自實測過全綠**,不是只有一版。
+    #   1.27.0  桌機(票 101 全程,含實機 Desktop 驗收)
+    #   1.29.1  淨室 venv(`pip install -e ".[dev]"` 自己解到的最新合規版)
+    #           —— `tests/test_mcp_server.py` 34 passed
+    # **這一格本身就是「上限有沒有畫對」的證據**:區間右端附近的 1.29.1 也全綠,
+    # 所以 `<2` 擋掉的是 2.x 那個**已知不同的 API**,不是順手把還能用的版本一起關在外面。
+    #
+    # ⚠ **兩版的口徑不同,分開記**:桌機那版是**既有安裝**(`mcp-server-duckdb` 帶進來的),
+    # 淨室那版是**照這份宣告解出來的**。後者才證得出「宣告本身可用」——
+    # 前者只證得出「這台機器上剛好有的那一版可用」。
+    "mcp>=1.27,<2",
 ]
 
 [tool.monkeyleash]
 # 上限複審日(票 34)。過了這天 tests/test_dependency_ceiling.py 轉紅,
 # 訊息會直接給複審程序。改這個日期就是做一次複審 —— 不要只把它往後推。
 pytest-ceiling-review = "2027-02-15"
+# 票 101。日期比 pytest 那條近得多,理由是**這兩個上限的性質不同**:
+# pytest 的上限在等「新大版本出來、有人去試」;
+# mcp 的上限在等**一張已經開好的候選票**(升 2.x),而那張票有具體內容 ——
+# 換 import 面(`FastMCP` -> `MCPServer`)、換 HTTP 客戶端(`httpx` -> `httpx2`)。
+# **一個等外界、一個等自己,後者不該給同樣長的繩子。**
+mcp-ceiling-review = "2026-10-31"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
