@@ -941,6 +941,63 @@ $rows | Format-Table -AutoSize
 
 ---
 
+### 十三之四、**「十一項控制檔清單」與「本輪 17 檔」的差集**(2026-09-03 偵察落點)
+
+> ### ⚠ **兩張表的判準不同,所以差集不是缺陷清單。本節只把三個集合攤開,不下結論。**
+>
+> | 表 | 判準 | 出處 |
+> |---|---|---|
+> | **十一項** | 「**決定閘門行為、卻不進版控**」的十項 + 清單自己 | `docs/machine-init.md:92`(逐字:`**判準:決定閘門行為、卻不進版控。**`);第 11 = 本票 §零 |
+> | **17 檔** | 「**這一輪要搬上碟的是哪些**」,桶名來自 `.agents/user-layer-manifest.txt` | 本票 §十三之三 的組成表 |
+>
+> **判準不同 ⇒ 一個項目不在另一張表裡,可能是「刻意」也可能是「沒想到」,
+> 而這兩者在差集裡長得一樣。** 本節不替它們分類。
+
+**單位**:十一項是**項**(第 10 項是一族檔案),17 是**檔**。**兩邊不能直接相減。**
+
+#### 甲、兩邊都有 —— **9 項 ↔ 10 檔**
+
+| 十一項 # | 17 檔裡的位置 | 出處(它為什麼在) |
+|---|---|---|
+| 2 `.dev/pipeline.json` | `repo/pipeline.json` | `machine-init.md:98`(`R2 的站別、R3 的票號` / gitignored);本票 §十三之三 `repo` 桶 |
+| 4 `.dev/test-runs.jsonl` | `repo/test-runs.jsonl` | `machine-init.md:100`(`**R3 的紅燈紀錄**`) |
+| 5 `.cache/mount-check.json` | `repo/mount-check.json` | `machine-init.md:101`(`R4 的掛載快取`) |
+| **10** `.dev/intercepts-*.jsonl` | `repo/intercepts-2026-08.jsonl` + `repo/intercepts-2026-09.jsonl`(**一族兩檔**) | `machine-init.md:106`(`**R7 enforce 側的攔截紀錄**(票 49)`)、`:108`(`**第 10 是一族檔案,不是一個檔**`)、`:116`(`**換機器時複製整族**`) |
+| 6 `~/.claude/shadow-clamp.txt` | `human/shadow-clamp.txt` | `.agents/user-layer-manifest.txt:62-63`(`不帶 `!`:內容是一行 `SHADOW_MAX=<日期>`,兩台機器相同` → `shadow-clamp.txt human`) |
+| 7 `~/.claude/g1-protected.txt` | `human/g1-protected.txt`(`human!`) | `.agents/user-layer-manifest.txt:54-61`(`這兩個檔在 G1 保護清單裡,第一級無豁免、不分讀寫 —— 腳本去讀就會被擋。`) |
+| 8 `~/.claude/leak-patterns.local.txt` | `userlayer/leak-patterns.local.txt`(**`age` 桶,密文**) | `.agents/user-layer-manifest.txt:51`(`leak-patterns.local.txt         age!`);本票 §十三之三 的密文警告 |
+| 9 `~/.claude/upstream-roots.txt` | `userlayer/upstream-roots.txt` | `machine-init.md:105`(`**R3 provenance 的上游指標**`);`.agents/user-layer-manifest.txt:34`(`upstream-roots.txt              export`) |
+| **11**(清單自己) | `README.md` | 本票 §零(十項 → 十一項)、§十三之三(`(基準本身)` 那一列) |
+
+#### 乙、**只在十一項裡 —— 2 項**
+
+| # | 檔 | 出處(它為什麼不在 17 檔裡) |
+|---|---|---|
+| 1 | `.agents/legacy-no-redlight.txt` | `machine-init.md:97`(`**已進版控**(票 54 前置 `20859ce`)—— **不需手動複製**`);`:194`(`**改成「已進版控 · 不需手動複製」,而那一列保留。**`) |
+| 3 | `.dev/shadow.json` | `machine-init.md:99`(`🔴 本項刻意不存在,見下`)、`:204`(`實查(2026-08-28):`.dev/shadow.json` **不存在**。**這是對的,要保持。**`)。本票 §二 對它另有要求:`**⚠ `shadow.json` 那一項必須能表達「刻意不存在」**` |
+
+#### 丙、**只在 17 檔裡 —— 7 檔**
+
+| 檔 | 桶 | 出處(它為什麼在;以及為什麼不在十一項裡) |
+|---|---|---|
+| `shadow-baselines/shadow-log-baseline-20260813.jsonl` | `baseline` | 本票 §十三之三 `baseline` 桶;`docs/handover/2026-09-11.md:224`(`**它們是「當時量到什麼」的原件。** 9/15 的誤擋率評估要拿它們當基準`) |
+| `…-20260813b.jsonl` | `baseline` | 同上(`handover:216-218` 三檔並列) |
+| `…-20260813c.jsonl` | `baseline` | 同上。**為什麼不在十一項裡**:`docs/audits/2026-08-28-f110-inventory.md:212` 逐字 `它們正確地不在控制檔清單上,**也因此沒有任何清單在管它們**` |
+| `userlayer/settings.json` | `export!` | `.agents/user-layer-manifest.txt:35-38`(`G1 掛載寫的是**絕對路徑**…原樣匯入 = 掛載指向一個不存在的路徑 = **G1 整層靜默失效**`) |
+| `userlayer/commands/finmind.md` | `export` | `.agents/user-layer-manifest.txt:39`(`commands/                       export`)—— **目錄前綴涵蓋,該檔本身沒有獨立一行** |
+| `userlayer/age-recipient.txt` | `export` | `.agents/user-layer-manifest.txt:40-43`(`# age 公鑰(recipient)。**公鑰不是祕密**…新機器要加密自己的匯出時需要它。`) |
+| `manifest.json` | (基準本身) | 本票 §十三之三(`README 給人讀,manifest 給驗收腳本讀`)、§十 的「還原時的順序」第 2 步 |
+
+#### 核對
+
+`10 檔(甲) + 7 檔(丙) = 17 檔` ✓(與 §十三之三 的 `17 檔` 相符)
+`9 項(甲) + 2 項(乙) = 11 項` ✓
+
+**這兩行是核對,不是論證** —— 它只證明我沒有漏掉或重複計算,
+**不證明任何一項的歸屬是對的**。歸屬要一項一項看上表的出處欄。
+
+---
+
 ## ✅ 十四、**2026-09-03 匯出被拒:四項未分類 → 裁 `never`**
 
 `user_layer` 的匯出撞到 `plan_export` 的未分類拒絕(票 15 那條:
