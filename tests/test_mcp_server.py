@@ -36,6 +36,7 @@ root 從 `claude_desktop_config.json` 的 args 進來(裁 6,repo 內不存路徑
 
 import ast
 import io
+import json
 import os
 import pathlib
 import subprocess
@@ -259,6 +260,42 @@ class TestSubprocessIsPinned:
         const_name = call.args[0].elts[1].id
         val = getattr(mcp_server, const_name)
         assert os.path.abspath(str(val)) == os.path.abspath(str(STATUS_PY))
+
+    def test_stdin_and_timeout_are_pinned(self):
+        """**kwargs 也要釘,不只 argv**(2026-09-03 驗收失敗)。
+
+        ## 為什麼這一條原本不存在,而它的缺席是致命的
+
+        紅燈②本來只釘 `argv` 前綴。而現場死掉的原因**不在 argv 裡** ——
+        是缺一個 `stdin=subprocess.DEVNULL`:在 MCP stdio server 底下,
+        沒有重導向 stdin 的子程序會連帶繼承 server 與客戶端之間那對管線,
+        於是 `subprocess.run` **等不到結束**。
+
+        實測(scratchpad 最小 FastMCP server,從 server 行程內部計時):
+          子程序只是 `python -c "print('hi')"`,stdin 繼承 -> 卡到拆線
+          客戶端逾時 20s -> 子程序記到 20.02s;逾時 40s -> 40.03s
+          **是跟著拆線才回來的,不是慢** —— 沒有逾時就永遠不回來
+          同一支 server 加 `stdin=DEVNULL` -> 1.03s
+
+        ## `timeout` 是第二條,不是同一條
+
+        缺 `stdin` 是這一次的成因;**缺 `timeout` 是它變成「永遠等」的原因**。
+        修了 stdin 之後,下一個未知的阻塞仍然沒有上限。
+        兩件事分開釘,因為它們各自失效。
+        """
+        call = self._subprocess_calls()[0]
+        kw = {k.arg: k.value for k in call.keywords}
+
+        assert "stdin" in kw, u"subprocess.run 必須明寫 stdin —— 這是死鎖的成因"
+        v = kw["stdin"]
+        assert (isinstance(v, ast.Attribute) and v.attr == "DEVNULL"
+                and isinstance(v.value, ast.Name) and v.value.id == "subprocess"), (
+            u"stdin 必須是 subprocess.DEVNULL,實際 %s" % ast.dump(v)[:100])
+
+        assert "timeout" in kw, u"subprocess.run 必須明寫 timeout —— 否則阻塞沒有上限"
+        t = kw["timeout"]
+        assert isinstance(t, ast.Constant) and isinstance(t.value, int), (
+            u"timeout 必須是整數字面(算得出來的上限),實際 %s" % ast.dump(t)[:100])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -521,3 +558,176 @@ class TestServerDoesNotImportGate:
                                     or node.module.startswith("gate.")):
                     bad.append((node.lineno, node.module))
         assert bad == [], u"原始碼裡 import 了 gate:%r" % (bad,)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ⑥ 真的起一支 stdio server,走協定叫一次(2026-09-03 驗收失敗補上)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 🔴 **這一條為什麼非有不可。**
+#
+# 2026-09-03 的驗收失敗時,全套 1232 支測試**全綠**,而 Claude Desktop 那一側
+# `status_all` 完全叫不動(兩次 timed out)。兩件事不衝突 ——
+# **上面每一條測試都是在 pytest 的行程裡直接呼叫那個函式**,
+# 而 pytest 的 stdin 不是 MCP 管線,所以那個死鎖在測試環境裡**不會發生**。
+#
+# 紅燈④(逐位元組相同)是最貼近的一條,而它也是 in-process 的 ——
+# 它證的是「這個函式回的字串對」,不是「這支 server 在協定上活著」。
+#
+# **判準:測試造的行程環境,證不出真實行程環境裡的事。**
+# 這與「材料要從別的地方來」是同一句話,只是換到行程模型這一面:
+# 材料(行程環境)若由測試自己造,它只能證明自洽。
+# 唯一的出路是**真的走一次協定** —— 這一條就是那個出路。
+
+_LIVE_TIMEOUT = 30          # 客戶端逾時
+_LIVE_BUDGET = 15           # 斷言的上限:15s 內要回
+
+
+def _live_call(tmp_path, root, tool, kwargs, errlog_path):
+    """起一個真的 stdio server,叫一次 `tool`,回 (耗時, 文字, isError)。
+
+    **在子行程裡跑客戶端**,不在 pytest 的事件迴圈裡 —— pytest 沒有
+    `anyio`/`asyncio` 的 session fixture,而在測試裡自己 `asyncio.run()`
+    會與別的 plugin 打架;更要緊的是:**客戶端與被測 server 同處一個
+    行程會讓「行程環境」這個變因回到測試手上**,而那正是本節要避開的東西。
+    """
+    driver = tmp_path / "live_driver.py"
+    with io.open(str(driver), "w", encoding="utf-8") as f:
+        f.write(_LIVE_DRIVER_SRC)
+
+    argv = [sys.executable, str(driver), str(SERVER_PY), root,
+            tool, json.dumps(kwargs), str(errlog_path), str(_LIVE_TIMEOUT)]
+    proc = subprocess.run(argv, capture_output=True,
+                          stdin=subprocess.DEVNULL, timeout=_LIVE_TIMEOUT + 30)
+    raw = proc.stdout.decode("utf-8", "replace")
+    try:
+        payload = json.loads(raw.split(u"---RESULT---", 1)[1])
+    except Exception:
+        raise AssertionError(
+            u"驅動器沒有吐出結果。rc=%d\n--- stdout ---\n%s\n--- stderr ---\n%s"
+            % (proc.returncode, raw[-2000:],
+               proc.stderr.decode("utf-8", "replace")[-2000:]))
+    return payload
+
+
+_LIVE_DRIVER_SRC = u'''# -*- coding: utf-8 -*-
+"""測試用的一次性 MCP 客戶端。argv:
+   <server.py> <root> <tool> <kwargs-json> <errlog> <timeout>
+結果以 ---RESULT--- 後接一行 JSON 印到 stdout。
+"""
+import asyncio, io, json, sys, time
+
+server_py, root, tool, kwargs_json, errlog, timeout = sys.argv[1:7]
+kwargs = json.loads(kwargs_json)
+timeout = float(timeout)
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+
+async def go():
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[server_py, "--root", root],
+        cwd="C:\\\\" if sys.platform == "win32" else "/",
+    )
+    out = {"ok": False, "elapsed": None, "text": "", "isError": None, "why": ""}
+    t0 = time.time()
+    try:
+        with io.open(errlog, "w", encoding="utf-8") as errf:
+            async with stdio_client(params, errlog=errf) as (r, w):
+                async with ClientSession(r, w) as session:
+                    await session.initialize()
+                    names = sorted(t.name for t in (await session.list_tools()).tools)
+                    out["tools"] = names
+                    t1 = time.time()
+                    res = await asyncio.wait_for(
+                        session.call_tool(tool, kwargs), timeout=timeout)
+                    out["elapsed"] = time.time() - t1
+                    out["text"] = "".join(getattr(c, "text", "") for c in res.content)
+                    out["isError"] = bool(res.isError)
+                    out["ok"] = True
+    except asyncio.TimeoutError:
+        out["why"] = "TimeoutError after %.1fs" % (time.time() - t0)
+    except Exception as e:
+        out["why"] = "%s: %s" % (type(e).__name__, str(e)[:300])
+    return out
+
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+result = asyncio.run(go())
+sys.stdout.write("---RESULT---" + json.dumps(result, ensure_ascii=False))
+'''
+
+
+class TestLiveStdioServer:
+    """走真的 stdio 協定叫一次。**這是唯一照得出行程層死鎖的那一條。**"""
+
+    def _errlog(self, tmp_path, tag):
+        return tmp_path / ("server_%s.stderr.log" % tag)
+
+    def _dump(self, path):
+        if not os.path.exists(str(path)):
+            return u"(stderr 檔不存在)"
+        body = io.open(str(path), encoding="utf-8", errors="replace").read()
+        return body if body.strip() else u"(空 —— 0 bytes)"
+
+    def test_status_all_returns_over_the_wire(self, tmp_path):
+        """`status_all` 要在 15s 內經由協定回來,而且內容是真的。
+
+        ⚠ **這一條紅的樣子是「逾時」,不是「值不對」** ——
+        而逾時在報告裡讀起來像「機器慢」。它不是:同一份 `status.py`
+        直跑是 1s 等級(紅燈④已經證過),差別只在**誰是父行程**。
+        """
+        root = _make_root(tmp_path)
+        errlog = self._errlog(tmp_path, "statusall")
+        r = _live_call(tmp_path, root, u"status_all", {}, errlog)
+
+        assert r["ok"], (
+            u"status_all 沒有經由協定回來:%s\n--- server stderr ---\n%s"
+            % (r["why"], self._dump(errlog)))
+        assert set(r.get("tools") or []) == EXPECTED_TOOLS, r.get("tools")
+        assert r["elapsed"] < _LIVE_BUDGET, (
+            u"status_all 走協定花了 %.2fs,超過 %ds 上限 —— 同一份 status.py "
+            u"直跑是 1s 等級,差別只在誰是父行程\n--- server stderr ---\n%s"
+            % (r["elapsed"], _LIVE_BUDGET, self._dump(errlog)))
+        assert r["isError"] is False, r["text"][:400]
+        assert r["text"].startswith(u"=== Repository ==="), (
+            u"回來的不是 status 的輸出,前 200 字:%r" % r["text"][:200])
+
+    def test_ticket_over_the_wire_is_the_negative_control(self, tmp_path):
+        """**負控** —— `ticket` 走同一條線 1s 內回。
+
+        它證的是**這條線本身是通的**:沒有這一支的話,
+        上面那條逾時會有兩種讀法(「server 壞了」與「這支工具壞了」),
+        而那兩種的處置完全不同。`ticket` 不開子程序,所以它一直是綠的 ——
+        **綠的那一支正是把成因夾出來的那一支。**
+        """
+        root = _make_root(tmp_path, ticket_files={u"01-first.md": u"# 票 01\n\n內文甲\n"})
+        errlog = self._errlog(tmp_path, "ticket")
+        r = _live_call(tmp_path, root, u"ticket", {"n": "1"}, errlog)
+
+        assert r["ok"], (
+            u"ticket 沒有經由協定回來:%s\n--- server stderr ---\n%s"
+            % (r["why"], self._dump(errlog)))
+        assert r["elapsed"] < 1.0, u"ticket 走協定花了 %.2fs" % r["elapsed"]
+        assert u"內文甲" in r["text"], r["text"][:200]
+
+    def test_friction_over_the_wire_is_the_negative_control(self, tmp_path):
+        """**負控之二** —— `friction` 同上,也不開子程序。"""
+        root = _make_root(tmp_path)
+        d = pathlib.Path(root) / "docs" / "agents"
+        d.mkdir(parents=True)
+        with io.open(str(d / "friction-log.md"), "w", encoding="utf-8") as f:
+            f.write(_FRICTION_FIXTURE)
+        errlog = self._errlog(tmp_path, "friction")
+        r = _live_call(tmp_path, root, u"friction", {"code": "F-101"}, errlog)
+
+        assert r["ok"], (
+            u"friction 沒有經由協定回來:%s\n--- server stderr ---\n%s"
+            % (r["why"], self._dump(errlog)))
+        assert r["elapsed"] < 1.0, u"friction 走協定花了 %.2fs" % r["elapsed"]
+        assert u"乙的內文" in r["text"], r["text"][:200]
