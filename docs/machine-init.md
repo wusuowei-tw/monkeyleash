@@ -354,7 +354,9 @@ Get-FileHash $src -Algorithm SHA256 | Select-Object -ExpandProperty Hash
 1. 兩檔 sha256 相同
 2. `python -W error::DeprecationWarning` 匯入乾淨(`~/.claude/hooks/` 那一支)
 3. `PYTHONIOENCODING=utf-8 python .claude/portable/g1_verify.py`(**不帶參數 = 驗正式檔**)全綠
-4. **活體探針一次** —— 對一條含保護路徑的唯讀指令試一次,要看到 `[G1/保護清單]`
+4. **活體探針一次** —— 對一條含保護路徑的唯讀指令試一次,要看到 `[G1/保護清單]`。
+   **🔴 探針一律用 `~/` 形態**(例:對清單自己下一條唯讀指令,路徑寫成 `~/.claude/g1-protected.txt`),
+   **不要用完整路徑** —— 理由見下
 
 > **第 4 項不能被第 3 項取代。** `g1_verify` 自己 `subprocess` 起 guard,**不經 `settings.json` 的掛載** ——
 > 它證明的是「如果被呼叫,它會擋」,證明不了「它會被呼叫」。這與本檔第 1、5 項「檔案都在也可能沒生效」是同一句話。
@@ -362,6 +364,23 @@ Get-FileHash $src -Algorithm SHA256 | Select-Object -ExpandProperty Hash
 > `PYTHONIOENCODING=utf-8` 不是可選的:`g1_verify.py` 有一行 `print("  無 ✓")`,
 > 在 cp950 主控台會 `UnicodeEncodeError` 崩掉(票 62,已立案未修)——
 > 你會看到一個編碼錯誤,而不是驗收結果。
+
+> ### 🔴 **為什麼第 4 項的探針一定要用 `~/` 形態**(2026-09-03 補)
+>
+> **因為在這台機器上,`~/` 形態沒有任何其他東西在驗。** 三條各自獨立,缺口疊在一起:
+>
+> | 哪一層 | 為什麼碰不到 `~/` 形態 |
+> |---|---|
+> | **第 3 項的 `g1_verify`** | 它的探針由 `as_probe()` 產生,而那個函式用**條目原文**造指令(`.claude/portable/g1_verify.py:61-63`:`touch "%s\g1_verify_probe.txt" % as_backslash(...)`),**不走 `variants()`** —— 清單裡寫的是完整路徑,產出的探針就是完整路徑 |
+> | **`KNOWN_GAPS`** | `~ 寫法(清單自己)` 那一條 **2026-08-31 已移出**(票 88 修好後,見該檔 :137-149)⇒ 那一桶現在也不再碰它 |
+> | **`tests/test_g1_guard.py` 的 tilde 四條** | 它們 `importlib` 載入的是 **repo 內**那份 `.claude/portable/g1_guard.py`(該檔 :31 `SRC = ROOT / ".claude" / "portable" / "g1_guard.py"`),**不是 `~/.claude/hooks/` 那份正在守的** |
+>
+> **⇒ 三層都證不到部署層的 `~/` 形態,而第 4 項是唯一碰得到的那一發。**
+> 用完整路徑跑探針的話,它驗到的是**修票 88 之前就已經會擋**的那一種寫法 ——
+> **綠燈照樣出現,而新機器上「`~/` 認不認得」這件事一次都沒有被問過。**
+>
+> 先例在票 88 §十一 AC-1 ③:2026-08-31 桌機那一發跑的正是
+> `ls ~/.claude/g1-protected.txt`,而它由 **Jeff 剛蓋上去的那一份**擋下。
 
 > ### 🔴 **第 2、3、4、6 項在新機器上是「第一次建檔」 ——
 > ### 建檔前先讀本節末的「一之零」:用什麼指令建,決定它們有沒有 BOM。**
