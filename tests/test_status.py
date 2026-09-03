@@ -737,3 +737,65 @@ class TestSyncWaterline:
         assert u"個不同 commit" not in wl, wl
 
         assert _value_of(out, u"[2] behind") == u"1 刀", out
+
+
+class TestFindTicketFileHasABoundary:
+    """framework-updates/101 裁 4 前半:票號比對要帶邊界(號碼後接 `-`)。
+
+    **為什麼測試放在這裡而不是只放 MCP 那一側**:修的是 `status.py` 的函式,
+    而**下一個呼叫者不會經過 MCP** —— CLI 的 Ticket 區段現在就在用它。
+    測試要放在被修的東西旁邊。
+
+    ⚠ 三格裡只有中間那格是紅的。另外兩格是**負控**:
+    現行行為就是綠的,修法**不得把它們弄紅**。
+    只寫紅的那一格的話,一個「一律回 None」的實作會通過。
+
+    ⚠ 補零(`1` -> `01`)**不在這一層**。`_find_ticket_file("1")` 回 `None`
+    是**正確行為** —— 底層只答「這個字串有沒有邊界命中」,
+    補零是呼叫者對本 repo 命名慣例的知識(下游 repo 不見得補零)。
+    """
+
+    def _dir_with(self, tmp_path, feature=u"testfeat"):
+        root = tmp_path / "repo"
+        d = root / "docs" / "tickets" / feature
+        d.mkdir(parents=True)
+        for name in (u"10-a.md", u"100-b.md"):
+            with io.open(str(d / name), "w", encoding="utf-8") as f:
+                f.write(u"# %s\n" % name)
+        # `_ticket_dirs` 走 `gate.TICKET_DIRS`,所以要一份真 gate。
+        (root / ".claude" / "hooks").mkdir(parents=True)
+        shutil.copy2(str(REAL_GATE), str(root / ".claude" / "hooks" / "gate.py"))
+        return str(root), status.load_gate(str(root)), feature
+
+    def test_ten_still_finds_ten(self, tmp_path):
+        """負控 —— 現行就綠,修法不得弄紅。
+
+        字典序意外讓這一格現在就對(`-` 0x2D < `0` 0x30,
+        所以 `10-a.md` 排在 `100-b.md` 前面)。**綠的原因不是程式碼守住了它**,
+        所以它留在這裡:邊界改成 `+"-"` 之後,綠的原因才變成正確的那個。
+        """
+        root, gate, feature = self._dir_with(tmp_path)
+        got = status._find_ticket_file(root, gate, feature, u"10")
+        assert got is not None and os.path.basename(got) == u"10-a.md", got
+
+    def test_one_finds_nothing(self, tmp_path):
+        """**紅的那一條** —— 現行回 `10-a.md`。
+
+        真實資料上這一族有九筆(票 101 第四節實測):
+        `1` -> 票 10、`2` -> 票 20、…、`9` -> 票 90。
+        回錯一份票比回不出來糟得多:回不出來的人會再查,
+        拿到一份**看起來對**的票的人不會。
+        """
+        root, gate, feature = self._dir_with(tmp_path)
+        got = status._find_ticket_file(root, gate, feature, u"1")
+        assert got is None, u"票號 1 不該命中 %r" % (got,)
+
+    def test_hundred_still_finds_hundred(self, tmp_path):
+        """負控 —— 邊界改成 `+"-"` 之後,長號仍要中。
+
+        沒有這一支的話,一個把邊界寫成「號碼後接 `-` **且長度相等**」
+        之類的實作會讓上面兩格都綠,而把 `100` 弄丟。
+        """
+        root, gate, feature = self._dir_with(tmp_path)
+        got = status._find_ticket_file(root, gate, feature, u"100")
+        assert got is not None and os.path.basename(got) == u"100-b.md", got
