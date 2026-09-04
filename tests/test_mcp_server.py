@@ -20,7 +20,7 @@ root 從 `claude_desktop_config.json` 的 args 進來(裁 6,repo 內不存路徑
 
 ## 五條紅燈各守什麼
 
-    ① 工具清單恰三支      —— 守裁 A 的範圍;多長出第四支要紅
+    ① 工具清單恰四支      —— 守範圍;多長出第五支要紅(票 105 前為三支)
     ② AST 無寫入 + 一處子程序 —— 守裁 3 與第六節第一層
     ③ 輸入先驗格式,不讀檔  —— 守裁 4 / 裁 F
     ④ stdout 逐位元組相同  —— 守裁 B(原樣回傳)
@@ -54,7 +54,7 @@ sys.path.insert(0, str(PORTABLE))
 import mcp_server  # noqa: E402
 
 
-EXPECTED_TOOLS = {u"status_all", u"ticket", u"friction"}
+EXPECTED_TOOLS = {u"status_all", u"ticket", u"friction", u"latest_report"}
 
 
 def _drop_generated(blob):
@@ -108,17 +108,20 @@ def _make_root(tmp_path, name=u"repo", stage=u"implement", ticket=u"101",
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ① 工具清單恰三支
+# ① 工具清單恰四支
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestToolInventory:
-    """裁 A:範圍鎖死在三支唯讀工具。
+    """裁 A:範圍鎖死在唯讀工具。**票 105 從三支擴到四支**(加 `latest_report`)。
 
-    **用相等,不用包含。** 包含擋不住「多長出第四支」,
+    **用相等,不用包含。** 包含擋不住「多長出下一支」,
     而多出來的那支正是要擋的東西 —— 尤其是一支能寫的。
+
+    ⚠ **票 105 擴充時改的是 `EXPECTED_TOOLS` 這個常數,不是把 `==` 放寬成 `<=`。**
+    放寬的話這條就再也擋不住任何新增,而下面那條負控正是為了防那個放寬。
     """
 
-    def test_exactly_three_tools(self):
+    def test_exactly_four_tools(self):
         names = {t.name for t in mcp_server.mcp._tool_manager.list_tools()}
         assert names == EXPECTED_TOOLS, (
             u"工具清單必須恰好是 %s,實際 %s" % (sorted(EXPECTED_TOOLS), sorted(names)))
@@ -731,3 +734,267 @@ class TestLiveStdioServer:
             % (r["why"], self._dump(errlog)))
         assert r["elapsed"] < 1.0, u"friction 走協定花了 %.2fs" % r["elapsed"]
         assert u"乙的內文" in r["text"], r["text"][:200]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ⑦ 票 105:latest_report —— 回報回程
+#
+# **本組是真的 TDD**,不是票 102–104 那種特徵化測試:
+# `latest_report` 今天不存在,所以下面每一條在刀二都必須**真的紅**,
+# 而紅的樣子已經先寫在票面第四節。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_REPORT_ONE = (
+    u"## 第一段【給裁決者】\n"
+    u"甲段內文。\n"
+    u"\n"
+    u"## 第二段【給裁決助手】\n"
+    u"乙段內文。\n"
+)
+
+_REPORT_THREE_LEVEL = (
+    u"### 第一段【給裁決者】\n"
+    u"甲段內文。\n"
+    u"\n"
+    u"### 第二段【給裁決助手】\n"
+    u"乙段內文。\n"
+)
+
+_REPORT_NO_HEADINGS = u"這份回報沒有段落標題,只有一段散文。\n"
+
+
+def _with_reports(root, files):
+    """在 root 底下造 `.dev/reports/` 並寫入 {檔名: 內文}。
+
+    **不建目錄**就代表「目錄不存在」那一種空 —— 三種空要分得出來,
+    所以造法也要分得出來(`files=None` vs `files={}`)。
+    """
+    d = os.path.join(root, ".dev", "reports")
+    if files is None:
+        return d
+    os.makedirs(d)
+    for name, body in files.items():
+        with io.open(os.path.join(d, name), "w", encoding="utf-8") as f:
+            f.write(body)
+    return d
+
+
+class TestLatestReportPart:
+    """紅燈 #2:`part` 三值各回對段落。"""
+
+    def _root(self, tmp_path, body=_REPORT_ONE):
+        root = _make_root(tmp_path)
+        _with_reports(root, {u"2026-09-04T120000Z-ticket-105.md": body})
+        mcp_server.set_roots([root])
+        return root
+
+    def test_part_1_returns_only_the_first_section(self, tmp_path):
+        self._root(tmp_path)
+        out = mcp_server.latest_report(u"1")
+        assert u"甲段內文" in out, out[:200]
+        assert u"乙段內文" not in out, u"part=1 卻夾帶了第二段:%r" % out[:200]
+
+    def test_part_2_returns_only_the_second_section(self, tmp_path):
+        self._root(tmp_path)
+        out = mcp_server.latest_report(u"2")
+        assert u"乙段內文" in out, out[:200]
+        assert u"甲段內文" not in out, u"part=2 卻夾帶了第一段:%r" % out[:200]
+
+    def test_part_all_returns_both(self, tmp_path):
+        self._root(tmp_path)
+        out = mcp_server.latest_report(u"all")
+        assert u"甲段內文" in out and u"乙段內文" in out, out[:200]
+
+    def test_the_default_is_part_1(self, tmp_path):
+        """**預設值是介面的一部分。**
+
+        裁決寫的是「預設 1」——`latest_report()` 不給參數時要等同 `part="1"`,
+        而一個預設成 `all` 的實作在三值測試裡**全部會綠**。
+        """
+        self._root(tmp_path)
+        assert mcp_server.latest_report() == mcp_server.latest_report(u"1")
+
+
+class TestLatestReportBadPartNeverReadsAFile:
+    """紅燈 #3:非法 `part` 先驗格式,**一個檔都不讀**。
+
+    形狀抄 `TestBadInputNeverReadsAFile` —— 判準做在 `io.open` 的呼叫次數上,
+    不做在回傳值上:一個先讀了再判的實作也會回錯字串,而**從回傳值上看不出來**。
+    """
+
+    @pytest.fixture
+    def no_open(self, monkeypatch):
+        calls = []
+        real = io.open
+
+        def boom(*a, **kw):
+            calls.append(a[0] if a else None)
+            return real(*a, **kw)
+
+        monkeypatch.setattr(io, "open", boom)
+        return calls
+
+    @pytest.mark.parametrize("bad", [u"3", u"0", u"", u"ALL", u"1;rm", u"first", u"-1"])
+    def test_bad_part_returns_error_and_opens_nothing(self, bad, no_open, tmp_path):
+        root = _make_root(tmp_path)
+        _with_reports(root, {u"2026-09-04T120000Z-ticket-105.md": _REPORT_ONE})
+        mcp_server.set_roots([root])
+        # 造 tmp repo 的那些 io.open 要清掉,否則紅會指向錯的方向
+        del no_open[:]
+        out = mcp_server.latest_report(bad)
+        assert u"未記錄" in out, u"不合法 part %r 應回未記錄,實際 %r" % (bad, out[:120])
+        assert no_open == [], u"不合法 part %r 仍開了檔:%r" % (bad, no_open)
+
+
+class TestLatestReportThreeKindsOfEmpty:
+    """紅燈 #4:三種空**各回不同**的「未記錄(…)」。
+
+    `F-155`:回空字串的話,「沒有目錄」「目錄是空的」「讀不到那個檔」
+    在 Desktop 那一側**逐字相同**,而三者的處置完全不同 ——
+    去建目錄 / 去問這輪為什麼沒寫 / 去查權限或編碼。
+    """
+
+    def test_no_reports_dir(self, tmp_path):
+        root = _make_root(tmp_path)
+        _with_reports(root, None)          # 刻意不建
+        mcp_server.set_roots([root])
+        out = mcp_server.latest_report(u"1")
+        assert u"未記錄" in out, out[:200]
+        assert u"reports" in out, u"沒說出是哪個目錄不存在:%r" % out[:200]
+
+    def test_reports_dir_is_empty(self, tmp_path):
+        root = _make_root(tmp_path)
+        _with_reports(root, {})            # 建了但空
+        mcp_server.set_roots([root])
+        out = mcp_server.latest_report(u"1")
+        assert u"未記錄" in out, out[:200]
+
+    def test_the_three_empties_say_different_things(self, tmp_path):
+        """**核心那一條**:三句話兩兩不同。
+
+        少了它,三個分支各自回「未記錄」也會讓上面兩條綠 ——
+        而那正是本組要擋的東西。
+        """
+        r1 = _make_root(tmp_path, name=u"none")
+        _with_reports(r1, None)
+        mcp_server.set_roots([r1])
+        a = mcp_server.latest_report(u"1")
+
+        r2 = _make_root(tmp_path, name=u"empty")
+        _with_reports(r2, {})
+        mcp_server.set_roots([r2])
+        b = mcp_server.latest_report(u"1")
+
+        r3 = _make_root(tmp_path, name=u"unreadable")
+        d = _with_reports(r3, {u"2026-09-04T120000Z-x.md": u"x"})
+        os.remove(os.path.join(d, u"2026-09-04T120000Z-x.md"))
+        os.mkdir(os.path.join(d, u"2026-09-04T120000Z-x.md"))   # 同名目錄 -> 讀不到
+        mcp_server.set_roots([r3])
+        c = mcp_server.latest_report(u"1")
+
+        assert a != b and b != c and a != c, (
+            u"三種空回了相同的字串,分不出來:\n沒目錄=%r\n空目錄=%r\n讀不到=%r"
+            % (a[:80], b[:80], c[:80]))
+
+
+class TestLatestReportPicksByFilename:
+    """紅燈 #5:**字典序**取最新,不看 mtime。
+
+    裁三:mtime 的失敗是無聲的(`git checkout` / clone / 解壓縮會重設它,`F-135`)。
+    所以這裡刻意讓**字典序最大的那份 mtime 最舊** ——
+    兩個判準給出相反的答案,才分得出實作用的是哪一個。
+    """
+
+    def test_picks_the_lexicographically_last_even_when_its_mtime_is_oldest(
+            self, tmp_path):
+        root = _make_root(tmp_path)
+        d = _with_reports(root, {
+            u"2026-12-31T235959Z-ticket-105.md":
+                u"## 第一段【給裁決者】\n新的那份。\n",
+            u"2026-01-01T000000Z-ticket-105.md":
+                u"## 第一段【給裁決者】\n舊的那份。\n",
+        })
+        # 讓字典序最大的那份 **mtime 最舊**
+        old = os.path.join(d, u"2026-12-31T235959Z-ticket-105.md")
+        new = os.path.join(d, u"2026-01-01T000000Z-ticket-105.md")
+        os.utime(old, (1000000, 1000000))
+        os.utime(new, (2000000, 2000000))
+
+        mcp_server.set_roots([root])
+        out = mcp_server.latest_report(u"1")
+        assert u"新的那份" in out, (
+            u"挑錯了 —— 用 mtime 會挑到「舊的那份」。實際回傳:%r" % out[:200])
+
+
+class TestLatestReportTruncates:
+    """紅燈 #6:`part="all"` 超過上限要截斷,**且標記帶真數字**。"""
+
+    def test_all_is_capped_and_marked(self, tmp_path):
+        body = (u"## 第一段【給裁決者】\n" + u"甲" * 30000 +
+                u"\n## 第二段【給裁決助手】\n" + u"乙" * 30000 + u"\n")
+        root = _make_root(tmp_path)
+        _with_reports(root, {u"2026-09-04T120000Z-ticket-105.md": body})
+        mcp_server.set_roots([root])
+
+        out = mcp_server.latest_report(u"all")
+        assert u"[截斷:" in out, u"超長內容沒有截斷標記:%r" % out[-200:]
+        assert str(len(body)) in out, (
+            u"截斷標記沒有寫出原長度 %d:%r" % (len(body), out[-200:]))
+        assert u"40000" in out, u"截斷標記沒有寫出回傳長度:%r" % out[-200:]
+
+    def test_a_short_report_is_not_marked(self, tmp_path):
+        """負控:沒超過上限就不得出現截斷標記。
+
+        少了它,一個「無條件加標記」的實作會讓上面那條綠 ——
+        而那會讓每一份回報都看起來像被截斷過。
+        """
+        root = _make_root(tmp_path)
+        _with_reports(root, {u"2026-09-04T120000Z-ticket-105.md": _REPORT_ONE})
+        mcp_server.set_roots([root])
+        assert u"[截斷:" not in mcp_server.latest_report(u"all")
+
+
+class TestLatestReportSplitsBothHeadingLevels:
+    """紅燈 #9:`##` 與 `###` **兩級都要吃**。
+
+    裁一:`CLAUDE.md:329/:343` 寫 `###`,而實際產出的回報一直是 `##`。
+    一個照 `CLAUDE.md` 寫死 `^### ` 的切分器,**對今天全部的回報一條都切不到**
+    —— 而它會回「未切分」,看起來像格式壞了,實際是切分器抄錯了層級。
+    """
+
+    @pytest.mark.parametrize("body,tag", [
+        (_REPORT_ONE, u"##"),
+        (_REPORT_THREE_LEVEL, u"###"),
+    ])
+    def test_both_levels_split(self, body, tag, tmp_path):
+        root = _make_root(tmp_path, name=u"r" + str(len(tag)))
+        _with_reports(root, {u"2026-09-04T120000Z-ticket-105.md": body})
+        mcp_server.set_roots([root])
+
+        one = mcp_server.latest_report(u"1")
+        assert u"甲段內文" in one and u"乙段內文" not in one, (
+            u"%s 級標題切不出第一段:%r" % (tag, one[:200]))
+        two = mcp_server.latest_report(u"2")
+        assert u"乙段內文" in two and u"甲段內文" not in two, (
+            u"%s 級標題切不出第二段:%r" % (tag, two[:200]))
+
+
+class TestLatestReportFallsBackToWhole:
+    """紅燈 #10:切不到 → 回**整份** + `[未切分:找不到段落標題]`,**不得回空**。
+
+    回空的話,「這份回報沒有分段」與「這個 repo 沒有回報檔」
+    在 Desktop 那一側**逐字相同**(`F-155`)。
+    """
+
+    def _out(self, tmp_path, part):
+        root = _make_root(tmp_path, name=u"nb" + part)
+        _with_reports(root, {u"2026-09-04T120000Z-ticket-105.md": _REPORT_NO_HEADINGS})
+        mcp_server.set_roots([root])
+        return mcp_server.latest_report(part)
+
+    @pytest.mark.parametrize("part", [u"1", u"2"])
+    def test_unsplittable_returns_the_whole_file_with_a_marker(self, part, tmp_path):
+        out = self._out(tmp_path, part)
+        assert u"[未切分:找不到段落標題]" in out, u"沒有標記:%r" % out[:200]
+        assert u"只有一段散文" in out, u"沒有回整份:%r" % out[:200]
+        assert out.strip() != u"", u"回了空字串"

@@ -799,3 +799,78 @@ class TestFindTicketFileHasABoundary:
         root, gate, feature = self._dir_with(tmp_path)
         got = status._find_ticket_file(root, gate, feature, u"100")
         assert got is not None and os.path.basename(got) == u"100-b.md", got
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 105 乙段:Evidence 的 `report:` 行
+#
+# **它只印一行,不擋任何東西** —— 票面第六節逐字:
+# 「一個沒有人看的 `status` 輸出,與沒有這一行,效果相同。」
+# 選它的理由是便宜且零誤報,不是它解決了問題。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _reports(root, files):
+    """在 root 底下造 `.dev/reports/`。`files=None` = 目錄不存在。"""
+    d = os.path.join(root, ".dev", "reports")
+    if files is None:
+        return d
+    os.makedirs(d)
+    for name, body in files.items():
+        with io.open(os.path.join(d, name), "w", encoding="utf-8") as f:
+            f.write(body)
+    return d
+
+
+def _report_line(blob):
+    """從 status 輸出取 `report:` 那一行。沒有回 None。
+
+    **錨在行首**,不用 `in` —— 「輸出裡有 report 這個字」與
+    「有一行叫 report:」是兩件事,而票面內文本來就會提到 report。
+    """
+    for ln in blob.splitlines():
+        if ln.startswith(u"report:"):
+            return ln
+    return None
+
+
+class TestEvidenceHasAReportLine:
+    """票 105 乙:Evidence 區段要有 `report:` 一行,三種空各說不同的話。"""
+
+    def test_there_is_a_report_line_at_all(self, tmp_path):
+        root = _make_root(tmp_path)
+        _reports(root, {u"2026-09-04T120000Z-ticket-105.md": u"## 第一段【給裁決者】\nx\n"})
+        line = _report_line(render(root))
+        assert line is not None, u"status 輸出裡沒有 report: 開頭的行"
+
+    def test_the_line_carries_a_source(self, tmp_path):
+        """`_line()` 的 `source` 是必填參數(判準 3)—— 這一行也不例外。"""
+        root = _make_root(tmp_path)
+        _reports(root, {u"2026-09-04T120000Z-ticket-105.md": u"x"})
+        line = _report_line(render(root))
+        assert line is not None and u"(source:" in line, line
+
+    def test_the_line_names_the_latest_file(self, tmp_path):
+        root = _make_root(tmp_path)
+        _reports(root, {
+            u"2026-01-01T000000Z-a.md": u"舊",
+            u"2026-12-31T235959Z-b.md": u"新",
+        })
+        line = _report_line(render(root))
+        assert line is not None and u"2026-12-31T235959Z-b.md" in line, line
+
+    def test_the_three_empties_say_different_things(self, tmp_path):
+        """與 `latest_report` 同一條(裁五「三種空同 ④」)。
+
+        三句話兩兩不同 —— 否則「沒目錄」與「目錄空」在 status 上同形,
+        而那兩者的處置不同:一個要去建,一個要去問這輪為什麼沒寫。
+        """
+        r1 = _make_root(tmp_path / u"none")
+        _reports(r1, None)
+        a = _report_line(render(r1))
+
+        r2 = _make_root(tmp_path / u"empty")
+        _reports(r2, {})
+        b = _report_line(render(r2))
+
+        assert a is not None and b is not None, (a, b)
+        assert a != b, u"沒目錄與空目錄印了相同的一行:%r" % a

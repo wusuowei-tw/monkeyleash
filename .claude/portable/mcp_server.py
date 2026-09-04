@@ -105,6 +105,23 @@ _FRICTION_RE = re.compile(r"^[A-Za-z]+-\d+$")
 # friction 段落的結束條件:**下一個 `^##`**(裁 5)。
 _NEXT_HEADING = re.compile(r"^##")
 
+# 票 105。**`{2,3}` 兩級都吃**(裁一):`CLAUDE.md:329/:343` 的規範寫 `###`,
+# 而實際產出的回報一直是 `##` —— 一個照規範寫死 `^### ` 的切分器,
+# 對今天全部的回報**一條都切不到**,而它會回「未切分」,
+# 看起來像格式壞了,實際是切分器抄錯了層級。
+_SEC1_RE = re.compile(r"^#{2,3}\s*第一段【給裁決者】\s*$")
+_SEC2_RE = re.compile(r"^#{2,3}\s*第二段【給裁決助手】\s*$")
+
+# `part` 是封閉集合,所以用枚舉不用 pattern(`F-158` 的同一條)。
+_PART_VALUES = (u"1", u"2", u"all")
+
+REPORTS_DIRNAME = "reports"
+
+# `part="all"` 的回傳上限(裁二)。其他三支工具**沒有上限** —— 那是候選,不在本票。
+_ALL_MAX_CHARS = 40000
+_TRUNCATED_FMT = u"\n\n[截斷:原 %d 字/回傳前 %d 字]"
+UNSPLIT_MARK = u"[未切分:找不到段落標題]"
+
 _ROOTS = []
 
 
@@ -282,6 +299,90 @@ def friction(code: str) -> str:
             end = j
             break
     return u"\n".join(lines[start:end])
+
+
+def _latest_report_path(root):
+    """`.dev/reports/` 裡**字典序最大**的 `.md`。回 `(路徑, 原因)`。
+
+    **字典序,不看 mtime,也不用 mtime 當備援**(裁三)——
+    兩者的失敗方向相反:檔名排序錯在「有人做了什麼」(看得見),
+    **mtime 錯在「檔案系統做了什麼」**(`git checkout` / clone / 解壓縮會重設它,
+    `F-135`),而後者**完全無聲**。混用兩個判準時,「它們不一致」不會有人發現。
+
+    **三種空各自有不同的原因字串**(`F-155`)—— 回同一句話的話,
+    「沒有目錄」「目錄是空的」「讀不到那個檔」在 Desktop 那一側逐字相同,
+    而三者的處置完全不同。
+    """
+    d = os.path.join(root, ".dev", REPORTS_DIRNAME)
+    if not os.path.isdir(d):
+        return None, u"沒有 .dev/%s/ 目錄 —— 這個 repo 還沒開始寫回報檔" % REPORTS_DIRNAME
+    try:
+        names = sorted(n for n in os.listdir(d) if n.endswith(u".md"))
+    except Exception as e:
+        return None, u"讀不到 .dev/%s/ 目錄(%s)" % (REPORTS_DIRNAME, e)
+    if not names:
+        return None, (u".dev/%s/ 是空的 —— 有目錄代表開過,但這一輪沒有寫"
+                      % REPORTS_DIRNAME)
+    return os.path.join(d, names[-1]), None
+
+
+def _split_sections(text):
+    """切成 `(第一段, 第二段)`。切不到回 `(None, None)`。
+
+    **錨在行首**,不用 `in` —— 回報的內文本來就會提到這兩個標題
+    (本票的票面就提了),用 `in` 會切在引用的地方。
+    """
+    lines = text.splitlines()
+    i1 = i2 = None
+    for i, ln in enumerate(lines):
+        if i1 is None and _SEC1_RE.match(ln):
+            i1 = i
+        elif i2 is None and _SEC2_RE.match(ln):
+            i2 = i
+    if i1 is None or i2 is None or i2 <= i1:
+        return None, None
+    return u"\n".join(lines[i1:i2]), u"\n".join(lines[i2:])
+
+
+@mcp.tool()
+def latest_report(part: str = "1") -> str:
+    """最新一份回報檔。`part`:`1` 第一段(預設)/ `2` 第二段 / `all` 全文。
+
+    回報寫在 `.dev/reports/`(不進版控),檔名 `YYYY-MM-DDTHHMMSSZ-<slug>.md`,
+    **字典序取最新**。
+
+    ⚠ **格式先驗,驗完才碰檔案系統**(與 `ticket` / `friction` 同一式)。
+    一個先讀了再判的實作也會回錯字串,而它已經把路徑餵給檔案系統了 ——
+    從回傳值上看不出這件事。
+
+    切不到段落標題時回**整份**並加上 `[未切分:找不到段落標題]`,**不回空字串**:
+    回空的話,「這份回報沒有分段」與「這個 repo 沒有回報檔」逐字相同(`F-155`)。
+    """
+    if part not in _PART_VALUES:
+        return u"%s(part 值不合:%r —— 要 1 / 2 / all)" % (UNRECORDED, part)
+
+    root = _upstream()
+    if root is None:
+        return u"%s(沒有設定 root)" % UNRECORDED
+
+    path, why = _latest_report_path(root)
+    if path is None:
+        return u"%s(%s)" % (UNRECORDED, why)
+
+    body = _read(path)
+    if body is None:
+        return u"%s(讀不到 %s)" % (UNRECORDED, os.path.basename(path))
+
+    if part == u"all":
+        if len(body) > _ALL_MAX_CHARS:
+            return body[:_ALL_MAX_CHARS] + (
+                _TRUNCATED_FMT % (len(body), _ALL_MAX_CHARS))
+        return body
+
+    one, two = _split_sections(body)
+    if one is None:
+        return u"%s\n%s" % (UNSPLIT_MARK, body)
+    return one if part == u"1" else two
 
 
 def main(argv=None):

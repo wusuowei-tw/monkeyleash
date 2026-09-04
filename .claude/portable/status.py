@@ -466,6 +466,56 @@ def _enforcement(root, gate):
     return out
 
 
+REPORTS_DIRNAME = "reports"
+
+
+def latest_report_name(root):
+    """`.dev/reports/` 裡**字典序最大**的 `.md` 檔名。
+
+    回 `(檔名, 原因)`:挑得到回 `(名字, None)`,挑不到回 `(None, 原因字串)`。
+
+    **字典序,不看 mtime**(票 105 裁三)。理由是兩者的失敗方向相反:
+    檔名排序錯在「有人做了什麼」(改名是一個動作,看得見);
+    **mtime 錯在「檔案系統做了什麼」** —— `git checkout` / clone / 解壓縮
+    會把 mtime 重設成當下(`F-135`:逐位元組相同的複本在**內容**上成立,
+    在**時間屬性**上不成立),而那件事**完全無聲**。
+    **也不用 mtime 當備援** —— 兩個判準混用時,「它們不一致」不會有人發現。
+
+    **三種空各回不同的原因**(`F-155`):沒有目錄 / 目錄是空的 / 挑到檔但讀不到,
+    三者的處置完全不同 —— 去建目錄 / 去問這輪為什麼沒寫 / 去查權限或編碼,
+    而回同一句話的話它們在畫面上逐字相同。
+    """
+    d = os.path.join(root, ".dev", REPORTS_DIRNAME)
+    if not os.path.isdir(d):
+        return None, u"沒有 .dev/%s/ 目錄" % REPORTS_DIRNAME
+    try:
+        names = sorted(n for n in os.listdir(d) if n.endswith(u".md"))
+    except Exception as e:
+        return None, u"讀不到 .dev/%s/(%s)" % (REPORTS_DIRNAME, e)
+    if not names:
+        return None, u".dev/%s/ 是空的" % REPORTS_DIRNAME
+    return names[-1], None
+
+
+def _report_value(root):
+    """`report:` 那一行的值。
+
+    ⚠ **它只印一行,不擋任何東西**(票 105 第六節)。
+    一個沒有人看的 `status` 輸出,與沒有這一行,效果相同 ——
+    選它的理由是**便宜且零誤報**,不是它解決了問題。
+    """
+    name, why = latest_report_name(root)
+    if name is None:
+        return u"%s(%s)" % (UNRECORDED, why)
+
+    head = _git(root, ["log", "-1", "--format=%cI"])
+    behind = _git(root, ["rev-list", "--count", "HEAD"])
+    parts = [name]
+    parts.append(u"HEAD %s" % (head.strip() if head else UNRECORDED))
+    parts.append(u"樹共 %s 筆 commit" % (behind.strip() if behind else UNRECORDED))
+    return u";".join(parts)
+
+
 def _evidence(root, gate, ticket):
     out = [_head(u"Evidence")]
 
@@ -543,6 +593,8 @@ def _evidence(root, gate, ticket):
             else u"%s(上游無此檔屬正常)" % UNRECORDED)
     out.append(_line(u"provenance", pval,
                      _rel(root, prov) if prov else NO_FUNC))
+
+    out.append(_line(u"report", _report_value(root), u".dev/reports/"))
     return out
 
 
