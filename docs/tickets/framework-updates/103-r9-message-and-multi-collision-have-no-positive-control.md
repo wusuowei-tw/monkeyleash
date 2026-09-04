@@ -156,19 +156,75 @@ R9 的擋下訊息有兩個資訊欄位(`gate.py:1372`,逐字):
 ⇒ 本票的三輪是 **`:1319` 兩輪 + `:1365` 一輪**。
 **這一格請 Jeff 在切站前確認**;不同意的話輪三改成別的形狀,而缺口一與二會失去它們的紅燈來源。
 
+### 🔴 反向枚舉:真實 `friction-log.md` 有幾個消費者(2026-09-04,輪①失準後補)
+
+**第一版預測只數了明著讀它的那一個**(`test_the_shipped_log_is_clean`),
+漏掉了**暗著讀它的那一個** —— `mode_pre_commit()` 會呼叫 `check_friction_numbers()`
+(`gate.py:3006`),而
+
+```
+gate.py:1310   FRICTION_LOG = os.path.join(ROOT, "docs", "agents", "friction-log.md")
+gate.py:  28   ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+```
+
+**`FRICTION_LOG` 在 import 時就算好了** —— 之後 `monkeypatch.setattr(gate, "ROOT", tmp_path)`
+**改不到它**。於是任何走 `mode_pre_commit()` 的測試,都在讀**本 repo 真實的** friction log。
+
+**全庫枚舉**(`grep -rn "mode_pre_commit" tests/*.py`,逐一讀過斷言):
+
+| # | 位置 | 斷言 | 有 patch R9? | 對「真實 log 多一個違規」 |
+|---|---|---|---|---|
+| 1 | `test_gate.py:987` | `rc == 1` | ❌ | 免疫(rc 本來就是 1) |
+| 2 | `test_gate.py:2042` | `rc == 1` + `"--no-verify" not in err` | ❌ | 免疫 |
+| 3 | `test_gate.py:2051` | `"會留下紀錄" not in err` | ❌ | 免疫 |
+| **4** | **`test_gate.py:2059`** | **`"1 項" in err`** | ❌ | 🔴 **脆弱(斷言的是【項數】)** |
+| 5 | `test_gate.py:2521` | 只讀原始碼字串,不呼叫 | — | 免疫 |
+| 6 | `test_gate.py:2682` | `rc == 1`,**且自己 patch 掉 `check_friction_numbers`** | ✅ | 免疫 |
+| 7 | `test_gate.py:2966` | `rc == 1` | ❌ | 免疫 |
+| 8 | `test_gate.py:2996` | `rc == 1` | ❌ | 免疫 |
+| 9 | `test_r5_mounts.py:578` | `rc == 1` + `[R5]` + 內容 | ❌ | 免疫 |
+| 10 | `test_r5_mounts.py:595` | `rc == 1` + `[R5]` + 內容 | ❌ | 免疫 |
+| **11** | **`test_r5_mounts.py:609`** | **`rc == 0`** | ❌ | 🔴 **脆弱(期望乾淨)** |
+| 12 | `test_r5_mounts.py:625` | `rc == 1` + 兩則訊息 | ❌ | 免疫 |
+
+**交叉驗證(獨立於上表)**:全庫只有這兩處做「數量/乾淨」斷言 ——
+
+```
+grep -rn "項\" in err"            -> tests/test_gate.py:2059   (唯一命中)
+grep -rn "mode_pre_commit() == 0" -> tests/test_r5_mounts.py:609 (唯一命中)
+```
+
+> ### **⇒ 判準不是「這條測試提不提 R9」,是【它斷言的東西會不會被多一個違規改變】。**
+> 斷言 `rc == 1` 的**全部免疫**(多一個違規,rc 還是 1);
+> 斷言**項數**或 **`rc == 0`** 的**全部脆弱**。全庫恰好各一條。
+
 ### 輪 ① — 拿掉標題層級限制
 
 **突變**:`gate.py:1319`,`^##\s+` → `^#+\s+`
 
-**預測紅 2 條(新 1 + 既有 1):**
+~~**預測紅 2 條(新 1 + 既有 1):**~~
+~~| 新 | `test_a_third_level_heading_is_not_an_issuing_line`(#6) |~~
+~~| 既有 | `test_the_shipped_log_is_clean`(`:2684`) |~~
+~~**預測綠**:`TestBothHeadingCriteriaAgree` 三條全綠。~~
 
-| | 哪一條 | 為什麼 |
+> **第一版預測(2026-09-04,動手前)實測不中:預測 2,實測 4。**
+> 原文加刪節線保留不刪(`F-036`)。**漏的兩條與成因見上一格的反向枚舉。**
+
+#### **第二版預測(2026-09-04,重跑前寫)——紅 4 條(新 1 + 既有 3)**
+
+| | 哪一條(逐字) | 為什麼 |
 |---|---|---|
-| 新 | `test_a_third_level_heading_is_not_an_issuing_line`(#6) | `### F-001` ×2 變成撞號 |
-| **既有** | `test_the_shipped_log_is_clean`(`:2684`) | **實測依據**:真實 log 有 `## F-058`(第 946 行)與 `### F-058 家族註記`(第 979 行);放寬層級之後 `F-058` 撞號。全檔 `^###\s+<字母>-<數字>` 命中數 = **1**,所以剛好一個撞號 |
+| 新 | `tests/test_gate.py::TestFrictionNumbersAreUnique::test_a_third_level_heading_is_not_an_issuing_line` | `### F-001` ×2 變成撞號 |
+| 既有 | `tests/test_gate.py::TestFrictionNumbersAreUnique::test_the_shipped_log_is_clean` | 真實 log 有 `## F-058`(946 行)與 `### F-058 家族註記`(979 行);放寬層級後撞號。全檔 `^###` 像發號的行 = **1**,所以剛好一個撞號 |
+| 既有 | `tests/test_gate.py::TestEnforcementDoesNotTeachItsOwnBypass::test_the_block_message_still_says_what_was_violated` | `_blocked_stderr`(`:2025-2037`)把 R4/R5/R6 都 patch 掉了,**唯獨沒 patch R9**;真實 log 多一項 → 訊息從「1 項」變「2 項」→ `:2059` 的斷言失敗 |
+| 既有 | `tests/test_r5_mounts.py::TestR5IsActuallyInvokedAtTheAuthoritativeLayer::test_a_clean_repo_does_not_block` | `_wire_pre_commit`(`:534-555`)同樣沒 patch R9,而它 patch 的 `ROOT` **救不了 import 時定死的 `FRICTION_LOG`**;`rc` 從 0 變 1 → `:609` 失敗 |
 
-**預測綠**:`TestBothHeadingCriteriaAgree` 三條全綠 —— 它的 5 筆 CORPUS **沒有 `###` 開頭的行**,
-gate 側對那 5 行的答案不變,對帳不會漂。
+**預測綠(逐條寫出來,不只寫「其餘全綠」):**
+- `TestBothHeadingCriteriaAgree` 三條 —— 它的 5 筆 CORPUS **沒有 `###` 開頭的行**,gate 側答案不變。
+- 上表第 1/2/3/6/7/8/9/10/12 號 —— 斷言 `rc == 1` 或字串不存在,多一個違規不改變它們。
+- 四條既有反控 —— 突變方向是**放寬**,反控問的是有沒有擋過頭,不該被影響。
+
+**預測 passed = 1270 − 4 = 1266。**
 
 ### 輪 ② — 拿掉尾端邊界
 
@@ -190,6 +246,21 @@ gate 側對那 5 行的答案不變,對帳不會漂。
 **預測綠**:`TestBothHeadingCriteriaAgree` 三條 —— 5 筆 CORPUS 裡
 `## 併記於 F-118(…)` 仍然不匹配(`[A-Za-z]+` 配不上 `併`),gate 側答案全部不變。
 
+#### **第二版預測(2026-09-04,反向枚舉後)——【枚舉後不變】,仍是紅 1 條**
+
+理由要寫出來,不能只寫「不變」:
+反向枚舉找出的兩條脆弱測試,**只有在真實 log 的判定結果改變時才會紅**。
+而本輪突變是拿掉尾端邊界,對真實 log 的影響已量過:
+
+```
+號碼後緊接字母或底線的行 = 0
+號碼後緊接 - 的行        = 0
+```
+
+⇒ **真實 log 在本輪突變下仍然乾淨**,`check_friction_numbers()` 仍回 `[]`,
+`mode_pre_commit()` 的違規項數與 `rc` 都不變 ⇒ 那兩條**不會紅**。
+**預測 passed = 1270 − 1 = 1269。**
+
 ### 輪 ③ — 丟掉第一次出現的行號
 
 **突變**:`gate.py:1365`,
@@ -205,6 +276,15 @@ gate 側對那 5 行的答案不變,對帳不會漂。
 
 > **輪 ③ 的既有紅是 0,這件事本身就是缺口一的證據** ——
 > 一個把行號整個算錯的突變,**現有 32 個案例一條都不會咬**。
+
+#### **第二版預測(2026-09-04,反向枚舉後)——【枚舉後不變】,仍是紅 2 條**
+
+理由:本輪突變動的是**去重迴圈**(`gate.py:1365`),而那段程式碼
+**只有在已經偵測到撞號時才會執行**(`if num in seen:`)。
+真實 log **沒有撞號**(`test_the_shipped_log_is_clean` 現在是綠的),
+所以 `dupes` 恆為空、迴圈不進、`check_friction_numbers()` 仍回 `[]`。
+⇒ 兩條脆弱測試看到的違規項數與 `rc` 都不變 ⇒ **不會紅**。
+**預測 passed = 1270 − 2 = 1268。**
 
 ### 三輪共通的驗收
 
@@ -265,6 +345,42 @@ tests/test_gate.py:300                    R9(`gate.py:1283` 的 `_FRICTION_HEADI
 
 **這是 `CLAUDE.md`「引名不引行號」那一格的又一個實例**(行號是位置,標題是身分)。
 **不在本票改** —— 本票只碰測試,改註解會讓突變輪的 `git diff --stat` 驗收混進無關異動。
+
+**候選四(friction 候選,2026-09-04 輪①失準時發現):
+測試 helper 逐條關規則時漏掉一條,而【`ROOT` 被換掉】讓它看起來已經隔離了。**
+
+`tests/test_r5_mounts.py:534-555` 的 `_wire_pre_commit` docstring 逐字寫著
+「把 `mode_pre_commit()` 的**鄰居全部停掉**」,並列出四條,每條附**不同的理由** ——
+**那份清單本身寫得比多數地方都仔細,而它漏了 R9。**
+
+真正讓人不會回頭查的是第一行:
+
+```python
+    monkeypatch.setattr(gate, "ROOT", str(root))
+```
+
+**`ROOT` 換掉了,讀起來像「整個 repo 已經被換成 tmp_path」** ——
+於是「還有誰在讀真實 repo」這個問題不會被問第二次。
+而 `FRICTION_LOG` 是 import 時就從 `ROOT` 算好的常數,**patch `ROOT` 對它無效**。
+
+> **一份【逐條列出並各附理由】的關閉清單,比一份沒有理由的清單更難發現漏項** ——
+> 理由欄讓讀的人相信每一條都被想過,而**沒被想到的那一條不會出現在清單上**。
+> (`F-108` 的同一句話換到 monkeypatch 上:驗收清單天生偏向意圖,
+> 而「我沒打算關的那條」不會出現在待辦清單裡。)
+
+**候選五(票候選):`FRICTION_LOG` 在 import 時算好,`patch ROOT` 隔離不到。**
+
+| | |
+|---|---|
+| 現況 | `gate.py:1310` `FRICTION_LOG = os.path.join(ROOT, ...)`,模組載入時定死 |
+| 後果 | 任何 `monkeypatch.setattr(gate, "ROOT", tmp)` 都**隔離不掉 R9** —— 測試以為在打 tmp_path,實際在讀本 repo |
+| 修法 A | **呼叫時算**:`check_friction_numbers()` 內用 `os.path.join(ROOT, ...)`,讓它跟著 patch 走 |
+| 修法 B | **helper 明關 R9**:兩支 helper 各加一行 `monkeypatch.setattr(gate, "check_friction_numbers", lambda: [])` |
+| 取捨 | A 修根因、涵蓋未來所有 helper,但**動的是 `gate.py`**(守衛本體);B 只動測試、風險低,但**下一個寫 helper 的人仍然會漏** |
+| 範圍 | 同一個形狀可能不只 `FRICTION_LOG` —— **開票時要先枚舉 `gate.py` 裡所有 import 時就綁死 `ROOT` 的常數**,不要只修這一個 |
+
+**不在本票修** —— 本票的驗收條件是 `gate.py` 三輪突變後回到原樣,
+在同一輪改它會讓 `git diff --stat` 那道驗收失去意義。
 
 ---
 

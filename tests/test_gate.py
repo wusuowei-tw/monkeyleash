@@ -2685,6 +2685,133 @@ class TestFrictionNumbersAreUnique:
         """對**本庫現行的** friction-log 跑一次 —— 正對照,不是只測 tmp_path。"""
         assert gate.check_friction_numbers() == []
 
+    # ── 票 103:訊息內容與多重撞號的正控 ──────────────────────────────────
+    #
+    # 上面那批問的是**會不會擋**。以下九條問的是另外兩件事:
+    #   ① 擋下時**訊息說了什麼**(具體到行號,不只是號碼)
+    #   ② 撞號**不只一次 / 不只一個號**時,分筆與排序對不對
+    #
+    # 口徑:每一條都斷言**訊息的具體內容**或**發現的筆數**,
+    # 不得只斷言 truthy —— 那一層上面已經有了,再加一條是重複不是涵蓋。
+
+    def test_the_message_names_both_line_numbers(self, tmp_path):
+        """**票 83 驗收條件的另一半**,逐字:「訊息**點名是哪個號、哪兩行**」。
+
+        「哪個號」上面兩條已經問過(`F-007` / `TSI-001`);
+        **「哪兩行」到今天為止沒有任何斷言碰過** —— 而產生它的是三行程式碼
+        (`enumerate(lines, 1)`、`dupes.setdefault(...)`、`"、".join(...)`)。
+
+        `"F-007" in v[0]` 在行號整個算錯時**仍然會綠**(`F-105`:
+        訊息類斷言有兩種,只有一種抓得到判定壞掉)。
+        """
+        path = self._log(tmp_path, "## F-007 甲\n\n內文\n\n## F-007 乙\n")
+        v = gate.check_friction_numbers(path)
+        assert v, "撞號沒有被抓到"
+        assert "第 1 行" in v[0] and "第 5 行" in v[0], (
+            "訊息沒有點名兩個行號 —— 只說『有撞號』等於要人自己再掃一次:%r" % v[0])
+
+    def test_the_message_lists_every_line_when_a_number_repeats_three_times(
+            self, tmp_path):
+        """三次撞號時**三個行號都要在訊息裡**,不是只有頭尾。
+
+        少一個行號的話,人會照著訊息去改那兩處,而第三處留在原地 ——
+        **一份修好一半的 log,與一份沒撞號的 log,下一次掃描的結果相同。**
+        """
+        path = self._log(tmp_path,
+                         "## F-007 甲\n\n## F-007 乙\n\n## F-007 丙\n")
+        v = gate.check_friction_numbers(path)
+        assert v, "三次撞號沒有被抓到"
+        for expected in ("第 1 行", "第 3 行", "第 5 行"):
+            assert expected in v[0], (
+                "三次撞號的訊息漏了 %s:%r" % (expected, v[0]))
+
+    def test_three_occurrences_are_one_finding_not_three(self, tmp_path):
+        """**同一個號撞三次是【一筆】發現。**
+
+        分成三筆的話,一份 log 裡一個號撞十次會印十則幾乎相同的訊息,
+        而**吵到讀不下去的訊息,人會照著繞而不是照著修**(`F-031`)。
+        判準是「哪個號撞了」,不是「撞了幾次」。
+        """
+        path = self._log(tmp_path,
+                         "## F-007 甲\n\n## F-007 乙\n\n## F-007 丙\n")
+        v = gate.check_friction_numbers(path)
+        assert len(v) == 1, "同一個號撞三次應該是一筆發現,實際 %d 筆:%r" % (len(v), v)
+
+    def test_two_distinct_collisions_produce_two_findings(self, tmp_path):
+        """兩個**不同的號**各自撞 → **兩筆**發現。
+
+        `for num in sorted(dupes)` 這個迴圈在現有測試裡**永遠只跑一圈** ——
+        每一份 tmp log 都只有一個撞號。只跑一圈的迴圈與沒有迴圈,
+        在測試輸出上長得一樣。
+        """
+        path = self._log(tmp_path,
+                         "## F-001 甲\n\n## F-002 乙\n\n"
+                         "## F-001 丙\n\n## F-002 丁\n")
+        v = gate.check_friction_numbers(path)
+        assert len(v) == 2, "兩個號各自撞應該是兩筆發現,實際 %d 筆:%r" % (len(v), v)
+        assert "F-001" in v[0] + v[1] and "F-002" in v[0] + v[1], v
+
+    def test_the_findings_are_ordered_by_number(self, tmp_path):
+        """**輸出順序是決定性的**(`sorted(dupes)`),不是 dict 的插入順序。
+
+        這裡刻意讓 `F-002` **先**撞完、`F-001` **後**撞完 ——
+        照插入順序的話 `F-002` 會排在前面。
+        順序不決定性的話,兩次跑同一份 log 可以給出兩種輸出,
+        而**比對輸出的人會以為 log 變了**。
+        """
+        path = self._log(tmp_path,
+                         "## F-002 甲\n\n## F-002 乙\n\n"
+                         "## F-001 丙\n\n## F-001 丁\n")
+        v = gate.check_friction_numbers(path)
+        assert len(v) == 2, v
+        assert "F-001" in v[0], "排序不是照號碼:第一筆應該是 F-001,實際 %r" % v[0]
+        assert "F-002" in v[1], "排序不是照號碼:第二筆應該是 F-002,實際 %r" % v[1]
+
+    # ── 判定矩陣:以下四條釘的是 `gate.py` 那一份正則自己 ──────────────
+    #
+    # **這四個條件今天只在 `.claude/portable/` 那一側有測試**
+    # (`tests/test_friction_heading.py`),而兩份是各自獨立的字面,不是同一個物件。
+    # `TestBothHeadingCriteriaAgree` 做的是對帳,而對帳綠有兩種來源:
+    # 兩邊都對,以及**兩邊一起錯** —— 那個 class 自己的 docstring 就寫過這句。
+    # 它「釘住」用的 5 筆語料裡**沒有** `###`、沒有無空白、沒有邊界案例。
+
+    def test_a_third_level_heading_is_not_an_issuing_line(self, tmp_path):
+        """`###` 不是發號位置 —— **三級標題是段落,不是條目**。
+
+        本庫實際有一行 `### F-058 家族註記(票 42)`,而 `## F-058` 也在同一份
+        log 裡。判準放寬到 `#+` 的話,那一對會變成撞號 ——
+        **而它們本來就是同一則的標題與子節。**
+        """
+        path = self._log(tmp_path, "### F-001 甲\n\n### F-001 乙\n")
+        assert gate.check_friction_numbers(path) == []
+
+    def test_a_heading_without_a_letter_prefix_is_not_an_issuing_line(self, tmp_path):
+        """**前綴必須是字母。** 純數字標題(`## 118 甲`)是散文,不是發號。
+
+        少了這個條件,一份用數字當小節編號的文件會整份被判成撞號 ——
+        而那種誤報會讓整條規則被關掉(`CLAUDE.md`:錯在權威層等於擋住做對事的人)。
+        """
+        path = self._log(tmp_path, "## 118 甲\n\n## 118 乙\n")
+        assert gate.check_friction_numbers(path) == []
+
+    def test_a_longer_token_is_not_swallowed(self, tmp_path):
+        """**邊界**:`## F-118x` 不得被讀成 `F-118`。
+
+        少了尾端邊界,一個打錯的號會靜靜地被算成另一個號 ——
+        於是這裡會報一個**不存在的撞號**,而人會去改一則本來沒問題的紀錄。
+        """
+        path = self._log(tmp_path, "## F-118 甲\n\n## F-118x 乙\n")
+        assert gate.check_friction_numbers(path) == []
+
+    def test_a_hash_without_a_space_is_not_an_issuing_line(self, tmp_path):
+        """`##F-001`(無空白)不是 markdown 標題,所以也不是發號行。
+
+        判準是 `^##\\s+` —— `\\s+` 的 `+` 不是裝飾:
+        少了它,任何以 `##` 開頭的字串都會被當成標題行掃描。
+        """
+        path = self._log(tmp_path, "##F-001 甲\n\n##F-001 乙\n")
+        assert gate.check_friction_numbers(path) == []
+
 
 class TestUpstreamMustNotBeInShadowMode:
     """票 89 第 1 條 —— **上游 repo 不得處於影子狀態**,而違反的當下要有東西叫。
