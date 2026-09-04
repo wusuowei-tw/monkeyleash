@@ -44,7 +44,14 @@ improve-codebase-architecture);強制層 —— 閘門本身、帳本、
     git clone https://github.com/wusuowei-tw/monkeyleash
     cd monkeyleash
     sh bootstrap.sh          # 用 core.hooksPath 接上 .githooks/(每個 clone 一次)
+    python -m pip install -e ".[dev]"   # 測試相依,缺它 pytest 連 collect 都過不了
     python -m pytest -q      # 跑框架自己的測試
+
+**`pip install -e ".[dev]"` 那一行在乾淨機器上不是可選的。**
+2026-09-04 筆電實測:少了它,`pytest` 會在 **collection 階段整套中斷**
+(不是某一條紅,是整套沒跑)——
+`ModuleNotFoundError: No module named 'mcp'`、`1 error during collection`。
+**中斷的 collection 回報的是「零條測試」,而那看起來不像缺相依,看起來像什麼都沒發生。**
 
 最後那行跑完會剩一條紅(`TestLegacyNoRedlightList`)—— 那是**已知的缺口,
 不是你裝壞了**。雲端那邊把這一條跳過了,原因見票 54。

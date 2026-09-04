@@ -44,7 +44,15 @@ themselves, the ledger, and the friction log — is original to this repo.
     git clone https://github.com/wusuowei-tw/monkeyleash
     cd monkeyleash
     sh bootstrap.sh          # wires .githooks/ via core.hooksPath (once per clone)
+    python -m pip install -e ".[dev]"   # test deps — without it pytest cannot collect
     python -m pytest -q      # run the framework's own tests
+
+**The `pip install -e ".[dev]"` line is not optional on a clean machine.**
+Measured 2026-09-04 on a fresh laptop: skipping it makes `pytest` abort during
+*collection* — the whole suite, not one test — with
+`ModuleNotFoundError: No module named 'mcp'` and `1 error during collection`.
+An aborted collection reports **zero tests run**, which does not look like a
+missing dependency; it looks like nothing happened.
 
 The last command ends with `1 failed` (`TestLegacyNoRedlightList`) — that is a
 known gap, not a broken install. CI skips this one; see ticket 54 for why.
