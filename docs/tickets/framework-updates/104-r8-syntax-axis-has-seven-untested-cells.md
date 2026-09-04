@@ -308,6 +308,129 @@ grep -n "node.level\|\.level" .claude/hooks/gate.py   ->  零命中
 
 ---
 
+## 三之二、輪 ④–⑦ 的預測(**2026-09-04 裁決全部採用,共七輪;本節寫在動手之前**)
+
+裁決:候選 ④⑤⑥⑦ 全部採用。以下四輪的預測**與輪①②③同一套紀律** ——
+寫在跑之前,跑完不修改,不合就停。
+
+### 輪 ④ — `:901` `for alias in node.names:` → 只看第一個
+
+```python
+-        if isinstance(node, ast.Import):
+-            for alias in node.names:
+-                if alias.name.split(".")[0] == RESEARCH_ROOT:
+-                    return True
++        if isinstance(node, ast.Import):
++            alias = node.names[0]
++            if alias.name.split(".")[0] == RESEARCH_ROOT:
++                return True
+```
+
+**預測紅 1 條(新 1 + 既有 0):**
+
+| | 逐字名稱 | 為什麼 |
+|---|---|---|
+| 新 | `test_research_among_several_names_on_one_line_is_caught`(格 5) | 語料 `import os, research\n` 的 `node.names` = `[('os', None), ('research', None)]`(**實測**);只看第一個 → `os` → False,而斷言要 True |
+
+**預測綠(逐條):**
+- 格 1/2/3/4 —— 語料都只有**一個** name,`names[0]` 就是它,行為不變。
+- 格 6/7/8/9/10/11 —— 走 `ast.ImportFrom`,本輪不動。
+- 四條邊界反控 —— `import research_utils` / `import researched` 各只有一個 name,仍 False。
+- `check()` 版三條 —— 語料各只有一個 name。
+- `test_edit_result.py` 全部 —— `:241`/`:247`/`:310` 語料各只有一個 name。
+
+### 輪 ⑤ — `:902` 前加 `alias.asname is None and`
+
+```python
+-                if alias.name.split(".")[0] == RESEARCH_ROOT:
++                if alias.asname is None and alias.name.split(".")[0] == RESEARCH_ROOT:
+```
+
+**預測紅 2 條(新 2 + 既有 0):**
+
+| | 逐字名稱 | 為什麼 |
+|---|---|---|
+| 新 | `test_an_aliased_import_is_still_a_research_import`(格 3) | `import research as r` 的 `names` = `[('research', 'r')]`(**實測**),`asname='r'` → 被跳過 → False |
+| 新 | `test_an_aliased_dotted_import_is_still_a_research_import`(格 4) | `import research.explore as e` → `[('research.explore', 'e')]` → 同理 |
+
+**預測綠(逐條):**
+- 格 1/2/5 —— `asname` 皆為 `None`(實測),條件不變。
+- 格 6–11、四條邊界反控、`check()` 版三條 —— 見輪④同理。
+
+### 輪 ⑥ — `:906` 前加 `node.level == 0 and`
+
+```python
+-            if node.module and node.module.split(".")[0] == RESEARCH_ROOT:
++            if node.level == 0 and node.module and node.module.split(".")[0] == RESEARCH_ROOT:
+```
+
+**預測紅 1 條(新 1 + 既有 0):**
+
+| | 逐字名稱 | 為什麼 |
+|---|---|---|
+| 新 | `test_a_relative_import_whose_module_is_research_is_caught`(格 11) | `from .research import x` 的 `level=1`(**實測**) → 被排除 → False,而斷言要 True |
+
+**預測綠(逐條):**
+- 格 6/7/8 —— `level=0`(實測),條件不變。
+- 格 9/10 —— `level` 是 1/2,但 `module` 是 `None`,**本來就 False**,方向一致。
+- 既有 `[from research import explore\n]`、`[from research.explore import thing\n]`、
+  `:106`、`:241` —— 全部 `level=0`,不變。
+- 四條邊界反控 —— `from research_helpers import x` / `from my_research import x` 皆 `level=0` 且不匹配。
+
+> ### **⚠ 輪⑥就是候選一的【修法方向 A】。**
+> 它紅的那一條(格 11)**正是本票用來釘現行行為的那一條** ——
+> 所以這一輪的紅**不代表 A 是錯的**,它代表「格 11 的測試真的在守現行行為」。
+> **要不要改成 A 由候選一裁,本票不裁。**
+
+### 輪 ⑦ — `:904-907` ImportFrom 支改為也看 `node.names`
+
+```python
+         elif isinstance(node, ast.ImportFrom):
+             if node.module and node.module.split(".")[0] == RESEARCH_ROOT:
+                 return True
++            for alias in node.names:
++                if alias.name.split(".")[0] == RESEARCH_ROOT:
++                    return True
+```
+
+**預測紅 2 條(新 2 + 既有 0):**
+
+| | 逐字名稱 | 為什麼 |
+|---|---|---|
+| 新 | `test_a_relative_import_of_the_package_name_is_not_caught`(格 9) | `from . import research` 的 `names` = `[('research', None)]`(**實測**) → 新分支命中 → True,而斷言要 False |
+| 新 | `test_a_two_level_relative_import_is_not_caught`(格 10) | `from .. import research` → 同理 |
+
+**預測綠(逐條):**
+- 格 6/7/11 —— `names` 分別是 `explore` / `thing` / `x`,**都不是** `research`;而它們本來就經第一個條件回 True,結果不變。
+- 格 8 `from research import *` —— `names` = `[('*', None)]`,新分支不命中;第一個條件仍回 True。
+- 四條邊界反控 —— `from research_helpers import x`、`from my_research import x` 的 `names` 是 `x`,不命中 ⇒ 仍 False。
+- 格 1–5、`check()` 版三條 —— 走 `ast.Import`,本輪不動。
+
+### 七輪合計的涵蓋
+
+| 新測試 | 由哪一輪取得紅燈 |
+|---|---|
+| 格 3 `import research as r` | **輪⑤** |
+| 格 4 `import research.explore as e` | **輪⑤** |
+| 格 5 `import os, research` | **輪④** |
+| 格 8 `from research import *` | **輪②** |
+| 格 9 `from . import research` | **輪⑦** |
+| 格 10 `from .. import research` | **輪⑦** |
+| 格 11 `from .research import x` | **輪②、輪⑥**(兩輪) |
+| `check()` 8 `import research` | 🔴 **無** |
+| `check()` 9 `import research.explore` | 🔴 **無** |
+| `check()` 10 `from research.explore import thing` | **輪②** |
+
+**⇒ 10 條裡 8 條取得紅燈來源,2 條沒有。**
+`check()` 版第 8、9 條**標為「本方法論下無紅燈來源」,不硬做**(裁決)——
+理由見上一節:要讓它們紅得動 `check()` 的前置,那超出有界突變的邊界。
+
+> **這兩條留白的意義**:它們仍然證明「這條路徑今天會擋」,
+> 但**證明不了「這條斷言會咬」**。兩件事分開寫,而不是把它們算進涵蓋數。
+> (與票 102 那 72 筆「無法判定」同一條:**留白比蓋章誠實**。)
+
+---
+
 ## 四、驗收條件
 
 1. 10 條全部加進 `tests/test_research_stage.py::TestR8ProductionMustNotImportResearch`
