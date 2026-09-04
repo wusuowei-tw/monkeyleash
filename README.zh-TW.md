@@ -53,7 +53,7 @@ monkeyleash 是我發現自己專案門口那六道關卡,在四十幾次改動�
 - **去程是授權,回程是證據。** 總指揮 AI 永遠碰不到 repo;執行者 AI 永遠不決定
   下一步做什麼。人站在兩者之間唯一那條線上。
 - **評分者不是考生。** 每一句「通過了」都來自 agent 改不到的檔案,由 agent 在
-  commit 時關不掉的機制產生。
+  正常 commit 路徑上不能靜默關掉的機制產生。
 
 ## 裡面有什麼
 
@@ -61,8 +61,8 @@ monkeyleash 是我發現自己專案門口那六道關卡,在四十幾次改動�
 |---|---|
 | **九條規則(R1–R9)** | 機器強制的限制:agent 可以寫什麼、寫到哪、什麼時候寫。規格書裡不准放程式碼、不准寫到當前階段範圍外、生產檔要有測試、生產碼不准 `import research/`、鏡像要一致、friction 號不准重複……等。權威清單是 `.claude/hooks/gate.py` 的 `rule_codes()`,它從規則自己的擋下訊息掃出來。 |
 | **G1** | **使用者層**的獨立防護,不走六站流程:擋下破壞性檔案系統指令(`rm -rf`、`Remove-Item -Recurse`…),對照一份 agent 改不動的保護清單。**這是一個 denylist hook,不是沙箱** —— 真正的隔離要靠容器或作業系統權限。 |
-| **兩層強制** | **前哨**(`PreToolUse` hook,每一次 Bash / Edit / Write 執行前先判)與**權威**(`pre-commit`,`core.hooksPath`,agent 在正常 commit 路徑上繞不過的那層)。每條規則宣告自己住在哪一層。 |
-| **六站流程** | `grill-with-docs → to-spec → to-tickets → implement → code-review → improve-codebase-architecture`。另有兩個站不在主線上:`idle`(待命)與 `research`(探索區,不准寫生產碼)。目前在哪一站是一個由人編輯的檔案;agent 讀得到、改不了。只有允許寫程式的站才能寫程式。 |
+| **兩層 repo 強制** | **前哨**(`PreToolUse` hook,每一次 Bash / Edit / Write 執行前先判)與**權威**(`pre-commit`,`core.hooksPath`,agent 在正常 commit 路徑上繞不過的那層)。每條規則宣告自己住在哪一層。 |
+| **六站主線流程** | `grill-with-docs → to-spec → to-tickets → implement → code-review → improve-codebase-architecture`。另有兩個站不在主線上:`idle`(待命)與 `research`(探索區,不准寫生產碼)。目前在哪一站是一個由人編輯的檔案;agent 讀得到、改不了。只有允許寫程式的站才能寫程式。 |
 | **帳本** | 每一次豁免、每一次攔截、每一次測試,都追加到 `.dev/*.jsonl`,雜湊逐筆相接。用 `git checkout` 還原會在鏈上留下看得見的缺口,而不是一個乾淨的謊。 |
 | **`status`** | 一個指令印出 repo 的真實狀態 —— HEAD、階段、票號、哪些 hook 證明得了在場、哪些只是「宣稱」—— 每一行都帶 `(source: …)` 來源欄。證明不了的行印「未證明」,不印綠勾。 |
 | **唯讀 MCP server** | 給 Claude Desktop 的四支工具:`status_all`、`ticket(n)`、`friction(code)`、`latest_report`(最近一輪執行者回報)。零寫入路徑,由一條 AST 測試守著 —— 出現任何寫入呼叫就紅。 |
@@ -139,7 +139,7 @@ python .claude/portable/g1_verify.py                 # G1 保護清單
 
 ## 不會寫程式?讓 AI 幫你裝
 
-在你想保護的專案裡,把下面這段貼給你的 coding agent(Claude Code 或類似的):
+在你想保護的專案裡,把下面這段貼給你的 coding agent(已在 Claude Code 上驗證):
 
 ```
 請照 monkeyleash(https://github.com/wusuowei-tw/monkeyleash)README 的
@@ -152,7 +152,7 @@ python .claude/portable/g1_verify.py                 # G1 保護清單
    不要動閘門的狀態檔 —— 停下來問我。
 ```
 
-## 兩層強制
+## 兩層 repo 強制
 
 | 層 | 掛載 | 涵蓋 |
 |---|---|---|
@@ -220,7 +220,7 @@ hooks 與 CI)。monkeyleash 在「強制」這件事上跟它們重疊,在多 ag
 | 測試,CI | **1303** 條通過(差額逐項列在票 106) |
 | 規則 | **9** 條(R1–R9),另有使用者層的 G1 |
 | Friction log | **148** 則,編號至 `F-159` |
-| 票 | **105** 張,編號至 106 |
+| 票 | **105** 個檔,編號至 106 |
 
 > 「幾則」與「編號到幾」在這裡是兩件事:friction 號與票號都可能有缺號
 > (改號會留下空洞,而 R9 刻意不查連號)。上表兩個都給。

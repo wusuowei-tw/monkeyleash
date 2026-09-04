@@ -57,8 +57,8 @@ Two things are deliberate here:
   AI never touches the repo. The executor AI never decides what to do next. The
   human sits on the one line between them.
 - **The scorer is not the student.** Every claim of "it passed" comes from a file
-  the agent cannot edit, produced by a mechanism the agent cannot switch off at
-  commit time.
+  the agent cannot edit, produced by a mechanism the agent cannot silently
+  disable on the normal commit path.
 
 ## What's in the box
 
@@ -66,8 +66,8 @@ Two things are deliberate here:
 |---|---|
 | **9 rules (R1–R9)** | Machine-enforced constraints on what the agent may write, where, and when: no code in specs, no writing outside the current stage's scope, no production file without a test, no `import research/` from production code, mirrors must match, no duplicate friction numbers, and so on. The authoritative list is `rule_codes()` in `.claude/hooks/gate.py`, derived from the rules' own block messages. |
 | **G1** | A *user-level* guard, independent of the pipeline, that blocks destructive filesystem commands (`rm -rf`, `Remove-Item -Recurse`, …) against a protected list the agent cannot edit. **This is a denylist hook, not a sandbox** — real isolation needs containers or OS-level permissions. |
-| **Two enforcement layers** | An *outpost* (`PreToolUse` hook, judges every Bash/Edit/Write before it runs) and an *authority* (`pre-commit`, `core.hooksPath`, the structural layer — not bypassable on the normal commit path). Rules declare which layer they live on. |
-| **Six-station pipeline** | `grill-with-docs → to-spec → to-tickets → implement → code-review → improve-codebase-architecture`. Two further stages exist off the main line: `idle` (standby) and `research` (an exploration area that may not write production code). The stage is a file the human edits; the agent can read it but not change it. Source writes are allowed only in stages that allow them. |
+| **Two repository enforcement layers** | An *outpost* (`PreToolUse` hook, judges every Bash/Edit/Write before it runs) and an *authority* (`pre-commit`, `core.hooksPath`, the structural layer — not bypassable on the normal commit path). Rules declare which layer they live on. |
+| **Six-station main-line pipeline** | `grill-with-docs → to-spec → to-tickets → implement → code-review → improve-codebase-architecture`. Two further stages exist off the main line: `idle` (standby) and `research` (an exploration area that may not write production code). The stage is a file the human edits; the agent can read it but not change it. Source writes are allowed only in stages that allow them. |
 | **Ledgers** | Every exemption, every intercepted call, every test run, appended to `.dev/*.jsonl` with hashes chained. A restore that goes through `git checkout` leaves a visible gap in the chain rather than a clean lie. |
 | **`status`** | One command that prints the repo's real state — HEAD, stage, ticket, which hooks are provably installed, which are only *claimed* — with every line carrying a `(source: …)` column. Lines it can't prove print `未證明` (unproven), not a green tick. |
 | **Read-only MCP server** | Four tools for Claude Desktop: `status_all`, `ticket(n)`, `friction(code)`, `latest_report` (the latest executor report). Zero write paths, verified by an AST test that fails if a write call ever appears. |
@@ -149,7 +149,7 @@ python .claude/portable/g1_verify.py                    # G1 protected list
 
 ## No coding background? Let your AI install it
 
-Paste the following into your coding agent (Claude Code or similar) from
+Paste the following into your coding agent (tested with Claude Code) from
 inside the project you want to protect:
 
 ```
@@ -166,7 +166,7 @@ Rules for this task:
    gate's state files — stop and ask me.
 ```
 
-## Two enforcement layers
+## Two repository enforcement layers
 
 | Layer | Mount | Reach |
 |---|---|---|
@@ -246,7 +246,7 @@ Actively developed, one maintainer. Numbers below are from 2026-09-04:
 | Tests, CI | **1303** passed (the difference is itemised in ticket 106) |
 | Rules | **9** (R1–R9), plus G1 at the user level |
 | Friction log | **148** entries, numbered up to `F-159` |
-| Tickets | **105**, numbered up to 106 |
+| Tickets | **105 files**, numbered up to 106 |
 
 > Counts and highest numbers are different things here: friction numbers and
 > ticket numbers may have gaps (a renumbered entry leaves a hole, and R9
