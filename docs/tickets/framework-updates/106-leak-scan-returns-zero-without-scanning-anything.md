@@ -457,16 +457,67 @@ FAILED tests/test_leak_scan.py::TestMainNeverReturnsZeroWithoutScanning::test_an
 (裁決端稱那批積壓為「sync 輪二」= 9/1 起上游→兩下游的同步;
 **repo 內無此詞,本票不造這個詞,也不在本票處理那批同步。**)
 
-## CI 對帳
+## CI(run `33870292455`,`success`,`pytest in 1m9s`)
 
-**留白,待推後填。**(兩刀**均未推**,照裁決停在本機。)
+兩刀(`c62bbd3` / `4f76db7`)於 2026-09-04 推上 `99adb08..4f76db7`,**未用 force**。
 
-| | |
-|---|---|
-| run id | (待填) |
-| 跑測試 | (待填) |
-| 淨室驗證 | (待填,`−12` 那列**要重量**;⚠ 淨室增量取**manifest 標 copy 的那些檔**的條數,不是本機新增總數 —— 票 105 在這一格錯過一次) |
-| CI 與本機的差額 | (待填,逐項算) |
+```
+跑測試                             1303 passed, 1 deselected, 3 xfailed in 18.70s
+淨室驗證(每條規則各擋一次 + 安裝後形態)  1200 passed, 3 xfailed in 12.64s
+                                   全部 9 條規則各擋下一次,權威層偵測正常,框架測試在新 repo 全綠。
+```
+
+### CI 與本機的差額 —— **逐項算得出來,不是「環境不同」**
+
+| 項 | 數 | 來源(可各自驗證) |
+|---|---|---|
+| 本機 passed | **1313** | 收刀那一跑 |
+| − 個人 pattern 那一檔 | **−12** | `tests.yml:71` `--ignore=tests/test_known_items_regression.py`;**12 是本輪重量的**:`--collect-only -q` → `12 tests collected in 0.02s`。**未從票 105 抄** |
+| ＋ Windows 才 skip 的 symlink 三條 | **+3** | 本機 `3 skipped`(`test_gate.py:451/459/473`) |
+| − deselect 一條 | **−1** | `tests.yml:72`;CI 另欄報 `1 deselected` |
+| **= CI passed** | **1303** | **與實測相符** |
+
+`xfailed` 兩邊都是 **3**;`deselected` 預測 1、實測 1。
+**`1313 − 12 + 3 − 1 = 1303` 寫在拿到 CI 實測之前。**
+
+### 淨室 `1200` —— **這一次先查 manifest 再算,而且中了**
+
+**算法(票 105 那次錯過之後定的)**:
+
+```
+淨室新增 = 新增測試中【manifest 標 copy】的那些檔的條數
+         ≠ 本機新增總數
+```
+
+本票逐檔查證:
+
+```
+.agents/portable-manifest.txt:64:.claude/portable/               copy    ← leak_scan.py 由此帶走
+.agents/portable-manifest.txt:108:tests/test_leak_scan.py         copy
+```
+
+| 檔 | manifest | 本票新增 | 進淨室 |
+|---|---|---|---|
+| `.claude/portable/leak_scan.py` | `copy`(繼承 `:64`) | 實作 | ✅ |
+| `tests/test_leak_scan.py` | **`copy`**(`:108`) | **5 條** | ✅ |
+
+**預測 `1195 + 5 = 1200`,實測 `1200`。** ✅
+
+> ⚠ **「本機新增 == 淨室新增 == 5」這次是【查出來的結論】,不是假設。**
+> 票 105 那次剛好相反(21 條在標 `skip` 的檔裡,預測 +28 實測 +7),
+> **而兩次的差別只有「查不查 manifest」。**
+> **恰好相等時也要走同一條路徑得出** —— 否則下一次不相等時,
+> 沿用的會是那個沒有走過查證的捷徑。
+
+**淨室序列**(同一種樹、同一支指令):
+
+| | 淨室 passed | 增量 | 動的檔標什麼 |
+|---|---|---|---|
+| 票 102 | 1169 | — | — |
+| 票 103 | 1178 | +9 | `test_gate.py` copy |
+| 票 104 | 1188 | +10 | `test_research_stage.py` copy |
+| 票 105 | 1195 | +7 | `test_status.py` copy(7)+ `test_mcp_server.py` **skip**(21) |
+| **票 106** | **1200** | **+5** | `test_leak_scan.py` copy(5) |
 
 ## ⚠ 這 5 條證明了什麼、沒證明什麼
 
