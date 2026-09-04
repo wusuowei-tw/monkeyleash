@@ -1,6 +1,6 @@
 # 104 — R8 的語法軸有七個空格,而封閉集合本來就枚舉得完
 
-**狀態**:**立案、未實作**(2026-09-04)
+**狀態**:**完成**(2026-09-04)—— 三刀已落,**七輪有界突變預測 17/17 全中**,`gate.py` 三個獨立口徑各驗一次回到原樣。本票產出 `F-158`。~~立案、未實作~~(`F-036`:舊狀態不刪)
 **時鐘**:**無外部時鐘。** 理由是 R8 的語法軸是**封閉集合**(`ast.Import` / `ast.ImportFrom` 兩個節點型別窮舉得完),而現有 8 個案例只覆蓋其中 4 格
 **站別**:`idle`(立案時);刀二開工前由 Jeff 切成 `implement`,`ticket_id = 104`
 **前置**:票 102(R1,三刀 + 三輪突變的原型)、**票 103(R9,同一套形狀的第二次)**、`F-051`(R8 的邊界問題)
@@ -494,3 +494,191 @@ R9(票 103)的判定條件是一條正則的三個條件;
 > **而本票最有價值的產出可能不是那 10 條測試,是第三節那張 3/10 的表** ——
 > 它說的是:**枚舉補得完測試,補不完紅燈。**
 > 一個沒有判定分支的行為,枚舉得出它的案例,卻造不出它的反例。
+
+**⇒ 那句話已落地為 `F-158`**(2026-09-04,動筆當下重查最大號 `F-157` 加一,
+全庫 `grep -rn "F-158"` 零命中)。兩句判準逐字:
+**枚舉補的是斷言,突變補的是紅燈**;
+**沒有分支的行為,只能由「模擬未來的弄窄」提供紅燈。**
+
+---
+
+# 落地紀錄(2026-09-04)
+
+## 三刀
+
+| 刀 | sha | 內容 |
+|---|---|---|
+| 一(立案) | `7111009` | 票面(11 格實測表、10 條軸表、三輪定稿、3/10 那張表) |
+| 二(正控 + 七輪突變) | `23b7c76` | `tests/test_research_stage.py` 10 條 + 票面輪④–⑦預測 |
+| 三(帳本) | `11a5098` | `.dev/gate-exemptions.jsonl` 追加 14 筆 |
+| 收票 | (本刀) | 狀態行 + 本節 + `F-158` |
+
+## 全綠不是通過
+
+10 條寫完當下**全部是綠的** —— 判定邏輯本來就在,這是**特徵化測試**。
+紅燈由七輪有界突變提供。
+
+## 七輪有界突變 —— **預測 17/17 全中**
+
+| 輪 | 突變 | 預測紅 | 實測紅 | passed | 命中的是誰 |
+|---|---|---|---|---|---|
+| **①** | `:902` `split(".")[0] ==` → `startswith` | **3**(新 0 + 既有 3) | **3** | 1277 | `[import research_utils\n]`、`[import researched\n]`、`test_research_utils_is_still_not_a_research_import` |
+| **②** | 刪 `:904-907` ImportFrom 支 | **7**(新 3 + 既有 4) | **7** | 1273 | 新:格8、格11、`check()`版第10條;既有:`[from research import explore\n]`、`[from research.explore import thing\n]`、`:106`、`test_a_whole_file_write_importing_research_is_still_blocked` |
+| **③** | `:897-898` `except: return True` → `return False` | **1**(新 0 + 既有 1) | **1** | 1279 | `test_malformed_python_fails_closed` |
+| **④** | `:901` `for alias in node.names` → 只看 `names[0]` | **1**(新 1 + 既有 0) | **1** | 1279 | 格5 `test_research_among_several_names_on_one_line_is_caught` |
+| **⑤** | `:902` 前加 `alias.asname is None and` | **2**(新 2 + 既有 0) | **2** | 1278 | 格3、格4 兩條 alias |
+| **⑥** | `:906` 前加 `node.level == 0 and` | **1**(新 1 + 既有 0) | **1** | 1279 | 格11 `test_a_relative_import_whose_module_is_research_is_caught` |
+| **⑦** | ImportFrom 支加看 `node.names` | **2**(新 2 + 既有 0) | **2** | 1278 | 格9、格10 |
+
+**七輪的紅燈條數與逐字名單全部相符,零筆落空、零筆意外。**
+
+### 輪⑥ 單記:**它就是候選一的修法方向 A**
+
+輪⑥ 加的 `node.level == 0` 正是候選一的方向 A(只認絕對 import),
+而它紅的是**格 11 那條釘現行行為的測試**。
+
+> **這一輪的紅【不代表 A 是錯的】** —— 它代表格 11 的測試真的在守現行行為。
+> 改判成 A 的那一天,這條測試會紅,而**那正是它的工作**:
+> 讓改判成為一個**看得見的動作**,不是一次沒有人注意到的行為漂移。
+
+### 反控在七輪裡全綠
+
+四條既有邊界反控(`import research_utils` / `from research_helpers import x` /
+`import researched` / `from my_research import x`)——
+**除了輪①刻意咬到的那兩條之外,七輪零紅**。
+輪①咬到它們是**預測之內**(那一輪的方向就是放寬邊界),不是反控寫錯。
+
+## 🔴 紅燈來源表(第三節那張,實測後兌現;**驗收條件第 6 條:不得因全綠拿掉**)
+
+| 新測試 | 預定來源 | 實測 |
+|---|---|---|
+| 格3 `import research as r` | 輪⑤ | ✅ |
+| 格4 `import research.explore as e` | 輪⑤ | ✅ |
+| 格5 `import os, research` | 輪④ | ✅ |
+| 格8 `from research import *` | 輪② | ✅ |
+| 格9 `from . import research` | 輪⑦ | ✅ |
+| 格10 `from .. import research` | 輪⑦ | ✅ |
+| 格11 `from .research import x` | 輪②、輪⑥ | ✅ **兩輪都紅** |
+| **`check()` 8 `import research`** | 🔴 **無** | **未取得** |
+| **`check()` 9 `import research.explore`** | 🔴 **無** | **未取得** |
+| `check()` 10 `from research.explore import thing` | 輪② | ✅ |
+
+**8/10 取得紅燈來源。兩條無來源,逐條明列如上,標「本方法論下無紅燈來源」,不硬做**(裁決)。
+
+**那兩條為什麼救不了**:它們與述詞測試 `:83` / `:84` 的差別只在**走不走 `check()`**,
+要讓它們紅得動 `check()` 的前置(`is_source_path:1863` / R2 站別 `:1936` /
+`_under_research:1956`)—— **那超出「有界突變」的邊界**,動的不再是 R8 自己。
+
+> **它們仍然證明「這條路徑今天會擋」,但證明不了「這條斷言會咬」。**
+> 兩件事分開寫,**不算進涵蓋數**。與票 102 那 72 筆「無法判定」同一條:
+> **留白比蓋章誠實。**
+
+## 全套數字(逐名對帳)
+
+| 時點 | passed | skipped | xfailed | failed | passed+failed |
+|---|---|---|---|---|---|
+| **動工前基線**(票 103 收刀) | **1270** | 3 | 3 | 0 | — |
+| **10 條加完(突變前)** | **1280** | 3 | 3 | 0 | **1280** |
+| 突變 ① | 1277 | 3 | 3 | **3** | **1280** |
+| 突變 ② | 1273 | 3 | 3 | **7** | **1280** |
+| 突變 ③ | 1279 | 3 | 3 | **1** | **1280** |
+| 突變 ④ | 1279 | 3 | 3 | **1** | **1280** |
+| 突變 ⑤ | 1278 | 3 | 3 | **2** | **1280** |
+| 突變 ⑥ | 1279 | 3 | 3 | **1** | **1280** |
+| 突變 ⑦ | 1278 | 3 | 3 | **2** | **1280** |
+| **收刀** | **1280** | 3 | 3 | 0 | **1280** |
+
+**1270 + 10 = 1280**,而**九次量測**的 `passed + failed` 全部等於 1280。
+**skipped / xfailed 全程 3 / 3,零新增 skip。**
+
+> ⚠ **基線 1270 沒有重算,理由**(`F-109`):基線量在票 103 收刀(`d2312ea`),
+> 而中間只隔本票刀一(`7111009`,一個 `.md`)。**沒有任何 `.py` 進出。**
+> 日後對帳不是 1270 時,**先查那一筆 commit**,不要直接歸因到本票。
+
+### 10 條逐名
+
+| # | 名稱 | 格 | 紅燈來源 |
+|---|---|---|---|
+| 1 | `test_an_aliased_import_is_still_a_research_import` | 3 | 輪⑤ |
+| 2 | `test_an_aliased_dotted_import_is_still_a_research_import` | 4 | 輪⑤ |
+| 3 | `test_research_among_several_names_on_one_line_is_caught` | 5 | 輪④ |
+| 4 | `test_a_star_import_is_still_a_research_import` | 8 | 輪② |
+| 5 | `test_a_relative_import_of_the_package_name_is_not_caught` | 9 | 輪⑦ |
+| 6 | `test_a_two_level_relative_import_is_not_caught` | 10 | 輪⑦ |
+| 7 | `test_a_relative_import_whose_module_is_research_is_caught` | 11 | 輪②、⑥ |
+| 8 | `test_a_plain_import_is_blocked_through_check` | check() | 🔴 無 |
+| 9 | `test_a_dotted_import_is_blocked_through_check` | check() | 🔴 無 |
+| 10 | `test_a_dotted_from_import_is_blocked_through_check` | check() | 輪② |
+
+前 7 條在 `TestTheSyntaxAxisIsEnumeratedNotSampled`,後 3 條在
+`TestR8BlocksThroughCheckNotJustThePredicate`,**皆在 `tests/test_research_stage.py`,零個新檔案**。
+
+## `gate.py` 回到動工前 —— **三個獨立口徑**
+
+| 口徑 | 做法 | 結果 |
+|---|---|---|
+| ① 對工作樹 | 每輪還原後 `git diff --stat .claude/hooks/gate.py` | **七次都無輸出** |
+| ② 對動工前 commit | `git diff 7111009 --stat -- .claude/hooks/gate.py` | **無輸出** |
+| ③ **帳本鏈**(獨立於 git) | `python .claude/portable/ledger_verify.py --diff` | **筆數 14 / 首尾相等:是 / 逐段接續:是** |
+
+### 帳本比 `git diff` 多說的那一件事
+
+七個突變雜湊**互不相同**:
+
+```
+c04ff9a094f5  dec5864053c7  98ad486e5893  0a428687c1dc
+f108866aebf0  75e5f6d72ca0  9bd3d7c81bf0
+```
+
+⇒ **七輪真的各改到了不同的東西**,不是同一個編輯做了七次。
+**`git diff --stat` 只能說「現在是原樣」,說不出中間去過哪裡。**
+
+## 帳本(刀三)
+
+| | |
+|---|---|
+| 追加 | **14 筆**,`git diff --numstat` = `14  0` —— **純追加零刪除** |
+| 總數 | 181 → **195** |
+| 欄位 | 全部 `ticket=104`、`tool=Edit`、`reason=gate-self-modification` |
+| 首尾接續 | 第 181 筆(票 103 末筆)`result_hash` = `b6b06c082b53…becced`,第 182 筆 `content_hash` **逐字相同** ⇒ 接縫成立 |
+| 歷史斷點 | 全檔仍是 **27 處**(與票 103 收票時**同一個數字**)⇒ **本輪零新增斷點**;`grep "第 1[89][0-9] 筆結束於"` 無命中 |
+
+## CI 對帳
+
+**留白,待推後填。**(三刀 + 收票**均未推**,照裁決停在本機。)
+
+| | |
+|---|---|
+| run id | (待填) |
+| 跑測試 | (待填) |
+| 淨室驗證 | (待填) |
+| CI 與本機的差額 | (待填,逐項算,不寫「環境不同」;`−12` 那一列**要重量**,不得從票 103 抄) |
+
+## ⚠ 這 10 條證明了什麼、沒證明什麼
+
+**證明了**:R8 的語法軸 11 格**全部有斷言**(先前只有 4 格),
+而其中 8 條由七輪突變證明**咬得到**。
+
+**沒證明**:R8 的**設計**是對的。
+格 11(`from .research import x` → 擋)是**現行行為**,不是理想行為 ——
+測試裡逐字寫著「未裁是否正確」,要不要改是候選一。
+
+**也沒證明**:那 11 格就是全部。
+枚舉的依據是 `ast.Import` / `ast.ImportFrom` 兩個型別,
+**而「R8 只需要管這兩個型別」本身是一個判斷** ——
+`F-060` 逐字記過同一個洞:「R8 只看 AST 的 Import/ImportFrom:**字串型動態 import 全放行**」。
+**本票沒有碰那一面。**
+
+---
+
+# 本票產出的 friction
+
+**`F-158` 枚舉補得完測試,補不完紅燈 —— 沒有分支的行為造不出反例**
+(`docs/agents/friction-log.md`)。
+
+由來:本票第三節那張 3/10 的表。兩句判準逐字:
+
+> **枚舉補的是斷言,突變補的是紅燈。**
+> **沒有分支的行為,只能由「模擬未來的弄窄」提供紅燈。**
+
+`F-158` 反過來引本票作為落地出處,並收錄「`check()` 版兩條連這個修法都救不了」那一格。
