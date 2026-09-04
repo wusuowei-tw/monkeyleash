@@ -509,11 +509,37 @@ def _report_value(root):
         return u"%s(%s)" % (UNRECORDED, why)
 
     head = _git(root, ["log", "-1", "--format=%cI"])
-    behind = _git(root, ["rev-list", "--count", "HEAD"])
     parts = [name]
     parts.append(u"HEAD %s" % (head.strip() if head else UNRECORDED))
-    parts.append(u"樹共 %s 筆 commit" % (behind.strip() if behind else UNRECORDED))
+    parts.append(u"回報後 %s 筆" % _commits_since_report(root, name))
     return u";".join(parts)
+
+
+_REPORT_STAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})T(\d{2})(\d{2})(\d{2})Z-")
+
+
+def _commits_since_report(root, name):
+    """回報那一刻**之後** HEAD 多了幾筆 commit。答不出來回 `UNRECORDED`。
+
+    🔴 **第一版寫成 `git rev-list --count HEAD`,那是【樹的總 commit 數】** ——
+    它回答的是「這棵樹有多大」,**對「這份回報過期沒有」一個字都沒說**。
+    而它每一輪都會變大,所以**看起來像在動、像有意義**
+    (裁決者 2026-09-04 在 Desktop 上看到 `樹共 348 筆 commit` 當場問出來)。
+
+    **判準**:一個欄位的值,要能回答**它旁邊那個欄名問的問題**。
+    「report(回報)」問的是**新不新**,不是**樹多大**。
+
+    時間取自**檔名**(`YYYY-MM-DDTHHMMSSZ-`),不取 mtime ——
+    與 `latest_report_name()` 同一條理由(`F-135`:mtime 會被 checkout 重設,
+    而那件事完全無聲)。**同一份資料只能有一個時間來源**,
+    混用的話「它們不一致」不會有人發現。
+    """
+    m = _REPORT_STAMP_RE.match(name or u"")
+    if not m:
+        return UNRECORDED
+    since = u"%sT%s:%s:%sZ" % (m.group(1), m.group(2), m.group(3), m.group(4))
+    out = _git(root, ["rev-list", "--count", "--since=" + since, "HEAD"])
+    return out.strip() if out else (u"0" if out == u"" else UNRECORDED)
 
 
 def _evidence(root, gate, ticket):

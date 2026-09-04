@@ -874,3 +874,107 @@ class TestEvidenceHasAReportLine:
 
         assert a is not None and b is not None, (a, b)
         assert a != b, u"沒目錄與空目錄印了相同的一行:%r" % a
+
+
+def _git_here(root, *args):
+    """在 root 底下跑一條 git。測試自己用,不經 status 的 `_git`。
+
+    **不共用被測模組的 helper** —— 用它來造材料的話,
+    `_git` 壞掉時這一組會**一起壞掉而看起來像通過**(材料與量測同源,`F-152`)。
+    """
+    out = subprocess.run(["git"] + list(args), cwd=str(root),
+                         capture_output=True)
+    assert out.returncode == 0, (args, out.stderr.decode("utf-8", "replace"))
+    return out.stdout.decode("utf-8", "replace").strip()
+
+
+def _commit_at(root, msg, when):
+    """在 root 造一筆 commit,**author/committer date 都釘在 `when`**。
+
+    只釘 author date 的話 `--since` 讀的是 committer date,那筆會落在錯的一側 ——
+    而錯的方向是「看起來沒過期」,剛好是最不會被發現的那一種。
+    """
+    p = root / (msg + u".txt")
+    with io.open(str(p), "w", encoding="utf-8") as f:
+        f.write(msg)
+    _git_here(root, "add", "-A")
+    env_args = ["-c", "user.name=t", "-c", "user.email=t@t",
+                "-c", "commit.gpgsign=false"]
+    out = subprocess.run(
+        ["git"] + env_args + ["commit", "-m", msg, "--date", when],
+        cwd=str(root), capture_output=True,
+        env=dict(os.environ, GIT_COMMITTER_DATE=when,
+                 GIT_AUTHOR_DATE=when))
+    assert out.returncode == 0, out.stderr.decode("utf-8", "replace")
+
+
+class TestReportLineSaysHowStaleTheReportIs:
+    """票 105 收票追加:`report:` 的第三欄要答「**回報之後 HEAD 多了幾筆**」。
+
+    🔴 **第一版做成 `git rev-list --count HEAD`(樹的總 commit 數)** ——
+    那個數字回答的是「這棵樹有多大」,**對「這份回報過期沒有」一個字都沒說**,
+    而它每一輪都會變大,所以**看起來像在動、像有意義**。
+
+    判準:**這個欄位的值,能不能回答它旁邊那個欄名問的問題?**
+    「report(回報)」問的是**新不新**,不是**樹多大**。
+
+    ⚠ 而它之所以撐過了 25 條測試與三層驗收,是因為
+    **一個每輪都會變大的數字,看起來像在動、像有意義** ——
+    抓到它的是裁決者在 Desktop 上看一眼,不是任何一條斷言。
+    """
+
+    def _repo_with_report(self, tmp_path, report_stamp, commits):
+        """造一個真 git repo,`.dev/reports/` 放一份檔,再依 `commits` 造 commit。
+
+        `report_stamp` 是檔名裡的那個 UTC 戳(`YYYY-MM-DDTHHMMSSZ`)。
+        """
+        root = tmp_path / u"gitrepo"
+        root.mkdir()
+        _git_here(root, "init", "-q")
+        _git_here(root, "config", "user.name", "t")
+        _git_here(root, "config", "user.email", "t@t")
+
+        d = root / ".dev" / "reports"
+        d.mkdir(parents=True)
+        with io.open(str(d / (report_stamp + u"-ticket-105.md")), "w",
+                     encoding="utf-8") as f:
+            f.write(u"## 第一段【給裁決者】\nx\n")
+
+        for i, when in enumerate(commits):
+            _commit_at(root, u"c%d" % i, when)
+        return root
+
+    def test_a_report_newer_than_head_counts_zero(self, tmp_path):
+        """回報比 HEAD 新 → **0 筆**。"""
+        root = self._repo_with_report(
+            tmp_path, u"2026-09-04T083627Z",
+            [u"2026-09-04T08:00:00+00:00"])          # commit 在回報之前
+        val = status._report_value(str(root))
+        assert u"回報後 0 筆" in val, val
+
+    def test_commits_after_the_report_are_counted(self, tmp_path):
+        """HEAD 有回報之後的 commit → **N 筆**。"""
+        root = self._repo_with_report(
+            tmp_path, u"2026-09-04T083627Z",
+            [u"2026-09-04T08:00:00+00:00",          # 之前,不算
+             u"2026-09-04T09:00:00+00:00",          # 之後,算
+             u"2026-09-04T10:00:00+00:00"])         # 之後,算
+        val = status._report_value(str(root))
+        assert u"回報後 2 筆" in val, val
+
+    def test_the_field_is_not_the_total_commit_count(self, tmp_path):
+        """**負控:不得是樹的總 commit 數。**
+
+        少了這一條,一個回 `rev-list --count HEAD` 的實作在「有 2 筆」那格
+        會印 3(總數),而 `"回報後 2 筆" in val` 為假 —— 上面那條抓得到。
+        但**「0 筆」那格抓不到**:一個 commit 的樹,總數 1、回報後 0,
+        兩個數字不同所以碰巧會紅;**而兩筆 commit 且都在回報之前時,
+        總數 2、回報後 0** —— 這一格才是真的分得開。
+        """
+        root = self._repo_with_report(
+            tmp_path, u"2026-09-04T083627Z",
+            [u"2026-09-04T07:00:00+00:00",
+             u"2026-09-04T08:00:00+00:00"])         # 兩筆都在回報之前
+        val = status._report_value(str(root))
+        assert u"回報後 0 筆" in val, val
+        assert u"樹共" not in val, u"仍在印樹的總數:%r" % val
