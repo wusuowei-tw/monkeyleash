@@ -519,3 +519,111 @@ class TestReviewModeUsesAnExtensionAllowlist:
         f = _write_named(tmp_path, "prod.env.backup", "nothing suspicious here")
         assert ls.scan([f]) == 0
         assert "未內容掃描" not in capsys.readouterr().err
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 106 —— `main()` 的 argv 處理:一個檔都沒掃也回 0
+#
+# `leak_scan.py:278` 的 `return scan(paths, review=review) if paths else 0`
+# 把三條路徑收斂成同一個靜默出口:
+#
+#   A 不認得的旗標(`--help` / `--foo` / **`--stage` 打錯**)-> 回 0,零輸出
+#   B 零路徑                                                -> 回 0,零輸出
+#   C `--staged` 但清單為空                                  -> 回 0
+#
+# **A 與 B 是缺陷,C 不是。** C 碰得到(`--allow-empty`、純刪除 `D`、mode-only),
+# 而把它判成 2 會造出一個**永遠無法滿足的條件** —— `scanner.py:219-222` 對
+# gitlink 逐字記過同一個教訓:使用者沒有任何合法動作能讓它變乾淨。
+#
+# **A 比 B 更壞**:B 需要有人手動不給參數,A 只需要打錯一個字元 ——
+# `--stage` 少一個 `d`,`|| exit 1` 不觸發,commit 照常成功,
+# 而洩漏偵測整層從此不在,沒有任何東西會說。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestMainNeverReturnsZeroWithoutScanning:
+    """票 106 —— 「掃過了乾淨」與「一個檔都沒掃」不得回同一個退出碼。
+
+    `F-155` 的形狀落在洩漏偵測本身:兩者今天在退出碼**與輸出**上都逐字相同。
+    """
+
+    def test_an_unknown_flag_is_a_mechanism_error(self, capsys):
+        """① **不認得的旗標 -> exit 2,而且訊息要點名它。**
+
+        判準寫「**未知**旗標」而不是「所有旗標」——
+        `--staged` / `--review` / `--help` 都是認得的,不走這條。
+        點名的理由:一個只說「用法不對」的訊息,對
+        `--stage`(少一個 `d`)這種錯**幫不上忙** ——
+        人會盯著那一行看半天,而差別只有一個字元。
+        """
+        rc = ls.main(["--foo"])
+        err = capsys.readouterr().err
+        assert rc == 2, u"不認得的旗標回了 %r,而不是 2(機制錯誤)" % rc
+        assert "--foo" in err, u"訊息沒有點名那個旗標:%r" % err
+
+    def test_a_mistyped_staged_flag_is_caught(self, capsys):
+        """① 的實際形狀:`--stage` 少一個 `d`。
+
+        **這一條才是本票真正要防的那個** —— 它不需要任何人做錯事,
+        只需要打錯一個字元,而現況是**完全靜默地什麼都不掃**。
+        """
+        rc = ls.main(["--stage"])
+        err = capsys.readouterr().err
+        assert rc == 2, u"`--stage`(打錯的 `--staged`)回了 %r,靜默放行" % rc
+        assert "--stage" in err, err
+
+    def test_no_paths_at_all_is_a_mechanism_error(self, capsys):
+        """② **零路徑 -> exit 2**,訊息要說「沒有給任何路徑」。
+
+        與 ① 分開測:兩者今天走同一行(`:278`),而**修法可以只修一半** ——
+        一個只擋未知旗標的實作會讓這一條仍然靜默回 0。
+        """
+        rc = ls.main([])
+        err = capsys.readouterr().err
+        assert rc == 2, u"零路徑回了 %r,而不是 2" % rc
+        assert "沒有給任何路徑" in err, u"訊息沒說出是什麼問題:%r" % err
+
+    def test_help_prints_usage_and_exits_zero(self, capsys):
+        """③ **`--help` -> 印用法,exit 0**(裁四:甲案)。
+
+        ⚠ **這一條的紅在「沒有輸出」那一半,不是退出碼那一半** ——
+        `--help` 今天**本來就回 0**。
+        **寫成只斷言退出碼的話,它從第一天就是綠的,而且永遠不會紅**(`F-158`)。
+
+        本票的病是**靜默**,不是 exit 0 本身:`--help` 印了用法就不靜默了,
+        而「查用法回機制錯誤」會讓人以為裝壞了。
+        """
+        rc = ls.main(["--help"])
+        cap = capsys.readouterr()
+        out = cap.out + cap.err
+        assert rc == 0, u"`--help` 回了 %r" % rc
+        assert "用法" in out and "--staged" in out, (
+            u"`--help` 沒有印出用法(檔頭 :7-9 那三行):%r" % out[:200])
+
+    def test_an_empty_staged_list_still_returns_zero(self, monkeypatch, capsys):
+        """④ **負控:`--staged` 但清單為空,仍要回 0。**
+
+        🔴 **這一條寫完就是綠的,而它是本組最要緊的一條。**
+
+        C 碰得到:`git commit --allow-empty`、**純刪除**(`staged_paths` 用
+        `--diff-filter=ACM`,`D` 不在裡面)、mode-only 改動。
+        把它判成 2,就是把「**沒有東西要掃這回事**」判成「掃描機制壞了」,
+        造出一個**永遠無法滿足的條件** —— 使用者沒有任何合法動作
+        能讓一個 `--allow-empty` 的 commit 變得「有檔案可掃」。
+        `scanner.py:219-222` 對 gitlink 逐字記過同一個教訓。
+
+        **「問不到」早就回 2 了**(`scanner.staged_paths` 對非零退出碼 raise),
+        所以這裡回 0 是對的,不是漏網。
+
+        ⚠ **沒有這一條,下一個人會順手把三條都改成 2** ——
+        而那個改動**讀起來會像「把 fail-closed 做得更徹底」**。
+        """
+        class _R:
+            returncode = 0
+            stdout = b""
+            stderr = b""
+        monkeypatch.setattr(ls.subprocess, "run", lambda *a, **k: _R())
+        rc = ls.main(["--staged"])
+        err = capsys.readouterr().err
+        assert rc == 0, u"沒有 staged 檔卻回了 %r —— 那會擋死 --allow-empty" % rc
+        assert "機制" not in err and "沒有給任何路徑" not in err, (
+            u"沒有 staged 檔被說成機制錯誤:%r" % err)

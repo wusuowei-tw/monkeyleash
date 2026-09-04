@@ -1,6 +1,6 @@
 # 106 — `leak_scan` 一個檔都沒掃也回 0:「乾淨」與「什麼都沒掃」在退出碼上逐字相同
 
-**狀態**:**立案、未實作**(2026-09-04)
+**狀態**:**完成**(2026-09-04)—— 四條紅燈 ①②③ 紅 / ④ 綠皆與票面第五節相符,實作後全綠;④ 的突變一輪**預測全中**。~~立案、未實作~~(`F-036`:舊狀態不刪)
 **時鐘**:**無外部時鐘。** 理由是這條路徑今天就走得到 ——
 `--help` 是日常入口,而**一個打錯的旗標(`--stage` 少一個 `d`)會讓整層偵測靜默消失**
 **站別**:`idle`(立案時);刀二開工前由 Jeff 切成 `implement`,`ticket_id = 106`
@@ -308,3 +308,174 @@ helper 漏關一條、`FRICTION_LOG` import 時算好、格 11 設計題、`:106
 
 ⚠ **本票修的是「靜默」,不是「exit 0」** —— 這一句寫在這裡,
 因為裁四選了甲(`--help` 仍回 0),而**那個選擇只有在這句話成立時才對**。
+
+---
+
+# 落地紀錄(2026-09-04)
+
+## 刀
+
+| 刀 | sha | 內容 |
+|---|---|---|
+| 一(立案) | `c62bbd3` | 票面 |
+| 二 + 三(紅燈 + 實作) | (本刀) | `tests/test_leak_scan.py` 5 條 + `leak_scan.py` |
+
+## 刀二:①②③ 紅、④ 綠 —— **與票面第五節逐條相符**
+
+```
+4 failed, 1 passed in 0.14s
+```
+
+| 票面 # | 測試 | 實測 | 第一行 assertion |
+|---|---|---|---|
+| ① | `test_an_unknown_flag_is_a_mechanism_error` | **紅** | `AssertionError: 不認得的旗標回了 0,而不是 2(機制錯誤)` / `assert 0 == 2` |
+| ①(實際形狀) | `test_a_mistyped_staged_flag_is_caught` | **紅** | `AssertionError: --stage(打錯的 --staged)回了 0,靜默放行` / `assert 0 == 2` |
+| ② | `test_no_paths_at_all_is_a_mechanism_error` | **紅** | `AssertionError: 零路徑回了 0,而不是 2` / `assert 0 == 2` |
+| ③ | `test_help_prints_usage_and_exits_zero` | **紅** | `AssertionError: --help 沒有印出用法(檔頭 :7-9 那三行):''` / `assert ('用法' in '')` |
+| ④ | `test_an_empty_staged_list_still_returns_zero` | **綠** | —— |
+
+> ### **③ 紅在 `assert '用法' in ''` —— 正是票面預告的「沒有輸出」那一半。**
+> 退出碼那一半本來就綠(`--help` 今天就回 0)。
+> **把 ③ 寫成只斷言退出碼的話,它從第一天就是綠的,而且永遠不會紅**(`F-158`)。
+
+⇒ **零筆「該紅的綠」、零筆「紅在別的理由」**,照裁決不停,直接接刀三。
+
+## 刀三:實作
+
+| 動了什麼 | 位置 |
+|---|---|
+| `KNOWN_FLAGS = ("--staged", "--review", "--help", "-h")` | `leak_scan.py`,`HERE` 之後 |
+| `USAGE`(與檔頭「用法:」三行同一份內容) | 同上 |
+| `--help` / `-h` → 印 `USAGE`,**回 0** | `main()` 開頭 |
+| 未知旗標 → **點名它** + 印 `USAGE`,**回 2** | 同上 |
+| `--staged` 分支末尾 **明文保留 `else 0`** + 六行理由註解 | `main()` |
+| 非 `--staged` 且零路徑 → 訊息 + **回 2** | `main()` 末 |
+| 檔頭退出碼三行(裁五) | `:18` 起 |
+
+**旗標用枚舉不用 pattern** —— `F-158` 的同一條:封閉集合該枚舉。
+少了 `KNOWN_FLAGS`,`--stage` 會被當成「某個旗標」濾掉,而那正是本票要防的。
+
+`USAGE` **不另寫第二份** —— 兩份會漂開,而漂開的那一天沒有東西會說
+(同 `friction_heading.HEADING` 與 `gate._FRICTION_HEADING` 那兩份正則的教訓)。
+
+### 實測(真實執行,非單元測試)
+
+```
+$ python .claude/portable/leak_scan.py --help
+用法:
+  python .claude/portable/leak_scan.py --staged      掃 git staged 檔案(pre-commit)
+  python .claude/portable/leak_scan.py <檔案...>      掃指定檔案
+  旗標:--staged / --review / --help
+help_exit=0
+
+$ python .claude/portable/leak_scan.py --stage
+[洩漏偵測/機制錯誤] 不認得的旗標:--stage
+用法:
+  …
+mistyped_exit=2
+
+$ python .claude/portable/leak_scan.py
+[洩漏偵測/機制錯誤] 沒有給任何路徑,而且沒有 --staged。
+用法:
+  …
+noargs_exit=2
+```
+
+🔴 **`--stage` 現在點名它自己** —— 而這正是本票第一節說的那個「差別只有一個字元」的錯。
+
+## ④ 的突變一輪 —— **預測全中**
+
+| | 預測 | 實測 |
+|---|---|---|
+| 突變 | `:322` `else 0` → `else 2` | 同 |
+| 紅 | **1 條:④** | **1 條:④** ✅ |
+| 綠 | ①②③ | ①②③ ✅ |
+
+```
+FAILED tests/test_leak_scan.py::TestMainNeverReturnsZeroWithoutScanning::test_an_empty_staged_list_still_returns_zero
+1 failed, 44 passed in 3.23s
+```
+
+**這一輪模擬的正是「下一個人順手把三條都改成 2」那個動作,而 ④ 紅就是它被擋下的樣子。**
+
+### 還原驗收 —— ⚠ **本票的口徑與票 103/104 不同,寫明差別**
+
+| 口徑 | 票 103/104 | **本票** |
+|---|---|---|
+| `git diff --stat` 對動工前 commit | 無輸出(`gate.py` 全程未改) | 🔴 **有輸出** —— 因為刀三**本來就要改** `leak_scan.py`,而它尚未 commit |
+| **帳本鏈** | 14 筆逐段接續 | 🔴 **零筆** —— `.dev/gate-exemptions.jsonl` 只記 `gate.py` 的自我修改,`grep -c leak_scan` = **0** |
+| 可用的還原口徑 | 三個 | **兩個**(見下) |
+
+**本票實際用的兩個口徑**:
+
+| # | 做法 | 結果 |
+|---|---|---|
+| ① | `grep -n "if paths else" leak_scan.py` | **`:322 … if paths else 0`** —— 突變已還原 |
+| ② | 突變後重跑該檔全套 | **`45 passed`**(與突變前相同) |
+
+> ⚠ **誠實標註:本票沒有帳本那一個獨立口徑。**
+> `ledger_verify --diff` 回「筆數 0」——**不是鏈壞了,是這支檔案不在帳本的涵蓋範圍內**
+> (帳本只記 `gate.py` 的自我修改豁免)。
+> **「零筆」與「鏈斷了」在那份輸出上分得出來**(它另印「逐段接續:是」),
+> 但**不寫出來的話,下一個人會以為本票也做了三口徑驗收**。
+
+## 全套數字(逐名對帳)
+
+| 時點 | passed | skipped | xfailed | failed |
+|---|---|---|---|---|
+| **動工前基線**(票 105 收票後) | **1308** | 3 | 3 | 0 |
+| 刀二(該檔局部) | 1 | — | — | **4** |
+| 刀三後(該檔局部) | 45 | — | — | 0 |
+| 突變輪(該檔局部) | 44 | — | — | **1** |
+| **收刀全套** | **1313** | 3 | 3 | **0** |
+
+**`1308 + 5 = 1313`**,5 逐名:
+
+| 測試 | 對應 |
+|---|---|
+| `test_an_unknown_flag_is_a_mechanism_error` | ① |
+| `test_a_mistyped_staged_flag_is_caught` | ①(實際形狀) |
+| `test_no_paths_at_all_is_a_mechanism_error` | ② |
+| `test_help_prints_usage_and_exits_zero` | ③ |
+| `test_an_empty_staged_list_still_returns_zero` | ④(負控) |
+
+全部在 `tests/test_leak_scan.py::TestMainNeverReturnsZeroWithoutScanning`,**零個新檔案**。
+該檔 collect 由 **40 → 45**,與局部跑的 `45 passed` 相符。
+**skipped / xfailed 全程 3 / 3,零新增 skip。**
+
+> ⚠ **基線 1308 沒有重算,理由**(`F-109`):基線量在票 105 收票後(`99adb08`),
+> 中間只隔本票刀一(`c62bbd3`,一個 `.md`)。**沒有任何 `.py` 進出。**
+> 日後對帳不是 1308 時,**先查那一筆 commit**。
+
+## manifest 與下游(裁六)
+
+`leak_scan.py` **不在逐檔清單裡**,由 `.agents/portable-manifest.txt:64` 的
+`.claude/portable/ copy` 整個目錄帶走;`tests/test_leak_scan.py` 標 `copy`(`:108`)。
+
+> ### **實作 + 測試同為 `copy`,併入既有待 sync 積壓。**
+
+(裁決端稱那批積壓為「sync 輪二」= 9/1 起上游→兩下游的同步;
+**repo 內無此詞,本票不造這個詞,也不在本票處理那批同步。**)
+
+## CI 對帳
+
+**留白,待推後填。**(兩刀**均未推**,照裁決停在本機。)
+
+| | |
+|---|---|
+| run id | (待填) |
+| 跑測試 | (待填) |
+| 淨室驗證 | (待填,`−12` 那列**要重量**;⚠ 淨室增量取**manifest 標 copy 的那些檔**的條數,不是本機新增總數 —— 票 105 在這一格錯過一次) |
+| CI 與本機的差額 | (待填,逐項算) |
+
+## ⚠ 這 5 條證明了什麼、沒證明什麼
+
+**證明了**:`main()` 的 argv 處理**不再有靜默出口** ——
+未知旗標與零路徑會出聲並回 2,`--help` 會印用法,而 `--staged` 空清單**仍然回 0**。
+
+**沒證明**:`scan()` 內部的任何事。本票只動 `main()` 與檔頭。
+
+**也沒證明**:`KNOWN_FLAGS` 那個枚舉是完整的。
+它枚舉的是**今天存在的旗標**,而**新增一個旗標卻忘了加進去**時,
+那個新旗標會被判成「不認得」→ 回 2 → **fail-closed,會出聲**。
+⇒ 方向是對的,但**沒有任何測試釘住「新增旗標要同步更新 KNOWN_FLAGS」**。

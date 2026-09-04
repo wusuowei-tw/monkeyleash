@@ -15,7 +15,13 @@ staged 清單問不到 → 機制錯誤。讀不到就放行的話,刪掉 patter
 那個理由對**選項名**成立,對**金鑰**完全不成立 —— `.md` 裡的金鑰就是外洩的金鑰。
 豁免綁在規則組上,所以合一沒有把這個差異壓平。
 
-退出碼:0 = 乾淨,1 = 有命中(擋 commit),2 = 機制自身錯誤。
+退出碼:0 = **掃過了而且乾淨**(掃了零個檔不算,見 `main()`),
+       1 = 有命中(擋 commit),
+       2 = 機制自身錯誤(**含:不認得的旗標、沒有給任何路徑**)。
+
+⚠ `2` 那一格的括號是票 106 加的:它的涵蓋從「git 問不到清單」擴到
+「呼叫方式不對」是**一次語意擴張**。不寫出來的話,下一個讀的人會以為
+`2` 只在 git 壞掉時出現 —— **而那正是票 106 要修的那個誤解的鏡像**。
 """
 
 import io
@@ -28,6 +34,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scanner                                              # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# 票 106。**旗標是封閉集合,所以用枚舉不用 pattern**(`F-158` 的同一條)。
+# 少了它,`--stage`(打錯的 `--staged`)會被當成「某個旗標」濾掉,
+# 而 `paths` 變空 → 回 0 → **整層偵測靜默消失**,`|| exit 1` 也不觸發。
+KNOWN_FLAGS = ("--staged", "--review", "--help", "-h")
+
+# 用法字串 —— 與檔頭 `用法:` 那三行同一份內容。
+# 兩份會漂開,而漂開的那一天沒有東西會說
+# (同 `friction_heading.HEADING` 與 `gate._FRICTION_HEADING` 那兩份正則的教訓)。
+USAGE = (u"用法:\n"
+         u"  python .claude/portable/leak_scan.py --staged      掃 git staged 檔案(pre-commit)\n"
+         u"  python .claude/portable/leak_scan.py <檔案...>      掃指定檔案\n"
+         u"  旗標:--staged / --review / --help\n")
 ROOT = os.path.dirname(os.path.dirname(HERE))
 
 # 通用形狀,進版控,可公開。
@@ -262,6 +281,22 @@ def main(argv):
     **刻意不是預設** —— 把審查模式的嚴格度倒灌回 pre-commit,
     每天的 commit 會開始被陌生副檔名擋,而**被煩到的規則會被關掉**。
     """
+    if "--help" in argv or "-h" in argv:
+        # **裁四(甲案)**:印用法、回 0。
+        # 本票的病是**靜默**,不是 exit 0 本身 —— 印了用法就不靜默了,
+        # 而「查用法回機制錯誤」會讓人以為裝壞了。
+        _err(USAGE)
+        return 0
+
+    unknown = [a for a in argv if a.startswith("-") and a not in KNOWN_FLAGS]
+    if unknown:
+        # **點名那個旗標**,不只說「用法不對」。
+        # 一個只說用法不對的訊息,對 `--stage`(少一個 `d`)這種錯幫不上忙 ——
+        # 人會盯著那一行看半天,而差別只有一個字元。
+        _err("[洩漏偵測/機制錯誤] 不認得的旗標:%s\n%s"
+             % (" ".join(unknown), USAGE))
+        return 2
+
     review = "--review" in argv
     if "--staged" in argv:
         gitlinks = []
@@ -273,9 +308,24 @@ def main(argv):
         if gitlinks:
             _err(gitlink_note(gitlinks))
         paths = [os.path.join(ROOT, p.replace("/", os.sep)) for p in rels]
-    else:
-        paths = [a for a in argv if not a.startswith("--")]
-    return scan(paths, review=review) if paths else 0
+        # ⚠ **這裡【刻意】允許空清單回 0**(票 106 裁二)。
+        # C 碰得到:`git commit --allow-empty`、**純刪除**(本函式用
+        # `--diff-filter=ACM`,`D` 不在裡面)、mode-only 改動。
+        # 把它判成 2,就是把「**沒有東西要掃這回事**」判成「掃描機制壞了」,
+        # 造出一個**永遠無法滿足的條件** —— 使用者沒有任何合法動作
+        # 能讓一個 `--allow-empty` 的 commit 變得「有檔案可掃」。
+        # `scanner.py` 對 gitlink 逐字記過同一個教訓。
+        #
+        # **「問不到」早就回 2 了**(上面那個 `StagedListingFailed`),
+        # 所以這裡回 0 是對的,不是漏網。
+        # 負控:`tests/test_leak_scan.py::…::test_an_empty_staged_list_still_returns_zero`。
+        return scan(paths, review=review) if paths else 0
+
+    paths = [a for a in argv if not a.startswith("-")]
+    if not paths:
+        _err("[洩漏偵測/機制錯誤] 沒有給任何路徑,而且沒有 --staged。\n%s" % USAGE)
+        return 2
+    return scan(paths, review=review)
 
 
 if __name__ == "__main__":
