@@ -829,3 +829,105 @@ class TestDecodingDoesNotOverreach:
         """空檔案是合法的文字檔,不是壞檔案 —— 可讀性檢查不得把它擋掉。"""
         text, why = sc.read_text(_wb(tmp_path, "empty.txt", b""))
         assert why is None and text == u""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 110 —— UTF-32:BOM 嗅探只認 2 位元組,而 `FF FE` 是 `FF FE 00 00` 的前綴
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# **失效形狀與票 109 不同,這一格要先講清楚**(票面第零節,`F-149`):
+# 票 109 的 UTF-16 是**靜默漏放**(`read_text` 成功、解出亂碼、`scan()` 回 0);
+# 本票的 UTF-32 是**擋下但沒有診斷**(`read_text` fail-closed、`scan()` 回 1、
+# 報告列成 `<讀不到內容>`)。**兩張票的機制相鄰,後果不相鄰。**
+#
+# ⇒ 所以這一組正對照斷言的是 **`read_text` 解得開而且樣本還在**,
+# 不是「這個檔被擋下」—— 後者今天就成立,而它成立的理由正是這一票要修的東西。
+#
+# **順序陷阱**(票面第二節):
+#
+#     UTF-32 LE BOM   FF FE 00 00
+#     UTF-16 LE BOM   FF FE            <- 前綴重疊
+#
+# 先試短的必然截走長的。`test_the_two_byte_bom_is_a_prefix_of_the_four_byte_one`
+# 把這個事實本身釘住 —— 它不測行為,測的是**這條規矩的前提**。
+# 另一側 `00 00 FE FF` **不以** `FE FF` 開頭,沒有前綴問題;
+# 「兩側對稱」在這裡只有一半成立,所以兩側都要有案例。
+
+
+class TestReadTextUnderstandsUtf32:
+    """**八格 = 四態 × 兩種內容。**
+
+    ⚠ **裁決字面只列三態**(LE+BOM / BE+BOM / LE 無 BOM)。
+    第四態(**BE 無 BOM**)是我加的 —— 立案實測時它與另外三態一樣壞
+    (八格全部 fail-closed),而它走的是同一段修法。
+    **測了才知道修法真的涵蓋它;不測的話它是一個沒有人在守的假設。**
+    要拿掉說一聲。
+
+    兩種內容不是湊數:純 ASCII 的 UTF-32 在階梯**第一格** `utf-8-sig`
+    就「成功」(ASCII 與 NUL 都是合法 UTF-8),含 CJK 的走別條路 ——
+    與票 109 同一個理由,只測一種等於只驗一條路。
+    """
+
+    @pytest.mark.parametrize("content", [_ASCII_LINE, _CJK_LINE],
+                             ids=["ascii", "cjk"])
+    @pytest.mark.parametrize("bom,endian", [
+        (b"\xff\xfe\x00\x00", "le"), (b"\x00\x00\xfe\xff", "be"),
+        (b"", "le"), (b"", "be"),
+    ], ids=["le-bom", "be-bom", "le-nobom", "be-nobom"])
+    def test_the_secret_survives_decoding(self, tmp_path, content, bom, endian):
+        raw = bom + content.encode("utf-32-" + endian)
+        text, why = sc.read_text(_wb(tmp_path, "probe.env", raw))
+        assert why is None, (
+            u"UTF-32 解不開 —— 走到 fail-closed 出口:%s\n"
+            u"    這個檔是標準編碼的文字檔,裡面有一把讀得出來的金鑰,"
+            u"而診斷說它「可能是二進位或未知編碼」。" % why)
+        assert _AWS in text, (
+            u"解出來的文字裡找不到樣本 —— 這個檔不是「掃過乾淨」,"
+            u"是「解成亂碼之後沒命中」。解出來的前 40 字:%r" % text[:40])
+
+
+class TestTheFourByteBomIsTriedFirst:
+    """**順序判準的前提本身要有測試釘著,不能只寫在註解裡**(`F-086`:註解不是機制)。
+
+    這一條不測行為,測的是「為什麼要有這條順序規矩」——
+    前綴關係一旦不成立(例如將來有人改了 `UTF16_BOMS`),
+    上面那一組仍然會綠,而**這條規矩就變成一句沒有理由的話**。
+    """
+
+    def test_the_two_byte_bom_is_a_prefix_of_the_four_byte_one(self):
+        assert b"\xff\xfe\x00\x00".startswith(b"\xff\xfe"), (
+            u"UTF-32 LE BOM 不再以 UTF-16 LE BOM 開頭 —— "
+            u"「長的先試」這條規矩的理由消失了,回去重讀票 110 第二節。")
+
+    def test_the_other_side_has_no_prefix_overlap(self):
+        """**兩側不對稱,而不對稱要有人說出來。**
+
+        `00 00 FE FF` 不以 `FE FF` 開頭 —— 這一側先試短的也不會截走長的。
+        寫成測試是因為「兩側對稱」是一個很自然的假設,
+        而**自然的假設不會被驗**。
+        """
+        assert not b"\x00\x00\xfe\xff".startswith(b"\xfe\xff")
+
+
+class TestUtf32DecodingDoesNotOverreach:
+    """**反控:本票動的是票 109 那條路徑的入口,所以 UTF-16 是本票專屬的反控面。**
+
+    往「更會判成 UTF-32」走一步的代價在這裡。**代價的方向是涵蓋變小**,
+    而變小的方向沒有任何既有測試會抱怨。
+    """
+
+    @pytest.mark.parametrize("bom,endian", [
+        (b"\xff\xfe", "le"), (b"\xfe\xff", "be"), (b"", "le"),
+    ], ids=["le-bom", "be-bom", "no-bom"])
+    def test_utf16_is_still_decoded_as_utf16(self, tmp_path, bom, endian):
+        """票 109 剛修好的四態不得被 UTF-32 那條新路徑搶走。"""
+        raw = bom + _CJK_LINE.encode("utf-16-" + endian)
+        text, why = sc.read_text(_wb(tmp_path, "u16.env", raw))
+        assert why is None, u"票 110 的改動讓 UTF-16 解不開了:%s" % why
+        assert _AWS in text, u"票 110 的改動讓 UTF-16 裡的樣本消失了"
+
+    def test_a_plain_ascii_utf8_file_is_not_read_as_utf32(self, tmp_path):
+        """純 ASCII 的 UTF-8 檔長度可能剛好是 4 的倍數 —— 不得被 UTF-32 接走。"""
+        text, why = sc.read_text(_wb(tmp_path, "plain.txt",
+                                     _ASCII_LINE.encode("utf-8")))
+        assert why is None and _AWS in text

@@ -885,3 +885,113 @@ class TestAnUndecodableStreamIsFailClosed:
         assert rc != 0, (
             u"解不出可讀文字的位元組流被靜默放行(回 %r)—— "
             u"「沒讀懂」不是「乾淨」" % rc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 110 —— UTF-32:**`scan() == 1` 不夠,它今天就已經是 1 了**
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 立案實測(八格全量):UTF-32 的四種形態 × 兩種內容,`read_text` 全部走到
+# fail-closed 出口,`scan()` 全部回 **1** —— 但那個 1 是
+# `Hit(rel, 0, UNREADABLE, UNREADABLE, why)`,報告裡印的是 `<讀不到內容>`,
+# **不是 pattern 命中**。
+#
+# ⇒ 一條寫成 `assert ls.scan([f]) == 1` 的「正對照」**今天就是綠的**,
+#   而它證明的是「這個檔被擋下」,不是「這個檔裡的金鑰被讀出來」。
+#
+# **`F-155` 的鏡像。** 票 109 遇到的是「`0` 替一個沒讀過的檔作保」;
+# 這裡是「一個**因為讀不到**而給出的 `1`,被讀成偵測有效」。
+# 同一個病:**回傳值回答的不是它欄名問的那個問題。**
+#
+# ⇒ 判準寫死:每一條都要斷言報告裡**沒有** `<讀不到內容>`。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_UNREADABLE_MARK = u"<讀不到內容>"
+
+
+def _write_u32(tmp_path, name, text, bom=None, endian="le"):
+    """把 text 以 UTF-32 寫成位元組檔。
+
+    `bom` 給 b"\\xff\\xfe\\x00\\x00"(LE)/ b"\\x00\\x00\\xfe\\xff"(BE)。
+    **BOM 由呼叫端明寫,不用 `utf-32` 這個 codec 自動加** ——
+    自動加的話測試就不再說得出「它加了哪四個位元組」,
+    而那四個位元組正是本票的題目。
+    """
+    p = tmp_path / name
+    io.open(str(p), "wb").write((bom or b"") + text.encode("utf-32-" + endian))
+    return str(p)
+
+
+def _scan_report(paths, **kw):
+    """跑一次 scan,回 `(rc, stderr)` —— 判準要看報告內容,不只看退出碼。"""
+    return ls.scan(paths, **kw)
+
+
+class TestUtf32IsNotReportedAsUnreadable:
+    """**正對照:三態 × 兩種內容,而且斷言的是「怎麼命中」不是「有沒有命中」。**
+
+    三態照裁決字面:LE+BOM / BE+BOM / LE 無 BOM。
+    """
+
+    def _assert_real_hit(self, capsys, rc, label):
+        err = capsys.readouterr().err
+        assert rc == 1, u"%s 裡的金鑰沒被抓到(scan 回 %r)" % (label, rc)
+        assert _UNREADABLE_MARK not in err, (
+            u"%s 回 1,但報告裡是 %s —— 這個 1 是 fail-closed 給的,\n"
+            u"    不是 pattern 命中給的。**檔被擋下** ≠ **金鑰被讀出來**。\n"
+            u"    stderr:%s" % (label, _UNREADABLE_MARK, err))
+        assert "AKIA" in err or u"已遮罩" in err, (
+            u"%s 回 1 且不是 <讀不到內容>,但報告裡看不出命中了什麼:%s"
+            % (label, err))
+
+    def test_a_utf32_le_with_bom_is_caught(self, tmp_path, capsys):
+        f = _write_u32(tmp_path, "le.env", _CJK_SECRET, bom=b"\xff\xfe\x00\x00")
+        self._assert_real_hit(capsys, _scan_report([f]), u"UTF-32 LE(含 BOM)")
+
+    def test_a_utf32_be_with_bom_is_caught(self, tmp_path, capsys):
+        f = _write_u32(tmp_path, "be.env", _CJK_SECRET,
+                       bom=b"\x00\x00\xfe\xff", endian="be")
+        self._assert_real_hit(capsys, _scan_report([f]), u"UTF-32 BE(含 BOM)")
+
+    def test_a_utf32_le_without_bom_is_caught(self, tmp_path, capsys):
+        f = _write_u32(tmp_path, "nobom.env", _CJK_SECRET)
+        self._assert_real_hit(capsys, _scan_report([f]), u"UTF-32 LE(無 BOM)")
+
+    def test_a_pure_ascii_utf32_with_bom_is_caught(self, tmp_path, capsys):
+        """**最像真實世界的那一個** —— 純 ASCII 的 `.env` 另存成 UTF-32。
+
+        它帶著 `FF FE 00 00`,而 `FF FE` 是 UTF-16 LE BOM 的**完整前綴** ——
+        嗅探順序寫錯的話,它會被 UTF-16 那一格搶走,
+        而搶走之後的結果與今天一模一樣(fail-closed),
+        **看起來像「修法沒生效」而不是「順序寫錯了」**。
+        """
+        f = _write_u32(tmp_path, "ascii-bom.env", _ASCII_SECRET,
+                       bom=b"\xff\xfe\x00\x00")
+        self._assert_real_hit(capsys, _scan_report([f]),
+                              u"純 ASCII 的 UTF-32(含 BOM)")
+
+    def test_a_pure_ascii_utf32_without_bom_is_caught(self, tmp_path, capsys):
+        """純 ASCII 無 BOM 在階梯**第一格** `utf-8-sig` 就解成功
+        (ASCII 與 NUL 都是合法 UTF-8),走的路徑與含 CJK 的不同。"""
+        f = _write_u32(tmp_path, "ascii-nobom.env", _ASCII_SECRET)
+        self._assert_real_hit(capsys, _scan_report([f]),
+                              u"純 ASCII 的 UTF-32(無 BOM)")
+
+
+class TestReviewModeDoesNotVouchForAnUnreadUtf32File:
+    """**二擇一,不得兩者皆無** —— 與票 109 同一條,換成 UTF-32。
+
+    審查模式對白名單副檔名(`.md`)的 UTF-32 檔只有兩種可接受的結局:
+    **命中**,或**列進未內容掃描清單**。
+    """
+
+    def test_a_utf32_markdown_either_hits_or_is_listed(self, tmp_path, capsys):
+        f = _write_u32(tmp_path, "notes.md", _ASCII_SECRET,
+                       bom=b"\xff\xfe\x00\x00")
+        rc = ls.scan([f], review=True)
+        err = capsys.readouterr().err
+        assert rc != 0, (
+            u"審查模式對 UTF-32 檔回 0 —— 而它既沒命中也沒列進未掃清單。\n"
+            u"    stderr:%s" % err)
+        assert "notes.md" in err, (
+            u"退出碼非 0 但檔名沒出現在報告裡 —— 人無從知道是哪一個檔:%s" % err)
