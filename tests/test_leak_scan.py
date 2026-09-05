@@ -746,3 +746,142 @@ def test_a_short_aq_string_is_not_caught(tmp_path, monkeypatch):
     short = "GOOGLE_API_KEY=" + "AQ" + "." + ("A" * 39)
     assert ls.scan([_write(tmp_path, short)]) == 0, \
         u"低於下限的字串被擋了 —— 下限不在 40"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 109:UTF-16 的盲區
+#
+# `scanner.DECODINGS` 沒有 utf-16。而 UTF-16 的位元組**不會讓階梯全部失敗** ——
+# 它會被某一格「成功」解出來,解出來的東西夾著 NUL,於是任何要求連續字元的
+# pattern 都打不到。⇒ 這個檔不是「掃過乾淨」,是**解成亂碼之後沒命中**,
+# 而兩者在 `scan()` 的回傳值上一模一樣(都是 0)。
+#
+# **是哪一格接走它,取決於內容**(票 109 實測,這一點推翻了偵察初稿):
+#   含 CJK  -> latin-1(第 5 格)
+#   純 ASCII 無 BOM -> **utf-8-sig(第 1 格)** —— ASCII 與 NUL 都是合法 UTF-8
+#   純 ASCII 有 BOM -> **cp1252(第 4 格)** —— FF FE 是合法 cp1252
+#
+# 真實的 `.env` 幾乎都是純 ASCII,所以**最可能發生的那個案例走的是第 1 格**。
+# 底下的正控刻意兩種內容都測,免得再一次把「樣本的共同屬性」讀成「機制的性質」。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_AWS = "AKIA" + ("Z" * 16)                  # 組裝:本檔自己也被掃
+_ASCII_SECRET = u"aws_access_key_id = " + _AWS + u"\n"
+_CJK_SECRET = (u"# 票 109 探針 —— 這不是真金鑰,尾巴全是 Z。\n"
+               u"金鑰 = " + _AWS + u"\n")
+
+
+def _write_u16(tmp_path, name, text, bom=None, endian="le"):
+    """把 text 以 UTF-16 寫成位元組檔。`bom` 給 b"\\xff\\xfe" / b"\\xfe\\xff"。"""
+    raw = text.encode("utf-16-" + endian)
+    p = tmp_path / name
+    io.open(str(p), "wb").write((bom or b"") + raw)
+    return str(p)
+
+
+class TestUtf16IsNotSilentlyPassed:
+    """**正控三態 × 兩種內容。**
+
+    三態:LE+BOM / BE+BOM / LE 無 BOM。兩種內容:純 ASCII 與含 CJK ——
+    因為它們走的是**不同的解碼分支**(見上方註解),只測一種等於只驗一條路。
+    """
+
+    def test_a_utf16_le_with_bom_is_caught(self, tmp_path):
+        f = _write_u16(tmp_path, "le.env", _CJK_SECRET, bom=b"\xff\xfe")
+        assert ls.scan([f]) == 1, u"UTF-16 LE(含 BOM)裡的金鑰沒被抓到"
+
+    def test_a_utf16_be_with_bom_is_caught(self, tmp_path):
+        f = _write_u16(tmp_path, "be.env", _CJK_SECRET, bom=b"\xfe\xff",
+                       endian="be")
+        assert ls.scan([f]) == 1, u"UTF-16 BE(含 BOM)裡的金鑰沒被抓到"
+
+    def test_a_utf16_le_without_bom_is_caught(self, tmp_path):
+        f = _write_u16(tmp_path, "nobom.env", _CJK_SECRET)
+        assert ls.scan([f]) == 1, u"UTF-16 LE(無 BOM)裡的金鑰沒被抓到"
+
+    def test_a_pure_ascii_utf16_without_bom_is_caught(self, tmp_path):
+        """**最像真實世界的那一個** —— 純 ASCII 的 `.env` 另存成 Unicode。
+
+        它在 `utf-8-sig`(階梯**第一格**)就解成功,所以走的路徑與含 CJK 的
+        那三個完全不同。少了這一條,修法只要接在 `latin-1` 後面就會全綠,
+        而真實案例照漏。
+        """
+        f = _write_u16(tmp_path, "ascii-nobom.env", _ASCII_SECRET)
+        assert ls.scan([f]) == 1, u"純 ASCII 的 UTF-16(無 BOM)沒被抓到"
+
+    def test_a_pure_ascii_utf16_with_bom_is_caught(self, tmp_path):
+        """帶 BOM 的純 ASCII 由 `cp1252` 接走(第 4 格)——又是另一條路徑。"""
+        f = _write_u16(tmp_path, "ascii-bom.env", _ASCII_SECRET, bom=b"\xff\xfe")
+        assert ls.scan([f]) == 1, u"純 ASCII 的 UTF-16(含 BOM)沒被抓到"
+
+
+class TestReviewModeDoesNotVouchForAnUnreadFile:
+    """**二擇一,不得兩者皆無。**
+
+    審查模式對 UTF-16 的白名單副檔名檔(`.md`)只有兩種可接受的結局:
+    **命中**,或**列進未內容掃描清單**。第三種結局 —— 回 0 而且清單是空的 ——
+    是這一票要修的那件事:報告主動宣告「未內容掃描的檔案(0):(無)」,
+    **替一個沒被真正讀過的檔案作保**。
+
+    `F-155` 同族:那個 `0` 回答的不是它欄名問的問題。
+    """
+
+    def test_a_utf16_markdown_either_hits_or_is_listed(self, tmp_path, capsys):
+        f = _write_u16(tmp_path, "notes.md", _ASCII_SECRET, bom=b"\xff\xfe")
+        rc = ls.scan([f], review=True)
+        err = capsys.readouterr().err
+        listed = "notes.md" in err
+        assert rc != 0, (
+            u"審查模式對 UTF-16 檔回 0 —— 而它既沒命中也沒列進未掃清單。\n"
+            u"    stderr:%s" % err)
+        assert listed, (
+            u"退出碼非 0 但檔名沒出現在報告裡 —— 人無從知道是哪一個檔:%s" % err)
+
+
+class TestTheNulHeuristicDoesNotOverreach:
+    """**反控:往「更會判成 UTF-16」的方向走一步的代價。**
+
+    這兩條釘的是**涵蓋不得變小**。UTF-16 判定做寬一點,代價就是把
+    正常的中文檔解成亂碼 —— 那會讓偵測**變少**,而
+    **變少的方向沒有任何既有測試會抱怨**(同 `scanner.py` 那條正規化反控)。
+    """
+
+    def test_a_cp950_chinese_file_is_still_scanned(self, tmp_path):
+        """cp950 的中文檔(**沒有 NUL**)照原本的路徑走,金鑰照樣抓得到。"""
+        p = tmp_path / "cp950.txt"
+        io.open(str(p), "wb").write(_CJK_SECRET.encode("cp950"))
+        assert ls.scan([str(p)]) == 1, u"cp950 中文檔裡的金鑰沒被抓到"
+
+    def test_a_utf8_file_with_a_few_nuls_is_not_read_as_utf16(self, tmp_path):
+        """**含少量 NUL 的 UTF-8 檔不得被誤判成 UTF-16。**
+
+        NUL 是合法的 UTF-8 位元組,所以這種檔真的存在。誤判的話它會被
+        以 utf-16 解成亂碼,**裡面的金鑰就消失了** —— 一個為了多抓而做的
+        改動,反而讓這一類檔完全失去偵測。
+        """
+        text = (u"# note\x00\x00\n" + _ASCII_SECRET
+                + u"padding padding padding padding padding padding\n" * 4)
+        p = tmp_path / "few-nuls.txt"
+        io.open(str(p), "wb").write(text.encode("utf-8"))
+        assert ls.scan([str(p)]) == 1, (
+            u"含少量 NUL 的 UTF-8 檔被誤判成 UTF-16,金鑰因此漏掉")
+
+
+class TestAnUndecodableStreamIsFailClosed:
+    """**解不出可讀文字 ⇒ 進未掃清單,不得靜默放行。**
+
+    `read_text` 的 docstring 寫著「理由非空即 fail-closed」,而
+    `DECODINGS` 的最後一格 `latin-1` **對全部 256 個位元組值都成功**
+    (枚舉實測)⇒ 那個 fail-closed 出口是死碼,從來沒被執行過。
+
+    這一條把它叫醒:latin-1 不再是保底,它的結果也要過可讀性檢查。
+    """
+
+    def test_random_bytes_in_a_text_file_do_not_pass_silently(self, tmp_path):
+        raw = bytes(bytearray((i * 7 + 3) % 256 for i in range(512)))
+        p = tmp_path / "noise.txt"
+        io.open(str(p), "wb").write(raw)
+        rc = ls.scan([str(p)])
+        assert rc != 0, (
+            u"解不出可讀文字的位元組流被靜默放行(回 %r)—— "
+            u"「沒讀懂」不是「乾淨」" % rc)
