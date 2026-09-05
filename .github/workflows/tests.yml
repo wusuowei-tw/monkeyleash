@@ -71,6 +71,30 @@ jobs:
             --ignore=tests/test_known_items_regression.py \
             --deselect "tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce"
 
+      # 票 85:CI 那一側的**收集清單**。只收集不執行 ——
+      # 它的用途是拿去跟本機那一份取差集,不是再驗一次測試。
+      #
+      # **排在跑測試之後**,不是之前:排在之前的話,這一步紅就會讓
+      # 跑測試那一步整個不執行,而票 85「條件二」寫死「不得讓原本會綠的那一步
+      # 變紅或變綠」—— 從綠變成沒跑,也是變。
+      #
+      # **旗標必須與上一步相同**,否則兩份清單量的不是同一批,而
+      # **差集照樣算得出來、照樣看起來合理**,沒有東西會說口徑不同。
+      # 守它的是 tests/test_ci_workflow.py::
+      # test_the_collect_only_step_selects_the_same_set_as_the_test_step ——
+      # 它比的是**解析後的集合**,所以這裡的換行寫法可以與上一步不同,
+      # 旗標的值不行。
+      #
+      # 清單怎麼回到人手上:`gh run view <run-id> --log`(裁決 2026-09-05,方案 C)。
+      # 不走 upload-artifact —— 那解的是「本機沒有 gh」,而 gh 裝著也登入著;
+      # 不進版控 —— 那要維護一份一千三百多行、每次增刪測試就過期的基準,
+      # 而在還不知道差集長什麼樣之前,那是先付款後看貨。
+      - name: 收集清單(票 85)
+        run: |
+          python -m pytest --collect-only -q \
+            --ignore=tests/test_known_items_regression.py \
+            --deselect "tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce"
+
       # 淨室:真的裝一次、讓每條規則各擋一次、再在新 repo 裡跑一次框架測試。
       #
       # **與上一步不重複。** 上一步驗的是**原始碼形態**(這個 repo 的樹),
