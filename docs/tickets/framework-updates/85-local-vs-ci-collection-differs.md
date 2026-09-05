@@ -252,6 +252,8 @@ skip 理由字串,三支相同:**`此環境無法建立 symlink`**
 `.scratch/ticket85-corpus-2026-08-28/` —— 取樣時工作樹乾淨,
 HEAD `a6473a2de649bc5e2288bb933f91cc19464c2f8b`,遠端同值。
 
+**2026-09-05 該檔已刪(`.scratch/` 清空事故);影響見 `.dev/reports/2026-09-05T103052Z-recon-scratch-deletion-impact.md`**
+
 ```
 README.md                    取樣條件、兩邊數字原樣抄錄、上面那一格限制
 local-collect-plain.txt      pytest --collect-only -q(無旗標)   1070 collected
