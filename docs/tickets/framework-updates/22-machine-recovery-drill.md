@@ -195,6 +195,12 @@ R3 的豁免宣告 `**Untested by decision:**` 是從 `.scratch/<feature>/issues
 
 `machine-init.md` 第二之一節已寫入完整步驟與兩條掛載路徑的語意。
 
+**9/5 筆電負控:通過。** 造一個命中通用 pattern 的**假**值 staged 後 `git commit`,
+退出碼 1,擋下訊息首行 `[洩漏偵測] 這些檔案含個人身分或機密,擋下 commit:`。
+⚠ **只證到 hook 的第一段(`leak_scan`)** —— 它 `exit 1` 之後 `gate.py --pre-commit`
+沒有執行,所以「六站規則在 commit 時會判定」仍**未證明**;第二段的負控未做。
+(在此之前的材料只有 hook 檔內容與讀同一個檔的金絲雀測試,兩者都只證得出自洽。)
+
 ### 二之一、Phase 3 必跑:保護清單的**存在性**檢查
 
 `g1_verify` 與唯讀探針的前四段,探針字串都是**從條目本身組出來的**,

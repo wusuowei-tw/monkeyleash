@@ -672,6 +672,23 @@ Add-Content -Encoding UTF8(檔已存在)     90, 90, 70              BOM: False 
 | **clamp 缺席 → fail-closed** | 把 `shadow-clamp.txt` 暫時改名,對一個開了影子的 repo 觸發一條本該擋的規則 | **照常擋**(影子不生效),不寫影子日誌。驗完把 clamp 改回來 |
 | **leak hook 擋假 token** | 在一個跑過 `bootstrap.sh` 的 repo 裡,把一個**假造**的、命中某條 pattern 的字串寫進檔案並試 `commit` | pre-commit 洩漏偵測擋下 commit |
 
+> **9/5 筆電實測:通過。** 假值照通用檔 `.claude/portable/leak-patterns.txt:21`
+> 的 `\bAKIA[0-9A-Z]{16}\b` 造(**固定前綴 + 固定長度 + 封閉字元集**,
+> 所以「會不會命中」由構造決定,不靠猜),`git commit` 退出碼 **1**,首行:
+> `[洩漏偵測] 這些檔案含個人身分或機密,擋下 commit:`,並點名該檔與行號。
+>
+> **這是這台機器上第一個「權威層真的被 git 叫到」的觀測** ——
+> 在此之前只有兩種材料:hook 檔的內容、以及讀同一個 hook 檔的測試,
+> **兩者都是自洽證明**(`F-152`)。負控的材料來自外部,所以它證得到別的東西。
+>
+> ### ⚠ **它證到的是【第一段】,不是整支 hook。**
+> `.githooks/pre-commit:18-19` 是兩段:`leak_scan.py --staged || exit 1`,
+> 然後才 `exec … gate.py --pre-commit`。**擋在第一段就 `exit 1`,第二段沒有執行。**
+> ⇒ **「六站規則在 commit 時會判定」這件事,本探針一個字都沒有證到。**
+> 要證第二段,需要另一個負控:造一個**通得過洩漏偵測、但違反某條 R 規則**的
+> staged 狀態(例如在非可寫站 staged 一個原始碼檔),看它是不是被 `[Rx]` 擋下。
+> **未做。**
+
 自動化替代:
 - `python .claude/portable/g1_verify.py` —— 從**當前實際清單**生成案例,斷言每一條保護路徑被命中時訊息都指名它自己(涵蓋第一級探針,且清單長新條目時自動涵蓋)。
 - `python .claude/portable/verify_gates.py <暫存目錄>` —— 六站規則全跑 + 淨室安裝一次。
