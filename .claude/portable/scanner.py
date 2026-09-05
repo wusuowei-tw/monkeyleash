@@ -165,8 +165,28 @@ def normalize_for_match(s):
 # 那一行看起來是這支函式的 fail-closed 出口,而**保底編碼把它消掉了** ——
 # 兩段程式各自都對,是它們的組合出的問題。
 
-# BOM 是**封閉集合**(兩個位元組序列),所以用枚舉不用 pattern(`F-087` 同款)。
+# BOM 是**封閉集合**(位元組序列,列完就是列完),所以用枚舉不用 pattern
+#(`F-087` 同款:比對的漏是未知的,枚舉的漏是不存在的)。
 UTF16_BOMS = (b"\xff\xfe", b"\xfe\xff")
+
+# ── 票 110:UTF-32 的 BOM,以及它與 UTF-16 的**前綴重疊** ──────────────────
+#
+#     UTF-32 LE BOM   FF FE 00 00
+#     UTF-16 LE BOM   FF FE            <- 前綴重疊
+#
+# **短 BOM 是長 BOM 的前綴 ⇒ 先試短的必然截走長的。**
+# 所以底下的嗅探順序寫死:**4 位元組先試**。這不是「UTF-32 比較重要」,
+# 是前綴關係本身逼出來的唯一正確順序。
+#
+# **另一側沒有重疊,而這件事要寫出來**:`00 00 FE FF` **不以** `FE FF` 開頭,
+# 所以 BE 那一側先試短的也不會出事。「兩側對稱」是一個很自然的假設,
+# 而它在這裡**只有一半成立** —— 不寫的話,下一個讀的人會以為同構,
+# 於是把順序當成可有可無的細節。
+#
+# 順序寫錯的後果**不會長得像錯**:UTF-32 檔被 UTF-16 那一格搶走之後,
+# `looks_readable` 會擋下它、掉進 fail-closed —— 與**沒有這段修法時一模一樣**。
+# 看起來像「修法沒生效」,而不是「順序寫錯了」。
+UTF32_BOMS = (b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")
 
 # 「這串解出來的東西還算文字嗎」的門檻:控制字元(含 NUL)佔比。
 # 實測(票 109):正常文字 ~0%;含少量 NUL 的 UTF-8 檔 0.8%;
@@ -216,6 +236,34 @@ def _decode_utf16(raw):
     return None
 
 
+def _decode_utf32(raw):
+    """與 `_decode_utf16` 同形狀,換成 UTF-32(票 110)。
+
+    **可讀性檢查同樣是必要的一半。** UTF-32 比 UTF-16 更難誤中
+    (大多數位元組流會解出 > U+10FFFF 的碼位而拋錯),但
+    「更難」不是「不會」—— 而少了檢查,這條路自己就是新的靜默漏放。
+    """
+    for enc in ("utf-32-le", "utf-32-be"):
+        try:
+            t = raw.decode(enc)
+        except (UnicodeDecodeError, LookupError, ValueError):
+            continue
+        if looks_readable(t):
+            return t
+    return None
+
+
+def _decode_wide(raw):
+    """無 BOM 時的寬編碼嘗試:**先 UTF-32 再 UTF-16**(票 110)。
+
+    順序與 BOM 那一層同一條規矩:**寬的先試**。
+    UTF-32 的位元組用 UTF-16 解會得到一半是 NUL 的東西 —— 那個東西
+    `looks_readable` 會擋下,所以反過來排也不會誤判;
+    **但兩層用同一個順序,是為了讓「為什麼是這個順序」只需要解釋一次**。
+    """
+    return _decode_utf32(raw) or _decode_utf16(raw)
+
+
 def read_text(path):
     """讀檔並解碼。回 `(text, None)` 或 `(None, 理由)` —— 理由非空即 fail-closed。
 
@@ -240,6 +288,17 @@ def read_text(path):
 
     # ① BOM 嗅探。**BOM 說了算**:它是產生端寫下的宣告,不是讀的人的猜測
     #    (與「判『遮過沒』的權威在產生端」同一條)。
+    #
+    #    **4 位元組先試**(票 110):`FF FE` 是 `FF FE 00 00` 的前綴,
+    #    先試 2 位元組的話 UTF-32 LE + BOM 會被 UTF-16 那一格搶走。
+    if raw[:4] in UTF32_BOMS:
+        try:
+            t = raw.decode("utf-32")          # 由 BOM 自己決定 LE/BE
+            if looks_readable(t):
+                return t, None
+        except (UnicodeDecodeError, LookupError, ValueError):
+            pass
+
     if raw[:2] in UTF16_BOMS:
         try:
             t = raw.decode("utf-16")          # 由 BOM 自己決定 LE/BE
@@ -256,19 +315,26 @@ def read_text(path):
             continue
         # 裁決 B 的快路徑:一半是 NUL 的「文字」多半是被單位元組編碼
         # 讀進來的 UTF-16 —— 當場改試,不必等走完階梯。
+        # 票 110:改叫 `_decode_wide` —— UTF-32 的 NUL 佔比更高(每 4 位元組
+        # 3 個 NUL,實測 0.75),**門檻本來就會被觸發**;沒接住它的不是門檻,
+        # 是門檻接到的那隻手只會 UTF-16。
+        # **一個被觸發了的門檻,與一個接得住的門檻,是兩件事。**
         if _nul_ratio(t) >= NUL_TRIGGER:
-            u16 = _decode_utf16(raw)
-            if u16 is not None:
-                return u16, None
+            wide = _decode_wide(raw)
+            if wide is not None:
+                return wide, None
         if looks_readable(t):
             return t, None
         # 解得開但不可讀 -> 這一格不算數,繼續試下一格。
 
     # ③ 階梯裡沒有一格給出可讀的東西。**無 BOM 又含 CJK 的 UTF-16 走到這裡** ——
     #    它的 NUL 佔比低到 4.3%,快路徑接不住,而這一步不依賴門檻。
-    u16 = _decode_utf16(raw)
-    if u16 is not None:
-        return u16, None
+    #    票 110:同樣改叫 `_decode_wide`。**兩個位置都要改** ——
+    #    只改快路徑的話,保證會落在一個依賴門檻的地方,而那正是票 109
+    #    刻意避開的形狀(快路徑讓意圖看得見,保證掛在不依賴門檻的那一步上)。
+    wide = _decode_wide(raw)
+    if wide is not None:
+        return wide, None
 
     # ④ 真正的 fail-closed 出口 —— 票 109 之前這裡是死碼。
     return None, "解不出可讀文字(控制字元佔比過高,可能是二進位或未知編碼)"
