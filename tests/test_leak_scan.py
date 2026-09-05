@@ -12,6 +12,8 @@ import importlib.util
 import io
 import pathlib
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
@@ -627,3 +629,115 @@ class TestMainNeverReturnsZeroWithoutScanning:
         assert rc == 0, u"沒有 staged 檔卻回了 %r —— 那會擋死 --allow-empty" % rc
         assert "機制" not in err and "沒有給任何路徑" not in err, (
             u"沒有 staged 檔被說成機制錯誤:%r" % err)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 108:通用組**逐條**正對照 —— 表驅動
+#
+# 在這之前,往 `leak-patterns.txt` 加一行**不會有任何東西要求它配一條斷言**:
+# 加完測試全綠,而那條規則從沒被驗證過會命中。與票 102 記過的形狀同一族 ——
+# **輸入存在不等於斷言存在。**
+#
+# 表以 **pattern 原字串**為 key。改了一條 pattern,key 就對不上 → 紅 →
+# 有人得回來看。**這是本票唯一那個「規則變動會叫」的機制。**
+#
+# **key 也要組裝,不只樣本。** 憑證副檔名那三條的 pattern 字串
+# **自己就打得到自己**(字串裡含 `.` 接副檔名再接非字元 ⇒ `\b` 成立),
+# 寫成字面的話**這個測試檔**會被 shipped-tree 掃描擋下 ——
+# 與檔頭那條紀律同一個理由,只是這次中槍的是 key 不是樣本。
+#
+# **這不是推論,是實測**(票 108 刀一):本段原本把那三條的 pattern
+# 寫成字面當例子,`test_the_shipped_tree_is_clean` 當場紅,
+# 擋下訊息點名的就是**這幾行註解**。⇒ **連解釋這條陷阱的句子都會踩到它。**
+#
+# ⚠ **本表目前只驗一個方向:「pattern 都有樣本嗎」。**
+# 反方向(「樣本都還對應得到 pattern 嗎」——刪掉一條 pattern 之後表裡會留下
+# 孤兒)**沒有機器在管**。CLAUDE.md 那條「驗兩個方向」的判準適用於此,
+# 而本票的裁決範圍只含前者,所以它是一個**寫下來的缺口**,不是留白。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PFX = "pfx"                             # 組裝:字面的 `.` + 這三個字會打到自己
+_P12 = "p" + "12"
+_PEM = "pem"
+
+_NO_LOCAL = str(ROOT / "tests" / "no-such-leak-patterns.local.txt")
+
+# pattern 原字串 -> 該條規則的**組裝**正樣本(一整行內容)。
+#
+# **憑證那三條的樣本放在【內容】裡,不放檔名。** `leak_scan.scan()` 會先用
+# `CERT_EXT` 對**路徑**短路(不讀內容);把樣本放成檔名的話走的是副檔名那條路,
+# **regex 一個字都沒被驗到**,而測試照樣綠。
+SAMPLES = {
+    "\\." + _PFX + "\\b": "keyfile = client." + _PFX,
+    "\\." + _P12 + "\\b": "bundle = server." + _P12,
+    "\\." + _PEM + "\\b": "cert = server." + _PEM,
+    "-----BEGIN " + "[A-Z ]*" + "PRIVATE KEY-----":
+        "-----BEGIN RSA " + "PRIVATE KEY-----",
+    "\\bghp_[A-Za-z0-9]{20,}": "token=" + _TOK,
+    "\\bAIza[A-Za-z0-9_\\-]{30,}": "key = " + "AIza" + ("Z" * 35),
+    # 票 108 的本體:Google 2026-06 起的 Gemini 新格式 Auth key。
+    "\\bAQ\\.[A-Za-z0-9_\\-]{40,}": "GOOGLE_API_KEY=" + "AQ" + "." + ("A" * 50),
+}
+
+
+def _generic_pattern_strings():
+    """`load_patterns()` 的**通用組**原字串。
+
+    `LOCAL_PATTERNS_FILE` 暫時指到不存在的路徑 —— **只驗出貨檔**。
+    這台機器上個人清單是存在的;不隔開的話這張表會被一份**不進版控、
+    每台機器不同**的清單汙染,而**下游根本收不到那份清單** ——
+    於是本地全綠、下游沒有規則,兩件事看起來一樣。
+    """
+    saved = ls.LOCAL_PATTERNS_FILE
+    ls.LOCAL_PATTERNS_FILE = _NO_LOCAL
+    try:
+        generic = [g for g in ls.load_patterns() if g.name == u"通用"]
+    finally:
+        ls.LOCAL_PATTERNS_FILE = saved
+    assert len(generic) == 1, u"找不到通用組(load_patterns 的分組變了?)"
+    return [raw for raw, _rx in generic[0].patterns]
+
+
+GENERIC_PATTERNS = _generic_pattern_strings()
+
+
+@pytest.mark.parametrize("pattern", GENERIC_PATTERNS)
+def test_every_generic_pattern_has_a_positive_control(pattern, tmp_path,
+                                                     monkeypatch):
+    """出貨檔裡的**每一條**通用 pattern 都要有一個組裝正樣本,而且真的命中。
+
+    **缺樣本一律紅,不 skip。** skip 的話這條元測試就退化成
+    「有樣本的都過」—— 而那正是它要修的病:**沒被驗的那些會安靜地不存在。**
+    """
+    monkeypatch.setattr(ls, "LOCAL_PATTERNS_FILE", _NO_LOCAL)
+    assert pattern in SAMPLES, (
+        u"通用 pattern %r 沒有正樣本 —— 在 SAMPLES 裡補一條組裝樣本。\n"
+        u"    (不得寫死敏感字面:本檔自己也被 shipped-tree 掃描)" % pattern)
+    rc = ls.scan([_write(tmp_path, SAMPLES[pattern])])
+    assert rc == 1, (
+        u"通用 pattern %r 有樣本卻沒命中(scan 回 %r)—— "
+        u"樣本與 pattern 對不上,規則等於不存在" % (pattern, rc))
+
+
+def test_the_new_google_key_shape_is_caught(tmp_path, monkeypatch):
+    """票 108 正控:`AQ.` + 50 字的新格式 Auth key 要被擋。
+
+    **組裝**,不寫死。桌機 2026-09-05 實測:含新鑰的 `.env` 餵給 `leak_scan`
+    回 exit 0(沒擋)—— 舊的 `\\bAIza…` 那條打不到新格式。
+    """
+    monkeypatch.setattr(ls, "LOCAL_PATTERNS_FILE", _NO_LOCAL)
+    sample = "GOOGLE_API_KEY=" + "AQ" + "." + ("A" * 50)
+    assert ls.scan([_write(tmp_path, sample)]) == 1, \
+        u"新格式金鑰沒被擋 —— 通用組缺 AQ. 那條"
+
+
+def test_a_short_aq_string_is_not_caught(tmp_path, monkeypatch):
+    """反控:`AQ.` + **39** 字不命中 —— 釘住下限真的在 40。
+
+    少了它,把 `{40,}` 誤打成 `{4,}` 之類的**放寬**方向不會有任何測試抱怨,
+    而放寬的失效是靜默的(誤擋才吵)。
+    """
+    monkeypatch.setattr(ls, "LOCAL_PATTERNS_FILE", _NO_LOCAL)
+    short = "GOOGLE_API_KEY=" + "AQ" + "." + ("A" * 39)
+    assert ls.scan([_write(tmp_path, short)]) == 0, \
+        u"低於下限的字串被擋了 —— 下限不在 40"
