@@ -673,7 +673,12 @@ SAMPLES = {
     "\\." + _PEM + "\\b": "cert = server." + _PEM,
     "-----BEGIN " + "[A-Z ]*" + "PRIVATE KEY-----":
         "-----BEGIN RSA " + "PRIVATE KEY-----",
+    "\\bsk-[A-Za-z0-9]{16,}": "OPENAI_API_KEY=" + "sk" + "-" + ("A" * 20),
     "\\bghp_[A-Za-z0-9]{20,}": "token=" + _TOK,
+    "\\bgithub_pat_[A-Za-z0-9_]{20,}":
+        "token=" + "github" + "_pat_" + ("A" * 24),
+    "\\bAKIA[0-9A-Z]{16}\\b": "aws_access_key_id = " + "AKIA" + ("Z" * 16),
+    "\\bxox[baprs]-[A-Za-z0-9-]{10,}": "slack = " + "xox" + "b-" + ("A" * 12),
     "\\bAIza[A-Za-z0-9_\\-]{30,}": "key = " + "AIza" + ("Z" * 35),
     # 票 108 的本體:Google 2026-06 起的 Gemini 新格式 Auth key。
     "\\bAQ\\.[A-Za-z0-9_\\-]{40,}": "GOOGLE_API_KEY=" + "AQ" + "." + ("A" * 50),

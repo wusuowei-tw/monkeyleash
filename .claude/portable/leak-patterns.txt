@@ -21,3 +21,5 @@
 \bAKIA[0-9A-Z]{16}\b
 \bxox[baprs]-[A-Za-z0-9-]{10,}
 \bAIza[A-Za-z0-9_\-]{30,}
+# Google 2026-06 起 Gemini 新格式 Auth key,實測 53 字,下限 40 依檔頭「寧可寬」,是否封閉未證明(票 108)
+\bAQ\.[A-Za-z0-9_\-]{40,}
