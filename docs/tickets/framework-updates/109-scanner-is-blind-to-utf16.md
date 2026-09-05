@@ -203,3 +203,90 @@ exit=0
 | 四 | 收票 + 順手(票 22 二之零補一行、friction 發號判定) | 票面 + `22-machine-recovery-drill.md` + 可能的 friction |
 
 **`not_scanned` 要擴到預設模式**(偵察回報第 5 節 C 的介面細節):目前兩個 `append` 都在 `if review` 底下,**pre-commit 那條路徑上它永遠是空的**。這是一次**行為擴張**,不是「接上現成機制」—— 而現有測試有一條 `test_default_mode_is_unchanged` 明確釘住「審查模式的嚴格度不得倒灌回預設模式」。**刀二要正面處理這條反控:不可讀是新的擋下理由,與副檔名白名單無關,兩者不可混為一談。**
+
+> **刀二實作後的更正(舊文不刪,`F-036`)**:**不需要擴張 `not_scanned`。**
+> `scan_paths` 對 `read_text` 回的 `(None, 理由)` **早就有一條 fail-closed 路徑** ——
+> 它把那個檔案記成 `Hit(rel, 0, UNREADABLE, UNREADABLE, why)`,而 `UNREADABLE`
+> 是一般的 hit,預設模式照樣回 1 並把理由印出來。實測:
+> ```
+>   .scratch/ticket-109-utf16/noise-probe.bin:0
+>      命中 pattern:<讀不到內容>
+>      內容:解不出可讀文字(控制字元佔比過高,可能是二進位或未知編碼)
+> exit=1
+> ```
+> ⇒ `test_default_mode_is_unchanged` **完全沒有被動到**。
+> **上面那段「要擴張」是立案時的推測,不是量出來的** ——
+> 記在這裡是因為它一度是刀二的預定範圍,而範圍縮小的理由要留得下來。
+
+---
+
+## 八、落地紀錄(2026-09-05)
+
+| 刀 | sha | 內容 |
+|---|---|---|
+| 零 | `79e8f39` | 票面立案 |
+| 一 | `9a56a07` | 紅燈 7 條(`tests/test_leak_scan.py`)+ 票面修正一處 |
+| **一b** | `7e2f138` | **補 scanner 層紅燈 7 條** —— 見八之一 |
+| 二 | `6017271` | 轉綠:`read_text` 四步 |
+| 三 | 本 commit | CLEAN / REAL |
+
+### 八之一、為什麼多了一刀 —— R3 擋下才發現刀一不完整
+
+刀二第一次動 `scanner.py` **被前哨擋下**,原始訊息:
+```
+[六站閘門/前哨] [R3/紅燈][enforce] .claude/portable/scanner.py:測試檔存在,但沒有合格的紅燈紀錄。
+     tests/test_scanner.py 有紅燈紀錄,但沒有一筆屬於當前票 109。
+     舊票的紅燈不解鎖後續修改 —— 每張票要有自己的紅燈。
+     先跑測試確認它在實作不存在時是紅的,再回來寫功能碼。
+```
+
+**原因**:裁決寫的是「`tests/test_scanner.py` **或** `test_leak_scan.py`」,我只挑了後者。
+而 **R3 的對應是逐檔的** —— 要改 `scanner.py` 就得有 `tests/test_scanner.py` 的紅燈。
+
+> ### **「或」在裁決裡是選項,在 R3 那裡不是。**
+
+未繞過,照規則補齊。而補的**不是複製品**,兩邊證的是不同命題:
+
+| 檔 | 證什麼 |
+|---|---|
+| `tests/test_scanner.py` | **解碼決策本身** —— `read_text` 回什麼 |
+| `tests/test_leak_scan.py` | **決策接到偵測上之後** —— 金鑰有沒有真的讓 `scan` 回 1 |
+
+⇒ 這一刀不是純粹的補票手續,它補上的那 12 條測試裡有 6 條是
+「三態 × 兩種內容」的矩陣,而**兩種內容在舊碼裡走不同分支** —— 少了它,
+修法只要接在 `latin-1` 後面就會全綠,而真實案例(純 ASCII 的 `.env`)照漏。
+
+### 八之二、三層計數(先算後比,基準一併寫)
+
+| 層 | 基準 | 預測 | 實測 | 差 |
+|---|---|---|---|---|
+| **UNIT** 全套 collected | `d2a1c67` 的 1326 | 1326 + 21 = **1347** | **1347 passed, 3 skipped, 3 xfailed** | **0** |
+| **CLEAN** 淨室 collected | `d2a1c67` 的 1213 | 1213 + 21 = **1234** | **1231 passed + 3 skipped = 1234** | **0** |
+| 兩支測試檔單跑 | —— | —— | **122 passed** | —— |
+
+新增 21 的拆法:`tests/test_leak_scan.py` **9**(UTF-16 正控 5 + 審查模式 1 + 反控 2 + 不可讀 1)+ `tests/test_scanner.py` **12**(UTF-16 六格 + latin-1 前提 1 + 隨機位元組 1 + 反控 4)。
+
+### 八之三、REAL —— 權威層活體負控
+
+探針:`.scratch/ticket-109-real/leak-probe-utf16.env`,**UTF-16 LE 含 BOM**(前四位元組 `b'\xff\xfe#\x00'`,158 bytes),內含組裝的假金鑰(尾巴全是 Z)。`git add -f` 後真的 `git commit` 一次。
+
+**原始輸出(逐字)**:
+```
+[洩漏偵測] 這些檔案含個人身分或機密,擋下 commit:
+
+  .scratch/ticket-109-real/leak-probe-utf16.env:2
+     命中 pattern:\bAKIA[0-9A-Z]{16}\b
+     內容:aws_access_key_id = ***已遮罩 20 字***
+
+乾淨的歷史要在這條規則底下誕生 —— 先把上面的洗掉再 commit。
+```
+
+`git rev-parse --short HEAD` 之後仍是 `6017271` ⇒ **commit 真的沒成立**。已 `git reset` 退出 staging;探針檔留在 `.scratch/`(gitignored)給裁決者手清。
+
+**三格各自證到不同的事**:
+
+| 觀察 | 證明了什麼 |
+|---|---|
+| 擋下了、HEAD 未動 | 權威層真的被呼叫(UNIT 是 in-process,證不了) |
+| 行號是 **`:2`** | 報的是**解碼後的行**,不是位元組偏移 —— 換句話說它真的把檔案讀成文字了 |
+| 遮罩 **`已遮罩 20 字`** | **字元數,不是位元組數(40)**。UTF-16 解碼後長度與位元組數不同,遮罩若沿用位元組數會印錯 —— **這一格只有 REAL 看得到**,UNIT 的斷言問的是退出碼 |
