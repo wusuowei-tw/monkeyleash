@@ -18,6 +18,7 @@ import importlib.util
 import io
 import os
 import pathlib
+import shlex
 import re
 
 import pytest
@@ -288,3 +289,142 @@ def test_verify_gates_is_wired_into_ci():
         "     以及框架測試在新 repo 裡再跑一次),與跑 pytest 那一步驗的\n"
         "     **原始碼形態**是不同維度 —— 少了不會有別的東西補上。\n"
         "     現有的 run 指令:%s" % runs)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 85 —— 兩個 pytest 步驟的關係,不是各自的內容
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# `--collect-only` 那一步存在的唯一理由,是拿它的清單去跟本機那一份取差集。
+# 兩步的 `--ignore` / `--deselect` 只要有一個字不同,量的就不是同一批 ——
+# 而**差集照樣算得出來、照樣看起來合理**。沒有東西會說那兩份清單的口徑不同。
+#
+# 這是「機制做好了,但沒有東西保證它們一致」,與
+# `test_verify_gates_is_wired_into_ci` 守的是同一個缺陷家族的變體:
+# 那一條問「它有沒有被走到」,這一條問「這兩個有沒有對齊」。
+#
+# **比對的是解析後的集合,不是字串。** 換行、續行符、引號、旗標順序都是寫法,
+# 不是行為;比字串會在一次無害的重排上紅,而**在無害處紅的測試最後會被整條關掉**。
+
+
+def _pytest_invocations():
+    """所有 workflow 裡**直接**叫 pytest 的 `run:` 段落,回 `(原文, argv)`。
+
+    「直接」是刻意的:`verify_gates.py` 內部也會跑 pytest,但它的 `run:` 只寫得出
+    那支腳本的名字 —— 從設定檔這一層看不到、也不該假裝看得到。
+    """
+    out = []
+    for path in workflow_files():
+        for run in _walk_runs(yaml.safe_load(_text(path))):
+            # 續行符先攤平:shlex 在 posix 模式下把 `\<newline>` 留成一個裸換行,
+            # 那會讓 `--ignore=... \` 與下一行黏成一個 token。
+            flat = run.replace("\\\n", " ")
+            try:
+                argv = shlex.split(flat)
+            except ValueError:
+                continue          # 引號不成對的段落交給別條測試,不在這裡假裝懂
+            if any(a == "pytest" or a.endswith("/pytest") for a in argv):
+                out.append((run, argv))
+    return out
+
+
+# 影響**選取集合**的旗標。這一組是封閉的:CI 那兩步只用得到這兩個,
+# 而枚舉的漏是不存在的(F-087)。將來真的多一個,加在這裡是一次看得見的決定。
+_SELECTION_FLAGS = ("--ignore", "--deselect")
+
+
+def _selection_flags(argv):
+    """抽出選取集合相關的旗標值,回 `{旗標: 值的集合}`。
+
+    `--x=v` 與 `--x v` 兩種寫法都收 —— 只收一種的話,換個寫法就繞過去了,
+    而**繞過去不會有東西叫**。
+    """
+    picked = dict((name, set()) for name in _SELECTION_FLAGS)
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        for name in _SELECTION_FLAGS:
+            if tok == name and i + 1 < len(argv):
+                picked[name].add(argv[i + 1])
+                i += 1
+                break
+            if tok.startswith(name + "="):
+                picked[name].add(tok[len(name) + 1:])
+                break
+        i += 1
+    return picked
+
+
+def test_the_collect_only_step_selects_the_same_set_as_the_test_step():
+    """票 85:CI 要有一個 `--collect-only` 步驟,而且它的選取旗標與跑測試那一步**相同**。
+
+    兩份清單的用途是取差集。口徑不同時,差集**不會是空的**,而那個非空
+    來自旗標,不是來自兩台機器的差異 —— **一個答對了自己問題的工具,
+    被拿去回答另一個問題時,它的輸出是誤導的**(票 85 §零之一逐字)。
+    """
+    if not workflow_files():
+        pytest.skip("沒有 workflow — 由 test_there_is_at_least_one_workflow 負責紅")
+    invocations = _pytest_invocations()
+    collect = [(r, a) for r, a in invocations if "--collect-only" in a]
+    execute = [(r, a) for r, a in invocations if "--collect-only" not in a]
+
+    assert collect, (
+        "沒有任何 workflow 步驟跑 `pytest --collect-only` —— CI 那一側的收集清單\n"
+        "     取不回來,而票 85 的第 1、2 類差集(只在本機 / 只在 CI)就沒有材料。\n"
+        "     現有的 pytest 呼叫:%s" % [a for _, a in invocations])
+    assert execute, (
+        "沒有任何 workflow 步驟跑不帶 `--collect-only` 的 pytest —— "
+        "那表示 CI 根本沒在執行測試。")
+
+    for _, c_argv in collect:
+        c = _selection_flags(c_argv)
+        for _, e_argv in execute:
+            e = _selection_flags(e_argv)
+            assert c == e, (
+                "收集步驟與執行步驟的選取旗標不同 —— 兩份清單量的不是同一批。\n"
+                "     收集步驟:%r\n"
+                "     執行步驟:%r\n"
+                "     差在:%s\n"
+                "     **這個差不會讓任何一步變紅**,它只會讓差集看起來合理。"
+                % (c, e,
+                   dict((k, (c[k] ^ e[k])) for k in c if c[k] != e[k])))
+
+
+def test_the_test_step_does_not_override_reportchars():
+    """票 85 乙:命令列上不得出現 `-r*` —— 它會**蓋掉** `addopts` 的 `-ra`。
+
+    pytest 的 `-r` 是 `action="store"`(不是累加),而 `addopts` 是**前置**到
+    命令列引數的。所以 `-rs` 排在 `-ra` 之後、後者覆蓋前者,
+    `reportchars` 從 `a`(all except passed)縮成 `s`(只有 skipped)——
+    **XFAIL / FAILED 那幾行會從 short summary 消失。**
+
+    **看起來是加詳細度,實際是減。** 而它不改退出碼、不改選取集合,
+    所以**沒有任何一條既有測試會因此變紅** —— 這條就是為了讓它變紅而存在。
+
+    `-ra` 本身已經含 `s`,所以「要看 skip 理由」不需要任何命令列旗標。
+    """
+    if not workflow_files():
+        pytest.skip("沒有 workflow — 由 test_there_is_at_least_one_workflow 負責紅")
+    bad = []
+    for run, argv in _pytest_invocations():
+        for tok in argv:
+            if tok.startswith("-r") and not tok.startswith("--"):
+                bad.append((tok, run.strip().splitlines()[0]))
+    assert not bad, (
+        "workflow 的 pytest 命令列上有 `-r*` 旗標,它會蓋掉 pyproject.toml 的 "
+        "`addopts = \"-ra …\"`:\n  %s\n"
+        "     `-r` 是 store 不是 append,後者覆蓋前者 —— 結果是**縮小**報告面。\n"
+        "     `-ra` 已經含 `s`(skipped),要看 skip 理由不必加任何東西。"
+        % "\n  ".join("%r(在 %r 這一段)" % b for b in bad))
+
+    # 另一半:`-ra` 得真的在 `addopts` 裡。只守命令列的話,有人把 `-ra` 從
+    # pyproject 拿掉,這條測試仍然全綠 —— **守一半的門是一扇開著的門**。
+    addopts = ""
+    for line in io.open(ROOT / "pyproject.toml", encoding="utf-8"):
+        if line.strip().startswith("addopts"):
+            addopts = line
+            break
+    assert "-ra" in addopts, (
+        "pyproject.toml 的 addopts 裡沒有 `-ra`(讀到 %r)——\n"
+        "     上面那條「命令列不得覆蓋」守的東西不存在了,而它仍然是綠的。"
+        % addopts.strip())
