@@ -1,6 +1,6 @@
 # 108 — 通用洩漏規則補 Google 新格式 `AQ.`,並補一條「通用組逐條正對照」的元測試
 
-**狀態**:**立案、未實作**(2026-09-05)
+**狀態**:**完成**(2026-09-05)—— 四刀 `11eaa3a` / `c2bf47f` / `7491ecd` / 刀四本 commit,**未推**。三層全過:**UNIT 1326**(紅燈 5 條 → 全綠)、**CLEAN 1213**(1210 passed + 3 skipped)、**REAL** 權威層真的擋下一次 `git commit`。四個計數的預測與實測全中(差 0)。~~立案、未實作~~(`F-036`:舊狀態不刪)
 **時鐘**:**有外部時鐘** —— Google 自 2026-06 起發的 Gemini API 金鑰改成 `AQ.` 開頭的 Auth key。新鑰**已經在本機 `.env` 裡**(桌機 9/5 實測可用),而現行通用規則只認 `\bAIza…`,**新鑰穿過**。下游 repo 收不到本機個人黑名單那一行形狀,所以每晚一天,下游就多一天沒有這條規則。
 **站別**:待裁(見第七節 —— 兩個目標檔在 `gate.py` 眼中**都不是原始碼**,R2 不管,所以站別是流程紀律問題不是閘門問題)
 **前置**:偵察回報 `.dev/reports/2026-09-05T060441Z-aq-key-rule-recon.md`;票 102(R1 零正對照,同一族的前例)、票 47(R5 零正對照)、票 45(規則清冊)
@@ -205,7 +205,20 @@ tests/test_leak_scan.py                  is_source_path=False
 |---|---|---|
 | 一 | `11eaa3a` | 紅燈:元測試 + AQ. 正反控,只動 `tests/test_leak_scan.py` |
 | 二 | `c2bf47f` | 轉綠:`leak-patterns.txt` 加 AQ. 那條 + 補四條樣本 |
-| 三 | 本 commit | CLEAN / REAL 落地紀錄(本節)+ 票面入版控 |
+| 三 | `7491ecd` | CLEAN / REAL 落地紀錄(本節)+ 票面入版控 |
+| 四 | 本 commit | `F-161` 進 friction log;`leak-patterns.txt` 檔頭加「加一條規則要配什麼」;狀態行收票 |
+
+### 三層計數總表(預測 vs 實測,基準一併寫)
+
+| 層 | 基準 | 預測 | 實測 | 差 |
+|---|---|---|---|---|
+| **UNIT** 全套 collected | `973ddc2` 的 1313 | 1313 + 13 = **1326** | **1326 passed, 3 skipped, 3 xfailed** | **0** |
+| **UNIT** 單檔 `test_leak_scan.py` | 刀一收集 57 | 58 | **58 passed** | **0** |
+| **CLEAN** 淨室 collected | `973ddc2` 筆電淨室 1197 passed + 3 skipped = 1200 | 1200 + 13 = **1213** | **1210 passed + 3 skipped = 1213** | **0** |
+| `load_patterns()` 通用組長度 | `973ddc2` 的 10 | 11 | **11** | **0** |
+| **REAL** | —— | 權威層擋下、HEAD 不動 | **擋下,HEAD 仍 `c2bf47f`** | —— |
+
+新增 13 的拆法:元測試 `parametrize` **11 個參數** + AQ. 正控 **1** + AQ. 反控 **1**。
 
 ### 九之一、UNIT
 
@@ -278,3 +291,4 @@ FAILED tests/test_leak_scan.py::test_the_new_google_key_shape_is_caught
 | 元測試只驗**一個方向**(「pattern 都有樣本嗎」) | 反方向(刪掉 pattern 後表裡留下孤兒樣本)**沒有機器在管**。CLAUDE.md「驗兩個方向」的判準適用,但不在本票裁決範圍 —— 已寫進測試檔註解 |
 | `53` 是不是封閉規格 | **仍未證明**(單一樣本)。見第五節的到期條件 |
 | `leak-patterns.txt` 靠 `.txt` 落在 R2 非原始碼清單外 | **未動**。見第七節 |
+| 「pattern 字面不得進版控」在**寫的當下**沒有機器會叫 | 刀四把規矩從測試檔檔頭搬到 `leak-patterns.txt` 檔頭(加規則的人一定會打開那個檔),但**守它的仍然只有 commit 時的擋下** —— 前哨與 UNIT 都走 `git ls-files`,看不到未追蹤的檔。⇒ **下次仍會是 `git commit` 才發現**(`F-161` 末節) |
