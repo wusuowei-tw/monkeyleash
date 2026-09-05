@@ -734,3 +734,98 @@ class TestSkipListMatchingIsBounded:
     def test_a_name_merely_ending_in_cache_is_not_skipped(self):
         """`my.cache/` 不是 `.cache/`。"""
         assert not self._skipped("a/my.cache/x.txt")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 109:`read_text` 的解碼階梯 —— UTF-16 與可讀性
+#
+# 這一組測的是**骨架自己**(`scanner.read_text`),不是某一支掃描器的組態。
+# `tests/test_leak_scan.py` 那一組測的是**同一件事的對外行為**(scan 的退出碼);
+# 兩邊都要,因為它們證的是不同的命題:這裡證「解碼決策對不對」,
+# 那裡證「決策接到偵測上之後,金鑰真的被擋下」。
+#
+# 失效方向照本檔檔頭:**靜默放行**。所以每一條都往「不可讀 -> 計為違規」倒,
+# 而且配反控 —— 少了反控,「全部當成違規」也會讓正控過。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_AWS = "AKIA" + ("Z" * 16)                  # 組裝:本檔自己也被掃
+_ASCII_LINE = u"aws_access_key_id = " + _AWS + u"\n"
+_CJK_LINE = u"# 票 109 探針 —— 尾巴全是 Z。\n金鑰 = " + _AWS + u"\n"
+
+
+def _wb(tmp_path, name, data):
+    p = tmp_path / name
+    io.open(str(p), "wb").write(data)
+    return str(p)
+
+
+class TestReadTextUnderstandsUtf16:
+    """**六格 = 三態 × 兩種內容。**
+
+    三態:LE+BOM / BE+BOM / 無 BOM。兩種內容:純 ASCII 與含 CJK。
+    **兩種內容不是湊數** —— 它們在舊碼裡走的是**不同的解碼分支**
+    (純 ASCII 在 `utf-8-sig` 第一格就「成功」,含 CJK 掉到 `latin-1`),
+    只測一種等於只驗一條路,而修法很容易只接住其中一條。
+    """
+
+    @pytest.mark.parametrize("content", [_ASCII_LINE, _CJK_LINE],
+                             ids=["ascii", "cjk"])
+    @pytest.mark.parametrize("bom,endian", [
+        (b"\xff\xfe", "le"), (b"\xfe\xff", "be"), (b"", "le"),
+    ], ids=["le-bom", "be-bom", "no-bom"])
+    def test_the_secret_survives_decoding(self, tmp_path, content, bom, endian):
+        raw = bom + content.encode("utf-16-" + endian)
+        text, why = sc.read_text(_wb(tmp_path, "probe.env", raw))
+        assert why is None, u"解不開:%s" % why
+        assert _AWS in text, (
+            u"解出來的文字裡找不到樣本 —— 這個檔不是「掃過乾淨」,"
+            u"是「解成亂碼之後沒命中」。解出來的前 40 字:%r" % text[:40])
+
+
+class TestLatin1IsNoLongerAGuaranteedPass:
+    """**`latin-1` 對全部 256 個位元組值都成功**,所以舊版的 fail-closed 出口
+    是死碼。這一組把它叫醒。"""
+
+    def test_latin1_still_decodes_every_byte_value(self):
+        """先釘住前提本身 —— 這是上面那句話的來源,不是我推的。"""
+        assert bytes(bytearray(range(256))).decode("latin-1")
+
+    def test_random_bytes_are_reported_not_decoded_into_noise(self, tmp_path):
+        raw = bytes(bytearray((i * 7 + 3) % 256 for i in range(512)))
+        text, why = sc.read_text(_wb(tmp_path, "noise.bin", raw))
+        assert text is None and why, (
+            u"解不出可讀文字的位元組流被當成文字回傳了 —— "
+            u"fail-closed 出口仍是死碼。解出來的前 40 字:%r"
+            % (text[:40] if text else None))
+
+
+class TestDecodingDoesNotOverreach:
+    """**反控:涵蓋不得變小。** 往「更會判成 UTF-16」走一步的代價在這裡。"""
+
+    def test_a_plain_utf8_file_is_unchanged(self, tmp_path):
+        text, why = sc.read_text(_wb(tmp_path, "a.txt",
+                                     _CJK_LINE.encode("utf-8")))
+        assert why is None and _AWS in text
+
+    def test_a_cp950_file_is_unchanged(self, tmp_path):
+        text, why = sc.read_text(_wb(tmp_path, "b.txt",
+                                     _CJK_LINE.encode("cp950")))
+        assert why is None and _AWS in text
+
+    def test_a_utf8_file_with_a_few_nuls_is_not_read_as_utf16(self, tmp_path):
+        """NUL 是合法的 UTF-8 位元組,這種檔真的存在。
+
+        誤判成 UTF-16 的話它會被解成亂碼,**裡面的金鑰就消失了** ——
+        一個為了多抓而做的改動,反而讓這一類檔完全失去偵測。
+        """
+        content = (u"# note\x00\x00\n" + _ASCII_LINE
+                   + u"padding padding padding padding padding\n" * 4)
+        text, why = sc.read_text(_wb(tmp_path, "c.txt",
+                                     content.encode("utf-8")))
+        assert why is None, u"含少量 NUL 的 UTF-8 檔被判成不可讀:%s" % why
+        assert _AWS in text, u"含少量 NUL 的 UTF-8 檔被誤判成 UTF-16,樣本消失"
+
+    def test_an_empty_file_is_readable_not_broken(self, tmp_path):
+        """空檔案是合法的文字檔,不是壞檔案 —— 可讀性檢查不得把它擋掉。"""
+        text, why = sc.read_text(_wb(tmp_path, "empty.txt", b""))
+        assert why is None and text == u""
