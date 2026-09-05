@@ -147,23 +147,131 @@ def normalize_for_match(s):
                    if c not in ZERO_WIDTH)
 
 
+# ── UTF-16 與可讀性(票 109)────────────────────────────────────────────────
+#
+# **問題不是「階梯裡沒有 utf-16」,是「階梯裡有好幾格會【成功】解開 UTF-16」。**
+# 解出來的東西夾著 NUL,任何要求連續字元的 pattern 都打不到 ⇒ 那個檔
+# 不是「掃過乾淨」,是**解成亂碼之後沒命中**,而兩者的回傳值一模一樣。
+#
+# 哪一格接走它**取決於內容**(票 109 實測):
+#   含 CJK           -> latin-1(第 5 格)
+#   純 ASCII 無 BOM  -> **utf-8-sig(第 1 格)** —— ASCII 與 NUL 都是合法 UTF-8
+#   純 ASCII 有 BOM  -> **cp1252(第 4 格)** —— FF FE 是合法 cp1252
+# 真實的 `.env` 幾乎都是純 ASCII,所以**最可能發生的案例走的是第 1 格**。
+# ⇒ 判定不能只掛在 latin-1 後面。
+#
+# **`latin-1` 對全部 256 個位元組值都成功**(枚舉實測,測試釘住)⇒ 舊版
+# `return None, "任何已知編碼都解不開"` 是**死碼**,從來沒被執行過。
+# 那一行看起來是這支函式的 fail-closed 出口,而**保底編碼把它消掉了** ——
+# 兩段程式各自都對,是它們的組合出的問題。
+
+# BOM 是**封閉集合**(兩個位元組序列),所以用枚舉不用 pattern(`F-087` 同款)。
+UTF16_BOMS = (b"\xff\xfe", b"\xfe\xff")
+
+# 「這串解出來的東西還算文字嗎」的門檻:控制字元(含 NUL)佔比。
+# 實測(票 109):正常文字 ~0%;含少量 NUL 的 UTF-8 檔 0.8%;
+# UTF-16 被單位元組編碼解開 4.3%(全 CJK)~ 50%(純 ASCII);隨機位元組 ~12.9%。
+# 2% 落在「含少量 NUL 的真文字」與「最低的 UTF-16」之間,**兩側都有實測值**。
+UNREADABLE_MAX = 0.02
+
+# 裁決 B 的 NUL 佔比:**這是快路徑,不是唯一的保證**。
+# 它讓「解出來一半是 NUL」在階梯中途就被認出來,不必等走完;
+# 真正保證涵蓋的是底下第 ③ 步(階梯全不可讀 -> 再試一次 utf-16),
+# 而**那一步不依賴任何門檻**。兩者都留:快路徑讓意圖看得見,
+# 保證掛在不會因為門檻訂錯而消失的那一步上。
+NUL_TRIGGER = 0.10
+
+
+def _control_ratio(s):
+    """控制字元(含 NUL)佔比。`\\t` `\\n` `\\r` 是正常文字的一部分,不算。"""
+    if not s:
+        return 0.0
+    bad = sum(1 for c in s
+              if (ord(c) < 32 and c not in "\t\n\r") or ord(c) == 127)
+    return float(bad) / len(s)
+
+
+def _nul_ratio(s):
+    return (float(s.count(u"\x00")) / len(s)) if s else 0.0
+
+
+def looks_readable(s):
+    """這串東西還算文字嗎。**空字串算可讀**(空檔案不是壞檔案)。"""
+    return _control_ratio(s) <= UNREADABLE_MAX
+
+
+def _decode_utf16(raw):
+    """試 LE / BE 兩種 UTF-16,回**第一個可讀的**結果;都不可讀回 None。
+
+    **可讀性檢查是必要的一半。** 少了它,任何偶數長度的位元組流都能被
+    utf-16 解出「某個東西」,於是這條路自己變成新的靜默漏放。
+    """
+    for enc in ("utf-16-le", "utf-16-be"):
+        try:
+            t = raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+        if looks_readable(t):
+            return t
+    return None
+
+
 def read_text(path):
     """讀檔並解碼。回 `(text, None)` 或 `(None, 理由)` —— 理由非空即 fail-closed。
 
     **先拿位元組再依序解碼。** 讀不到位元組(權限、路徑壞掉)不是「沒問題」,
     是「這個問題沒有答案」,呼叫端一律計為違規。
+
+    票 109 之後的順序:① BOM 嗅探 → ② 原本的階梯(每一格的結果都要過
+    可讀性檢查)→ ③ 階梯全不可讀時再試一次 utf-16 → ④ 都不可讀就 fail-closed。
+
+    **`latin-1` 不再是保底。** 它仍在階梯裡,但它的結果與別格一樣要過檢查 ——
+    這正是把那條死掉的 fail-closed 出口叫醒的那一步。
     """
     try:
         with io.open(path, "rb") as f:
             raw = f.read()
     except Exception as e:                                   # noqa: BLE001
         return None, "讀不到檔案:%s" % e
+
+    # 空檔案是合法的文字檔,不是壞檔案 —— 這一格要在所有檢查之前。
+    if not raw:
+        return u"", None
+
+    # ① BOM 嗅探。**BOM 說了算**:它是產生端寫下的宣告,不是讀的人的猜測
+    #    (與「判『遮過沒』的權威在產生端」同一條)。
+    if raw[:2] in UTF16_BOMS:
+        try:
+            t = raw.decode("utf-16")          # 由 BOM 自己決定 LE/BE
+            if looks_readable(t):
+                return t, None
+        except (UnicodeDecodeError, LookupError):
+            pass
+
+    # ② 原本的階梯。差別是:**解得開不等於可以用。**
     for enc in DECODINGS:
         try:
-            return raw.decode(enc), None
+            t = raw.decode(enc)
         except (UnicodeDecodeError, LookupError):
             continue
-    return None, "任何已知編碼都解不開"
+        # 裁決 B 的快路徑:一半是 NUL 的「文字」多半是被單位元組編碼
+        # 讀進來的 UTF-16 —— 當場改試,不必等走完階梯。
+        if _nul_ratio(t) >= NUL_TRIGGER:
+            u16 = _decode_utf16(raw)
+            if u16 is not None:
+                return u16, None
+        if looks_readable(t):
+            return t, None
+        # 解得開但不可讀 -> 這一格不算數,繼續試下一格。
+
+    # ③ 階梯裡沒有一格給出可讀的東西。**無 BOM 又含 CJK 的 UTF-16 走到這裡** ——
+    #    它的 NUL 佔比低到 4.3%,快路徑接不住,而這一步不依賴門檻。
+    u16 = _decode_utf16(raw)
+    if u16 is not None:
+        return u16, None
+
+    # ④ 真正的 fail-closed 出口 —— 票 109 之前這裡是死碼。
+    return None, "解不出可讀文字(控制字元佔比過高,可能是二進位或未知編碼)"
 
 
 # git 的檔案模式是**封閉集合**,所以判定用枚舉、不用 pattern:
