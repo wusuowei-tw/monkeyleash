@@ -237,7 +237,13 @@ docstring 演化如實入註:「認定收在一處」第一版是願望 → 第�
   **R2 於 idle 正確擋下**(原始訊息在回報),待 Jeff 開站後落地;
   逐字稿(替換前/後,含落地後驗收步驟)在 `.scratch/79-shoubei-pending.md`
   (gitignored,不髒樹 —— 對話會結束,稿不能只住在對話裡);
-  **2026-09-05 該檔已刪(`.scratch/` 清空事故);影響見 `.dev/reports/2026-09-05T103052Z-recon-scratch-deletion-impact.md`**
+  **2026-09-05 該檔已刪(`.scratch/` 清空事故)。結論:稿的內容已經落地** ——
+  guard 的宣告改寫在 `.claude/portable/g1_verify.py` 對應的 `g1_guard.py` docstring 裡,
+  驗收由 `TestCoverageDeclarationIsThreeStateNotTwoState` 守著(2026-09-05 實跑 5 passed),
+  **所以那份稿不需要重建**。(查證過程降為附註:
+  `.dev/reports/2026-09-05T103052Z-recon-scratch-deletion-impact.md` ——
+  ⚠ `.dev/` 是 gitignored,**clone 的人看不到那個檔**,所以結論寫在這一行裡,
+  不寫在那個路徑後面。)
   票 80 已立(docs 側不受 R2 管)。
 
 ## 裁 A 落地(2026-08-25,開站 implement)

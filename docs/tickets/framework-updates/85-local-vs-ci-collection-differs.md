@@ -1,6 +1,7 @@
 # 85 — 本機與 CI 的測試收集清單有差,而那個差從來沒有人查過
 
-**狀態**:**立案**(2026-08-27)
+**狀態**:**done**(2026-09-05)—— 三刀 `b13b0a7`(紅燈)/ `5968180`(轉綠+推)/ 本 commit(收票)。
+三類差集逐條落地見「七、結果」。~~立案(2026-08-27)~~(`F-036`:舊狀態不刪)
 **時鐘**:**上線之後**(裁決 2026-08-28 晚,見「零之一」)
 ~~9/1 之前(開源上線當天之前)~~ —— 上線日已提前到 **8/31**,
 而本票的改動**不得排在上線當天**(改 CI 與設 status check 保護同日 = 互為前置)
@@ -80,6 +81,65 @@
 > (「兩邊都收集到、但結果不同」)**從來沒有人問過它要用什麼量** ——
 > `--collect-only` 答不了,而原本的 workflow 也不印。
 > **驗收列了一項,而那一項沒有對應的量測工具,這件事本身沒有被發現。**
+
+#### 🔴 2026-09-05 推翻:**`-rs` 不是零成本,它是【減】 —— 而且那把尺早就在了**(裁決,乙案)
+
+上面那一格有兩個錯,舊文不刪(`F-036`),更正寫在這裡:
+
+**錯一:「現在 CI 那一步只印得出『有幾個』」不成立。**
+`pyproject.toml:72` 的 `addopts = "-ra --strict-markers"` 已經生效,
+而 **`-ra` 是「all except passed」,本來就含 `s`**。CI 那一步從第一天起
+就會印出每一支 skip 的理由 —— 那一輪看不到形狀,是因為 **ubuntu 上真的 0 個 skip**,
+不是因為沒有尺。**「沒有尺」與「尺量到 0」在畫面上長得一樣**,
+而只有前者需要動手。
+
+實測(本機,`-ra` 生效,未加任何 `-r*`):
+
+```
+$ python -m pytest -q tests/test_gate.py::TestSkillMirrorSingleRule
+sss...                                                                   [100%]
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_gate.py:451: 此環境無法建立 symlink
+SKIPPED [1] tests\test_gate.py:459: 此環境無法建立 symlink
+SKIPPED [1] tests\test_gate.py:473: 此環境無法建立 symlink
+3 passed, 3 skipped in 0.05s
+```
+
+**錯二:「零額外執行成本 —— 它只改報告的詳細度」的方向反了。**
+pytest 的 `-r` 是 `action="store"`(**不是累加**),而 `addopts` 是
+**前置**到命令列引數的。所以命令列上的 `-rs` 排在 `-ra` **之後**、
+後者覆蓋前者,`reportchars` 從 `a` 縮成 `s` ——
+**XFAIL / FAILED 那幾行會從 short summary 消失。**
+
+實測(同一檔,唯一差別是 `-rs`):
+
+```
+$ python -m pytest -q tests/test_g1_guard.py
+=========================== short test summary info ===========================
+XFAIL tests/test_g1_guard.py::TestLevelTwoIsUnchanged::test_an_unlisted_root_should_be_visible_to_level_two[/srv/x] - …
+XFAIL …[/data/x] - …
+XFAIL …[/backup/x] - …
+103 passed, 3 xfailed in 0.29s
+
+$ python -m pytest -q -rs tests/test_g1_guard.py
+103 passed, 3 xfailed in 0.31s          ← 三行 XFAIL 不見了
+```
+
+退出碼兩邊都是 `0`(實測),選取集合不變 ——
+**所以它不會讓任何一條既有測試變紅**。一個看起來是「加詳細度」的旗標,
+實際做的是減,而**減掉的部分不會有東西說它不見了**。
+
+> ⇒ **裁決(2026-09-05,乙):不加 `-rs`。** 票面規矩改寫成
+> **「`-ra` 已含 `s`,命令列不得再加任何 `-r*` 覆蓋它」**。
+> 這條由 `tests/test_ci_workflow.py::test_the_test_step_does_not_override_reportchars`
+> 守著(刀一),它同時斷言 `pyproject.toml` 的 `addopts` 裡 `-ra` 還在 ——
+> **只守命令列的話,有人把 `-ra` 拿掉,那條測試仍然全綠**,而那是一扇開著的門。
+
+**條件二那一格的基準也過期了。** 它寫死「`1054 passed, 1 deselected, 3 xfailed`
+這三個數字必須逐字不變」,而那是 2026-08-28 的數字;
+2026-09-05 同一組旗標的 CI 實測是 `1339 passed, 1 deselected, 3 xfailed`。
+照 `F-109`,判準改寫成**「與【改動前那一次】CI 的三個數字逐字相同」** ——
+寫死一個絕對數,下一次做這件事的人會把「基準過期」讀成「踩線」。
 
 ### 兩個條件(核准附加,不是建議 —— **(a)(b) 兩件都適用**)
 
@@ -252,7 +312,18 @@ skip 理由字串,三支相同:**`此環境無法建立 symlink`**
 `.scratch/ticket85-corpus-2026-08-28/` —— 取樣時工作樹乾淨,
 HEAD `a6473a2de649bc5e2288bb933f91cc19464c2f8b`,遠端同值。
 
-**2026-09-05 該檔已刪(`.scratch/` 清空事故);影響見 `.dev/reports/2026-09-05T103052Z-recon-scratch-deletion-impact.md`**
+**2026-09-05 該檔已刪(`.scratch/` 清空事故)。結論:三分之二可重生,而且不需要重建** ——
+CI log 由 `gh run view 33131319384 --log` 重生(2026-09-05 實測 **311 行**,與上表記載相符,
+該 run 的 headSha 正是取樣 commit `a6473a2`,確認仍活著);
+兩份本機清單由 `a6473a2` checkout 重跑即得;
+**唯一不可重生的是 `local-meta.txt`(Python / pytest 版本、platform)—— 而它正是
+用來檢查重生是否忠實的那一份**。不重建:重建出來的複本沒有東西可以對帳,
+那正是 `F-122`(一份沒有人在守的副本)最省力的產生方式。
+**而本票 2026-09-05 這一輪產生的是成對的新資料,兩邊版本都記在「七、結果」**,
+所以舊語料的損失對驗收是零影響。
+(查證過程降為附註:`.dev/reports/2026-09-05T103052Z-recon-scratch-deletion-impact.md` ——
+⚠ `.dev/` 是 gitignored,**clone 的人看不到那個檔**,所以結論寫在這幾行裡,
+不寫在那個路徑後面。)
 
 ```
 README.md                    取樣條件、兩邊數字原樣抄錄、上面那一格限制
@@ -312,3 +383,207 @@ CI 內部  : 1102 - 1 deselected = 1101 跑;- 3 xfailed = 1098 passed  ✓
 - **票 85 狀態維持**(`立案`)
 - `--collect-only` 那一步**照原排程:上線之後**(本票「零之一」:上線當天不動 CI)
 - 上面那串算術**留著當線索**,並標明它**不是驗收** —— 這一段就是那個標明
+
+---
+
+## 七、結果(2026-09-05,收票)
+
+### 取得條件
+
+| | 本機 | CI |
+|---|---|---|
+| commit | `5968180c8b73eafdac3aeaf5c7a6cd8461f7f175` | 同(run headSha 實測相符) |
+| 工作樹 | 乾淨(`git status --porcelain` 空) | 乾淨 checkout |
+| platform | `win32` / `Windows-10-10.0.26200-SP0` | `linux` / `ubuntu-latest` |
+| Python | **3.11.9** | **3.11.16** |
+| pytest | **9.0.3** | **9.1.1** |
+| 取得方式 | `pytest --collect-only -q <CI 旗標>` | `gh run view 33965570366 --log`(方案 C) |
+| 時間 | 2026-09-05 | run `33965570366`,`2026-09-05T12:16:21Z`,結論 `success` |
+
+⚠ **兩邊的 Python 與 pytest 版本都不同。**
+workflow 只釘了 `python-version: '3.11'`(次版本,不是修訂版),pytest 完全沒釘 ——
+所以「一次只變一個變數」這句話在本票的量測裡**不成立**:
+兩邊至少差了三個變數(OS、Python 修訂版、pytest 次版本)。
+**本票不修這個**(§五:本票只負責讓差有名字),但它是下一張票的材料 ——
+下面的差集結論**都要讀成「在這三個變數同時不同的條件下」**。
+
+### 三類差集
+
+**尺有兩把,兩把都要跑,而且不能互相取代。**
+尺一比**完整節點 id**(pytest 實際用來選取的字串);
+尺二比**函式身分**(丟掉 `[...]` 參數段)。
+只跑尺一會把「同一支測試在兩台機器上拿到不同的絕對路徑」報成 12 條差;
+只跑尺二會把「某支測試在一邊多產生了幾個參數化案例」抹平,而那是真的差。
+
+```
+=== 尺一:完整節點 id ===
+本機 1342 條 / CI 1342 條 / 交集 1336 條 / 相等 False
+  只在本機 6 條、只在 CI 6 條
+
+=== 尺二:丟掉 [參數] 之後的函式身分 ===
+本機 937 支 / CI 937 支 / 交集 937 支 / 相等 True
+  只在本機 0 支、只在 CI 0 支
+```
+
+#### 第 1 類 —— **只在本機收集到:6 條**(逐條)
+
+```
+tests/test_ci_workflow.py::test_checkout_fetches_the_whole_history[C://projects//agent-gates//.github//workflows//tests.yml]
+tests/test_ci_workflow.py::test_every_third_party_action_is_pinned_to_a_sha[C://projects//agent-gates//.github//workflows//tests.yml]
+tests/test_ci_workflow.py::test_leak_scan_is_clean_on_the_workflow[C://projects//agent-gates//.github//workflows//tests.yml]
+tests/test_ci_workflow.py::test_no_secrets_are_referenced[C://projects//agent-gates//.github//workflows//tests.yml]
+tests/test_ci_workflow.py::test_nothing_reaches_for_the_user_layer[C://projects//agent-gates//.github//workflows//tests.yml]
+tests/test_ci_workflow.py::test_permissions_are_least_privilege[C://projects//agent-gates//.github//workflows//tests.yml]
+```
+
+#### 第 2 類 —— **只在 CI 收集到:6 條**(逐條)
+
+```
+tests/test_ci_workflow.py::test_checkout_fetches_the_whole_history[/home/runner/work/monkeyleash/monkeyleash/.github/workflows/tests.yml]
+tests/test_ci_workflow.py::test_every_third_party_action_is_pinned_to_a_sha[/home/runner/work/monkeyleash/monkeyleash/.github/workflows/tests.yml]
+tests/test_ci_workflow.py::test_leak_scan_is_clean_on_the_workflow[/home/runner/work/monkeyleash/monkeyleash/.github/workflows/tests.yml]
+tests/test_ci_workflow.py::test_no_secrets_are_referenced[/home/runner/work/monkeyleash/monkeyleash/.github/workflows/tests.yml]
+tests/test_ci_workflow.py::test_nothing_reaches_for_the_user_layer[/home/runner/work/monkeyleash/monkeyleash/.github/workflows/tests.yml]
+tests/test_ci_workflow.py::test_permissions_are_least_privilege[/home/runner/work/monkeyleash/monkeyleash/.github/workflows/tests.yml]
+```
+
+**第 1 類與第 2 類是同 6 支測試。** 逐支比對後,**每一支兩邊都恰好 1 個案例** ——
+不是誰多產生了案例,是**同一個案例的 id 在兩台機器上不同**。
+成因:`tests/test_ci_workflow.py` 的 `workflow_files()` 回的是
+`glob.glob(str(WORKFLOW_DIR / "*.yml"))` —— **絕對路徑**,
+而 `@pytest.mark.parametrize("path", …)` 把它直接當成參數 id。
+
+> **這是本票要找的那個「名字」。**
+> 從立案起的「差 10 / 差 3 / 差 1」全部是**計數**,而計數答不出這件事:
+> 兩邊**條數完全相同**(1342 = 1342),而**集合不同**。
+> §零之二那條硬條件寫的是「數字相同不等於集合相同」——
+> **這一次它真的發生了**,而且如果只看數字,會得到「完全一致」的結論。
+
+**後果(登記,不在本票修):**
+
+1. **節點 id 不可攜。** 這 6 支測試的節點 id 換一台機器就變,所以
+   `--deselect` / `-k` / 任何把節點 id 記下來的清單(CI 的 `--deselect` 就是一份)
+   **對它們不成立**。目前那條 `--deselect` 指的是別支測試,所以沒有踩到。
+2. **本機絕對路徑會進到節點 id 裡。** 本輪是 `C:/projects/agent-gates`(無個人名),
+   但在 repo 路徑含個人資料夾名的機器上,**節點 id 本身就是一次洩漏**
+   (`F-082` 的形狀)。**這一格直接否定了方案 A**(把本機清單提交進版控):
+   那份清單會帶著本機絕對路徑一起進 git 歷史。
+   裁決 2026-09-05 選 C 是對的,而**當時選 C 的理由不是這個** ——
+   當時的理由是維護成本,這個理由是量完才看到的。
+
+#### 第 3 類 —— **兩邊都收集到、但結果不同**
+
+| | 本機(win32) | CI(ubuntu) |
+|---|---|---|
+| 摘要行 | `1336 passed, 3 skipped, 1 deselected, 3 xfailed in 108.92s` | `1339 passed, 1 deselected, 3 xfailed in 19.73s` |
+| collected | 1343 | 1343 |
+| selected | 1342 | 1342 |
+| **skipped** | **3** | **0** |
+| **xfailed** | **3** | **3** |
+
+**skip 的 3 支(本機,`-ra` 摘要 + 原始碼對照):**
+
+```
+SKIPPED [1] tests\test_gate.py:451: 此環境無法建立 symlink
+SKIPPED [1] tests\test_gate.py:459: 此環境無法建立 symlink
+SKIPPED [1] tests\test_gate.py:473: 此環境無法建立 symlink
+```
+
+`-ra` / `-rs` 的 SKIPPED 行給的是 `檔案:行號`,**不是節點 id** ——
+所以節點名是從原始碼查回來的(`tests/test_gate.py:420` 起的
+`class TestSkillMirrorSingleRule`):
+
+```
+tests/test_gate.py::TestSkillMirrorSingleRule::test_intact_symlink_passes                    (:446 def / :451 skip)
+tests/test_gate.py::TestSkillMirrorSingleRule::test_broken_symlink_is_blocked                (:454 def / :459 skip)
+tests/test_gate.py::TestSkillMirrorSingleRule::test_symlink_pointing_outside_canonical_is_blocked (:465 def / :473 skip)
+```
+
+**這一格順帶更正票面的一句話**:§零之一 (b) 寫「`-rs` 讓 short summary 印出
+**每一支 skip 的節點**與理由」——
+**`-rs` 與 `-ra` 都做不到**,它們印的是 `檔案:行號`。
+要節點 id 得走 `-v`。這不是實作選擇,是票面對工具能力的認定與實際不符。
+
+**xfail 的 3 條,兩邊逐字相同:**
+
+```
+tests/test_g1_guard.py::TestLevelTwoIsUnchanged::test_an_unlisted_root_should_be_visible_to_level_two[/srv/x]
+tests/test_g1_guard.py::TestLevelTwoIsUnchanged::test_an_unlisted_root_should_be_visible_to_level_two[/data/x]
+tests/test_g1_guard.py::TestLevelTwoIsUnchanged::test_an_unlisted_root_should_be_visible_to_level_two[/backup/x]
+```
+
+**§零之二那個假說:計數層閉合,集合層仍未證。**
+`本機 1336 passed + 3 skipped = 1339 = CI passed` ✓。
+⚠ **但這【不是】「那 3 支在 CI 上跑且通過」的證明** ——
+`-ra` **不列 passed**,所以 CI 那 3 支是哪 3 支**沒有被觀測到**。
+成立的只有:兩邊 selected 相同、函式集合相同、passed 差恰為 3、本機 skip 恰為 3。
+**要證到集合層,CI 那一步得走 `-rp` 或 `-v`** —— 本票不做(§五:只讓差有名字)。
+**這一句留在票面,是因為「差 3、skip 3」這個算術太容易被讀成證明了** ——
+而那正是本票 §「一次對得上的算術」整節在防的東西。
+
+### `10` / `3` / `1` 各自的來源(驗收第 2 項)
+
+- **`1`** = CI 的 `--deselect`,指名
+  `tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce`。
+  **來源明確,兩邊都被收集到、都被排除。**
+- **`3`** = 本機 win32 的**執行期** skip,就是上面那 3 支
+  `TestSkillMirrorSingleRule`(`tests/test_gate.py:451/459/473`)。
+  **它們在兩份 collect 清單裡都在** —— 所以 `3` **從來不屬於收集面的差**,
+  它屬於第 3 類。
+- **`10`** = **當初那個 `10` 沒有實體**。它是
+  「本機**無旗標**(1070)」對「CI **有旗標**(1058)」的差裡被拆出來的一格,
+  而那個差的真實成因是 `--ignore` 拿掉的 **12 條**
+  (`tests/test_known_items_regression.py`,2026-09-05 實測單獨收集 = 12)。
+  **口徑不同,不是測試不見** —— §零之二的推導在這一格成立。
+  ⇒ **`10 + 3 − 1 = 12` 這個算術之所以閉合,是因為它把一個口徑差(12)
+  拆成三格再加回去。** 三格裡只有 `3` 與 `1` 有指名的實體,`10` 沒有。
+
+### 驗收對照
+
+- [x] 三類差集**逐條列出** —— 第 1 類 6 條、第 2 類 6 條(逐條節點 id 在上),
+      第 3 類 skip 3 支(逐條)+ xfail 3 條(逐條)。
+      ⚠ 第 3 類的 CI 側**只證到計數,未證到集合**(上面已標)。
+- [x] `10`、`3`、`1` **各自**有指名的來源 —— 且結論是 **`10` 沒有實體**,
+      不是靠 `10 + 3 − 1 = 12` 收尾。
+- [x] 跑的時候**工作樹乾淨** —— 兩次 `--collect-only` 前後 `git status --porcelain` 皆空;
+      產物寫在 `.dev/audits/`(`git check-ignore -v` 實測命中 `.gitignore:30 /.dev/*`)。
+- [x] 兩邊清單各自留檔,附取得時間與 commit sha ——
+      `.dev/audits/local-collect-5968180.txt`、`.dev/audits/ci-collect-5968180.txt`、
+      `.dev/audits/ci-run-33965570366.log`、`.dev/audits/local-run-5968180.txt`。
+      ⚠ **`.dev/` 是 gitignored,這四份不進版控、換機器就沒有** ——
+      與 §六 那份語料同一個限制,**所以逐條名字抄在上面這幾格裡,而不是「去看那四個檔」**。
+
+### 條件一實測(不是只看 diff)
+
+```
+$ gh api repos/wusuowei-tw/monkeyleash/commits/<HEAD>/check-runs
+[('pytest', 'success')]
+```
+
+**check run 名稱 `pytest` 未變**(job key,`tests.yml:19`);workflow 名 `tests` 未變(`tests.yml:5`)。
+
+⚠ **但條件一的前提本身要更正:`master` 上目前沒有 required status checks。**
+
+```
+$ gh api repos/wusuowei-tw/monkeyleash/branches/master/protection
+{"message":"Branch not protected", …, "status":"404"}
+
+$ gh api repos/wusuowei-tw/monkeyleash/rules/branches/master
+[{"type":"deletion"}, {"type":"non_fast_forward"}]
+```
+
+這與版控裡的裁決一致(票 72:79 與票 84:90,2026-08-31「Require status checks 經裁決不裝」)。
+⇒ **條件一守的不是一個現存的綁定,是一個將來要裝的綁定。**
+而「改名會靜默失效」這個危害**目前為零**,「將來裝的時候名字已經漂掉」**才是實的**。
+
+⚠ **順帶更正一個字面**:條件一寫「`tests` 這個名稱仍出現在 CI 結果裡」,
+但 required status checks 綁的是 **check run 名 = job 名 = `pytest`**;
+`tests` 是 **workflow 名**。票 72:79 與票 84:90 三處都寫 `tests`。
+**本票不改那三處**(不是本票範圍),原地登記。
+
+### 本票沒做的事(明列)
+
+- **沒有修那個差**(§五)。6 支測試的絕對路徑 parametrize id 原樣留著。
+- **沒有證到第 3 類的集合層**(要 CI 側 `-rp` / `-v`)。
+- **沒有釘 pytest 版本**,也沒有把 `python-version` 釘到修訂版。
+- **沒有加任何測試守「節點 id 必須可攜」** —— 那需要先決定要不要修。
