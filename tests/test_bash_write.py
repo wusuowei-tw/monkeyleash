@@ -141,9 +141,30 @@ class TestEveryWriteTargetMustBeAllowed:
     @pytest.mark.parametrize("cmd", [
         "python x.py > /tmp/out.txt",
         "rm -rf /tmp/scratch",
-        "python x.py > C:/x/scratchpad/out.txt",
+        # 以 `/` 開頭的絕對路徑 —— **兩個平台都是 repo 外**(票 111 補刀)。
+        "python x.py > /var/x/scratchpad/out.txt",
     ])
     def test_allowed_targets_still_pass(self, cmd):
+        assert gate.bash_write_violation(cmd) is None, cmd
+
+    def test_a_scratchpad_outside_the_repo_passes(self, tmp_path):
+        """repo 外的 scratchpad 要放行 —— **路徑由 `tmp_path` 組,不寫死磁碟代號**。
+
+        ## 這一條為什麼長這樣(票 111 補刀,2026-09-07)
+
+        原本這一格是寫死的 `python x.py > C:/x/scratchpad/out.txt`。
+        `C:/…` **在 Windows 上是絕對路徑,在 Linux 上是相對路徑** ——
+        票 111 加了「解析後落在 repo 內就不算系統暫存」之後,
+        同一筆資料在兩個平台得到相反的答案:本機(Windows)綠、CI(Linux)紅。
+
+        **一條測試資料如果它的語意隨平台改變,它就不是一條平台無關的反控** ——
+        而它會在只有一個平台的機器上看起來永遠正確。
+
+        `tmp_path` 是 pytest 給的**真絕對路徑**,而且必然在 repo 之外,
+        所以它在兩個平台表達的是同一件事。
+        """
+        target = str(tmp_path / "claude" / "sess" / "scratchpad" / "out.txt").replace("\\", "/")
+        cmd = "python x.py > %s" % target
         assert gate.bash_write_violation(cmd) is None, cmd
 
     def test_an_unparseable_write_is_blocked(self):
@@ -587,7 +608,8 @@ class TestExtractionFailureMustRefuse:
     @pytest.mark.parametrize("cmd", [
         "rm -rf /tmp/scratch",
         "python x.py > /dev/null",
-        "python x.py > C:/x/scratchpad/out.txt",
+        # 以 `/` 開頭的絕對路徑 —— **兩個平台都是 repo 外**(票 111 補刀)。
+        "python x.py > /var/x/scratchpad/out.txt",
         "Remove-Item .cache/x.json",
     ])
     def test_allowed_targets_still_pass(self, cmd):
@@ -598,6 +620,17 @@ class TestExtractionFailureMustRefuse:
         於是 R7 每天擋掉大量正當指令,然後整條規則被關掉(F-031)。
         **把 fail-open 修成 fail-everything,不算修好。**
         """
+        assert gate.bash_write_violation(cmd) is None, cmd
+
+    def test_a_scratchpad_outside_the_repo_passes(self, tmp_path):
+        """同上一格的第三條,但**路徑由 `tmp_path` 組,不寫死磁碟代號**(票 111 補刀)。
+
+        原本是 `C:/x/scratchpad/out.txt` —— 在 Windows 上絕對、在 Linux 上相對,
+        於是票 111 的「解析後在 repo 內就不算系統暫存」讓同一筆資料
+        在兩個平台得到相反的答案。**本機綠、CI 紅,而本機永遠測不出來。**
+        """
+        target = str(tmp_path / "claude" / "sess" / "scratchpad" / "out.txt").replace("\\", "/")
+        cmd = "python x.py > %s" % target
         assert gate.bash_write_violation(cmd) is None, cmd
 
 

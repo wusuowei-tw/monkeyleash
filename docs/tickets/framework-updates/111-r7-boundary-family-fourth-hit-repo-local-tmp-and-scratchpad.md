@@ -1,6 +1,8 @@
 # 111 — R7 邊界族第四次:repo 內 `tmp/` / `scratchpad/` 被當成系統暫存(併 A-3 票號前綴)
 
 **狀態**:**done**(2026-09-07)—— 紅燈 5 紅 / 14 綠 → 全綠 19;全套 **1439 passed, 3 skipped, 3 xfailed**。
+**補刀**(同日,見第六節):CI(Linux)紅 2 條,主刀的測試資料寫死磁碟代號;
+改平台無關之後全套 **1468 passed, 3 skipped, 3 xfailed**。
 ~~**candidate**(立案,不動工)~~(`F-036` 保留舊文)
 **立案**:2026-09-07,第六站(arch)第二次診斷 → A 桶 A-1 + A-3
 **來源**:`docs/audits/2026-09-07-arch-round-2.md`(A-1 / A-3);同族:F-051 邊界家族、F-117
@@ -225,3 +227,110 @@ R7 依設計不展開它。
 
 `test_every_allowed_target_is_classified_inside_or_outside` 是**機制那一條**:
 許可表新增一項而忘了分類,它會紅 —— 否則 `OUTSIDE_REPO_ONLY` 就是第二份手工名單。
+
+## 六、補刀(2026-09-07)—— 本機 Windows 綠 / CI Linux 紅
+
+### 發生了什麼
+
+主刀推上去之後 CI 紅:
+
+```
+2 failed, 1454 passed, 1 deselected, 3 xfailed in 15.16s
+
+FAILED tests/test_bash_write.py::TestEveryWriteTargetMustBeAllowed::
+       test_allowed_targets_still_pass[python x.py > C:/x/scratchpad/out.txt]
+FAILED tests/test_bash_write.py::TestExtractionFailureMustRefuse::
+       test_allowed_targets_still_pass[python x.py > C:/x/scratchpad/out.txt]
+
+E   assert '[R7] 這個 Bash 指令會寫到沒有被許可的位置(C:/x/scratchpad/out.txt)。…' is None
+```
+
+**同一筆測試資料在兩個平台的語意不同**:
+
+| | `C:/x/scratchpad/out.txt` | `os.path.join(ROOT, tok)` | `_resolves_inside_repo` | 判定 |
+|---|---|---|---|---|
+| Windows | **絕對路徑** | `C:/x/scratchpad/out.txt` | `False` | 放行(本機兩輪全綠) |
+| Linux | **相對路徑**(`C:` 只是一個普通目錄名) | `<repo>/C:/x/scratchpad/out.txt` | `True` | **擋** |
+
+主刀加的條件是「解析後落在 repo 內 ⇒ 那幾項 repo 外才成立的許可不適用」,
+而 Linux 上這筆資料**真的**解析到 repo 內 —— **判定沒有錯,錯的是測試資料**。
+
+### 本機重現(先重現再修)
+
+`C:/…` 在 Windows 上重現不了 —— **那正是它逃過本機兩輪全綠的原因**。
+所以重現的做法是把 `gate` 的路徑語意換成 POSIX(`posixpath` + `sep="/"`),
+在同一個行程裡跑同一條指令:
+
+```
+一、本機(Windows)
+   _resolves_inside_repo('C:/x/scratchpad/out.txt') = False
+   os.path.join(ROOT, tok)  = 'C:/x/scratchpad/out.txt'
+   bash_write_violation     = 放行(= 本機看不到 CI 的紅)
+
+二、換成 POSIX 語意
+   ROOT = '/home/runner/work/monkeyleash/monkeyleash'
+   posixpath.join(ROOT, tok) = '/home/runner/work/monkeyleash/monkeyleash/C:/x/scratchpad/out.txt'
+   _resolves_inside_repo('C:/x/scratchpad/out.txt') = True
+   bash_write_violation      = 擋  <= 重現 CI 的紅
+   訊息第一行:[R7] 這個 Bash 指令會寫到沒有被許可的位置(C:/x/scratchpad/out.txt)。
+```
+
+**⚠ 第二段是模擬,不是真的在 Linux 上跑。** 它換掉的是唯一一個有差別的東西
+(`os.path.join` 對 `C:/…` 的看法),其餘一律不動。
+
+### 修法(裁甲:改測試資料,不改判定)
+
+那兩筆 `python x.py > C:/x/scratchpad/out.txt` 各換成兩條**平台無關**的:
+
+1. 參數化清單裡改成 `python x.py > /var/x/scratchpad/out.txt`
+   —— 以 `/` 開頭,**兩個平台都是 repo 外**;
+2. 各加一條吃 `tmp_path` 的方法(`test_a_scratchpad_outside_the_repo_passes`),
+   目標由 `tmp_path / "claude" / "sess" / "scratchpad" / "out.txt"` 組出來
+   —— pytest 給的**真絕對路徑**,必然在 repo 之外,**不寫死磁碟代號**。
+
+**為什麼是改測試不是改判定**:那兩條反控的 docstring 自己寫著判準
+(「這四條是**抽到目標、而目標被許可**」)。在 Linux 上,
+`C:/x/scratchpad/out.txt` 這個目標**本來就不該被許可**,因為它落在 repo 裡 ——
+**測試資料沒有表達它自己宣稱的意思**。
+
+另外兩案當時也寫下來了,不藏:
+(乙)`_resolves_inside_repo` 只認絕對路徑 → **票 111 白做**
+(`rm -rf tmp/` 全是相對路徑);
+(丙)標 `xfail` → 用「已知缺陷」蓋掉一個**資料問題**,而下一個人會以為那是缺陷。
+
+### 這是同一個形狀的第幾次
+
+`F-142`(**把開發機的檔案系統性質,當成世界的性質**)立案時的標本是票 89
+(2026-08-28,本機 1106 全綠 / CI 一條紅)。之後:
+
+| 日期 | 票 | 那個「開發機性質」 |
+|---|---|---|
+| 2026-08-28 | 89 | 路徑分隔符與大小寫 |
+| 2026-09-07 | 96 | `os.pathsep`(Windows `;` / Linux `:`) |
+| 2026-09-07 | **111** | **磁碟代號 `C:` 是不是絕對路徑** |
+
+**這一次特別要記的是:我在主刀的新測試裡用了 `tmp_path`(平台正確),
+卻沒有回頭看既有測試裡有沒有同類的硬編路徑** —— F-085 的形狀
+(修好一個命中之後沒找同類),而且發生在**同一輪之內**。
+
+### 常駐檢查項(候選,登記在此,未開票)
+
+> **測試資料裡出現磁碟代號(`C:` / `D:`)或 `os.pathsep` 的,
+> 一律改用 `tmp_path` 或一個明寫的常數。**
+
+現況清點(2026-09-07,`grep -c` 於 `tests/`,單位:筆):
+
+```
+tests/test_g1_guard.py     13
+tests/test_bootstrap.py     9
+tests/test_bash_write.py    3   ← 本刀之後全部在註解/docstring 裡
+tests/test_user_layer.py    2
+tests/test_gate.py          1
+```
+
+**⚠ 這是計數,不是判定。** 逐筆看過的只有本刀改的那兩筆;
+其餘 **沒有逐筆驗過它們會不會在 Linux 上翻面**。
+已知的兩個理由讓多數應該沒事(**未驗證**,寫下來讓下一個人去驗):
+`test_g1_guard.py` 的那些餵給的是**純字串比對**(`g1_guard` 不對 repo 根解析路徑);
+`test_bootstrap.py` 的那 9 筆是票 96 剛處理過的那一族,而該檔已經寫下
+「**寫死 `;`,不是 `os.pathsep`**」的理由。
