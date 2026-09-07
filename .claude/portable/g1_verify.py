@@ -183,11 +183,11 @@ def bash(cmd):
 
 
 def main(guard):
-    print("驗的是:%s" % guard)
+    _out("驗的是:%s" % guard)
     entries = protected_entries()
-    print("實際保護清單:%s(%d 條)\n" % (PROTECTED_LIST, len(entries)))
+    _out("實際保護清單:%s(%d 條)\n" % (PROTECTED_LIST, len(entries)))
     if len(entries) < 3:
-        print("清單少於 3 條 —— 驗收沒有實質對象,先確認清單存在。")
+        _out("清單少於 3 條 —— 驗收沒有實質對象,先確認清單存在。")
         return 1
     failures = []
 
@@ -200,115 +200,115 @@ def main(guard):
     # 否則陷阱只是從 guard 換到這裡(F-032:綠的原因不是你以為的)。
     drive_roots = [i + 1 for i, e in enumerate(entries)
                    if re.match(r"^(?:[A-Za-z]:[\\/]?|/[A-Za-z]/?)$", e.strip())]
-    print("=== 磁碟根目錄條目(票 25:守不住的寫法)===")
+    _out("=== 磁碟根目錄條目(票 25:守不住的寫法)===")
     if drive_roots:
-        print("  第 %s 條是磁碟根目錄 —— guard 會 fail-closed 拒絕整份清單。"
-              % ", ".join(str(n) for n in drive_roots))
-        print("  改法:把要保護的東西逐條列出來。**不印路徑本身**,序號自己去對。")
+        _out("  第 %s 條是磁碟根目錄 —— guard 會 fail-closed 拒絕整份清單。"
+             % ", ".join(str(n) for n in drive_roots))
+        _out("  改法:把要保護的東西逐條列出來。**不印路徑本身**,序號自己去對。")
         failures.append("磁碟根目錄條目(第 %s 條)"
                         % ", ".join(str(n) for n in drive_roots))
     else:
         _out("  無 ✓")
-    print()
+    _out("")
 
-    print("=== 第一級:清單每一條各斷言【命中的是哪一條】 ===")
+    _out("=== 第一級:清單每一條各斷言【命中的是哪一條】 ===")
     for p in entries:
         rc, err = run(guard, bash(as_probe(p)))
         blocked = rc == 2 and "G1/保護清單" in err
         want = as_backslash(p.rstrip("/\\"))
         right = blocked and want in err
         # 只印命中與否,**不印路徑本身** —— 這支腳本的輸出也可能被貼進公開處
-        print("  %-3d %s" % (entries.index(p) + 1,
-                             "OK" if right else
-                             ("擋了但命中的不是這條" if blocked else "沒擋到")))
+        _out("  %-3d %s" % (entries.index(p) + 1,
+                            "OK" if right else
+                            ("擋了但命中的不是這條" if blocked else "沒擋到")))
         if not right:
             failures.append("第 %d 條" % (entries.index(p) + 1))
 
-    print("\n=== 子目錄自動涵蓋(取第一條 + 深層子路徑)===")
+    _out("\n=== 子目錄自動涵蓋(取第一條 + 深層子路徑)===")
     sub = bash(r'touch "%s\2023\x\y.txt"' % as_backslash(entries[0].rstrip("/\\")))
     rc, err = run(guard, sub)
     ok = rc == 2 and "G1/保護清單" in err and as_backslash(entries[0].rstrip("/\\")) in err
-    print("  子目錄  %s" % ("擋下 OK" if ok else "不符"))
+    _out("  子目錄  %s" % ("擋下 OK" if ok else "不符"))
     if not ok:
         failures.append("子目錄")
 
-    print("\n=== 相鄰名稱不得命中(前綴邊界,取前三條加後綴)===")
+    _out("\n=== 相鄰名稱不得命中(前綴邊界,取前三條加後綴)===")
     for p in entries[:3]:
         neighbour = bash(r'ls "%s_g1_neighbour\x"' % as_backslash(p.rstrip("/\\")))
         rc, err = run(guard, neighbour)
         ok = rc == 0
-        print("  第 %d 條的鄰居  %s" % (entries.index(p) + 1,
-                                        "放行 OK" if ok else "誤擋"))
+        _out("  第 %d 條的鄰居  %s" % (entries.index(p) + 1,
+                                       "放行 OK" if ok else "誤擋"))
         if not ok:
             failures.append("鄰居 %d(誤擋)" % (entries.index(p) + 1))
 
-    print("\n=== Write 工具寫入第一條保護目錄 ===")
+    _out("\n=== Write 工具寫入第一條保護目錄 ===")
     rc, err = run(guard, {"tool_name": "Write",
                           "tool_input": {"file_path":
                                          r"%s\新檔案.txt" % as_backslash(entries[0].rstrip("/\\")),
                                          "content": "x"}})
     ok = rc == 2 and "G1/保護清單" in err
-    print("  Write  %s" % ("擋下 OK" if ok else "不符"))
+    _out("  Write  %s" % ("擋下 OK" if ok else "不符"))
     if not ok:
         failures.append("Write 工具")
 
-    print("\n=== 第二級回歸集:收窄比對前擋得住的,現在還擋得住嗎 ===")
+    _out("\n=== 第二級回歸集:收窄比對前擋得住的,現在還擋得住嗎 ===")
     for label, cmd in LEVEL2_REGRESSION:
         rc, err = run(guard, bash(cmd))
         ok = rc == 2 and "G1/專案外破壞性動作" in err
-        print("  %-22s exit=%d  %s" % (label, rc, "擋下 OK" if ok else
-                                       ("擋了但不是第二級" if rc == 2 else "沒擋到")))
+        _out("  %-22s exit=%d  %s" % (label, rc, "擋下 OK" if ok else
+                                      ("擋了但不是第二級" if rc == 2 else "沒擋到")))
         if not ok:
-            print("      指令:%s" % cmd)
-            print("      實得:%s" % (err.splitlines()[0] if err else "(無訊息 = 放行)"))
+            _out("      指令:%s" % cmd)
+            _out("      實得:%s" % (err.splitlines()[0] if err else "(無訊息 = 放行)"))
             failures.append(label + "(第二級回歸)")
 
-    print("\n=== 已知缺口:目前放行,改變時要出聲 ===")
+    _out("\n=== 已知缺口:目前放行,改變時要出聲 ===")
     for label, cmd, ticket in KNOWN_GAPS:
         rc, err = run(guard, bash(cmd))
         if rc == 0:
-            print("  %-22s 放行(已知缺口,%s)" % (label, ticket))
+            _out("  %-22s 放行(已知缺口,%s)" % (label, ticket))
         else:
             # **擋下不是好消息,是「票面過期了」的訊號。**
             # 有人補好了缺口而沒回來收票 —— 那正是本桶要抓的事件。
-            print("  %-22s **擋下了** —— 缺口可能已被補上,請回頭收 %s"
-                  % (label, ticket))
-            print("      指令:%s" % cmd)
-            print("      實得:%s" % (err.splitlines()[0] if err else "(無訊息)"))
+            _out("  %-22s **擋下了** —— 缺口可能已被補上,請回頭收 %s"
+                 % (label, ticket))
+            _out("      指令:%s" % cmd)
+            _out("      實得:%s" % (err.splitlines()[0] if err else "(無訊息)"))
             failures.append(label + "(已知缺口變成擋下,票面未更新)")
 
-    print("\n=== 應放行 ===")
+    _out("\n=== 應放行 ===")
     for label, cmd in PASS_THROUGH:
         rc, err = run(guard, bash(cmd))
-        print("  %-24s exit=%d  %s" % (label, rc, "OK" if rc == 0 else "誤擋"))
+        _out("  %-24s exit=%d  %s" % (label, rc, "OK" if rc == 0 else "誤擋"))
         if rc != 0:
             failures.append(label + "(誤擋)")
 
-    print("\n=== fail-closed:清單讀不到 ===")
+    _out("\n=== fail-closed:清單讀不到 ===")
     moved = PROTECTED_LIST + ".verify-moved"
     shutil.move(PROTECTED_LIST, moved)
     try:
         rc, err = run(guard, bash("touch /tmp/x"))
         ok = rc == 2 and "fail-closed" in err
-        print("  清單不存在  exit=%d  %s" % (rc, "OK" if ok else "不符"))
+        _out("  清單不存在  exit=%d  %s" % (rc, "OK" if ok else "不符"))
         if not ok:
             failures.append("fail-closed")
     finally:
         shutil.move(moved, PROTECTED_LIST)
 
-    print()
+    _out("")
     if failures:
-        print("不合格:%s" % failures)
+        _out("不合格:%s" % failures)
         return 1
-    print("全部通過:%d 條保護路徑各命中自己那一條、子目錄涵蓋、"
-          "3 個相鄰名稱不誤中、%d 條第二級回歸擋下、fail-closed 成立。"
-          % (len(entries), len(LEVEL2_REGRESSION)))
+    _out("全部通過:%d 條保護路徑各命中自己那一條、子目錄涵蓋、"
+         "3 個相鄰名稱不誤中、%d 條第二級回歸擋下、fail-closed 成立。"
+         % (len(entries), len(LEVEL2_REGRESSION)))
     # **通過不等於沒有缺口。** 綠燈要說得出它沒驗到什麼,
     # 否則「全部通過」會被讀成「全面涵蓋」——而那是票 79 那輪的原題。
     if KNOWN_GAPS:
-        print("已知缺口 %d 項(**不在上述涵蓋內**,各有票):%s"
-              % (len(KNOWN_GAPS),
-                 "、".join("%s → %s" % (lb, tk) for lb, _c, tk in KNOWN_GAPS)))
+        _out("已知缺口 %d 項(**不在上述涵蓋內**,各有票):%s"
+             % (len(KNOWN_GAPS),
+                "、".join("%s → %s" % (lb, tk) for lb, _c, tk in KNOWN_GAPS)))
     return 0
 
 

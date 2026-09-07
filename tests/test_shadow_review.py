@@ -1013,3 +1013,57 @@ class TestStatusSurvivesACp950Console:
         # 兩個都斷言,免得只修一半而測試照樣綠。
         assert _carries(raw, "≥"), "跨行那個 print 沒有走 utf-8 位元組"
         assert _carries(raw, "⚠"), "單行那個 print 沒有走 utf-8 位元組"
+
+    def test_the_whole_main_emits_only_utf8(self, tmp_path):
+        """**第二刀的正題:整支 `main` 的輸出只有一種編碼。**
+
+        第一刀之後這支已經不會丟例外了(會炸的兩個都改完),所以
+        「呼叫 main 不丟例外」在這裡**恆綠 = 空的**(票 58)。
+        會紅的是「整份輸出解得回 utf-8」—— 留著的 `print` 寫 cp950 位元組、
+        `_out` 寫 utf-8,混在一起就解不回來。
+
+        ## 為什麼用「把模組複製到 tmp」而不是 monkeypatch,也不用 subprocess
+
+        `main()` 的日誌路徑是**從 `__file__` 往上三層**算出來的,不吃參數:
+
+            root = os.path.dirname(os.path.dirname(os.path.dirname(
+                       os.path.abspath(__file__))))
+            log  = os.path.join(root, ".dev", "shadow-log.jsonl")
+
+        - **不 monkeypatch**:要蓋掉的是 `os.path` 而不是模組自己的常數,
+          那會連帶影響同一支測試裡別的東西,而且蓋錯了測試仍然會綠。
+        - **不 subprocess**:子行程的 `sys.stdout` 是真的管線,
+          它的編碼由**跑測試那台機器的 locale** 決定 —— 在 Linux 的 CI 上
+          那是 UTF-8,於是這條測試在 CI 上**恆綠**。**那正是要避免的空綠燈。**
+        - **複製模組到 tmp 底下的假 repo**:`root` 就是 tmp,
+          日誌是我自己放的 fixture,`sys.stdout` 仍由本行程控制 ——
+          **三件事同時成立,而且在任何平台上行為一樣。**
+          (同一招見票 89 §一之五:把守衛複製出去、只改指向的那一行。)
+        """
+        import shutil
+
+        from test_portable_output_encoding import cp950_console, _decode_whole_stream
+
+        portable = tmp_path / ".claude" / "portable"
+        portable.mkdir(parents=True)
+        shutil.copy(str(ROOT / ".claude" / "portable" / "shadow_review.py"),
+                    str(portable / "shadow_review.py"))
+        (tmp_path / ".dev").mkdir()
+        # 分類字串必須是 `CLASSES` 的值 —— 未知的分類會**大聲失敗**(票 65/67),
+        # 而那個失敗與本條要驗的東西無關。第一版用了「誤報」,`main` 回 1。
+        _write(tmp_path / ".dev" / "shadow-log.jsonl",
+               [_rec("R7", "真陽"), _rec("R7", "假陽/解析"), _rec("R2")])
+
+        spec = importlib.util.spec_from_file_location(
+            "shadow_review_in_fake_root", portable / "shadow_review.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        with cp950_console() as raw:
+            rc = mod.main(["--status"])
+        assert rc == 0, "出口碼變了 —— 本刀只動輸出,不動判定與出口碼"
+        text = _decode_whole_stream(raw)
+        # 非空性:一份空輸出也「解得回來」。這兩句分別出自 print 與 _out,
+        # 所以它們同時在,才代表兩條路徑都走了 utf-8。
+        assert "影子日誌:讀到 3 筆" in text, "print 那一半沒出現"
+        assert "⚠" in text, "_out 那一半沒出現"

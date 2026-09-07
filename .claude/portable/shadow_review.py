@@ -506,12 +506,12 @@ def print_status(path):
     per = promotion_status(path)
     total = len(rows)
     classified = sum(d["classified"] for d in per.values())
-    print("影子日誌:讀到 %d 筆,其中 %d 筆已分類。" % (total, classified))
+    _out("影子日誌:讀到 %d 筆,其中 %d 筆已分類。" % (total, classified))
     if not per:
         if total:
-            print("尚無任何分類 —— 跑一輪互動分類(不加 --status)即可開始。")
+            _out("尚無任何分類 —— 跑一輪互動分類(不加 --status)即可開始。")
         else:
-            print("日誌本身是空的 —— 影子模式還沒有記錄過任何判定。")
+            _out("日誌本身是空的 —— 影子模式還沒有記錄過任何判定。")
         return
     _out("每規則晉升狀態(三條同時滿足才可轉正:"
          "已分類 ≥%d、假陽率 <%.0f%%、可判定率 ≥%.0f%%):"
@@ -519,15 +519,15 @@ def print_status(path):
             MIN_DECIDABLE_RATE * 100))
     # **這一行是本節的重點,不是註腳。** 見下方輸出的內容與 F-126。
     _out("  ⚠ 以下是**報表,非閘門** —— 這三條不改變任何行為。")
-    print("    影子的開關只看日期(clamp 與 shadow.json 的 until),"
-          "而且是**整個 repo 一起**,不分規則。")
-    print("    所以「可轉正」是一句建議,**沒有任何東西會因為它而發生**"
-          " —— 實際會發生的只有到期。")
+    _out("    影子的開關只看日期(clamp 與 shadow.json 的 until),"
+         "而且是**整個 repo 一起**,不分規則。")
+    _out("    所以「可轉正」是一句建議,**沒有任何東西會因為它而發生**"
+         " —— 實際會發生的只有到期。")
     # **三分類的三個數都印**(票 65 / ADR 0012 §2)。只印一個 FP 的話,
     # 讀者無從判斷分母裡有多少是刻意成本 —— 而那正是同一批資料
     # 曾經算得出兩個相反 FP 的原因。
-    print("  (假陽率的分母 = 真陽+誤報+刻意 refuse;無法判定兩個分母都不進)")
-    print("  (可判定率 = 那個分母 ÷ 總筆數 —— **未判定的餘量看得見**,票 67)")
+    _out("  (假陽率的分母 = 真陽+誤報+刻意 refuse;無法判定兩個分母都不進)")
+    _out("  (可判定率 = 那個分母 ÷ 總筆數 —— **未判定的餘量看得見**,票 67)")
     for rule in sorted(per):
         d = per[rule]
         if d["classified"] == 0:
@@ -535,17 +535,17 @@ def print_status(path):
             # 「假陽率 0.0% 可判定率 0.0% -> 留影子」—— 三個數字全是
             # **除以零的預設值**,而它們看起來與「量過了,結果是 0」一模一樣。
             # 那正是本修法要消掉的東西,不能在同一支函式裡又製造一次。
-            print("  %-4s 總 %3d  **零分類** -> 無資料(這 %d 筆還沒有人判過)"
-                  % (rule, d["total"], d["total"]))
+            _out("  %-4s 總 %3d  **零分類** -> 無資料(這 %d 筆還沒有人判過)"
+                 % (rule, d["total"], d["total"]))
             continue
-        print("  %-4s 總 %3d  已分類 %3d  未判定 %3d"
-              "  真陽 %3d  刻意 refuse %3d  誤報 %3d  無法判定 %3d"
-              % (rule, d["total"], d["classified"], d["unclassified"],
-                 d["true_positives"], d["deliberate"], d["false_positives"],
-                 d["undecidable"]))
-        print("       假陽率 %5.1f%%  可判定率 %5.1f%%  -> %s"
-              % (d["fp_rate"] * 100, d["decidable_rate"] * 100,
-                 "可轉正" if d["promotable"] else "留影子"))
+        _out("  %-4s 總 %3d  已分類 %3d  未判定 %3d"
+             "  真陽 %3d  刻意 refuse %3d  誤報 %3d  無法判定 %3d"
+             % (rule, d["total"], d["classified"], d["unclassified"],
+                d["true_positives"], d["deliberate"], d["false_positives"],
+                d["undecidable"]))
+        _out("       假陽率 %5.1f%%  可判定率 %5.1f%%  -> %s"
+             % (d["fp_rate"] * 100, d["decidable_rate"] * 100,
+                "可轉正" if d["promotable"] else "留影子"))
 
 
 def review(path):
@@ -553,17 +553,17 @@ def review(path):
     rows = load_log(path)
     unclassified = [i for i, r in enumerate(rows) if not r.get("classification")]
     if not unclassified:
-        print("沒有未分類的項目。")
+        _out("沒有未分類的項目。")
         print_status(path)
         return
-    print("共 %d 筆未分類。分類選項:" % len(unclassified))
+    _out("共 %d 筆未分類。分類選項:" % len(unclassified))
     for k, v in CLASSES.items():
-        print("  %s = %s" % (k, v))
-    print("  s = 跳過(留待下次)  q = 存檔離開\n")
+        _out("  %s = %s" % (k, v))
+    _out("  s = 跳過(留待下次)  q = 存檔離開\n")
     for i in unclassified:
         r = rows[i]
-        print("── %s  [%s]  %s" % (r.get("ts", "")[:19], r.get("rule", "?"),
-                                    r.get("message", "")[:90]))
+        _out("── %s  [%s]  %s" % (r.get("ts", "")[:19], r.get("rule", "?"),
+                                  r.get("message", "")[:90]))
         # 範圍字串從 `CLASSES` 導出,不寫死 —— 寫死的話,加一類而忘了改這裡,
         # 使用者會看到一個**不含新鍵的提示**,然後永遠不會按它。
         ans = input("  分類 [%s-%s/s/q]: "
@@ -599,7 +599,7 @@ def review(path):
     with io.open(path, "w", encoding="utf-8", newline="\n") as f:
         for r in rows:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    print()
+    _out("")
     print_status(path)
 
 
@@ -619,19 +619,19 @@ def main(argv):
             apply = "--apply" in argv
             plan = apply_card(log, card, apply=apply)
             total = sum(plan.by_class.values())
-            print("套用卡:%s" % card)
-            print("將套用 %d 筆:%s"
-                  % (total, "、".join("%s×%d(%s)" % (k, plan.by_class[k], CLASSES[k])
-                                      for k in sorted(plan.by_class))))
+            _out("套用卡:%s" % card)
+            _out("將套用 %d 筆:%s"
+                 % (total, "、".join("%s×%d(%s)" % (k, plan.by_class[k], CLASSES[k])
+                                     for k in sorted(plan.by_class))))
             if apply:
-                print("已寫入 %d 筆,留檔於 %s" % (plan.applied, _card_ledger_path(log)))
-                print()
+                _out("已寫入 %d 筆,留檔於 %s" % (plan.applied, _card_ledger_path(log)))
+                _out("")
                 print_status(log)
             else:
                 # **dry-run 的收尾句要說出「什麼都沒發生」。** 少了它,
                 # 上面那份清單讀起來像是已經做完的報告(F-104 的形狀:
                 # 「我做了什麼」與「現在的狀態是什麼」)。
-                print("(dry-run,日誌一個位元組都沒動;要實際套用加 --apply)")
+                _out("(dry-run,日誌一個位元組都沒動;要實際套用加 --apply)")
         elif "--status" in argv:
             print_status(log)
         else:
@@ -642,9 +642,15 @@ def main(argv):
         # —— 在 cp950 主控台上,一個用 `print` 印中文的錯誤訊息會自己炸掉,
         # 而那正好發生在使用者最需要讀到它的時候。
         #
-        # **票 62(2026-09-07)就是回來改它們的那一票**,而它只改了會炸的那兩個
-        # —— 本檔其餘的 `print` 印的都是 cp950 編得動的字(中文編得動,
-        # 炸的是 `≥` / `⚠` 那一族符號)。**留著它們不是遺漏,是範圍。**
+        # ~~**票 62(2026-09-07)就是回來改它們的那一票**,而它只改了會炸的那兩個~~
+        # **更正(票 62 第二刀,同日)**:第一刀只改會炸的兩個,而那留下一個
+        # **混編碼**的輸出流 —— 留著的 `print` 走 locale(Windows 上是 cp950)、
+        # `_out` 走 utf-8,導進管線時同一份輸出裡兩種編碼。
+        # **第二刀把本檔所有 `print` 都改走 `_out`**,由
+        # `tests/test_portable_output_encoding.py` 的
+        # `TestNoBarePrintRemainsInTheThreeTools` 釘住(數的是 `ast` 的 print 呼叫,
+        # 門檻是 **0**,不是「比上次少」—— 基準會過期,0 不會)。
+        # 舊文照 `F-036` 保留在上面。
         sys.stderr.buffer.write((u"[影子日誌/拒絕] %s\n" % e).encode("utf-8"))
         return 1
     return 0

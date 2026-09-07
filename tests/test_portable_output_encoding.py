@@ -31,11 +31,13 @@ Linux 的主控台是 UTF-8,所以一條「跑得完」的測試在 CI 上**恆�
 所以本檔同時斷言**寫出去的位元組解回來仍然帶著原本那個符號**,
 不只斷言「沒有丟例外」。
 """
+import ast
 import contextlib
 import importlib.util
 import io
 import json
 import pathlib
+import shutil
 import sys
 
 import pytest
@@ -112,6 +114,36 @@ def _carries(raw, mark):
     主控台會炸」那個假設是**反的**,票 62 偵察題 ① 的第二半由此得證。)
     """
     return mark.encode("utf-8") in raw.getvalue()
+
+
+def _decode_whole_stream(raw):
+    """**整份輸出**解得回來嗎 —— 這是第二刀買的那個性質。
+
+    第一刀之後沒有任何一個 `print` 會丟例外了(會炸的那 9 個都改完了),
+    所以「呼叫 main 不丟例外」這條測試**在第一刀之後就恆綠** ——
+    那是票 58 說的空綠燈。**第二刀要釘的不是「不炸」,是「整份輸出同一種編碼」。**
+
+    留著的 `print` 走文字層(cp950),`_out` 走二進位層(utf-8);
+    兩者混在同一份輸出裡時,**這個函式會丟 `UnicodeDecodeError`** ——
+    那就是第二刀的紅燈。
+
+    回傳解出來的文字;解不開就讓 `UnicodeDecodeError` 往上丟,
+    **不吞、不 `errors="replace"`** —— 吞掉的話這條測試會變成永遠綠。
+    """
+    return raw.getvalue().decode("utf-8")
+
+
+def _print_calls(filename):
+    """用 `ast` 數這個模組裡還有幾個 `print(...)` 呼叫。
+
+    **為什麼用 `ast` 而不是 grep 行首**:票 62 第一刀就是被這件事咬到的 ——
+    票面用「行首是 `print(` 的那一行」掃描,漏掉了兩個**跨行**的 print,
+    7 與 9 的差別就在那裡。**同一個錯不犯第二次。**
+    """
+    src = io.open(str(PORTABLE / filename), encoding="utf-8").read()
+    return [n.lineno for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id == "print"]
 
 
 class TestTheHarnessItselfRejectsTheMark:
@@ -212,6 +244,84 @@ class TestG1VerifyMainSurvivesACp950Console:
         with cp950_console() as raw:
             gv.main("stub-guard-not-executed")
         assert _carries(raw, "✓")
+
+    def test_the_whole_stream_is_utf8(self, tmp_path, monkeypatch):
+        """**第二刀的正題:整支 `main` 的輸出只有一種編碼。**
+
+        第一刀之後 `main` 已經不會丟例外了,所以「不丟例外」這條在這裡是空的。
+        會紅的是這一條 —— 留著的 `print` 寫 cp950 位元組,`_out` 寫 utf-8,
+        混在一起時整份輸出解不回來。
+        """
+        gv = _load("gv_enc2", "g1_verify.py")
+        fake_list = tmp_path / "g1-protected.txt"
+        fake_list.write_text(
+            "# 假清單\n"
+            + "\n".join(str(tmp_path / ("entry%d" % i)) for i in range(1, 4)) + "\n",
+            encoding="utf-8")
+        monkeypatch.setattr(gv, "PROTECTED_LIST", str(fake_list))
+
+        def fake_run(guard, payload):
+            blob = json.dumps(payload, ensure_ascii=False)
+            if "_g1_neighbour" in blob or "touch /tmp/x" in blob:
+                return (0, "")
+            return (2, "[G1/保護清單] %s" % blob.replace("/", "\\"))
+
+        monkeypatch.setattr(gv, "run", fake_run)
+
+        with cp950_console() as raw:
+            gv.main("stub-guard-not-executed")
+        text = _decode_whole_stream(raw)
+        # 非空性:一份空輸出也會「解得回來」。
+        assert "保護清單" in text or "第一級" in text
+
+
+class TestNoBarePrintRemainsInTheThreeTools:
+    """**第二刀的機器版判準:三支工具裡不得再有裸 `print`。**
+
+    ## 為什麼需要一條原始碼層的斷言,而不是只靠行為測試
+
+    `verify_gates.main()` **無法在測試套件裡呼叫** —— 它會真的裝一個 repo
+    再跑一次巢狀 pytest(87 秒)。所以那一支的「整支 main 同編碼」
+    只驗得到淨室那一次(收刀時跑,不帶 `-X utf8`),進不了 pytest。
+
+    > **⚠ 這條斷言是【補】不是【替代】。**
+    > 票 96 剛好講的就是相反方向的教訓:結構斷言照跑照綠,而行為正對照整組不執行。
+    > 所以 `g1_verify` 與 `shadow_review` 兩支**各自有行為測試**(整支 `main`
+    > 導進 cp950 緩衝、整份輸出解得回來),本條只是把「不得再長出新的裸 print」
+    > 這件事變成會叫的東西 —— **它守的是未來的新增,不是現在的正確性。**
+
+    ## 為什麼是 0 而不是「比上次少」
+
+    「比上次少」需要一個基準,而基準會過期(`F-109`)。**0 不會過期。**
+    """
+
+    @pytest.mark.parametrize("filename", ["verify_gates.py", "g1_verify.py",
+                                          "shadow_review.py"])
+    def test_the_module_has_no_bare_print(self, filename):
+        left = _print_calls(filename)
+        assert not left, (
+            "%s 還有 %d 個裸 print(行號 %s)—— 輸出要走 _out,"
+            "否則同一份輸出裡會有兩種編碼:留著的 print 走 locale(Windows 上是 cp950),"
+            "_out 走 utf-8。" % (filename, len(left), left))
+
+    def test_the_check_can_actually_see_a_bare_print(self, tmp_path):
+        """**反控:這個偵測器真的看得到 print,包含跨行的那種。**
+
+        少了它,一個永遠回空串列的 `_print_calls` 會讓上面三條全綠 ——
+        而那正是第一刀踩過的坑的機器版(行首判準看不到跨行的 print)。
+        """
+        sample = tmp_path / "sample.py"
+        sample.write_text(
+            "print('一行的')\n"
+            "print('跨行的'\n"
+            "      '第二段')\n"
+            "def f():\n"
+            "    return 1\n", encoding="utf-8")
+        found = [n.lineno for n in ast.walk(ast.parse(
+            sample.read_text(encoding="utf-8")))
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id == "print"]
+        assert found == [1, 2], "跨行的 print 沒被算到 —— 偵測器本身有洞"
 
 
 # `shadow_review.py` 那一條**不在這個檔裡**,在 `tests/test_shadow_review.py`。

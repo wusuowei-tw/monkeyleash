@@ -353,7 +353,8 @@ Get-FileHash $src -Algorithm SHA256 | Select-Object -ExpandProperty Hash
 
 1. 兩檔 sha256 相同
 2. `python -W error::DeprecationWarning` 匯入乾淨(`~/.claude/hooks/` 那一支)
-3. `PYTHONIOENCODING=utf-8 python .claude/portable/g1_verify.py`(**不帶參數 = 驗正式檔**)全綠
+3. `python .claude/portable/g1_verify.py`(**不帶參數 = 驗正式檔**)全綠
+   ——~~`PYTHONIOENCODING=utf-8` 前綴~~ **票 62 之後不再需要**(見下方註)
 4. **活體探針一次** —— 對一條含保護路徑的唯讀指令試一次,要看到 `[G1/保護清單]`。
    **🔴 探針一律用 `~/` 形態**(例:對清單自己下一條唯讀指令,路徑寫成 `~/.claude/g1-protected.txt`),
    **不要用完整路徑** —— 理由見下
@@ -361,9 +362,23 @@ Get-FileHash $src -Algorithm SHA256 | Select-Object -ExpandProperty Hash
 > **第 4 項不能被第 3 項取代。** `g1_verify` 自己 `subprocess` 起 guard,**不經 `settings.json` 的掛載** ——
 > 它證明的是「如果被呼叫,它會擋」,證明不了「它會被呼叫」。這與本檔第 1、5 項「檔案都在也可能沒生效」是同一句話。
 >
-> `PYTHONIOENCODING=utf-8` 不是可選的:`g1_verify.py` 有一行 `print("  無 ✓")`,
+> ~~`PYTHONIOENCODING=utf-8` 不是可選的:`g1_verify.py` 有一行 `print("  無 ✓")`,
 > 在 cp950 主控台會 `UnicodeEncodeError` 崩掉(票 62,已立案未修)——
-> 你會看到一個編碼錯誤,而不是驗收結果。
+> 你會看到一個編碼錯誤,而不是驗收結果。~~
+>
+> ### **更正(2026-09-07,票 62 落地)——`PYTHONIOENCODING=utf-8` 已不需要**
+>
+> 舊文照 `F-036` 保留在上面,**不刪**:它曾經是這一步的硬條件,
+> 而下一台新機器上的人若看到別處還留著那個前綴,要查得到它為什麼消失。
+>
+> **`g1_verify.py` 的輸出現在全部走 `sys.stdout.buffer` 的 utf-8 位元組**,
+> 那一行 `print("  無 ✓")` 已經不存在(整支檔的裸 `print` 是 **0 個**,
+> 由 `tests/test_portable_output_encoding.py` 釘住)。
+> **不帶任何旗標直接跑就會跑完。**
+>
+> **設了也不會壞** —— 所以舊指令仍然可用,只是不再是條件。
+> ⚠ **但不要因此把它當成「保險起見加著」**:一個「加著也沒差」的前綴,
+> 下一次真的有東西壞掉時會被當成原因去查,而它從來不是。
 
 > ### 🔴 **為什麼第 4 項的探針一定要用 `~/` 形態**(2026-09-03 補)
 >

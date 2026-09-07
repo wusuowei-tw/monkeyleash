@@ -264,7 +264,12 @@ def main(workdir):
             func(path)
         shutil.rmtree(target, onerror=_force)
 
-    print("=== 真實安裝(不是簡化版)===")
+    _out("=== 真實安裝(不是簡化版)===")
+    # ⚠ `install.main()` 自己還有 21 個裸 `print` —— **不在票 62 範圍內**
+    # (票面掃描的對象是這三支「證明別的東西是對的」的工具)。
+    # 實測那 21 個沒有一個含 cp950 編不出的字,所以它不會炸;
+    # 但它的輸出仍走文字層,**於是淨室的輸出在這一段仍是 locale 編碼**。
+    # 登記在票 62 第二刀的票面上,不在這裡順手擴大範圍。
     install.main(target)
 
     # 安裝器預設值(F-062):這兩項少任何一個,新 repo 的第一個秘密就沒人守。
@@ -280,13 +285,13 @@ def main(workdir):
     if defaults_bad:
         raise SystemExit("\n=== 安裝器預設值缺陷 ===\n"
                          + "".join("    %s\n" % b for b in defaults_bad))
-    print("\n=== 安裝器預設值(F-062)===")
+    _out("\n=== 安裝器預設值(F-062)===")
     _report_installer_defaults()
 
     gate = load_target_gate(target)
     codes = sorted(gate.rule_codes(), key=lambda c: int(c[1:]))
-    print("\n=== 規則清單(從 gate.py 的定義列舉,不是對照表)===")
-    print("    %s" % " ".join(codes))
+    _out("\n=== 規則清單(從 gate.py 的定義列舉,不是對照表)===")
+    _out("    %s" % " ".join(codes))
 
     missing = [c for c in codes if c not in SCENARIOS]
     if missing:
@@ -294,7 +299,7 @@ def main(workdir):
             "\n這些規則沒有任何實測情境:%s\n"
             "規則存在但沒被證明擋得住,跟沒有規則的差別只在讀碼的人心裡。" % missing)
 
-    print("\n=== 逐條實測(每條各擋一次)===")
+    _out("\n=== 逐條實測(每條各擋一次)===")
     failures = []
     for code in codes:
         blocked, out = run_scenario(target, code)
@@ -303,15 +308,15 @@ def main(workdir):
             failures.append((code, out))
 
     if failures:
-        print("\n=== 沒擋到的規則 ===")
+        _out("\n=== 沒擋到的規則 ===")
         for code, out in failures:
-            print("\n  %s —— 這條規則存在於定義裡,實測卻沒有擋下它的情境:" % code)
+            _out("\n  %s —— 這條規則存在於定義裡,實測卻沒有擋下它的情境:" % code)
             for line in (out.strip().splitlines() or ["(沒有任何輸出)"]):
-                print("      %s" % line)
+                _out("      %s" % line)
         raise SystemExit("\n%d 條規則沒擋到:%s"
                          % (len(failures), " ".join(c for c, _ in failures)))
 
-    print("\n=== 權威層偵測(只驗未安裝路徑)===")
+    _out("\n=== 權威層偵測(只驗未安裝路徑)===")
     hook = os.path.join(target, ".git", "hooks", "pre-commit")
     body = io.open(hook, encoding="utf-8").read()
 
@@ -328,29 +333,29 @@ def main(workdir):
     if gone or squatted or not back:
         raise SystemExit("權威層偵測不準 —— 沒裝的時候不會叫,那一層就是靜默缺席的。")
 
-    print("\n    未安裝時會說的話:")
+    _out("\n    未安裝時會說的話:")
     for line in gate.not_installed_notice(detail).splitlines():
-        print("      %s" % line)
+        _out("      %s" % line)
 
-    print("\n=== 框架自己的測試,在這個新 repo 裡跑一次 ===")
+    _out("\n=== 框架自己的測試,在這個新 repo 裡跑一次 ===")
     # 「在宿主 repo 全綠」證明不了什麼 —— 它本來就綠。要驗的是**換個環境也綠**:
     # 那是一個獨立的涵蓋維度(F-031)。框架測試若把宿主的特徵寫進斷言,
     # 新專案第一次跑就看到與自己無關的紅,人學到的是「這套測試本來就紅」,
     # 之後真的紅也不會被當一回事 —— 壞掉的訊號比沒有訊號糟。
     rc, out = sh([sys.executable, "-m", "pytest", "tests/", "-q"], target, check=False)
     tail = [l for l in out.strip().splitlines() if l.strip()][-1:]
-    print("    %s" % (tail[0] if tail else "(沒有輸出)"))
+    _out("    %s" % (tail[0] if tail else "(沒有輸出)"))
     if rc != 0:
-        print("\n    在新 repo 裡紅的:")
+        _out("\n    在新 repo 裡紅的:")
         for line in out.splitlines():
             if line.startswith("FAILED") or line.startswith("ERROR"):
-                print("      %s" % line)
+                _out("      %s" % line)
         raise SystemExit(
             "框架測試在新 repo 裡不是全綠 —— 那些紅與新專案無關,"
             "會訓練人忽略訊號。框架測試只能斷言框架的性質。")
 
-    print("\n全部 %d 條規則各擋下一次,權威層偵測正常,框架測試在新 repo 全綠。"
-          "\n安裝位置:%s" % (len(codes), target))
+    _out("\n全部 %d 條規則各擋下一次,權威層偵測正常,框架測試在新 repo 全綠。"
+         "\n安裝位置:%s" % (len(codes), target))
 
 
 if __name__ == "__main__":
