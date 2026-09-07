@@ -991,6 +991,170 @@ class TestTheListItselfIsGuarded:
         assert gate.check_legacy_list() != [], "清單消失時竟然回報乾淨(fail-open)"
 
 
+class TestR6SeparatesAMissingCommitFromAMissingPath:
+    """票 55 —— R6 把「那棵樹不在」誤報成「這是後來手加的」。
+
+    ## 病灶
+
+    `git cat-file -e <go-live>:<path>` 的**非零退出碼有兩種原因**,而程式折成一種:
+
+    | | 意思 | 舊訊息 | 該說什麼 |
+    |---|---|---|---|
+    | ① 路徑不在那棵樹裡 | **真違規** | 「新檔案要走紅燈,不是往豁免名單裡加」 | 同左 ✅ |
+    | ② 那個 commit **不在這個 repo** | **環境問題**(淺 clone / 歷史被改寫) | **同一句話** | 「go-live commit 不在這個 repo」 |
+
+    ## 為什麼「理由錯」比「不擋」貴
+
+    舊訊息會**主動把人推向刪清單條目** —— 那是讀完之後最合理的下一步。而:
+
+    1. 刪掉之後,**一份本來正確的清單被改壞**
+    2. 而 **R6 仍然紅**(樹還是不在)
+    3. 於是人會繼續刪,直到清單空掉,**而它從頭到尾都是對的**
+
+    > ### **`fail-closed` 保證的是「擋不擋」,不是「為什麼擋」——
+    > ### 而人是照理由行動的,不是照擋不擋行動的。**
+
+    ## 三條缺一不可
+
+    ① 是病灶;② 釘住舊訊息**一字不改**(少了它,一個「一律回新訊息」的實作也會讓 ① 綠);
+    ③ 釘住兩者都正常時**不擋**(少了它,一個「一律回違規」的實作會讓 ①② 都綠)。
+    """
+
+    def _repo(self, tmp_path, name, body="x = 1\n"):
+        """建一個一 commit 的 repo,回 (路徑, sha)。
+
+        ⚠ **`body` 這個參數不是裝飾。** 第一版兩個 repo 用同一份內容、同一個
+        commit 訊息、同一個身分建 —— 而 git 是**內容定址**的:
+        樹一樣、訊息一樣、時間戳落在同一秒,**兩個「互不相干的 repo」
+        算出來的 commit sha 完全相同**。
+
+        > ### **「另一個 repo」不等於「另一個 sha」。**
+
+        於是「拿別的 repo 的 sha 來當找不到的物件」這個構造**當場失效** ——
+        而它失效的樣子是**測試綠**(那個 sha 在這裡真的找得到)。
+        本類的前提斷言(`cat-file -e` 必須非零)就是為了這個而寫的,
+        **它在第一次跑就抓到了**。
+        """
+        repo = tmp_path / name
+        repo.mkdir()
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            subprocess.run(["git"] + c.split(), cwd=str(repo), capture_output=True)
+        (repo / "pkg").mkdir()
+        io.open(repo / "pkg" / "thing.py", "w", encoding="utf-8").write(body)
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "go-live " + name],
+                       cwd=str(repo), capture_output=True)
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                             capture_output=True).stdout.decode().strip()
+        return repo, sha
+
+    def test_a_go_live_commit_absent_from_this_repo_says_so(
+            self, tmp_path, monkeypatch):
+        """① **病灶本身。**
+
+        **怎麼造出「commit 不在這個 repo」**:建**兩個**互不相干的 repo,
+        把 B 的 sha 寫進 A 的清單。那是淺 clone / 歷史改寫之後的真實形狀 ——
+        sha 長得完全正常,而那個物件在這裡**不存在**。
+
+        **不用 `"0" * 40`**:git 對全零 sha 有特殊語意(null sha),
+        拿它當樣本的話,測到的可能是那個特例而不是本票的情境。
+        """
+        repo, _sha = self._repo(tmp_path, "here")
+        # **內容要不一樣** —— 見 `_repo` 的 docstring:一樣的話兩個 repo 同 sha。
+        _elsewhere, foreign = self._repo(tmp_path, "elsewhere", body="y = 2\n")
+
+        assert subprocess.run(["git", "cat-file", "-e", foreign + "^{commit}"],
+                              cwd=str(repo), capture_output=True).returncode != 0, \
+            "測試的前提垮了:另一個 repo 的 commit 竟然在這裡找得到"
+
+        lst = repo / "legacy.txt"
+        io.open(lst, "w", encoding="utf-8").write(
+            "# go-live: %s\npkg/thing.py\n" % foreign)
+        monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
+        monkeypatch.setattr(gate, "ROOT", str(repo))
+
+        v = gate.check_legacy_list()
+        assert v, "go-live commit 不在這個 repo,卻回報乾淨(fail-open)"
+        joined = "\n".join(v)
+        assert "不在這個 repo" in joined, joined
+        assert "淺層 clone" in joined and "--unshallow" in joined, (
+            "訊息沒說出修法 —— 票 13 的判準:說得出是哪一個前提沒滿足:%s" % joined)
+        assert foreign in joined, "訊息沒帶那個 sha,人沒辦法拿它去 fetch:%s" % joined
+
+        # 🔴 **這一句是本條的重點**:舊訊息會把人推向刪清單。
+        assert "清單只減不增" not in joined, (
+            "還在說「清單只減不增:新檔案要走紅燈」—— 那句話會讓人去刪一份"
+            "本來正確的清單,而刪完之後 R6 仍然紅:%s" % joined)
+
+    def test_a_path_absent_from_a_present_tree_keeps_the_original_message(
+            self, tmp_path, monkeypatch):
+        """② **反控:commit 在、路徑不在樹裡 → 原訊息一字不改。**
+
+        少了這條,一個「一律回新訊息」的實作也會讓 ① 綠,
+        而**真違規會被說成環境問題** —— 方向剛好相反,而且更貴:
+        它會讓一個真的往豁免清單裡加東西的人,以為自己只是 clone 淺了。
+        """
+        repo, sha = self._repo(tmp_path, "here")
+        lst = repo / "legacy.txt"
+        io.open(lst, "w", encoding="utf-8").write(
+            "# go-live: %s\npkg/thing.py\nnever/existed.py\n" % sha)
+        monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
+        monkeypatch.setattr(gate, "ROOT", str(repo))
+
+        v = gate.check_legacy_list()
+        assert len(v) == 1, v
+        assert "never/existed.py" in v[0], v
+        assert "不在機制上線 commit" in v[0], v
+        assert "清單只減不增:新檔案要走紅燈,不是往豁免名單裡加。" in v[0], (
+            "原訊息被改動了 —— 這一條路徑上它是對的,票 55 明訂一字不改:%s" % v[0])
+        assert "不在這個 repo" not in v[0], (
+            "真違規被說成環境問題 —— 方向反了:%s" % v[0])
+
+    def test_both_present_does_not_block(self, tmp_path, monkeypatch):
+        """③ **反控:兩者皆正常 → 不擋。**
+
+        少了這條,一個「一律回違規」的實作會讓 ①② 都綠 ——
+        而那會擋下每一個 repo 的每一次 commit,理由還輪流換。
+        """
+        repo, sha = self._repo(tmp_path, "here")
+        lst = repo / "legacy.txt"
+        io.open(lst, "w", encoding="utf-8").write(
+            "# go-live: %s\npkg/thing.py\n" % sha)
+        monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
+        monkeypatch.setattr(gate, "ROOT", str(repo))
+        assert gate.check_legacy_list() == [], "一切正常卻擋下"
+
+    def test_the_two_messages_are_told_apart_by_more_than_wording(
+            self, tmp_path, monkeypatch):
+        """**非空性**:兩條路徑各自產生的訊息,不得只差幾個字。
+
+        少了這條,「兩種原因都說得出來」可以靠**同一句話裡塞兩種可能**滿足
+        ——「不在樹裡,或者 commit 不在這個 repo」。
+        那種訊息**每一次都對**,而它**每一次都沒有指出是哪一個**,
+        於是讀的人仍然得自己查。**一句永遠正確的訊息沒有資訊量。**
+        """
+        repo, sha = self._repo(tmp_path, "here")
+        # **內容要不一樣** —— 見 `_repo` 的 docstring:一樣的話兩個 repo 同 sha。
+        _elsewhere, foreign = self._repo(tmp_path, "elsewhere", body="y = 2\n")
+        monkeypatch.setattr(gate, "ROOT", str(repo))
+
+        lst = repo / "legacy.txt"
+        io.open(lst, "w", encoding="utf-8").write(
+            "# go-live: %s\nnever/existed.py\n" % sha)
+        monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
+        real_violation = "\n".join(gate.check_legacy_list())
+
+        io.open(lst, "w", encoding="utf-8").write(
+            "# go-live: %s\nnever/existed.py\n" % foreign)
+        missing_commit = "\n".join(gate.check_legacy_list())
+
+        assert real_violation and missing_commit
+        assert real_violation != missing_commit
+        # 各自**只**含自己那一半的關鍵字,不含對方的
+        assert "清單只減不增" in real_violation and "清單只減不增" not in missing_commit
+        assert "不在這個 repo" in missing_commit and "不在這個 repo" not in real_violation
+
+
 class TestRedlightAcceptsTheSameTestLocationsAsR3:
     """R3 前半接受三個測試檔位置,後半只認 tests/test_X.py ——
     pkg/foo.py 配 pkg/test_foo.py 的佈局會被永久擋死,而且沒有合法解法。

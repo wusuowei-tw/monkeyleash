@@ -1398,6 +1398,36 @@ def check_legacy_list():
         return ["[R6] %s 沒有 go-live sha(第一行應為 `# go-live: <sha>`)。\n"
                 "     讀不到基準點就無從驗證清單 —— 不是「沒基準所以都算過」。"
                 % rel(LEGACY_LIST)]
+    # ── 先驗**那個 commit 在不在**,再逐條驗路徑(票 55)────────────────────
+    #
+    # `git cat-file -e <go-live>:<path>` 的**非零退出碼有兩種原因**,
+    # 而這個迴圈原本把它們折成一句話:
+    #
+    #   ① 路徑不在那棵樹裡        -> 真違規
+    #   ② 那個 commit 不在這個 repo -> 環境問題(淺層 clone / 歷史被改寫)
+    #
+    # ② 被說成 ① 的代價不是「訊息不精確」:舊訊息會**主動把人推向刪清單條目**
+    # —— 刪掉之後一份本來正確的清單被改壞,而 R6 **仍然紅**(樹還是不在),
+    # 於是人會繼續刪,直到清單空掉,而它從頭到尾都是對的。
+    #
+    # **fail-closed 保證的是「擋不擋」,不是「為什麼擋」——
+    # 而人是照理由行動的,不是照擋不擋行動的。**
+    #
+    # 這個缺陷**本機結構上碰不到**(本機的 clone 一直是完整的),
+    # 所以它只會在**別人的環境**裡出現 —— 而那個人手上沒有這份紀錄。
+    try:
+        rc = subprocess.call(["git", "cat-file", "-e", "%s^{commit}" % go_live],
+                             cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except Exception as e:
+        return ["[R6] 無法查驗豁免清單(%s)—— 查不動一律當違規。" % e]
+    if rc != 0:
+        # **仍然 fail-closed** —— 判不了就擋。變的只有理由。
+        return ["[R6] 機制上線 commit %s 不在這個 repo —— 檢查是否淺層 clone\n"
+                "     (git fetch --unshallow)或歷史被改寫;在確認之前 R6 無法判定,\n"
+                "     本次 commit 擋下。\n"
+                "     **這不是清單的問題,不要刪清單裡的條目** —— 刪了 R6 照樣紅。"
+                % go_live]
+
     out = []
     for p in sorted(legacy_no_redlight()):
         try:
@@ -1406,6 +1436,8 @@ def check_legacy_list():
         except Exception as e:
             return ["[R6] 無法查驗豁免清單(%s)—— 查不動一律當違規。" % e]
         if rc != 0:
+            # commit 已經確認在場,所以走到這裡的非零**只剩一種原因** ——
+            # 原訊息在這條路徑上是對的,票 55 明訂**一字不改**。
             out.append("[R6] %s 不在機制上線 commit %s 的樹裡,不得列入紅燈豁免清單。\n"
                        "     清單只減不增:新檔案要走紅燈,不是往豁免名單裡加。"
                        % (p, go_live[:7]))
