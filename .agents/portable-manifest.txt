@@ -162,6 +162,14 @@ tests/test_g1_verify.py         copy
 # **到期條件**:票 66(未搬遷守衛)落地、`docs/adr/` 改回 `copy` 的那一輪,
 # 回來把本筆改成 `copy`,並把上面那條凍結白名單改成「本 repo 的框架層 ADR」。
 tests/test_adr_numbering.py     skip
+# 票 94:「六站」是名稱不是計數,而真的在數站別的句子要對得上定義檔。
+# **標 `skip`,理由與上一筆同形**:它斷言 `README.md` / `README.zh-TW.md` 的內容,
+# 而那兩個檔標 `skip`(各 repo 自己的檔案)—— 下游沒有它們,斷言會**註定紅**,
+# 而那個紅與「下游違反命名規則」長得一模一樣。
+# **不改成「找不到就 skip」**(票 16:測試從 pass 轉 skip 沒有東西會出聲)。
+# ⇒ **下游因此完全沒有這個檢查。這是缺口,不是留白。**
+# 到期條件:兩份 README 若哪天改成隨框架走(現在不是,也不該是),回來改這一筆。
+tests/test_stage_naming.py      skip
 # 影子日誌讀取的出聲失敗(票 63)。**出貨**:它驗的
 # `.claude/portable/shadow_review.py` 落在 `.claude/portable/` 前綴底下(標 copy),
 # 所以下游一定有;而**被它守住的那個缺陷正是在下游現形的**

@@ -63,6 +63,12 @@ monkeyleash 是我發現自己專案門口那六道關卡,在四十幾次改動�
 | **G1** | **使用者層**的獨立防護,不走六站流程:擋下破壞性檔案系統指令(`rm -rf`、`Remove-Item -Recurse`…),對照一份 agent 改不動的保護清單。**這是一個 denylist hook,不是沙箱** —— 真正的隔離要靠容器或作業系統權限。 |
 | **兩層 repo 強制** | **前哨**(`PreToolUse` hook,每一次 Bash / Edit / Write 執行前先判)與**權威**(`pre-commit`,`core.hooksPath`,agent 在正常 commit 路徑上繞不過的那層)。每條規則宣告自己住在哪一層。 |
 | **六站主線流程** | `grill-with-docs → to-spec → to-tickets → implement → code-review → improve-codebase-architecture`。另有兩個站不在主線上:`idle`(待命)與 `research`(探索區,不准寫生產碼)。目前在哪一站是一個由人編輯的檔案;agent 讀得到、改不了。只有允許寫程式的站才能寫程式。 |
+
+> **「六站」是名字不是站數,站別以 `.agents/pipeline-stages.yaml` 為準。**
+> 上表的「六站主線流程」數的是**主線上**那六個;定義檔另有 `idle` 與 `research`,
+> 合計 8 個 `id`。產品名裡的「六站」**不承諾**等於任何一個計數
+> (裁決 2026-09-07,票 94),而三個數字都由 `tests/test_stage_naming.py`
+> 從定義檔算出來,不寫死在散文裡。
 | **帳本** | 每一次豁免、每一次攔截、每一次測試,都追加到 `.dev/*.jsonl`,雜湊逐筆相接。用 `git checkout` 還原會在鏈上留下看得見的缺口,而不是一個乾淨的謊。 |
 | **`status`** | 一個指令印出 repo 的真實狀態 —— HEAD、階段、票號、哪些 hook 證明得了在場、哪些只是「宣稱」—— 每一行都帶 `(source: …)` 來源欄。證明不了的行印「未證明」,不印綠勾。 |
 | **唯讀 MCP server** | 給 Claude Desktop 的四支工具:`status_all`、`ticket(n)`、`friction(code)`、`latest_report`(最近一輪執行者回報)。零寫入路徑,由一條 AST 測試守著 —— 出現任何寫入呼叫就紅。 |

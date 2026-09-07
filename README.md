@@ -68,6 +68,12 @@ Two things are deliberate here:
 | **G1** | A *user-level* guard, independent of the pipeline, that blocks destructive filesystem commands (`rm -rf`, `Remove-Item -Recurse`, …) against a protected list the agent cannot edit. **This is a denylist hook, not a sandbox** — real isolation needs containers or OS-level permissions. |
 | **Two repository enforcement layers** | An *outpost* (`PreToolUse` hook, judges every Bash/Edit/Write before it runs) and an *authority* (`pre-commit`, `core.hooksPath`, the structural layer — not bypassable on the normal commit path). Rules declare which layer they live on. |
 | **Six-station main-line pipeline** | `grill-with-docs → to-spec → to-tickets → implement → code-review → improve-codebase-architecture`. Two further stages exist off the main line: `idle` (standby) and `research` (an exploration area that may not write production code). The stage is a file the human edits; the agent can read it but not change it. Source writes are allowed only in stages that allow them. |
+
+> **"Six-station" is a name, not a count — the stages are defined by `.agents/pipeline-stages.yaml`.**
+> The row above counts the six on the main line; the definition file also carries
+> `idle` and `research`, for 8 ids in total. The name makes no promise about any of
+> those counts (decided 2026-09-07, ticket 94), and all three numbers are derived
+> from the definition file by `tests/test_stage_naming.py` rather than written into prose.
 | **Ledgers** | Every exemption, every intercepted call, every test run, appended to `.dev/*.jsonl` with hashes chained. A restore that goes through `git checkout` leaves a visible gap in the chain rather than a clean lie. |
 | **`status`** | One command that prints the repo's real state — HEAD, stage, ticket, which hooks are provably installed, which are only *claimed* — with every line carrying a `(source: …)` column. Lines it can't prove print `未證明` (unproven), not a green tick. |
 | **Read-only MCP server** | Four tools for Claude Desktop: `status_all`, `ticket(n)`, `friction(code)`, `latest_report` (the latest executor report). Zero write paths, verified by an AST test that fails if a write call ever appears. |

@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """六站流程閘門 — 單一判定邏輯,兩層共用。
 
+**「六站」是名字不是站數,站別以 `.agents/pipeline-stages.yaml` 為準**
+(裁決 2026-09-07,票 94)。本檔的 R2 判定**從那個檔讀站名**,
+不從這行字讀 —— 這一行是產品名,不是規格。
+
 兩種呼叫模式(邏輯只有這一份):
   1. agent 前哨:`python gate.py`            讀 stdin 的 PreToolUse JSON,判單一檔案
      exit 0 放行 / exit 2 擋下(stderr 回饋給 AI)
