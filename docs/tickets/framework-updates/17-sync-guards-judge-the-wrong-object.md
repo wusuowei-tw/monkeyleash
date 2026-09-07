@@ -1,5 +1,24 @@
 # 17 — sync 的兩道護欄各自判錯對象
 
+**狀態**:**done**(落地 `e867eb5`,2026-09-07 複驗 **15 passed**)
+
+> **複驗指令與原文**(2026-09-07,乙類第 0 刀;一行碼都沒動):
+>
+> ```
+> $ python -m pytest tests/test_sync.py -k "TestDirtinessIsAboutTheOuterTree or TestDuplicateFrictionHeadingsAreRefused"
+> 15 passed, 52 deselected in 13.49s
+> ```
+>
+> **單位:15 條測試通過 / 52 條未選取** —— 不是「15 個檔」也不是「15 個案例類別」。
+> 兩道護欄各對應一個類別:`TestDirtinessIsAboutTheOuterTree`(`tests/test_sync.py:340`)、
+> `TestDuplicateFrictionHeadingsAreRefused`(`:538`)。
+>
+> ⚠ **落地 sha 是 `e867eb5`,但 gitlink 那一半後來被 `0a23eb8`(票 42(b))改過** ——
+> 「index sha ≠ 內層 HEAD」那一格從**髒**放寬成**放行**,理由寫在
+> `sync.py:249-270` 的三態表裡。**本票的判準沒有被推翻,是被它自己的判準推翻了那一格**
+> (sync 不寫 submodule 底下任何東西 ⇒ 指標落後不在寫入面上)。
+> **寫在這裡是因為只看 `e867eb5` 的 diff 會讀到一個今天已經不成立的行為。**
+
 量化 repo 盤點揭出。兩件都是**護欄本身**的缺陷,修畢量化才開窗。
 
 ## 一、`refuse_if_dirty` 判錯對象(第六例)
