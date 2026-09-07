@@ -61,9 +61,38 @@ def _out(text):
 # 裝一個 repo 再跑一次巢狀 pytest,不可能在單元測試裡呼叫。
 # 判定留在 `main()`,本票一行都沒動。
 
-def _report_installer_defaults():
+def gitignore_gaps(body):
+    """安裝出來的 `.gitignore` **少了哪幾條**(票 78 裁決 B)。
+
+    **枚舉,不抽查。** `GITIGNORE_FRAMEWORK` 與 `GITIGNORE_SECRETS` 是
+    **封閉且可窮舉**的集合,而 `CLAUDE.md` 常駐檢查項逐字:
+    **封閉且可窮舉時,枚舉勝過比對 —— 比對的漏是未知的,枚舉的漏是不存在的。**
+
+    舊斷言只問 `.env` **一項**,而且只在安裝當下跑一次;其餘十幾條零護欄。
+
+    **行精確**(strip 後整行相等),與 `install.py` 的查重同一個判準 ——
+    子字串會讓一個「只有註解、沒有防護」的 `.gitignore` 報全過,
+    而那正是本票要修的安裝器缺陷的**驗收側版本**。
+    **兩邊同時瞎掉的話,缺陷不會有任何訊號。**
+
+    ## 這條驗的是【產物 vs 規格】,不是恆真檢查
+
+    比的是**安裝出來的檔案** vs **安裝器自己的常數**。常數是規格、檔案是產物,
+    而本票的缺陷正是「產物沒跟上規格」。
+    **但它驗不到「規格本身縮水了」** —— 那一面由 `tests/test_install.py` 的
+    `test_gitignore_secrets_cover_common_shapes` 與 `test_framework_ignores_unchanged`
+    釘著。兩面分工,寫在這裡免得下一個人以為這一條涵蓋了全部。
+    """
+    lines = set(l.strip() for l in body.splitlines())
+    return [p for p in list(install.GITIGNORE_FRAMEWORK) + list(install.GITIGNORE_SECRETS)
+            if p not in lines]
+
+
+def _report_installer_defaults(n_ignore):
     _out("    pre-commit 已接 leak_scan ✓")
-    _out("    .gitignore 已守 .env 家族與金鑰檔 ✓")
+    # 印出**條數**而不只是一句「已守」—— 一個「已守 ✓」在清單縮到剩一條時
+    # 看起來完全一樣,而那正是本票在修的那種靜默。
+    _out("    .gitignore 兩組清單逐條都在(%d 條)✓" % n_ignore)
 
 
 def _report_rule_result(code, blocked):
@@ -280,13 +309,19 @@ def main(workdir):
     defaults_bad = []
     if "leak_scan.py" not in hook_body:
         defaults_bad.append("pre-commit 沒接 leak_scan(洩漏 commit 會直接成功)")
-    if ".env" not in ignore_body.splitlines():
-        defaults_bad.append(".gitignore 沒守 .env")
+    # 票 78 裁決 B:~~只問 `.env` 一項~~ → **兩組清單逐條枚舉**。
+    # 訊息列出**缺的是哪幾條** —— 一句「.gitignore 沒守」讓人得自己去比對兩份清單,
+    # 而票 13 的判準是「說得出是哪一個前提沒滿足」。
+    gaps = gitignore_gaps(ignore_body)
+    if gaps:
+        defaults_bad.append(".gitignore 少了 %d 條(逐條枚舉,不是抽查):%s"
+                            % (len(gaps), "、".join(gaps)))
     if defaults_bad:
         raise SystemExit("\n=== 安裝器預設值缺陷 ===\n"
                          + "".join("    %s\n" % b for b in defaults_bad))
     _out("\n=== 安裝器預設值(F-062)===")
-    _report_installer_defaults()
+    _report_installer_defaults(
+        len(install.GITIGNORE_FRAMEWORK) + len(install.GITIGNORE_SECRETS))
 
     gate = load_target_gate(target)
     codes = sorted(gate.rule_codes(), key=lambda c: int(c[1:]))

@@ -363,3 +363,101 @@ class TestTheInstallerProducesThePortableAuthorityLayer:
         install_mod.install_portable_layer(str(target))
         assert (target / ".git" / "hooks" / "pre-commit").exists(), \
             "停寫 .git/hooks/pre-commit —— 沒設 hooksPath 時安裝驗證會假失敗"
+
+
+def _lines(path):
+    return [l.strip() for l in
+            open(str(path), encoding="utf-8").read().splitlines() if l.strip()]
+
+
+class TestGitignoreDedupIsLineExact:
+    """票 78 —— 安裝器對 `.gitignore` 的查重必須是**行精確**,不是子字串。
+
+    ## 病灶
+
+    `install.py` 舊寫法是 `[p for p in GITIGNORE_FRAMEWORK if p not in have]`
+    —— `have` 是**整檔內容的字串**。於是檔裡任何位置出現那串字元(例如一行
+    註解「keep .env.example」)就當成「已經有了」,**真的防護行不補**。
+
+    > **查重要問的是「這個 pattern 行存不存在」,
+    > 而子字串答的是「這串字元出現過沒有」—— 問錯對象。**
+
+    失效方向是 `F-062` 要防的那一邊:**裝出來的 repo 第一個放進去的秘密沒人守**,
+    而且**完全靜默**。
+
+    ## 三條反控,缺一不可
+
+    | | 驗什麼 | 少了它會怎樣 |
+    |---|---|---|
+    | ① | 註解裡有那串字 → 真的防護行**仍被補上** | 這是病灶本身 |
+    | ② | 已有真的那一行 → **不重複追加** | 一個「一律追加」的實作也會讓 ① 綠 |
+    | ③ | 無 / 空 `.gitignore` → 兩組清單**全部**補上 | 一個「什麼都不補」的實作也會讓 ② 綠 |
+
+    **三條互相封住對方的退化解** —— 這是本組存在的理由,不是湊數。
+    """
+
+    def _state(self, install_mod, tmp_path, initial=None):
+        if initial is not None:
+            open(str(tmp_path / ".gitignore"), "w", encoding="utf-8").write(initial)
+        install_mod.generate_state(str(tmp_path))
+        return tmp_path / ".gitignore"
+
+    def test_a_comment_mentioning_the_pattern_does_not_suppress_the_real_line(
+            self, install_mod, tmp_path):
+        """① **病灶本身。** 註解提到那串字,不等於那條防護在。
+
+        取 `.env` 當樣本的理由:它是本票與 `F-062` 逐字點名的那一個
+        (「裝出來的 repo 第一個放進去的秘密」),而且它**不是憑證副檔名**
+        —— 副檔名字面會被本 repo 自己的洩漏偵測擋下(票 73 / 票 78 的先例)。
+        """
+        ignore = self._state(install_mod, tmp_path,
+                             "# keep .env.example around for docs\n")
+        assert ".env" in _lines(ignore), (
+            "註解裡出現 .env 字樣就不補真的 .env 行 —— 查重是子字串,不是行。\n"
+            "  現況:%r" % _lines(ignore))
+
+    def test_an_existing_real_line_is_not_appended_twice(
+            self, install_mod, tmp_path):
+        """② **反控:查重的本意不得丟。**
+
+        少了這條,一個「一律追加」的實作也會讓 ① 綠 ——
+        而重複的 ignore 行雖然無害,卻會讓下一次有人讀這個檔時
+        以為安裝器壞了,然後去「修」一個沒有壞的東西。
+        """
+        ignore = self._state(install_mod, tmp_path, ".env\n")
+        assert _lines(ignore).count(".env") == 1, (
+            ".env 被追加了第二次:%r" % _lines(ignore))
+
+    @pytest.mark.parametrize("initial", [None, ""])
+    def test_an_absent_or_empty_gitignore_gets_both_lists_in_full(
+            self, install_mod, tmp_path, initial):
+        """③ **反控:兩組清單【全部】補上,不是補一部分。**
+
+        少了這條,一個「什麼都不補」的實作也會讓 ② 綠。
+
+        **枚舉,不抽查** —— 兩組清單是**封閉且可窮舉**的集合
+        (`CLAUDE.md` 常駐檢查項:封閉集合用枚舉,比對的漏是未知的,
+        枚舉的漏是不存在的)。
+        """
+        ignore = self._state(install_mod, tmp_path, initial)
+        got = _lines(ignore)
+        want = list(install_mod.GITIGNORE_FRAMEWORK) + list(install_mod.GITIGNORE_SECRETS)
+        missing = [p for p in want if p not in got]
+        assert not missing, "空 / 無 .gitignore 的新 repo 少了 %d 條:%r" % (
+            len(missing), missing)
+
+    def test_every_entry_of_both_lists_survives_the_comment_case(
+            self, install_mod, tmp_path):
+        """①的枚舉版:**每一條**都要在,不只 `.env`。
+
+        註解只提到 `.env`,但子字串查重會讓**任何**「碰巧是註解子字串」的
+        條目一起消失。逐條驗,免得下一次有人在範本 `.gitignore` 裡
+        寫了一行提到別條的註解,而我們只守住了 `.env` 那一條。
+        """
+        ignore = self._state(install_mod, tmp_path,
+                             "# keep .env.example around\n"
+                             "# 產生物:__pycache__/ 之類的東西不要進版控\n")
+        got = _lines(ignore)
+        want = list(install_mod.GITIGNORE_FRAMEWORK) + list(install_mod.GITIGNORE_SECRETS)
+        missing = [p for p in want if p not in got]
+        assert not missing, "註解吃掉了 %d 條真防護行:%r" % (len(missing), missing)

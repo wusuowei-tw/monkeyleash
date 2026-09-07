@@ -177,19 +177,34 @@ def generate_state(target):
 
     ignore = os.path.join(target, ".gitignore")
     have = io.open(ignore, encoding="utf-8").read() if os.path.exists(ignore) else ""
+    # **查重比對的是【行】,不是子字串**(票 78)。
+    #
+    # 舊寫法是 `p not in have`,而 `have` 是整檔內容 —— 於是檔裡任何位置出現
+    # 那串字元(例如一行註解「keep .env.example」)就當成「已經有了」,
+    # **真的防護行不補,而且完全靜默**。裝出來的 repo 第一個放進去的秘密沒人守,
+    # 正是 F-062 要防的方向。
+    #
+    # **要問的是「這個 pattern 行存不存在」,子字串答的是「這串字元出現過沒有」
+    # —— 問錯對象。**
+    #
+    # 失效方向只有一邊:子字串**只會過度抑制**(該補的不補),
+    # 不會過度追加 —— 所以改成行精確之後,「不重複追加」那個本意不受影響,
+    # 而那件事有自己的反控釘著(`tests/test_install.py` 的 ② )。
+    have_lines = set(l.strip() for l in have.splitlines())
     # **前導斜線是必要的,不是風格。** 寫成 `skills/` 的話 gitignore 會在
     # **任何深度**比對同名目錄 —— 於是 `.agents/skills/`(正典)也被排除,
     # 而 git 對 ignored 檔案依定義是靜默的。後果不是少幾個檔案:
     # 正典沒進版控 → 下一次從這個 repo 安裝時帶不走 skills → R5 在目標 repo 失敗。
     # 淨室測試抓到的,而且要「安裝出來的 repo 再安裝一次」才會現形。
-    add = [p for p in GITIGNORE_FRAMEWORK if p not in have]
+    add = [p for p in GITIGNORE_FRAMEWORK if p not in have_lines]
     if add:
         with io.open(ignore, "a", encoding="utf-8", newline="\n") as f:
             f.write(("\n" if have and not have.endswith("\n") else "")
                     + "# 六站閘門會產生的東西(鏡像目錄由 skills 工具重建)\n"
                     + "\n".join(add) + "\n")
         have = io.open(ignore, encoding="utf-8").read()
-    secrets = [p for p in GITIGNORE_SECRETS if p not in have]
+        have_lines = set(l.strip() for l in have.splitlines())
+    secrets = [p for p in GITIGNORE_SECRETS if p not in have_lines]
     if secrets:
         with io.open(ignore, "a", encoding="utf-8", newline="\n") as f:
             f.write(("\n" if have and not have.endswith("\n") else "")

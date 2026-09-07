@@ -179,7 +179,11 @@ class TestVerifyGatesReportsSurviveACp950Console:
     def test_installer_defaults_line(self):
         vg = _load("vg_enc", "verify_gates.py")
         with cp950_console() as raw:
-            vg._report_installer_defaults()
+            # 票 78 之後這支帶一個參數(要印的是**條數**,不是一句「已守」)。
+            # 條數從 `install` 的常數算,**不寫死** —— 寫死一個會漂的數字
+            # 等於保證它過期,而過期時這條測試仍然綠。
+            vg._report_installer_defaults(
+                len(vg.install.GITIGNORE_FRAMEWORK) + len(vg.install.GITIGNORE_SECRETS))
         assert _carries(raw, "✓")
 
     def test_per_rule_result_line(self):

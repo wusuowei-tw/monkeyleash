@@ -44,6 +44,66 @@ def _load(name, filename):
 
 
 vg = _load("verify_gates_under_test", "verify_gates.py")
+_install = _load("install_for_verify_gates_test", "install.py")
+
+
+class TestGitignoreAssertionEnumeratesBothLists:
+    """票 78 裁決 B —— 淨室的 `.gitignore` 斷言從 `.env` **一項**擴到兩組清單全部。
+
+    ## 為什麼是枚舉不是抽查
+
+    `GITIGNORE_FRAMEWORK` 與 `GITIGNORE_SECRETS` 是**封閉且可窮舉**的集合。
+    `CLAUDE.md` 常駐檢查項逐字:**封閉且可窮舉時,枚舉勝過比對 ——
+    比對的漏是未知的,枚舉的漏是不存在的。**
+
+    舊斷言只問 `.env` 一項:其餘十幾條(框架四條、秘密清單其餘各條)
+    **零護欄**,而且只在安裝當下跑一次。
+
+    ## 這條斷言驗的是【產物 vs 規格】,不是恆真檢查
+
+    `gitignore_gaps()` 拿**安裝出來的檔案**去比**安裝器自己的常數**。
+    那不是 `F-114` 說的「用衍生欄位驗來源欄位」——
+    常數是**規格**,檔案是**產物**,而本票的缺陷正是「產物沒跟上規格」。
+
+    > **但它確實驗不到「規格本身縮水了」** —— 那一面由
+    > `tests/test_install.py` 的 `test_gitignore_secrets_cover_common_shapes`
+    > 與 `test_framework_ignores_unchanged` 釘著。**兩面分工,寫在這裡免得
+    > 下一個人以為這條涵蓋了全部。**
+    """
+
+    def _full_body(self):
+        return "\n".join(list(_install.GITIGNORE_FRAMEWORK)
+                         + list(_install.GITIGNORE_SECRETS)) + "\n"
+
+    def test_a_complete_gitignore_reports_no_gap(self):
+        assert vg.gitignore_gaps(self._full_body()) == []
+
+    def test_removing_any_single_entry_is_reported(self):
+        """**有界突變:逐條拿掉,每一條都要被指名。**
+
+        這是本條的非空性證明 —— 一個永遠回 `[]` 的實作會讓上一條綠,
+        而只有這一條會紅。**逐條**而不是抽一條:清單是封閉的,枚舉得完。
+        """
+        entries = list(_install.GITIGNORE_FRAMEWORK) + list(_install.GITIGNORE_SECRETS)
+        assert len(entries) >= 8, "清單短得可疑,枚舉沒有意義了:%r" % entries
+        for dropped in entries:
+            body = "\n".join(e for e in entries if e != dropped) + "\n"
+            gaps = vg.gitignore_gaps(body)
+            assert gaps == [dropped], (
+                "拿掉 %r 之後,斷言回報的缺項是 %r —— 應該剛好是被拿掉的那一條"
+                % (dropped, gaps))
+
+    def test_a_comment_mentioning_an_entry_is_not_counted_as_present(self):
+        """**行精確的另一半:註解不算數。**
+
+        淨室這一側若用子字串,它會對一個「只有註解、沒有防護」的
+        `.gitignore` 報全過 —— 那正是本票要修的安裝器缺陷的**驗收側版本**,
+        而兩邊同時瞎掉的話,缺陷不會有任何訊號。
+        """
+        entries = list(_install.GITIGNORE_FRAMEWORK) + list(_install.GITIGNORE_SECRETS)
+        body = "\n".join("# 提到 %s 但沒有真的守它" % e for e in entries) + "\n"
+        assert vg.gitignore_gaps(body) == entries, (
+            "全是註解的 .gitignore 被判成有守 —— 驗收側也是子字串")
 
 
 def _git(args, cwd):
