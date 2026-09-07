@@ -447,3 +447,70 @@ E1 第一次提交時**多帶了 `.githooks/pre-commit` 的 mode 變更** ——
 > 而按檔名逐一 `git add` 的習慣**看不到那一格**:它不在我要加的清單裡,
 > 它已經在裡面了。**「我只加了這兩個檔」與「這一筆只有這兩個檔」是兩件事。**
 
+---
+
+## 追記(2026-09-07,第六站第二次診斷 A-4)—— **三道只在 bootstrap 那一刻成立**
+
+**本票已完成,這一段不改它的狀態。** 記在這裡而不是另開一張票,
+理由是它問的是**同一個問題的另一個時點**:本票讓 `bootstrap.sh` 在**設定 config 之前**
+驗三件事;而**設定完之後**沒有任何東西再驗過它們。
+
+### 事實
+
+```
+.claude/hooks/gate.py:278    return True, "%s 已接 leak_scan + gate.py --pre-commit(兩段)" % rel(hook)
+缺席證據:gate.py 全檔 grep "X_OK|100755|ls-files" 只有 :1183(註解)與 :3024(staged 清單)兩處,
+          `authoritative_layer`(:228-278)範圍內 **0 命中**
+```
+
+`authoritative_layer()` 驗三件事:**檔案在**、內容含 `gate.py --pre-commit`、內容含 `leak_scan`。
+它**不驗執行位元**。而本票的第 ③ 道逐字寫著:
+
+> **git 不執行沒有執行位元的 hook,而且不出聲。**
+
+所以在一台 Linux 機器上,一個 index mode `100644` 的 hook:
+git 不跑它、不出聲,而 `authoritative_layer()` 回報 **「已接(兩段)」**。
+
+### 為什麼這一格屬於本票的家族
+
+**同一支函式的同一個形狀,這是第三次:**
+
+| 次 | 掉的是 | 收在哪 |
+|---|---|---|
+| 一 | `--pre-commit` 旗標(有 `gate.py` 就算裝好) | 票 27 |
+| 二 | `leak_scan` 段(有六站段就算裝好) | 票 76 B5 |
+| **三** | **執行位元**(檔案在、字串對,就算裝好) | **未收** |
+
+而該函式自己在 `gate.py:262-266` 就寫下了這個形狀的名字:
+**「判定用的證據比它宣稱保證的東西弱一階」**。
+**寫下名字的那一段程式碼,第三次犯同一個錯。**
+
+### 為什麼 bootstrap 的三道不夠
+
+三道是**動作前的檢查**,而 `core.hooksPath` 是**持久狀態**(本票卷首的 TSI-030)。
+之後的 `git update-index --chmod=-x`、或一個 index mode 100644 的 clone,
+都會讓 hook 靜默不執行,而**常駐提醒不會出聲** ——
+`mode_hook()` 只在 `authoritative_layer()` 回 False 時才提醒(`gate.py:2772`)。
+
+### 探針形狀(零寫入)
+
+本條**不需要造 repo**:
+
+```
+git ls-files -s -- .githooks/pre-commit        讀出目前的 index mode(唯讀)
+grep -n "X_OK\|100755" .claude/hooks/gate.py   對 authoritative_layer 範圍做缺席比對
+```
+
+實測(要一個 mode 100644 的暫存 clone)有寫入,第六站那一輪**沒有跑**,
+所以這一格目前是**讀碼定案,不是實測定案**。
+
+### 處置(要裁決)
+
+- **建議**:`authoritative_layer()` 加一道 `git ls-files -s` 的 mode 檢查,
+  回 False 且訊息點名「mode 不是 100755」+ 修法(`git update-index --chmod=+x`)。
+  **估工小**(一道檢查 + 一條負控)。**裝新下游前:要** —— 下游若在 Linux/CI 上,這一格是靜默的。
+- **反面**:Windows 的檔案系統不帶執行位元,所以檢查**只能問 index**,不能問檔案系統
+  (本票 `bootstrap.sh` 已經踩過並寫下這一句)。照抄那個判準即可,不要另發明。
+- **不開新票的理由**:修法一行、驗收一條,而它與本票的三道共用同一份判準與同一份措辭;
+  另開一張會製造第二個版本。**若裁決者要獨立票,拆出去的成本是零。**
+
