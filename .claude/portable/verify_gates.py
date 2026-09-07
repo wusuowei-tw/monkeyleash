@@ -35,6 +35,49 @@ import install  # noqa: E402
 import friction_heading  # noqa: E402  (發號標題判準,與 sync 同一份)
 
 
+def _out(text):
+    """輸出走 **utf-8 位元組**,不走 `print`(票 62)。
+
+    `print` 用主控台的編碼。Windows 的 cp950 編不出 `✓` / `✗` / `≥` / `⚠`,
+    而那不是亂碼 —— 是 `UnicodeEncodeError` 未捕捉、**行程當場死掉**。
+    這支工具是淨室驗證,**本機唯一涵蓋「安裝後形態」的東西**;
+    它死掉時壞的不是功能,是**證據的產生能力**,而那種壞法不會讓任何測試變紅。
+    (實測:重導向到管線也一樣炸 —— Python 對管線用的仍是 locale 編碼,
+    所以「跑得完」與「跑得完且看得到」在這裡是同一件事,兩邊都不成立。)
+
+    **寫法與 `sync.py` / `ledger_verify.py` 現有的一致**,不是新發明的。
+
+    `sys.stdout.flush()` 不是裝飾:本檔仍有大量 cp950 安全的 `print`,
+    它們走文字層的緩衝,而這裡直接寫二進位層 —— 不先 flush 的話
+    **兩層的輸出會交錯**,而一份順序錯亂的驗收報告比沒有報告更難讀。
+    """
+    sys.stdout.flush()
+    sys.stdout.buffer.write((text + "\n").encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+
+# 底下三個 `_report_*` **只排版,不判定** —— 傳進來的布林值都是算好的。
+# 抽出來的唯一理由是**可測**:原本它們長在 `main()` 裡,而 `main()` 會真的
+# 裝一個 repo 再跑一次巢狀 pytest,不可能在單元測試裡呼叫。
+# 判定留在 `main()`,本票一行都沒動。
+
+def _report_installer_defaults():
+    _out("    pre-commit 已接 leak_scan ✓")
+    _out("    .gitignore 已守 .env 家族與金鑰檔 ✓")
+
+
+def _report_rule_result(code, blocked):
+    _out("    %-4s %s" % (code, "擋下 ✓" if blocked else "沒擋到 ✗"))
+
+
+def _report_authority_probe(gone, detail, squatted, squat_detail, back):
+    _out("    hook 刪掉        -> %s(%s)"
+         % ("偵測到沒裝 ✓" if not gone else "沒偵測到 ✗", detail))
+    _out("    別人的 hook 佔位 -> %s(%s)"
+         % ("偵測到沒裝 ✓" if not squatted else "沒偵測到 ✗", squat_detail))
+    _out("    裝回去           -> %s" % ("偵測到已裝 ✓" if back else "仍說沒裝 ✗"))
+
+
 def sh(args, cwd, check=True):
     p = subprocess.run(args, cwd=cwd, capture_output=True)
     out = (p.stdout + p.stderr).decode("utf-8", "replace")
@@ -238,8 +281,7 @@ def main(workdir):
         raise SystemExit("\n=== 安裝器預設值缺陷 ===\n"
                          + "".join("    %s\n" % b for b in defaults_bad))
     print("\n=== 安裝器預設值(F-062)===")
-    print("    pre-commit 已接 leak_scan ✓")
-    print("    .gitignore 已守 .env 家族與金鑰檔 ✓")
+    _report_installer_defaults()
 
     gate = load_target_gate(target)
     codes = sorted(gate.rule_codes(), key=lambda c: int(c[1:]))
@@ -256,7 +298,7 @@ def main(workdir):
     failures = []
     for code in codes:
         blocked, out = run_scenario(target, code)
-        print("    %-4s %s" % (code, "擋下 ✓" if blocked else "沒擋到 ✗"))
+        _report_rule_result(code, blocked)
         if not blocked:
             failures.append((code, out))
 
@@ -282,10 +324,7 @@ def main(workdir):
     io.open(hook, "w", encoding="utf-8", newline="\n").write(body)
     back, _ = gate.authoritative_layer(target)
 
-    print("    hook 刪掉        -> %s(%s)" % ("偵測到沒裝 ✓" if not gone else "沒偵測到 ✗", detail))
-    print("    別人的 hook 佔位 -> %s(%s)"
-          % ("偵測到沒裝 ✓" if not squatted else "沒偵測到 ✗", squat_detail))
-    print("    裝回去           -> %s" % ("偵測到已裝 ✓" if back else "仍說沒裝 ✗"))
+    _report_authority_probe(gone, detail, squatted, squat_detail, back)
     if gone or squatted or not back:
         raise SystemExit("權威層偵測不準 —— 沒裝的時候不會叫,那一層就是靜默缺席的。")
 

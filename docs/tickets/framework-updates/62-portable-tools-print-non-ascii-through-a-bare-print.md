@@ -1,6 +1,7 @@
 # 62 — 三支可攜工具用裸 `print()` 輸出非 ASCII,在 cp950 主控台上直接崩掉
 
-**狀態**:**candidate(立案,不動工)**
+**狀態**:**done**(落地 2026-09-07,修法 **(a)**;紅燈先行,綠燈 + 全套 + 兩次淨室各一次)
+~~**candidate(立案,不動工)**~~(`F-036` 保留舊文)
 **立案**:2026-08-19,回帶輪裁決
 **friction**:`F-107`(框架層 —— 任何在 Windows 上裝了框架的 repo 都成立)
 **家族**:`F-042`(cp950 編碼假設)第三、四、五次現身;前科 `F-042`(判定層)、`F-059`(install.py 回報層)
@@ -133,9 +134,246 @@ EXIT=0
    (例如把輸出導進一個 `encoding="cp950"` 的緩衝,斷言不丟例外),
    而不是依賴執行環境的主控台。
 
+---
+
+## ✅ 落地(2026-09-07)—— 修法 (a),裁決者 2026-09-07 裁定
+
+**站別 `implement`,`ticket_id = 62`。紅燈先行。**
+
+### 一、🔴 掃描範圍更正:**是 9 個 print 呼叫,不是 7 行**
+
+票面上方那張表量到 **3 檔 7 行**,判準是「**行首是 `print(` 的那一行** +
+該行 `.encode("cp950")` 會丟例外」。動工前用 `ast` 重掃**整個 `print` 呼叫**:
+
+| 檔 | print 呼叫 | 會炸 |
+|---|---|---|
+| `verify_gates.py` | 22 | **6** |
+| `g1_verify.py` | 33 | **1** |
+| `shadow_review.py` | 23 | **2** |
+| `install.py` | 21 | 0 |
+| `sync.py` / `ledger_verify.py` | 0 | 0 |
+| **合計** | — | **9 個呼叫** |
+
+> ### **多出來的兩個都是【跨行的 print】,而它們的壞字落在第二行 ——
+> ### 第二行不以 `print(` 開頭,所以行首判準看不到它們。**
+
+- `verify_gates.py:286-287`(跨 2 行,`✓` `✗`)
+- `shadow_review.py:496-499`(跨 4 行,`≥`)
+
+**兩個數字都對,量的不是同一個單位**(行 vs 呼叫,`F-109`)。
+**但只修 7 個會留下兩個沒修,而測試若照票面寫也不會發現** ——
+所以本票的驗收斷言把那兩個各釘一條(`shadow_review` 那條同時斷言 `≥` 與 `⚠`)。
+
+### 二、歸因更正:**炸的是符號,不是中文**
+
+實測 `cp950` 逐字元:
+
+```
+U+2713 ✓  炸     U+2717 ✗  炸     U+2265 ≥  炸     U+26A0 ⚠  炸
+U+2192 →  OK     U+2014 —  OK     U+4E2D 中  OK
+```
+
+**cp950 編得動中文。** 這一條寫進票面與測試(`test_plain_chinese_is_not_the_problem`),
+因為不寫的話,下一個人讀到「非 ASCII 不可攜」會去做一件很大而且不必要的事
+(把訊息改成英文),而那不會修好任何東西。
+
+### 三、修法:三支各加一個 `_out(text)`
+
+```python
+def _out(text):
+    sys.stdout.flush()
+    sys.stdout.buffer.write((text + "\n").encode("utf-8"))
+    sys.stdout.buffer.flush()
+```
+
+- **寫法與 `sync.py` / `ledger_verify.py` 現有的一致**,不是新發明的(裁決指定)。
+- **`sys.stdout.flush()` 不是裝飾**:三支都還有大量 cp950 安全的 `print`,
+  它們走文字層緩衝;不先 flush 就直接寫二進位層,**兩層的輸出會交錯** ——
+  而一份順序錯亂的驗收報告比沒有報告更難讀。
+- `verify_gates.py` 另外把三處回報抽成 `_report_installer_defaults()` /
+  `_report_rule_result()` / `_report_authority_probe()`。
+  **抽出來的唯一理由是可測**:原本它們長在 `main()` 裡,而 `main()` 會真的裝一個
+  repo 再跑一次巢狀 pytest,**不可能在單元測試裡呼叫**。
+  三個函式**只排版,不判定** —— 傳進去的布林值都是算好的,判定一行未動。
+
+### 四、⚠ (a) 的已知代價,明寫不藏
+
+修法 (a) 只改**會炸的那 9 個**,其餘 `print` 留著(那是範圍,不是遺漏)。
+於是輸出流會有兩種編碼,而**兩種去向的結果不同**:
+
+| 輸出去哪 | 結果 |
+|---|---|
+| Windows **主控台** | `sys.stdout.buffer` 是 `_WindowsConsoleIO`,把位元組**當 utf-8** 轉 UTF-16 送給主控台 API ⇒ **顯示正確** |
+| **管線 / 重導向** | 普通檔案:`print` 走 locale(cp950)、`_out` 走 utf-8 ⇒ **同一份輸出裡兩種編碼** |
+
+**本票接受後者**:要換掉的是「行程死掉」,不是「排版好看」。
+要讓整份輸出同編碼,得把三支的**所有** `print` 都改走 `_out` —— **那是另一個範圍**,
+**登記在此,不在本票開票**(裁決者要的話再說)。
+
+### 五、測試(紅燈先行)
+
+`tests/test_portable_output_encoding.py`(10 條)+ `tests/test_shadow_review.py`
+的 `TestStatusSurvivesACp950Console`(1 條)。
+
+> ### 🔴 **為什麼分兩個檔 —— R3 要求的,不是編排偏好**
+>
+> `shadow_review.py` **不在** `.agents/legacy-no-redlight.txt` 上,
+> 而 `verify_gates.py`(第 26 行)與 `g1_verify.py`(第 22 行)**在**。
+> 所以動 `shadow_review.py` 需要一筆屬於當前票、記在**它自己配對測試檔**上的紅燈。
+> **前哨當場擋了一次**,原始訊息:
+>
+> ```
+> [六站閘門/前哨] [R3/紅燈][enforce] .claude/portable/shadow_review.py:測試檔存在,但沒有合格的紅燈紀錄。
+>      tests/test_shadow_review.py 有紅燈紀錄,但沒有一筆屬於當前票 62。
+>      舊票的紅燈不解鎖後續修改 —— 每張票要有自己的紅燈。
+> ```
+>
+> **處置:把那一條搬進 `tests/test_shadow_review.py`,不繞過、不改路徑。**
+> ⇒ **分界線是那份清單,不是我的判斷。**
+
+**harness 不依賴執行環境的主控台** —— 自己造
+`io.TextIOWrapper(..., encoding="cp950", errors="strict", write_through=True)`,
+所以它在 Linux 的 CI 上**一樣紅得起來**(票 58:一個從來不會紅的綠燈是空的)。
+
+**`errors="strict"` 是判準不是預設值**:`replace` 會把 `✓` 換成 `?` 而不丟例外
+—— 那正是**被裁決排除的修法 (c)** 的機器版。所以每一條除了「沒丟例外」之外,
+**還斷言那個符號以 utf-8 位元組的形態真的出現在輸出裡**。
+
+**反控(`TestTheHarnessItselfRejectsTheMark`)**:裸 `print` 那四個符號在同一個
+harness 底下**必須丟 `UnicodeEncodeError`**。少了它,一個什麼都接受的假 harness
+會讓其餘每一條**因為錯的理由**而綠(`F-032` / `F-103`)。
+
+### 六、數字(基準與數字一起寫,`F-109`)
+
+```
+紅燈  5 failed, 5 passed    <- 反控 5 條當時就綠(它證明 harness 真的會拒絕)
+綠燈  102 passed            <- 四個相關測試檔一起跑
+全套  1380 passed, 3 skipped, 3 xfailed in 95.75s
+      新增 11 條(本票兩個檔:10 + 1,`--collect-only` 實數)
+      ⇒ 基準 1369(以 `573a0a4` 為底;**這個 1369 是從 1380 減出來的,不是量出來的**)
+淨室  帶 -X utf8    exit=0
+      **不帶旗標**  exit=0,9 條規則各擋一次,巢狀 1262 passed, 3 skipped, 3 xfailed
+```
+
+**紅燈五條的理由不一樣,分開寫**(不合併成「五條紅」):
+
+| 條 | 紅在哪 | 是不是本票要的那種紅 |
+|---|---|---|
+| `g1_verify` × 1 | `UnicodeEncodeError: '✓'` | ✅ **是** —— 對著改動前的碼真的炸了 |
+| `shadow_review` × 1 | `UnicodeEncodeError: '≥'` | ✅ **是** |
+| `verify_gates` × 3 | `AttributeError: module has no attribute '_report_*'` | ⚠ **不是** —— 那三個函式當時還不存在 |
+
+> ### **`verify_gates` 那三條的紅是「函式不存在」,不是「編碼炸了」。不湊。**
+>
+> 它真正的行為紅燈**在 pytest 之外**:動工前先跑了一次不帶 `-X utf8` 的淨室,
+> 原文如下 —— **那才是 `verify_gates` 這一支的紅燈**:
+>
+> ```
+> === 安裝器預設值(F-062)===
+> Traceback (most recent call last):
+>   File "...\verify_gates.py", line 320, in <module>
+>     main(sys.argv[1])
+>   File "...\verify_gates.py", line 241, in main
+>     print("    pre-commit 已接 leak_scan ✓")
+> UnicodeEncodeError: 'cp950' codec can't encode character '✓' in position 28
+> EXIT=1
+> ```
+>
+> **為什麼不能用 pytest 拿到它**:那六個 print 長在 `main()` 裡,
+> 而 `main()` 會真的裝一個 repo 再跑一次巢狀 pytest(87 秒)。
+> 一條會在測試套件裡做那件事的測試,不該存在。
+
+## 偵察題:五題逐一填答(2026-09-07)
+
+### ① 它以前在本機成功跑完過嗎?怎麼跑的?
+
+**跑過,而且只有帶旗標那一次**(票面上方已記:2026-08-19 `-X utf8`,
+本機第一次跑完淨室)。本輪補答那一題的**第二半**:
+
+> **「重導向(`> file` / 管線)時 Python 用的是 `locale.getpreferredencoding()` 還是 UTF-8?」**
+
+**答:locale(cp950)。實測 —— 導進管線一樣炸**(原文見上方紅燈那一格)。
+
+> ### **⇒ 票面當時那個推測是【反的】。**
+> 票面寫「**若**重導向會過而主控台會炸,那麼『跑得完』與『跑得完且看得到』
+> 是兩件事」。實測是:**重導向更容易炸**(管線走 locale;而 Windows 主控台
+> 走 `_WindowsConsoleIO`,那條路反而是 utf-8)。
+> **兩件事在這裡是同一件,而且兩邊都不成立。**
+>
+> 附帶結論:**「CI 的日誌收集正是重導向」那句話成立,而 CI 是 Linux/UTF-8,
+> 所以它照樣看不到這個缺陷** —— 方向不變,理由要換。
+
+`.dev/test-runs.jsonl` 有沒有淨室跑完的紀錄?——**結構上不會有**,見 ③。
+
+### ② `PYTHONIOENCODING` / `PYTHONUTF8` 有沒有被任何地方設過?
+
+**指定範圍(`bootstrap.sh`、`tests.yml`、`.claude/`、`CLAUDE.md`)全部 0 命中。**
+⇒ **沒有隱性前提,不必停手。**(裁決指定的停手條件不觸發。)
+
+全庫其餘命中**都不是設定**,逐筆:
+
+| 位置 | 是什麼 |
+|---|---|
+| `tests/test_bash_write.py:506` | R7 邊界測試的**指令字串樣本**,不是設定 |
+| `docs/machine-init.md:356, 364, 1004` | **給人照著打的指令**(見下,這是本題唯一的實質發現) |
+| `docs/agents/friction-log.md`、其他票面 | 散文 |
+
+> ### 🔴 **本題的實質發現:`machine-init.md` 把這個 workaround 寫成了新機器的硬步驟**
+>
+> `docs/machine-init.md:356` 逐字:
+> `PYTHONIOENCODING=utf-8 python .claude/portable/g1_verify.py`(**不帶參數 = 驗正式檔**)全綠
+> `:364` 逐字:「`PYTHONIOENCODING=utf-8` **不是可選的**:`g1_verify.py` 有一行 `print("  無 ✓")`」
+>
+> **那一行指的正是本票修掉的那一行。**
+> ⇒ 本票落地後,「**不是可選的**」這句話變成**假的**。
+>
+> **⚠ 本輪沒有改 `machine-init.md`** —— 裁決第五步只點名票 54 落差表第 24 行,
+> 而 `machine-init.md` 是**跟著人走到每一台新機器**的劇本,改它要你點頭。
+> **登記為待裁,不自行處置**(留著不會壞事:設了那個變數仍然正確,
+> 只是那句「不是可選的」從此不準)。
+
+### ③ 另外兩支有沒有人在本機跑過?`.dev/test-runs.jsonl` 查得到嗎?
+
+> ### **查不到 —— 而且是【結構上查不到】,不是【查到沒有】。**
+
+`.dev/test-runs.jsonl` 由 `conftest.py` → `redlight.record_run()` 寫入,
+**每一筆的鍵是 `test_file`(某支 pytest 檔)**。
+**直接執行 `python .claude/portable/g1_verify.py` 不產生任何一筆紀錄。**
+
+實測計數:`tests/test_g1_verify.py` **97 筆**、`tests/test_shadow_review.py` **189 筆**
+—— 那些是**測試**的紀錄,不是**工具**被執行的紀錄。
+
+> **「這份帳本裡沒有」不等於「沒發生過」。留白比蓋章誠實。**
+
+**而另一個來源給了半個答案**:`machine-init.md:364` 那句「`PYTHONIOENCODING=utf-8`
+不是可選的」,**點名的正是 `g1_verify.py` 的 `print("  無 ✓")`** ——
+**有人真的撞上過它,而且把 workaround 寫進了劇本。**
+(材料來自另一個獨立來源,不是從被量的對象身上拿的。)
+
+⇒ 對票面那個問句「**那條唯一合法途徑是不是從來沒有被走完過?**」的答案是:
+**走完過,但要靠一個寫在劇本裡的環境變數。本票之後不再需要它。**
+
+### ④ 修法選哪一種?
+
+**(a)。裁決者 2026-09-07 裁定,(b)(c) 不採。** 實作見上方第三節。
+
+### ⑤ 測試怎麼寫才不是空的?
+
+**照票面自己的判準做的**:harness 自己造 cp950,不依賴執行環境;
+`errors="strict"`;斷言符號**以 utf-8 位元組**真的出現(排除修法 (c) 那種
+「換成 ASCII 也會綠」的假通過);**再加一條反控證明 harness 真的會拒絕**。
+細節見上方第五節。
+
+> **途中真的踩到一次「假綠」的機會**:harness 第一版在換回 `sys.stdout` 之後
+> 沒有 `detach()`,`TextIOWrapper` 被回收時把底下的 `BytesIO` 一起關掉,
+> 於是讀位元組時丟 `ValueError: I/O operation on closed file`。
+> **那次失敗證明了那些位元組斷言不是裝飾 —— 它們真的會去讀。**
+
 ## 本票不含
 
-- 修任何一行(candidate,不動工)
+- ~~修任何一行(candidate,不動工)~~ **已修,見上方落地節**
+- **把三支其餘的 `print` 也改走 `_out`**(整份輸出同編碼)—— 見第四節,**登記待裁**
+- **改 `docs/machine-init.md` 的 `PYTHONIOENCODING` 硬步驟** —— 見 ②,**登記待裁**
 - `verify_gates.py` 的其他問題 —— 本票只管輸出編碼這一面
 - 其他語言的同族(`.sh` / `.ps1` 的編碼假設)。**但那是個真問題**:
   `F-042` 家族已知在 PowerShell 讀 `.ps1` 時也現身過(friction-log:1446),

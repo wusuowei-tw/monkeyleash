@@ -123,6 +123,16 @@ tests/test_evidence_isolation.py copy
 tests/test_intercepts.py        copy
 tests/test_user_layer.py        copy
 tests/test_verify_gates.py      copy
+# 票 62:三支可攜工具的輸出在 cp950 主控台上不得炸掉。**出貨**:它驗的
+# `.claude/portable/verify_gates.py` 與 `g1_verify.py` 都落在
+# `.claude/portable/` 前綴底下(標 copy),所以下游一定有它們 ——
+# 「帶走測試卻不帶走它驗的東西」那個形狀不成立。
+# **下游更需要這一條**:cp950 是 Windows 繁中的預設,而下游多半在 Windows 上。
+# 本檔不碰 `~/.claude/`:`g1_verify` 那條把 `PROTECTED_LIST` 換成 tmp 的假清單、
+# 把 `run()` 換成不起行程的替身(界線 A,票 88 §八之一)。
+# ⚠ `shadow_review.py` 那一條**不在本檔**,在 `tests/test_shadow_review.py` ——
+# 它不在 `.agents/legacy-no-redlight.txt` 上,R3 要求紅燈記在配對測試檔上。
+tests/test_portable_output_encoding.py copy
 # 帳本鏈驗證工具的測試(票 47 收尾)。**出貨**:它驗的
 # `.claude/portable/ledger_verify.py` 落在 `.claude/portable/` 前綴底下(標 copy),
 # 而 `.dev/gate-exemptions.jsonl` 每個裝了框架的 repo 都有(標 generate)——

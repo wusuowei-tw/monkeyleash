@@ -98,6 +98,26 @@ MIN_DECIDABLE_RATE = 0.90
 KNOWN_CLASSES = frozenset(CLASSES.values())
 
 
+def _out(text):
+    """輸出走 **utf-8 位元組**,不走 `print`(票 62)。
+
+    `print` 用主控台的編碼,而 Windows 的 cp950 編不出 `≥` / `⚠` —— 那不是亂碼,
+    是 `UnicodeEncodeError` 未捕捉、**行程當場死掉**。
+    這支工具是影子模式的晉升判定;它死掉的時候,**判定看不到**。
+
+    **寫法與 `sync.py` / `ledger_verify.py` 現有的一致**,也與本檔 `main()`
+    那個錯誤出口一致 —— 那裡的註解當時寫「本檔既有的 `print()` 屬票 62
+    的範圍,本票不順手改它們」。**票 62 就是回來改它們的那一票。**
+
+    `flush` 的理由:本檔其餘的 `print` 走文字層的緩衝,而這裡直接寫二進位層 ——
+    不先 flush 的話兩層的輸出會交錯,而這支工具印的是一張逐規則的表,
+    **錯行就讀錯規則**。
+    """
+    sys.stdout.flush()
+    sys.stdout.buffer.write((text + "\n").encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+
 def _is_false_positive(classification):
     return classification in FALSE_POSITIVE_CLASSES
 
@@ -493,12 +513,12 @@ def print_status(path):
         else:
             print("日誌本身是空的 —— 影子模式還沒有記錄過任何判定。")
         return
-    print("每規則晉升狀態(三條同時滿足才可轉正:"
-          "已分類 ≥%d、假陽率 <%.0f%%、可判定率 ≥%.0f%%):"
-          % (MIN_CLASSIFIED, MAX_FALSE_POSITIVE_RATE * 100,
-             MIN_DECIDABLE_RATE * 100))
-    # **這一行是本節的重點,不是註腳。** 見下方 print 的內容與 F-126。
-    print("  ⚠ 以下是**報表,非閘門** —— 這三條不改變任何行為。")
+    _out("每規則晉升狀態(三條同時滿足才可轉正:"
+         "已分類 ≥%d、假陽率 <%.0f%%、可判定率 ≥%.0f%%):"
+         % (MIN_CLASSIFIED, MAX_FALSE_POSITIVE_RATE * 100,
+            MIN_DECIDABLE_RATE * 100))
+    # **這一行是本節的重點,不是註腳。** 見下方輸出的內容與 F-126。
+    _out("  ⚠ 以下是**報表,非閘門** —— 這三條不改變任何行為。")
     print("    影子的開關只看日期(clamp 與 shadow.json 的 until),"
           "而且是**整個 repo 一起**,不分規則。")
     print("    所以「可轉正」是一句建議,**沒有任何東西會因為它而發生**"
@@ -621,6 +641,10 @@ def main(argv):
         # (cp950 家族)的範圍,本票不順手改它們;但**新寫的東西不該再製造一個**
         # —— 在 cp950 主控台上,一個用 `print` 印中文的錯誤訊息會自己炸掉,
         # 而那正好發生在使用者最需要讀到它的時候。
+        #
+        # **票 62(2026-09-07)就是回來改它們的那一票**,而它只改了會炸的那兩個
+        # —— 本檔其餘的 `print` 印的都是 cp950 編得動的字(中文編得動,
+        # 炸的是 `≥` / `⚠` 那一族符號)。**留著它們不是遺漏,是範圍。**
         sys.stderr.buffer.write((u"[影子日誌/拒絕] %s\n" % e).encode("utf-8"))
         return 1
     return 0

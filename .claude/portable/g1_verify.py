@@ -41,6 +41,25 @@ OFFICIAL = os.path.join(os.path.expanduser("~"), ".claude", "hooks", "g1_guard.p
 PROTECTED_LIST = os.path.join(os.path.expanduser("~"), ".claude", "g1-protected.txt")
 
 
+def _out(text):
+    """輸出走 **utf-8 位元組**,不走 `print`(票 62)。
+
+    `print` 用主控台的編碼,而 Windows 的 cp950 編不出 `✓` —— 那不是亂碼,
+    是 `UnicodeEncodeError` 未捕捉、**行程當場死掉**。
+
+    **這一支特別要緊**:`ADR 0009` 說改 G1 的唯一合法途徑要跑完它的全套驗收。
+    它在 cp950 主控台上跑不完的話,**那條唯一合法途徑在那台機器上走不通** ——
+    而走不通的樣子是一個看起來像環境壞掉的 traceback,不是一句「驗收失敗」。
+
+    **寫法與 `sync.py` / `ledger_verify.py` 現有的一致**,不是新發明的。
+    `flush` 的理由:本檔其餘的 `print` 走文字層緩衝,直接寫二進位層而不先
+    flush 的話兩層會交錯 —— 一份順序錯亂的驗收報告比沒有報告更難讀。
+    """
+    sys.stdout.flush()
+    sys.stdout.buffer.write((text + "\n").encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+
 def protected_entries():
     """讀實際保護清單,回傳路徑串列(去註解、去空行)。讀不到回空。"""
     out = []
@@ -189,7 +208,7 @@ def main(guard):
         failures.append("磁碟根目錄條目(第 %s 條)"
                         % ", ".join(str(n) for n in drive_roots))
     else:
-        print("  無 ✓")
+        _out("  無 ✓")
     print()
 
     print("=== 第一級:清單每一條各斷言【命中的是哪一條】 ===")

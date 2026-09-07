@@ -972,3 +972,44 @@ class TestFTheThresholdsAnnounceThatTheyAreNotAGate:
         assert d["fp_rate"] == 0.0
         assert d["decidable_rate"] == 1.0
         assert d["promotable"] is True
+
+
+class TestStatusSurvivesACp950Console:
+    """票 62 —— `print_status` 在 cp950 主控台上不得炸掉。
+
+    這支工具是影子模式的晉升判定。它崩掉的時候壞的不是功能,
+    是**判定看不到** —— 而那種壞法不會讓任何別的測試變紅。
+
+    ## 為什麼這一條放在本檔,而不是 `tests/test_portable_output_encoding.py`
+
+    **R3 要求的,不是編排偏好。** `shadow_review.py` 不在
+    `.agents/legacy-no-redlight.txt` 上,所以動它需要一筆屬於當前票、
+    而且記在**本檔**的紅燈。紅燈記在別的檔上時,前哨當場擋下:
+
+        [R3/紅燈][enforce] .claude/portable/shadow_review.py:測試檔存在,
+        但沒有合格的紅燈紀錄。
+        tests/test_shadow_review.py 有紅燈紀錄,但沒有一筆屬於當前票 62。
+
+    (`verify_gates.py` 與 `g1_verify.py` **在**那份清單上,所以它們兩支的
+    對應測試留在 `tests/test_portable_output_encoding.py` ——
+    **分界線是那份清單,不是編排上的偏好。**)
+
+    ## 這一條在 Linux 上不是空的
+
+    harness 自己造出 cp950,不依賴執行環境的主控台,所以它在 CI 上
+    一樣紅得起來(票 58:一個從來不會紅的綠燈是空的)。
+    **harness 自己會不會拒絕**,由那個檔裡的反控證明。
+    """
+
+    def test_print_status_runs_to_the_end(self, tmp_path):
+        from test_portable_output_encoding import cp950_console, _carries
+
+        recs = [_rec("R7", "真陽"), _rec("R7")]
+        p = _write(tmp_path / "shadow-log.jsonl", recs)
+        with cp950_console() as raw:
+            sr.print_status(str(p))
+        # 兩個壞字分屬**兩個** print 呼叫,其中一個是跨 4 行的那個 ——
+        # 票面那次「行首是 print(」的掃描漏掉的正是它。
+        # 兩個都斷言,免得只修一半而測試照樣綠。
+        assert _carries(raw, "≥"), "跨行那個 print 沒有走 utf-8 位元組"
+        assert _carries(raw, "⚠"), "單行那個 print 沒有走 utf-8 位元組"
