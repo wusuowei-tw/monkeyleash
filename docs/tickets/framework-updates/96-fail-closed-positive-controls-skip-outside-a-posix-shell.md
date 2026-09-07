@@ -145,6 +145,47 @@ PATH 上就有 `sh` 的機器(Git Bash、Linux CI)本來就帶著自己的工具
 ⚠ **①–⑥ 的紅都是 `NameError`(函式還不存在),不是行為紅。不湊。**
 **真正證明方向 3 有效的是第四節那個 `4 passed, 5 skipped` → `16 passed`。**
 
+### 五之一、🔴 補刀(2026-09-07,同日)—— **CI 紅了一次,紅的是我寫的斷言**
+
+推上去之後 CI 紅:`34101592862` / `headSha 8601a351` / `1 failed, 1400 passed`。
+
+```
+E  AssertionError: 走 Git for Windows 的殼,卻沒有把它的 coreutils 放到 PATH 最前面:
+   'C:\Program Files\Git\usr\bin:C:\Windows'
+E  assert 'C' == 'C:\Program ...Git\usr\bin'
+```
+
+**成因**:斷言寫 `env["PATH"].split(os.pathsep)[0]`,而 **`os.pathsep` 在 Linux 是 `:`**
+—— 而 `C:\...` 本身就含 `:`,於是切點落在**磁碟代號後面**,第一段變成 `'C'`。
+
+> ### **實作是對的,紅的是測試。** 那是 `F-142` 的形狀,**而本票落地當天才引用過它**。
+> `CLAUDE.md` 卷首那句再兌現一次:**寫下一條判準,不會讓你在下一次認出它適用。**
+
+**修法(只動測試檔)**:
+
+| | |
+|---|---|
+| 新常數 | `GIT_PATH_SEP = ";"` —— **不是 `os.pathsep`** |
+| 理由 | `sh_env()` 動 PATH 的那個分支**依構造只在 Windows 上執行**(條件是 `sh in GIT_FOR_WINDOWS`),所以它接的是**一個 Windows PATH**,分隔符是 `;`,**與跑測試的主機無關** |
+| 斷言 | 改成 `startswith(GIT_USR_BIN + GIT_PATH_SEP)` + `endswith(原 PATH)` —— **問「有沒有前置」,不切字串** |
+
+**新增一條反控,把那個平台條件搬進測試裡**
+(`test_the_same_input_holds_when_the_host_looks_like_linux`):
+`monkeypatch` `os.pathsep = ":"`,同一組輸入仍須成立。
+
+> **少了它,這個缺陷只有推上去才看得到** —— 而票 54 落差表
+> 「本機看不到、只有 CI 看得到」那一格會再長一筆。
+> **本條在本機重現得出 CI 那個紅**(先跑確認:實得字串與 CI 逐字相同)。
+
+⚠ **只換 `os.pathsep`,不換 `os.name`**:換 `os.name` 會讓 `pathlib` 整個改走 POSIX 分支,
+而 pytest 自己的錯誤報告也用 `pathlib` —— 實測是
+`INTERNALERROR> NotImplementedError: cannot instantiate 'PosixPath' on your system`,
+**測試沒有紅,是整個 pytest 死掉**,連失敗訊息都印不出來。
+**模擬要換【被依賴的那一格】,不是【整個作業系統】。**
+
+**數字**:`tests/test_bootstrap.py` **17 passed**(Git Bash 與 PowerShell 兩邊)/
+全套 **1412 passed, 3 skipped, 3 xfailed**(新增 1 條,基準 1411)。
+
 ### 六、已知不涵蓋
 
 **Git for Windows 裝在非預設位置、又剛好在一個 PATH 上沒有 `sh` 的殼裡跑** ——

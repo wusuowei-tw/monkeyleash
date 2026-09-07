@@ -164,6 +164,19 @@ GIT_FOR_WINDOWS = (
 # Git for Windows 自己的 coreutils(`cut` / `sed` / `grep` …)住的地方。
 GIT_USR_BIN = r"C:\Program Files\Git\usr\bin"
 
+# **Windows PATH 的分隔符,寫死成 `;` —— 不是 `os.pathsep`。**
+#
+# 🔴 這一行是 CI 紅了一次換來的(`34101592862`,`headSha 8601a351`)。
+# `sh_env()` 動 PATH 的那個分支,依構造**只在 Windows 上執行**
+# (條件是 `sh in GIT_FOR_WINDOWS`,兩條寫死的 Windows 路徑)——
+# 所以它接的是**一個 Windows PATH**,分隔符是 `;`,
+# **與跑這支測試的主機是什麼作業系統無關**。
+#
+# 用 `os.pathsep` 的話,在 Linux 上會拿 `:` 去接一個 Windows PATH,
+# 而 `C:\...` 本身就含 `:` —— 接出來的字串沒有任何一邊解得對。
+# **一個 Windows 專屬的分支,不該去問主機的平台常數。**
+GIT_PATH_SEP = ";"
+
 
 def find_sh(which=None, exists=None):
     """依序找一個跑得動 `bootstrap.sh` 的殼:`sh` → `bash` → Git for Windows。
@@ -234,7 +247,9 @@ def sh_env(sh=None, environ=None):
     environ = os.environ if environ is None else environ
     env = dict(environ)
     if sh and sh in GIT_FOR_WINDOWS:
-        env["PATH"] = GIT_USR_BIN + os.pathsep + env.get("PATH", "")
+        # **`GIT_PATH_SEP` 不是 `os.pathsep`** —— 這個分支依構造只在 Windows 上
+        # 執行,接的是一個 Windows PATH。理由與那次 CI 紅寫在常數旁邊。
+        env["PATH"] = GIT_USR_BIN + GIT_PATH_SEP + env.get("PATH", "")
     return env
 
 
@@ -465,10 +480,59 @@ class TestFindingShFallsBackToGitForWindows:
         放進 PATH 之後,同一支檔 **14 passed**。
         """
         env = sh_env(sh=GIT_FOR_WINDOWS[0], environ={"PATH": "C:\\Windows"})
-        assert env["PATH"].split(os.pathsep)[0] == GIT_USR_BIN, (
+        # ⚠ **不切字串**(`split(os.pathsep)`)—— `C:\...` 本身就含 `:`,
+        # 而 `os.pathsep` 在 Linux 正好是 `:`,於是切點落在磁碟代號後面。
+        # 那次 CI 紅就是這麼來的;改成問「有沒有前置」,兩個平台同一個語意。
+        assert env["PATH"].startswith(GIT_USR_BIN + GIT_PATH_SEP), (
             "走 Git for Windows 的殼,卻沒有把它的 coreutils 放到 PATH 最前面:%r"
             % env["PATH"])
-        assert "C:\\Windows" in env["PATH"], "原本的 PATH 被蓋掉了,不是前置"
+        assert env["PATH"].endswith("C:\\Windows"), (
+            "原本的 PATH 被蓋掉了,不是前置:%r" % env["PATH"])
+
+    def test_the_same_input_holds_when_the_host_looks_like_linux(self, monkeypatch):
+        """🔴 **反控:同一組輸入,在「假裝是 Linux」的主機上也要成立。**
+
+        ## 這條在本機重現得出 CI 那個紅
+
+        上一條的第一版斷言寫的是 `env["PATH"].split(os.pathsep)[0]`,
+        而 **`os.pathsep` 在 Linux 是 `:`** —— 於是
+        `'C:\\Program Files\\Git\\usr\\bin:C:\\Windows'` 會從 `C` 後面被切開,
+        第一段變成 `'C'`。**本機(Windows,`;`)恆綠,CI(Linux)紅。**
+
+        CI 原文(`34101592862`,`headSha 8601a351`):
+
+            E  AssertionError: 走 Git for Windows 的殼,卻沒有把它的 coreutils
+               放到 PATH 最前面:'C:\\Program Files\\Git\\usr\\bin:C:\\Windows'
+            E  assert 'C' == 'C:\\Program ...Git\\usr\\bin'
+
+        > ### **本條把那個平台條件搬進測試裡,所以它在【任何】平台上都問得出來。**
+        > 少了它,這個缺陷**只有推上去才看得到** ——
+        > 而票 54 落差表「本機看不到、只有 CI 看得到」那一格會再長一筆。
+
+        ## 判準:Windows 的 PATH 用 `;`,而這個分支依構造只在 Windows 上執行
+
+        `sh_env()` 只在 `sh in GIT_FOR_WINDOWS`(兩條寫死的 Windows 路徑)時
+        才動 PATH,**那個條件在 Linux 上永遠不成立**。
+        所以那一段接的是**一個 Windows PATH**,分隔符是 `;` ——
+        **與跑這支測試的主機是什麼作業系統無關。**
+        `GIT_PATH_SEP` 就是把這句話寫成一個常數。
+        """
+        # ⚠ **只換 `os.pathsep`,不換 `os.name`。**
+        # 換 `os.name` 會讓 `pathlib` 整個改走 POSIX 分支,而 pytest 自己的
+        # 錯誤報告也用 `pathlib` —— 實測結果是
+        # `INTERNALERROR> NotImplementedError: cannot instantiate 'PosixPath' on your system`:
+        # **測試沒有紅,是整個 pytest 死掉**,而那種死法連失敗訊息都印不出來。
+        #
+        # `os.pathsep` 才是這個缺陷依賴的那一個變數;換它就足以重現 CI 那個紅。
+        # **模擬要換的是【被依賴的那一格】,不是【整個作業系統】** ——
+        # 換得越多,壞掉的東西越可能不是受測的那個。
+        monkeypatch.setattr(os, "pathsep", ":")
+        env = sh_env(sh=GIT_FOR_WINDOWS[0], environ={"PATH": "C:\\Windows"})
+        assert env["PATH"].startswith(GIT_USR_BIN + GIT_PATH_SEP), (
+            "主機看起來像 Linux 時,前置用的分隔符跟著主機跑了 —— "
+            "而接的是一個 Windows PATH:%r" % env["PATH"])
+        assert env["PATH"].endswith("C:\\Windows"), (
+            "原本的 PATH 被蓋掉了,不是前置:%r" % env["PATH"])
 
     def test_a_shell_from_path_does_not_get_its_path_rewritten(self):
         """**反控:只有走寫死路徑那條才動 PATH。**
