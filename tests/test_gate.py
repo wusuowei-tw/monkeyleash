@@ -3428,3 +3428,256 @@ class TestR1DoesNotBlockWhatItShouldNotSee:
         msg = gate.check(str(spec_root / ".scratch/a/b/spec.md"), R1_FENCE)
         assert "R1" not in (msg or ""), (
             "`.scratch/a/b/spec.md` 進了 R1 的判定,而現行正則只吃一層:msg=%r" % msg)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 10 —— R2 的內容豁免(權威層):與上游 provenance 釘住的物件逐位元組相同的
+# staged 檔案放行。**綁內容,不綁站別 —— 沒有窗口,就沒有忘記關窗這個失效模式。**
+# ─────────────────────────────────────────────────────────────────────────────
+
+UP_SRC = "def f():\n    return 1\n"
+
+# 在 fixture 換掉 `gate.load_stage` 之前先抓住真的那一支 —— ⑥ 要它去真的讀
+# pipeline.json,否則「不寫」那條斷言測的是一個根本沒被開啟過的檔案。
+_REAL_LOAD_STAGE = gate.load_stage
+
+
+class TestR2AcceptsAnUpstreamIdenticalStagedFile:
+    """票 10:**豁免綁內容,不綁站別。**
+
+    要解的事:同步要寫 `.claude/portable/*.py`、`.claude/hooks/*.py`,而那些在
+    目標 repo 是原始碼;下游停在前置站時 R2 擋 commit。紙上流程是「人手動把
+    `current_stage` 改成 implement,做完再改回去」—— 實測窗口 57 分 38 秒、
+    逾 1 小時 08 分各一次,而**窗口期間 R2 對整個 repo 都是開的**,不只對同步的那些檔案。
+
+    內容豁免沒有窗口:只放行「與上游那個 commit 的物件逐位元組相同」的檔案,
+    差一個位元組就回到 R2 正常判定。**無法自我服務** —— 偽造要先改上游。
+
+    **判定對象是 staged 的位元組**(`git show :<path>`),不是工作樹:
+    commit 要判的是**要進 commit 的那一份**(F-046 那條判準換一個時點)。
+
+    ## 站別為什麼用 `spec` 而不是票面寫的 `review`
+
+    票面 §設計 (g) 的 ① 寫「停在 review」,那是**前哨**的擋法。
+    本刀只做權威層,而 `at_commit` 的 R2 只擋**前置站**
+    (`grill` / `spec` / `tickets`;`review` / `arch` / `idle` 在提交時本來就放行,
+    ADR 0005)—— 拿 `review` 當正控的話,那條測試從第一天就是綠的,
+    **證明不了任何東西**。改用 `spec`,紅燈才對著本票要加的分支。
+    """
+
+    @pytest.fixture()
+    def world(self, tmp_path, monkeypatch):
+        """上游與下游兩個**真的** git repo(判定要對到真的 git 物件)。
+
+        `core.autocrlf false`:行尾那一格(③)要真的測到正規化 ——
+        讓 git 在 `add` 時自己把 CRLF 轉掉的話,兩邊在**進 index 之前**就一樣了,
+        於是把正規化整段拿掉那條測試照樣綠。
+        """
+        up, down = tmp_path / "up", tmp_path / "down"
+        for r in (up, down):
+            r.mkdir()
+            for c in ("init -q", "config user.email t@t", "config user.name t",
+                      "config core.autocrlf false"):
+                subprocess.run(["git"] + c.split(), cwd=str(r), capture_output=True)
+
+        (up / "pkg").mkdir()
+        io.open(up / "pkg" / "thing.py", "w", encoding="utf-8",
+                newline="\n").write(UP_SRC)
+        subprocess.run(["git", "add", "-A"], cwd=str(up), capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "up"], cwd=str(up),
+                       capture_output=True)
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(up),
+                             capture_output=True).stdout.decode().strip()
+
+        (down / "pkg").mkdir()
+        (down / "tests").mkdir()
+        io.open(down / "tests" / "test_thing.py", "w",
+                encoding="utf-8").write("x = 1\n")
+        (down / ".dev").mkdir()
+
+        monkeypatch.setattr(gate, "ROOT", str(down))
+        monkeypatch.setattr(gate, "PROVENANCE", str(down / ".dev" / "provenance.jsonl"))
+        monkeypatch.setattr(gate, "RUN_LOG", str(down / ".dev" / "test-runs.jsonl"))
+        monkeypatch.setattr(gate, "EXEMPTION_LOG",
+                            str(down / ".dev" / "gate-exemptions.jsonl"))
+        monkeypatch.setattr(gate, "PIPELINE", str(down / ".dev" / "pipeline.json"))
+        pointer = tmp_path / "upstream-roots.txt"
+        io.open(pointer, "w", encoding="utf-8", newline="\n").write(
+            "UPSTREAM_ROOT=%s\n" % str(up).replace("\\", "/"))
+        monkeypatch.setattr(gate, "UPSTREAM_ROOTS", str(pointer))
+        monkeypatch.setattr(gate, "load_stage", lambda: ("spec", "10"))
+        monkeypatch.chdir(down)
+        return up, down, sha
+
+    def _stage(self, down, text, worktree=None):
+        """把 `text` 放進 index。`worktree` 給值時,`add` 之後再把工作樹改成別的內容。
+
+        `newline=""`:寫進去的就是傳進來的那些位元組,Python 不做行尾翻譯 ——
+        ③ 那一格的整個判準就是行尾。
+        """
+        p = down / "pkg" / "thing.py"
+        io.open(p, "w", encoding="utf-8", newline="").write(text)
+        subprocess.run(["git", "add", "pkg/thing.py"], cwd=str(down),
+                       capture_output=True)
+        if worktree is not None:
+            io.open(p, "w", encoding="utf-8", newline="").write(worktree)
+
+    def _prov(self, down, **kw):
+        rec = {"path": "pkg/thing.py", "upstream_path": "pkg/thing.py"}
+        rec.update(kw)
+        with io.open(down / ".dev" / "provenance.jsonl", "a",
+                     encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    # ── ① 正控 ────────────────────────────────────────────────────────────
+
+    def test_a_staged_file_identical_to_the_upstream_object_passes_r2(self, world):
+        """**本節的主張**:staged 內容 = 上游那個 commit 的同路徑物件 -> R2 不擋,
+        而且**不必動 `pipeline.json`**。"""
+        up, down, sha = world
+        self._stage(down, UP_SRC)
+        self._prov(down, upstream_commit=sha)
+        msg = gate.check("pkg/thing.py", None, at_commit=True)
+        assert not (msg and "[R2" in msg), msg
+
+    # ── ② 反控:差一個位元組就回到 R2 正常判定 ─────────────────────────────
+
+    def test_one_byte_of_drift_falls_back_to_normal_r2(self, world):
+        """**反控,現行就綠** —— 它擋的是實作把「相同」寫鬆(例如比對工作樹、
+        比對 provenance 自己宣稱的 hash、或前綴比對)之後正控仍然全綠。"""
+        up, down, sha = world
+        self._stage(down, UP_SRC + " ")
+        self._prov(down, upstream_commit=sha)
+        msg = gate.check("pkg/thing.py", None, at_commit=True)
+        assert msg and "[R2" in msg, (
+            "staged 與上游差一個位元組,R2 仍必須擋:msg=%r" % msg)
+
+    # ── ③ 正控:只差行尾 ──────────────────────────────────────────────────
+
+    def test_only_the_line_endings_differ(self, world):
+        """`git show` 給的是物件裡的位元組(LF),autocrlf 的機器上工作樹是 CRLF ——
+        不正規化的話這條規則在那些機器上**永遠不成立**(ADR F-0013 踩過)。
+
+        失敗方向是「擋住做對事的人」,而那種規則最後會被整條關掉。
+        """
+        up, down, sha = world
+        self._stage(down, UP_SRC.replace("\n", "\r\n"))
+        self._prov(down, upstream_commit=sha)
+        msg = gate.check("pkg/thing.py", None, at_commit=True)
+        assert not (msg and "[R2" in msg), msg
+
+    # ── ④ 正控:缺件一律不豁免,而且訊息點名缺的是哪一個 ───────────────────
+
+    def test_a_missing_upstream_pointer_is_named(self, world, monkeypatch):
+        up, down, sha = world
+        self._stage(down, UP_SRC)
+        self._prov(down, upstream_commit=sha)
+        # 指標檔**不存在**,但名字是真的那一個 —— 訊息要印得出人該去建哪個檔。
+        monkeypatch.setattr(gate, "UPSTREAM_ROOTS",
+                            str(down / "gone" / "upstream-roots.txt"))
+        msg = gate.check("pkg/thing.py", None, at_commit=True)
+        assert msg and "[R2" in msg, msg
+        assert "指標檔" in msg and "upstream-roots.txt" in msg, (
+            "訊息沒說出缺的是指標檔 —— 人會去查站別,查不出所以然(票 13):msg=%r" % msg)
+
+    def test_a_file_without_provenance_is_named(self, world):
+        up, down, sha = world
+        self._stage(down, UP_SRC)          # 不發 provenance
+        msg = gate.check("pkg/thing.py", None, at_commit=True)
+        assert msg and "[R2" in msg, msg
+        assert "provenance" in msg, (
+            "訊息沒說出這個檔案沒有同步紀錄:msg=%r" % msg)
+
+    def test_an_unreachable_upstream_repo_is_named(self, world, monkeypatch):
+        up, down, sha = world
+        self._stage(down, UP_SRC)
+        self._prov(down, upstream_commit=sha)
+        pointer = down / "moved-pointer.txt"
+        io.open(pointer, "w", encoding="utf-8", newline="\n").write(
+            "UPSTREAM_ROOT=%s\n" % str(down / "no_such_repo").replace("\\", "/"))
+        monkeypatch.setattr(gate, "UPSTREAM_ROOTS", str(pointer))
+        msg = gate.check("pkg/thing.py", None, at_commit=True)
+        assert msg and "[R2" in msg, msg
+        assert "問不到" in msg, (
+            "訊息沒說出上游那個物件問不到:msg=%r" % msg)
+
+    # ── ⑤ 正控:帳本 ──────────────────────────────────────────────────────
+
+    def test_the_exemption_is_recorded_with_its_own_reason(self, world):
+        """豁免要逐筆記帳,而且要與 `gate-self-modification` 分得開 ——
+        混在一起對帳又會得到一個解釋不了的數字(票 08)。
+
+        `reason` 是**第四個**值,不是第二個:程式裡已經有 `ticket-declared`、
+        `gate-self-modification`、`upstream-provenance`。
+
+        斷言 `check()` 收進 bucket、不斷言它寫檔:票 08 之後判定是純函式,
+        寫帳本屬於強制點(只有那裡知道「真的有人要寫」)。
+        """
+        up, down, sha = world
+        self._stage(down, UP_SRC)
+        self._prov(down, upstream_commit=sha)
+        used = []
+        gate.check("pkg/thing.py", None, at_commit=True, exemptions=used)
+        reasons = [e.get("reason") for e in used]
+        assert "upstream-identical" in reasons, used
+        assert "gate-self-modification" not in reasons, used
+
+        # 票 49 的讀法(逐筆對「哪一條規則、outcome 是什麼」)不得改變:
+        # 欄位集合與 outcome 語意照舊,只是多一個 reason 值。
+        ex = [e for e in used if e["reason"] == "upstream-identical"][0]
+        rec = gate.exemption_record(ex, None, True, "spec", "10", None,
+                                    tool="pre-commit")
+        assert set(rec) == {
+            "ts", "file", "module", "ticket", "stage", "declared_in", "reason",
+            "tool", "outcome", "blocked_by", "at_commit", "content_hash",
+            "result_hash", "changes_bytes"}, sorted(rec)
+        assert rec["reason"] == "upstream-identical"
+        assert rec["outcome"] == "granted" and rec["blocked_by"] is None, rec
+
+    # ── ⑥ 反控:不必開窗 ──────────────────────────────────────────────────
+
+    def test_the_exemption_never_writes_pipeline_json(self, world, monkeypatch):
+        """**反控。** 票面要的是「不必改 `pipeline.json`」,那有兩半:
+
+        **不寫** —— 位元組與 mtime 都不動;
+        **判定不隨站別改變** —— 三個前置站都豁免,所以沒有窗口要開。
+
+        「**不讀**」測不了,而且不該測:`load_stage()` 每一次判定都要讀它才知道
+        停在哪一站,那是構造。硬要斷言「沒讀」等於要求閘門不知道自己在哪一站。
+        """
+        up, down, sha = world
+        monkeypatch.setattr(gate, "load_stage", _REAL_LOAD_STAGE)
+        self._stage(down, UP_SRC)
+        self._prov(down, upstream_commit=sha)
+        p = down / ".dev" / "pipeline.json"
+        for stage in ("grill", "spec", "tickets"):
+            io.open(p, "w", encoding="utf-8", newline="\n").write(
+                json.dumps({"current_stage": stage, "ticket_id": "10"}))
+            before = p.read_bytes()
+            mtime = os.stat(str(p)).st_mtime_ns
+            msg = gate.check("pkg/thing.py", None, at_commit=True)
+            assert not (msg and "[R2" in msg), (stage, msg)
+            assert p.read_bytes() == before, stage
+            assert os.stat(str(p)).st_mtime_ns == mtime, stage
+
+    # ── ⑦ 反控:判的是 staged,不是工作樹 ─────────────────────────────────
+
+    def test_the_judgement_is_on_the_staged_bytes_not_the_worktree(self, world):
+        """**兩個方向都要**:一個方向只證明「有時候對」。
+
+        方向二(工作樹乾淨、staged 漂移)是關鍵的那一格 —— 照抄 R3 現有的
+        `upstream_backed`(它讀工作樹,`gate.py:1735`)的話,方向一會綠、
+        方向二會漏,而**正控全綠**。
+        """
+        up, down, sha = world
+        self._prov(down, upstream_commit=sha)
+
+        # 方向一:staged = 上游,工作樹漂移 -> 豁免(R3 可能另外擋,不是 R2 的事)
+        self._stage(down, UP_SRC, worktree=UP_SRC + "# drift\n")
+        msg = gate.check("pkg/thing.py", None, at_commit=True)
+        assert not (msg and "[R2" in msg), ("方向一", msg)
+
+        # 方向二:工作樹 = 上游,staged 漂移 -> 擋(讀工作樹的話這裡會綠)
+        self._stage(down, UP_SRC + "# drift\n", worktree=UP_SRC)
+        msg = gate.check("pkg/thing.py", None, at_commit=True)
+        assert msg and "[R2" in msg, ("方向二", msg)

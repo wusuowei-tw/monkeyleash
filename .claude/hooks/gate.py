@@ -94,7 +94,11 @@ RULE_DIVERGENCE = {
     "R2": {
         "adr": "docs/adr/0005-r2-time-point-semantics.md",
         "why": "寫入時問『現在這一站可以寫原始碼嗎』;提交時問『你是不是還停在前置站』。"
-               "實作完成後站別本來就會往 review / idle 走,拿寫入時的問題去問提交會擋掉每一次合法提交。",
+               "實作完成後站別本來就會往 review / idle 走,拿寫入時的問題去問提交會擋掉每一次合法提交。"
+               "**票 10 再加一格**:提交時另有內容豁免 —— staged 的位元組與上游 provenance "
+               "釘住的物件逐位元組相同時放行(docs/adr/F-0016-r2-content-bound-exemption.md)。"
+               "那一格前哨沒有,因為它判的是 index,而前哨手上只有編輯後的內容;"
+               "同步工具也不經前哨(sync.py 直接寫檔,不走檔案工具)。",
     },
     "R3": {
         "adr": "docs/adr/F-0013-r3-redlight-judges-the-implementation.md",
@@ -1625,7 +1629,14 @@ PROVENANCE = os.path.join(ROOT, ".dev", "provenance.jsonl")   # 控制,不是證
 # **不寫進 provenance.jsonl** 有兩個各自獨立的理由:
 #   去識別化 —— 那是本機設定,不該跟著 commit 送進版控
 #   不可自助 —— 欄位一旦可寫,指向一個自己控制的 repo 就能造出任意「上游物件」,
-#               控制就不再是控制。放進 G1 保護清單之後 agent 改不動它。
+#               控制就不再是控制。
+#
+# **⚠ 更正(票 10,2026-09-07)**:這裡原本寫「放進 G1 保護清單之後 agent 改不動它」。
+# **那句話沒有成立過** —— 實查 `~/.claude/g1-protected.txt`(65 行),
+# `upstream` 0 次命中。同一支檔案的另一處(`upstream_shadow_violation` 的 docstring)
+# 寫的才是實況:「目前沒有 G1 保護,改一行就能讓本條對本 repo 失效」。
+# 兩處對同一個事實說法相反,而**寫著「改不動」的那一處聽起來像已經處理過了** ——
+# 出口是票 89 第二階段(git 背書的錨),見 docs/adr/F-0016。
 UPSTREAM_ROOTS = os.path.join(os.path.expanduser("~"), ".claude",
                               "upstream-roots.txt")
 
@@ -1658,8 +1669,11 @@ def read_upstream_root():
     return vals[0] if len(vals) == 1 else None
 
 
-def upstream_backed(rel_path):
+def upstream_backed(rel_path, raw=None):
     """這個檔案是不是「與上游那個 commit 的物件逐位元組相同」的同步成品。
+
+    `raw` 給值時,判的是**那些位元組**,不是工作樹那一份(票 10 的 R2 分支要判
+    staged 的內容)。**預設不變**:`None` = 讀工作樹,R3 那一側的行為一個字都沒動。
 
     要解的問題:下游 repo 收到 sync 帶進來的實作時,R3 要求本地紅燈紀錄,
     而**紅綠燈迴圈在上游** —— 下游拿到的是成品,它從來沒有機會讓那些測試
@@ -1726,8 +1740,11 @@ def upstream_backed(rel_path):
             return False, ("上游那個物件問不到:`%s:%s`(上游 %s)。\n"
                            "     commit 或 upstream_path 對不上上游的樹。"
                            % (commit[:12], upath, root))
-        with io.open(os.path.join(ROOT, rel_path.replace("/", os.sep)), "rb") as f:
-            local = f.read()
+        if raw is None:
+            with io.open(os.path.join(ROOT, rel_path.replace("/", os.sep)), "rb") as f:
+                local = f.read()
+        else:
+            local = raw
         rl = _redlight()
         if rl.content_hash(out.stdout) == rl.content_hash(local):
             return True, None
@@ -1736,6 +1753,56 @@ def upstream_backed(rel_path):
                        "紅燈責任就回到本地。")
     except Exception as e:
         return False, "比對上游物件時出錯(%s)—— 問不到答案一律不豁免。" % e
+
+
+def staged_blob(rel_path):
+    """index 裡的那些位元組(`git show :<path>`)。取不到回 `None`。
+
+    **為什麼不是工作樹**:commit 要判的是**要進 commit 的那一份**。
+    工作樹與 index 可以不同(`git add` 之後又改了一次),而讀錯對象的失敗方式是
+    **靜默的** —— 兩者多數時候一樣,所以日常與測試都不會發現,只有在
+    「先 add 一份乾淨的、再把工作樹改壞」時才漏,而那正是要防的形狀
+    (票 07 / F-046 那條「判定對象」的判準換到提交時點)。
+
+    **取不到一律 `None`,呼叫端不得退回工作樹** —— 退回去就是判錯對象,
+    而且是往 fail-open 的方向錯。
+    """
+    try:
+        out = subprocess.run(["git", "-C", ROOT, "show", ":%s" % rel_path],
+                             capture_output=True)
+    except Exception:
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def upstream_identical_staged(rel_path):
+    """R2 的內容豁免判準(票 10):**staged 的位元組**與上游那個 commit 的同路徑
+    物件逐位元組相同嗎(行尾正規化後)。回 `(bool, 說明)`。
+
+    要解的事:同步要寫 `.claude/portable/*.py`、`.claude/hooks/*.py`,而那些在
+    目標 repo 是原始碼;下游停在前置站時 R2 擋 commit。紙上流程是「人手動把
+    `current_stage` 改成 implement,做完再改回去」——
+    **窗口期間 R2 對整個 repo 都是開的**,實測 57 分 38 秒、逾 1 小時 08 分各一次。
+    綁內容就沒有窗口,也就沒有「忘記關窗」這個失效模式。
+
+    釘的 commit 是 `.dev/provenance.jsonl` 裡**該 path 最後一筆**的 `upstream_commit`
+    —— 也就是 `status.py` 印的 waterline(票 100)。**不是上游 HEAD**:
+    HEAD 會動,而「碰巧等於上游 HEAD」的本地檔從來沒有被同步過(裁決 2026-09-07,甲案 A)。
+
+    **無法自我服務**:條件是「這個位元組序列等於上游那份」,agent 造不出一個
+    上游沒有的內容 —— 偽造得先改上游。
+    **已知邊界(原地登記,不擴大)**:指標檔 `~/.claude/upstream-roots.txt`
+    目前**不在** G1 保護清單裡,改一行就能換掉「上游是誰」。那是票 89 第二階段
+    (git 背書的錨)的守備範圍,見該票 §三(裁決 2026-09-07,乙案)。
+
+    **必須解包** —— 回的是 tuple,`(False, "…")` 在 `if` 裡**是真的**(票 13 C)。
+    """
+    raw = staged_blob(rel_path)
+    if raw is None:
+        return False, ("取不到 staged 內容(`git show :%s` 問不到)—— "
+                       "判不出來一律不豁免,而且不退回工作樹(那是另一份東西)。"
+                       % rel_path)
+    return upstream_backed(rel_path, raw=raw)
 
 
 def is_bare_package_marker(rel_path, content):
@@ -1963,9 +2030,27 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
         first_writable = next((i for i, s in enumerate(stages) if _declares_src_write(s)), len(ids))
         pre_implement = set(ids[:first_writable]) - {"idle"}
         if stage in pre_implement:
-            return ("[R2/commit] %s:current_stage='%s' 是前置站,卻要提交原始碼。\n"
-                    "     代表這些碼寫在該寫之前。回頭把流程走完,或由使用者調整 current_stage。"
-                    % (r, stage))
+            # 票 10 —— **內容豁免:綁內容,不綁站別。**
+            # staged 的位元組與上游 provenance 釘住的那個 commit 的同路徑物件
+            # 逐位元組相同(行尾正規化後)-> 放行,而且不必動 pipeline.json。
+            # **只在這裡**:前哨那一側不做(本刀範圍),而同步工具本來就不經前哨
+            # (`sync.py` 用 python io 直接寫檔,不走檔案工具)。
+            # **不 return** —— R3 在下方照常適用(理由同 ADR 0004:
+            # 寫測試不需要先解鎖任何東西)。
+            up_ok, up_why = upstream_identical_staged(r)
+            if up_ok:
+                note_exemption(exemptions, r,
+                               os.path.splitext(os.path.basename(r))[0], ticket,
+                               "docs/adr/F-0016-r2-content-bound-exemption.md",
+                               reason="upstream-identical")
+            else:
+                # **說出是哪一個前提沒滿足**,不是把人指向錯的方向(票 13):
+                # 缺指標檔要去修使用者層,缺 provenance 要去跑 sync,
+                # 漂移要去看內容 —— 三種修法完全不同,不能共用一句話。
+                return ("[R2/commit] %s:current_stage='%s' 是前置站,卻要提交原始碼。\n"
+                        "     代表這些碼寫在該寫之前。回頭把流程走完,"
+                        "或由使用者調整 current_stage。\n"
+                        "     上游內容豁免不適用:%s" % (r, stage, up_why))
         # 這裡不可 return —— 只有 R2 的問法要換,R3 在 commit 時同樣要驗,
         # 而且權威層更該驗。早一版寫成 return None,等於把 R3 在 commit 時整個跳過。
 
