@@ -3836,3 +3836,140 @@ class TestTicketNumberMatchingCarriesABoundary:
         mods, rel = gate.ticket_untested_modules("f", ticket_id)
         assert rel and rel.endswith(expect_file), (ticket_id, rel)
         assert mods == {expect_mod}, (ticket_id, mods)
+
+
+class TestInlineInterpretersAreUndecidable:
+    """票 112 —— 前哨對**內嵌直譯器**一律擋並出聲。
+
+    ## 要解的事
+
+    R7 的**偵測**這一側是白名單:`WRITE_CONSTRUCT` 列舉動詞、`>`、`<<`。
+    `python -c "open('pkg/evil.py','w').write('x')"` 三樣都不沾,
+    於是**第一關就 return None**,連目標抽取那一層都走不到(2026-09-07 實測放行)。
+
+    ## 判準:不可判定 ⇒ 擋,而且說「我判不出來」
+
+    **不解析引號裡的程式。** 一個字串參數裡的 Python / JS 是**資料不是 shell 語法**;
+    要判斷它會不會寫檔就得寫一個直譯器語意的分析器,而
+    **「半套的解析器比零涵蓋更危險」是 R7 自己的原則**。
+    所以本規則只問一件**字串答得出來**的事:
+    **這一段的指令位置是不是直譯器,而且它帶了「後面是程式碼」的旗標。**
+
+    ## 為什麼掛在 R7 底下(`[R7/內嵌直譯器]`)而不是新開一個 R 編號
+
+    `rule_codes()` 的 docstring 自己寫了判準:
+    「`[R2/commit]` 這種帶子類的歸到 R2 —— **子類是同一條規則的不同時點,不是新規則**」。
+    本條與 R7 是**同一個對象**(工具呼叫)、**同一個出口**(改用檔案工具 / 腳本檔)、
+    **同一層**(sentinel-only,ADR 0008)——
+    差別只在「R7 判『寫到哪』,本條判『判不判得出來』」,那是同一條規則的兩個問法。
+
+    另一半理由是機器面的:新開 `[R10]` 會讓 `rule_codes()` 多一條,而
+    `verify_gates.py` 要求**每一條規則都有一個淨室情境**;
+    R7 在那裡本來就是特例(前哨規則,commit 擋不到它)。
+    硬造一個新編號等於在淨室裡多一個必須特判的規則,
+    **而它與 R7 的特判理由一字不差** —— 那是同一件事的第二份定義(票 29 的形狀)。
+
+    ## 位置
+
+    依指令釘在 `tests/test_gate.py`。
+    (R7 的**行為層**正負控慣例在 `tests/test_bash_write.py`;本 class 判的是
+    `bash_write_violation` 的回傳,兩邊都跑得動,不搬既有那些。)
+    """
+
+    # ── ①② 正控:寫或讀都擋 —— 判準是「判不出來」,不是「有沒有在寫」──────
+
+    @pytest.mark.parametrize("cmd,flag", [
+        ('python -c "open(\'x\',\'w\').write(\'a\')"', "-c"),      # ① 會寫
+        ('python -c "print(1)"', "-c"),                            # ② 純讀,一樣擋
+        ('python3 -c "print(1)"', "-c"),
+        ('py -c "print(1)"', "-c"),
+        ('node -e "require(\'fs\').writeFileSync(\'x.py\',\'\')"', "-e"),
+        ('node --eval "1+1"', "--eval"),
+        ('perl -e "print 1"', "-e"),
+        ('ruby -e "puts 1"', "-e"),
+        ('powershell -Command "Get-Date"', "-Command"),
+        ('powershell -c "Get-Date"', "-c"),
+        ('pwsh -Command "Get-Date"', "-Command"),
+        ('pwsh -NoProfile -Command "Get-Date"', "-Command"),
+    ])
+    def test_an_inline_interpreter_is_blocked(self, cmd, flag):
+        """**每一個直譯器 + 程式碼旗標都要擋**,而且訊息要點名是哪一個旗標。
+
+        列舉來源是**各語言自己的旗標表**,不是「我想得到的」(F-083)——
+        想不到不等於不存在。
+        """
+        msg = gate.bash_write_violation(cmd)
+        assert msg and "R7" in msg, "內嵌直譯器沒被擋:%r -> %r" % (cmd, msg)
+        assert ".scratch" in msg, "訊息沒給出口(寫成 .scratch/ 腳本檔):%r" % msg
+        assert flag in msg, "訊息沒點名旗標 %r:%r" % (flag, msg)
+
+    def test_the_message_says_it_cannot_decide_not_that_you_wrote(self):
+        """訊息**不得**說「你寫了檔」—— 那是具體而錯誤的訊息,而人會相信它,
+        然後去找一個不存在的寫入(票 21 付過這個代價)。"""
+        msg = gate.bash_write_violation('python -c "print(1)"')
+        assert "判不出" in msg or "不可判定" in msg, msg
+
+    def test_an_env_assignment_prefix_does_not_launder_it(self):
+        """`PYTHONIOENCODING=utf-8 python -c …` —— 指令位置在環境變數指派之後。
+
+        少了這一格,**本規則自己有一條一行的繞道**,而那條繞道是這個 repo
+        日常在用的寫法(報告裡到處都是 `PYTHONIOENCODING=utf-8 python …`)。
+        """
+        msg = gate.bash_write_violation('PYTHONIOENCODING=utf-8 python -c "print(1)"')
+        assert msg and "R7" in msg, msg
+
+    def test_a_wrapper_does_not_launder_it(self):
+        """`sudo` / `env` / `xargs` 這些包裝器後面才是真正的指令 ——
+        `WRAPPERS` 已經為了同一個理由存在(`sudo rm -rf x` 的 rm 不在指令位置)。"""
+        msg = gate.bash_write_violation('sudo python -c "print(1)"')
+        assert msg and "R7" in msg, msg
+
+    def test_a_later_segment_is_checked_too(self):
+        """`&&` / `;` 之後那一段一樣要判 —— 逐段是 R7 既有的紀律。"""
+        msg = gate.bash_write_violation('git status && python -c "print(1)"')
+        assert msg and "R7" in msg, msg
+
+    # ── ③④⑤ 反控 ────────────────────────────────────────────────────────
+
+    @pytest.mark.parametrize("cmd", [
+        "python .scratch/probe.py",                 # ③ 出口要通
+        "python .scratch/f/prototype/x.py",
+        "python -m pytest -q",                      # ④ -m 不是內嵌碼
+        "python -m pip install -e .",
+        "python .claude/hooks/gate.py --pre-commit",
+        "python .claude/portable/verify_gates.py /tmp/x",
+        "git status",                               # ⑤ 一般指令不受影響
+        "ls -la",
+    ])
+    def test_the_exits_and_ordinary_commands_stay_open(self, cmd):
+        """**反控**:出口不通的話,這條規則就是一堵沒有門的牆 ——
+        而沒有門的規則會被整條關掉(F-031)。
+
+        `python -m pytest` 那一格特別要緊:**CI 與本機的每一次測試都走它**。
+        """
+        assert gate.bash_write_violation(cmd) is None, "誤擋:%r" % cmd
+
+    def test_the_existing_verb_rule_is_untouched(self):
+        """⑤ **反控**:R7 既有的動詞判定不受影響 —— 本票只加一條前置判定。"""
+        msg = gate.bash_write_violation("tee pkg/evil.py")
+        assert msg and "R7" in msg, msg
+        assert "內嵌直譯器" not in msg, "既有動詞路徑被新規則接管了:%r" % msg
+
+    def test_a_quoted_mention_in_another_command_is_not_a_hit(self):
+        """**反控**:比對錨在**指令位置**,不是「字串裡有沒有出現 python -c」。
+
+        少了這一格,`git commit -m "改了 python -c 那條規則"` 會被擋 ——
+        而那是本 repo 每天都在做的事(這張票的 commit 訊息自己就有那串字)。
+        """
+        cmd = 'git commit -m "fix: 前哨擋 python -c 內嵌直譯器"'
+        assert gate.bash_write_violation(cmd) is None, "誤擋:%r" % cmd
+
+    def test_the_rule_stays_inside_r7(self):
+        """規則代號不新增 —— `rule_codes()` 仍然只有既有那幾條。
+
+        新開一個編號會讓 `verify_gates` 要求一個新的淨室情境,
+        而那個情境的特判理由與 R7 一字不差(見本 class 的 docstring)。
+        """
+        codes = gate.rule_codes()
+        assert "R7" in codes
+        assert "R10" not in codes, "多了一個規則代號,淨室會要求它的情境:%s" % sorted(codes)

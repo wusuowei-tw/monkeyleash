@@ -433,6 +433,42 @@ PS_WRITE_LOWER = {c.lower() for c in PS_WRITE_CMDLETS}
 # 不在指令位置,運算元就掃不到。
 WRAPPERS = {"sudo", "env", "time", "nohup", "xargs", "command"}
 
+# ── 內嵌直譯器(票 112)──────────────────────────────────────────────────
+#
+# R7 的**偵測**這一側是白名單(`WRITE_CONSTRUCT` 列舉動詞、`>`、`<<`),
+# 而 `python -c "open('pkg/evil.py','w').write('x')"` 三樣都不沾 ——
+# 第一關就放行,連目標抽取都走不到(2026-09-07 實測)。
+#
+# **本條不解析引號裡的程式。** 一個字串參數裡的 Python / JS 是**資料不是 shell 語法**;
+# 要判斷它會不會寫檔就得寫一個直譯器語意的分析器,而
+# 「半套的解析器比零涵蓋更危險」是 R7 自己的原則(見本檔上方那段)。
+# 所以只問一件**字串答得出來**的事:
+# **指令位置是不是直譯器,而且它帶了「後面是程式碼」的旗標。**
+INLINE_INTERPRETERS = {"python", "python3", "py", "node", "perl", "ruby",
+                       "powershell", "pwsh"}
+
+# 「下一個運算元是程式碼」的旗標。**列舉來源是各語言自己的旗標表,不是憑印象**
+# (F-083:想不到不等於不存在)。
+INLINE_CODE_FLAGS = {
+    "python": ("-c",), "python3": ("-c",), "py": ("-c",),
+    "node": ("-e", "--eval", "-p", "--print"),
+    "perl": ("-e", "-E"),
+    "ruby": ("-e",),
+}
+
+# PowerShell 另外處理:**具名參數可以縮寫**(`-Comm`、`-Co`、`-C` 都是 `-Command`),
+# 所以比的是「這個參數是不是某個目標參數的前綴」,不是字面相等。
+# `-EncodedCommand` 一併收 —— 那一支吃 base64,**內容連人都看不出來**,
+# 漏掉它等於留一條看起來最無害的路。
+_PS_CODE_PARAMS = ("command", "encodedcommand")
+
+# **已宣告的守備範圍**(不是「檢查過沒事」):
+#   - 組合短旗標(`sh -c` 之外的 `-xc` 這類)不認 —— 各語言規則不同,猜會錯
+#   - `sh` / `bash` / `cmd` 的 `-c` **不在此列**:那一層是 shell 自己,
+#     切段與動詞判定照舊適用,收進來會把每一條 `bash -c "…"` 變成不可判定
+#   - 從 stdin 餵程式(`python < x.py`、`echo … | python`)不認 ——
+#     那是重導向與管線,由 R7 既有的路徑判
+
 # `>` / `>>` / `2>` 後面那一段就是重導向目標。`2>&1` 不算(fd 重導向,不落地)。
 REDIRECT_RE = re.compile(r"(?<!\d)(?<!&)>>?\s*([^\s;&|>]+)")
 
@@ -886,11 +922,86 @@ def _r7_head(bad, mixed, offenders, cmd):
     return head
 
 
+def _inline_code_flag(name, tok):
+    """`tok` 是不是 `name` 這個直譯器的「後面是程式碼」旗標。"""
+    low = tok.lower()
+    if name in ("powershell", "pwsh"):
+        bare = low.lstrip("-")
+        return bool(bare) and any(p.startswith(bare) for p in _PS_CODE_PARAMS)
+    return low in INLINE_CODE_FLAGS.get(name, ())
+
+
+def inline_interpreter_hit(command):
+    """指令裡有沒有「內嵌直譯器」。回 `(直譯器名, 旗標原文)` 或 `(None, None)`。
+
+    **錨在指令位置,不是「字串裡有沒有出現 python -c」**(F-051 邊界家族):
+    `git commit -m "改了 python -c 那條規則"` 的指令位置是 `git`,不算 ——
+    否則本 repo 每天都在做的事會被擋,而誤擋的規則會被整條關掉(F-031)。
+
+    指令位置要跳過兩種前置 token,**兩種都是實際在用的寫法**:
+      環境變數指派  `PYTHONIOENCODING=utf-8 python -c …`(本 repo 的報告裡到處都是)
+      包裝器        `sudo python -c …`(`WRAPPERS` 為了同一個理由早就存在)
+    少了任一種,本規則自帶一條一行的繞道。
+
+    逐段判(`SEGMENT_SPLIT_RE`,與許可判定同一份切段來源,票 76 A2)——
+    `git status && python -c "…"` 的第二段一樣要判。
+    """
+    for seg in SEGMENT_SPLIT_RE.split(command or ""):
+        toks = seg.split()
+        i = 0
+        while i < len(toks) and (
+                toks[i].lower() in WRAPPERS
+                or ("=" in toks[i] and not toks[i].startswith("-"))):
+            i += 1
+        if i >= len(toks):
+            continue
+        name = os.path.basename(
+            toks[i].strip('"').strip("'").replace("\\", "/")).lower()
+        if name.endswith(".exe"):
+            name = name[:-len(".exe")]
+        if name not in INLINE_INTERPRETERS:
+            continue
+        for tok in toks[i + 1:]:
+            if tok.startswith("-") and _inline_code_flag(name, tok):
+                return name, tok
+    return None, None
+
+
+def inline_interpreter_violation(command):
+    """R7 的內嵌直譯器分支(票 112)。回 None(放行)或訊息。
+
+    **訊息不得說「你寫了檔」** —— 那是具體而錯誤的訊息,而人會相信它然後去查
+    一個不存在的寫入(票 21 付過這個代價)。要說的是**我判不出來**。
+    """
+    name, flag = inline_interpreter_hit(command)
+    if not name:
+        return None
+    return (
+        "[R7/內嵌直譯器] `%s %s` 後面是一段程式,而**那段程式會不會寫檔,"
+        "從指令字串判不出來**。\n"
+        "     不可判定就擋,這是 R7 既有的姿態往前一步:\n"
+        "     R7 問『寫到哪』,抽不出來就 refuse;這一格連『有沒有在寫』都答不出來。\n"
+        "     **本規則不解析引號裡的程式** —— 那是資料不是 shell 語法,\n"
+        "     要判它得寫一個直譯器語意的分析器,而半套的解析器比零涵蓋更危險。\n"
+        "     出口:用 Write 把那段程式寫成 `.scratch/<feature>/<名字>.py`,\n"
+        "     再 `python .scratch/<feature>/<名字>.py` 跑它 ——\n"
+        "     內文不進指令字串,就沒有東西需要被判定,而且 R1–R6 全部適用。\n"
+        "     (唯讀診斷也一樣要走這條:判準是『判不判得出來』,不是『有沒有在寫』。)"
+        % (name, flag))
+
+
 def bash_write_violation(command):
     """R7:這個 Bash 指令會不會寫入 repo。回 None(放行)或訊息。"""
     if not command or not command.strip():
         return None
     cmd = command.strip()
+
+    # **內嵌直譯器先判**(票 112):放在許可清單之前,因為許可是**指令前綴**的性質,
+    # 而內嵌程式碼的不可判定性不會因為前綴被許可就消失 ——
+    # 一個許可前綴不得成為夾帶任意程式碼的洗白管道。
+    inline = inline_interpreter_violation(cmd)
+    if inline:
+        return inline
 
     # 逐段比對:`a && b` 的每一段都要在許可清單裡才算數,
     # 否則 `git status && rm -rf x` 會整條被許可。
