@@ -1,6 +1,7 @@
 # 111 — R7 邊界族第四次:repo 內 `tmp/` / `scratchpad/` 被當成系統暫存(併 A-3 票號前綴)
 
-**狀態**:**candidate**(立案,不動工)
+**狀態**:**done**(2026-09-07)—— 紅燈 5 紅 / 14 綠 → 全綠 19;全套 **1439 passed, 3 skipped, 3 xfailed**。
+~~**candidate**(立案,不動工)~~(`F-036` 保留舊文)
 **立案**:2026-09-07,第六站(arch)第二次診斷 → A 桶 A-1 + A-3
 **來源**:`docs/audits/2026-09-07-arch-round-2.md`(A-1 / A-3);同族:F-051 邊界家族、F-117
 **站別**:立案時 `arch`;動工前由裁決者改 `current_stage` 與 `ticket_id`
@@ -157,3 +158,70 @@ mods, rel = gate.ticket_untested_modules("framework-updates", "1")
 - A-1:下游的 repo 內**很可能真的有 `tmp/`**(建置暫存、測試輸出),
   而那正好是這一格會誤放行的地方。
 - A-3:下游的票號慣例未必補零,`1` / `0` 這種短票號在下游更容易出現。
+
+## 五、落地(2026-09-07)
+
+### 實作(`gate.py`,三處 + 一處)
+
+| 位置 | 改動 |
+|---|---|
+| `BASH_ALLOWED_TARGETS` 的三行理由 | 「在 repo 之外」改成程式真的驗的那句話:「**只在解析後落在 repo 之外時適用**」 |
+| 新 `OUTSIDE_REPO_ONLY = ("/dev/null", "/tmp/", "scratchpad")` | 把「這一項是 repo 外才成立」從**理由欄的措辭**變成**程式讀得到的東西**(F-086:註解不是機制) |
+| 新 `_resolves_inside_repo(tok)` | `realpath` 後 `normcase` 比對,**前綴帶 `os.sep` 邊界**;相對路徑以 repo 根為基準;例外一律回 `True`(= 更嚴) |
+| `_target_allowed` | `if inside and t in OUTSIDE_REPO_ONLY: continue` —— **只加這一個方向**,repo 外的判定一個字都沒動 |
+| `ticket_untested_modules` | `startswith(str(ticket_id) + "-")` |
+
+### 實測(同一支唯讀探針,修前 / 修後)
+
+```
+                              修前     修後
+rm -rf tmp/                   放行  ->  擋      ①
+tee tmp/x.py                  放行  ->  擋
+tee <repo>/scratchpad/x.py    放行  ->  擋      ②
+tee a/b/scratchpad/x.py       放行  ->  擋
+tee /tmp/x.py                 放行  ->  放行    ③ 反控
+tee <系統暫存>/…/scratchpad/x  放行  ->  放行    ③ 反控
+tee <repo 外>/…/tmp/x.py       放行  ->  放行    ④ 反控
+tee .dev/notes.jsonl          放行  ->  放行    反控
+tee build/out.tmp             放行  ->  放行    反控
+tee pkg/evil.py               擋    ->  擋      反控
+
+ticket_id="1"    -> docs/tickets/framework-updates/10-….md  ->  None      正控
+ticket_id="0"    -> docs/tickets/framework-updates/01-….md  ->  None      正控
+ticket_id="11"   -> 11-….md                                 ->  11-….md   反控
+ticket_id="111"  -> 111-….md                                ->  111-….md  反控
+```
+
+### ⚠ 驗收第 5 格的**實測更正**(照實記)
+
+票面原本把「真正的系統暫存(`tempfile.gettempdir()` 之下、`%TEMP%`、`/tmp`)→ 放行」
+整格寫成**反控**。**實測不是這樣**:
+
+| 目標 | 修前 | 修後 |
+|---|---|---|
+| `/tmp/x.py`(POSIX) | 放行 | 放行 |
+| `<gettempdir()>/x.py`(Windows,`…\AppData\Local\Temp`) | **擋** | **擋** |
+| `%TEMP%\x.py` / `$env:TEMP\x.py` | **擋** | **擋** |
+
+Windows 的真實暫存目錄**在本票之前就已經被擋**(許可項是字面的 `/tmp/`,
+而 `Temp` ≠ `tmp`,比對區分大小寫);環境變數則是「**答案不在字串裡**」,
+R7 依設計不展開它。
+
+**本票不改這一格,也沒有讓它變糟。** 要不要放行 Windows 的系統暫存是**另一個判準**
+(需要一個「這個路徑是不是本機系統暫存」的判定,而那要引入 `tempfile.gettempdir()`
+當作比對基準 —— 那是一個新的信任面)。**登記在此,不夾帶。**
+
+> 這一格是「反控必須先量過才知道它是不是反控」的標本:
+> 一條寫成「必須維持放行」的反控,如果它**現在根本不放行**,
+> 那它就不是反控,是一條偷渡進來的新需求 —— 而它會在紅燈時被當成「本票的洞」。
+
+### 測試
+
+`tests/test_gate.py`:
+
+- `TestUnallowedWriteTargets` 新增 **9 條**(①②③④ + 4 條 repo 內許可反控 + 1 條分類完整性)
+- `TestTicketNumberMatchingCarriesABoundary` 新增 **5 條**(2 正控 + 3 反控),
+  用自建的 tmp git repo(`01-a.md` / `10-b.md` / `11-c.md` / `111-d.md`),不依賴實際票樹
+
+`test_every_allowed_target_is_classified_inside_or_outside` 是**機制那一條**:
+許可表新增一項而忘了分類,它會紅 —— 否則 `OUTSIDE_REPO_ONLY` 就是第二份手工名單。

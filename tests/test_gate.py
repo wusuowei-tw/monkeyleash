@@ -598,6 +598,90 @@ class TestUnallowedWriteTargets:
     def test_an_allowed_operand_is_not_listed(self):
         assert gate.unallowed_write_targets("rm -rf /tmp/scratch") == []
 
+    # ── 票 111(A-1)—— 暫存許可止於 repo 邊界 ────────────────────────────
+    #
+    # `BASH_ALLOWED_TARGETS` 的 `/tmp/` 與 `scratchpad` 兩行,理由欄逐字寫著
+    # 「**在 repo 之外**」,而比對只問「路徑成分裡有沒有這個名字」——
+    # 於是 repo 內的 `tmp/` 與 `scratchpad/` 一起被當成系統暫存。
+    #
+    # 票 76 A3 補的是**成分邊界**,沒有補**根錨定**;而 `scanner.py` 的正典
+    # 明寫「**兩種錨定,不要合成一種**」,`_target_allowed` 的 docstring
+    # **引用了那一段**而只實作了其中一種 —— 引用一份正典不會讓你實作它(F-117)。
+
+    def test_a_repo_local_tmp_is_not_the_system_temp(self):
+        """① 正控:`rm -rf tmp/` 的目標解析後落在 repo 裡,**不是**系統暫存。
+
+        這一格是本票最貴的一格:它刪的是 repo 內的一個目錄,
+        而 R7 現行放行(2026-09-07 實測)。
+        """
+        assert gate.unallowed_write_targets("rm -rf tmp/") == ["tmp/"], \
+            gate.unallowed_write_targets("rm -rf tmp/")
+        msg = gate.bash_write_violation("rm -rf tmp/")
+        assert msg and "R7" in msg, "repo 內的 tmp/ 被當成系統暫存放行了:%r" % msg
+
+    def test_a_repo_local_scratchpad_is_not_the_session_scratchpad(self):
+        """② 正控:絕對路徑指向 `<repo>/scratchpad/`,以及任意深度的 `scratchpad`。
+
+        `scratchpad` 那一行沒有斜線,所以它是**任意深度**比對 ——
+        repo 內任何一層叫 `scratchpad` 的目錄都吃得到那個許可。
+        """
+        abs_in_repo = str(pathlib.Path(gate.ROOT) / "scratchpad" / "x.py").replace("\\", "/")
+        for cmd in ("tee %s" % abs_in_repo, "tee a/b/scratchpad/x.py"):
+            msg = gate.bash_write_violation(cmd)
+            assert msg and "R7" in msg, "repo 內的 scratchpad 被放行了:%r -> %r" % (cmd, msg)
+
+    def test_the_real_outside_temp_is_still_allowed(self, tmp_path):
+        """③ **反控** —— 真正在 repo 之外的暫存必須維持放行。
+
+        誤擋的方向會讓規則被關掉(F-031),而這一格正是 agent 每天在用的那條路。
+
+        ⚠ **兩條斷言都刻意與平台無關**:
+        `tempfile.gettempdir()` 在 Linux 是 `/tmp`(放行)、在 Windows 是
+        `…\\AppData\\Local\\Temp`(**現行就擋**,因為 `Temp` 不等於 `tmp`)——
+        直接斷言它會在兩個平台得到相反的答案。
+        **那個 Windows 現況不是本票造成的,本票也不改它**(要不要放行是另一個判準)。
+        """
+        outside_scratch = str(tmp_path / "claude" / "sess" / "scratchpad" / "x.py").replace("\\", "/")
+        assert gate.bash_write_violation("tee /tmp/x.py") is None, "POSIX /tmp/ 被誤擋"
+        assert gate.bash_write_violation("tee %s" % outside_scratch) is None, \
+            "repo 外的 session scratchpad 被誤擋:%s" % outside_scratch
+
+    def test_an_outside_repo_directory_named_tmp_keeps_its_old_verdict(self, tmp_path):
+        """④ **反控**:repo 之外一個恰好叫 `tmp` 的目錄,**依原本 R7 規則判**。
+
+        現行放行(任意深度命中 `/tmp/`),而本票**不動 repo 之外的判定** ——
+        本票加的條件只有一個方向:「解析後在 repo 內 ⇒ 不算系統暫存」。
+        """
+        outside_tmp = str(tmp_path / "not-the-repo" / "tmp" / "x.py").replace("\\", "/")
+        assert gate.bash_write_violation("tee %s" % outside_tmp) is None, \
+            "repo 外的 tmp 判定被本票改到了:%s" % outside_tmp
+
+    @pytest.mark.parametrize("cmd", [
+        "tee .dev/notes.jsonl",
+        "tee build/out.tmp",
+        "tee __pycache__/x.pyc",
+        "tee .cache/x.json",
+    ])
+    def test_the_in_repo_allowances_are_untouched(self, cmd):
+        """**反控**:`BASH_ALLOWED_TARGETS` 裡本來就是**給 repo 內用**的那幾項不受影響。
+
+        少了這一組,「在 repo 內 ⇒ 不許可」會被寫成一條把整份許可表關掉的規則,
+        而正控會全綠。
+        """
+        assert gate.bash_write_violation(cmd) is None, "誤擋:%r" % cmd
+
+    def test_every_allowed_target_is_classified_inside_or_outside(self):
+        """**機制,不是紀律**(F-148):許可表新增一項而忘了分類 ⇒ 這條紅。
+
+        分類是「這一項是給 repo 之外用的,還是 repo 之內」。沒有第三種:
+        少了這條測試,`OUTSIDE_REPO_ONLY` 就是第二份手工維護的名單,
+        而兩份手工名單必分岔(票 29 已經記過同型)。
+        """
+        keys = set(gate.BASH_ALLOWED_TARGETS)
+        outside = set(gate.OUTSIDE_REPO_ONLY)
+        assert outside <= keys, "OUTSIDE_REPO_ONLY 有不在許可表裡的項目:%s" % (outside - keys)
+        assert gate.OUTSIDE_REPO_ONLY, "分類表是空的 —— 那等於這條規則沒有生效"
+
 
 class TestStateFileClassification:
     """票 04 — 狀態檔分類。判準是**這個檔案壞掉或消失時,正確行為是什麼**。
@@ -3681,3 +3765,74 @@ class TestR2AcceptsAnUpstreamIdenticalStagedFile:
         self._stage(down, UP_SRC + "# drift\n", worktree=UP_SRC)
         msg = gate.check("pkg/thing.py", None, at_commit=True)
         assert msg and "[R2" in msg, ("方向二", msg)
+
+
+class TestTicketNumberMatchingCarriesABoundary:
+    """票 77(由票 111 落地)—— 票號比對不帶邊界:別張票的宣告豁免得了當前票。
+
+    ```
+    gate.py  if not name.startswith(str(ticket_id)):
+    ```
+
+    `ticket_id="1"` 命中 `10-*.md`;`"0"` 命中 `01-*.md`。命中之後
+    `committed_declaration()` 讀的是**那張票**的 `**Untested by decision:**`,
+    於是**別張票裁過的模組**豁免掉當前票的 R3。
+
+    **同一件事有三個實作,而修好的是另外兩個**:`status.py` 與 `mcp_server.py`
+    都已改成 `str(票號) + "-"`,`status.py` 的 docstring 還逐字寫著
+    「`gate.py` 有語意相同的一份,**本票不修它**」—— F-085 的知情版
+    (修好一個命中之後沒找同類),而沒修的那一份在**權威層**。
+
+    ⚠ **補零不在這一層**(照 `status.py` 的同一條判準):`"1"` 回 `None` 是
+    **正確行為**,不是要靠補零去救 —— 下游 repo 不見得補零到兩位,
+    把命名慣例埋進判定會在別的 repo 出錯。
+    """
+
+    @pytest.fixture()
+    def repo(self, tmp_path, monkeypatch):
+        """一個真的 git repo,票**已 commit**(判定綁 HEAD,票 24)。"""
+        d = tmp_path / "docs" / "tickets" / "f"
+        d.mkdir(parents=True)
+        for name, mod in (("01-a.md", "mod01"), ("10-b.md", "mod10"),
+                          ("11-c.md", "mod11"), ("111-d.md", "mod111")):
+            io.open(d / name, "w", encoding="utf-8", newline="\n").write(
+                "# t\n\n**Untested by decision:** %s\n" % mod)
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            subprocess.run(["git"] + c.split(), cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "add", "-A"], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "t"], cwd=str(tmp_path),
+                       capture_output=True)
+        monkeypatch.setattr(gate, "ROOT", str(tmp_path))
+        monkeypatch.chdir(tmp_path)
+        return tmp_path
+
+    # ── 正控(兩條,現行皆紅)────────────────────────────────────────────
+
+    @pytest.mark.parametrize("ticket_id,wrong", [
+        ("1", "10-b.md"),     # 「1」不得命中 10 / 11 / 111
+        ("0", "01-a.md"),     # 「0」不得命中 01
+    ])
+    def test_a_number_never_matches_a_longer_one(self, repo, ticket_id, wrong):
+        """**沒有 `<號>-` 開頭的票 = 沒有那張票**,不是「拿最像的那一張」。
+
+        回錯一份票比回不出來糟得多:回不出來的人會再查,
+        拿到一份看起來對的票的人不會(`status.py` 的同一句話)。
+        """
+        mods, rel = gate.ticket_untested_modules("f", ticket_id)
+        assert rel is None, "票號 %r 命中了 %s(應為 None)" % (ticket_id, rel)
+        assert mods == set(), mods
+
+    # ── 反控(現行即綠,修完必須仍綠)──────────────────────────────────
+
+    @pytest.mark.parametrize("ticket_id,expect_file,expect_mod", [
+        ("11", "11-c.md", "mod11"),
+        ("111", "111-d.md", "mod111"),
+        ("01", "01-a.md", "mod01"),
+    ])
+    def test_an_exact_number_still_finds_its_own_ticket(self, repo, ticket_id,
+                                                        expect_file, expect_mod):
+        """**反控**:收窄的失敗方向是「誰也找不到自己的票」,而那會讓
+        每一個合法的 `Untested by decision` 宣告失效 —— 擋住做對事的人。"""
+        mods, rel = gate.ticket_untested_modules("f", ticket_id)
+        assert rel and rel.endswith(expect_file), (ticket_id, rel)
+        assert mods == {expect_mod}, (ticket_id, mods)

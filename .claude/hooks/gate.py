@@ -395,14 +395,29 @@ BASH_ALLOWED_CMDS = {
 }
 
 BASH_ALLOWED_TARGETS = {
-    "/dev/null": "丟棄輸出,不產生檔案",
-    "/tmp/": "系統暫存,在 repo 之外",
-    "scratchpad": "工作階段暫存目錄,在 repo 之外",
+    "/dev/null": "丟棄輸出,不產生檔案 —— 只在解析後落在 repo 之外時適用",
+    "/tmp/": "系統暫存 —— 只在解析後落在 repo 之外時適用",
+    "scratchpad": "工作階段暫存目錄 —— 只在解析後落在 repo 之外時適用",
     ".dev/": "流程證據,由機制自己追加(append-only),不是人在編輯",
     "__pycache__": "位元碼,由直譯器產生",
     ".cache/": "快取,可重算",
     "build/": "建置產出物,不是來源",
 }
+
+# 上表哪幾項是**「在 repo 之外」才成立**的許可(票 111)。
+#
+# 原本這件事只寫在理由欄的措辭裡(「在 repo 之外」),而比對**完全不驗它** ——
+# 只問「路徑成分裡有沒有這個名字」,於是 repo 內的 `tmp/` 與 `scratchpad/`
+# 一起被當成系統暫存,`rm -rf tmp/` 整條放行(2026-09-07 實測)。
+# **註解不是機制**(F-086):要讓那句話生效,它得是程式讀得到的東西。
+#
+# 其餘各項(`.dev/`、`__pycache__`、`.cache/`、`build/`)**本來就是給 repo 內用的**,
+# 不在此列 —— 把它們一起收進來等於把整份許可表關掉。
+#
+# **分類必須是全的**:新增一項而忘了分類,由
+# `TestUnallowedWriteTargets::test_every_allowed_target_is_classified_inside_or_outside`
+# 擋下。少了那條,這裡就是第二份手工維護的名單,而兩份手工名單必分岔(票 29)。
+OUTSIDE_REPO_ONLY = ("/dev/null", "/tmp/", "scratchpad")
 
 
 # 會寫檔的指令,**由上面那份單一來源長出來**,寫成集合是為了逐 token 比對 ——
@@ -533,6 +548,35 @@ def _mask_quoted(seg):
     return "".join(out)
 
 
+def _resolves_inside_repo(tok):
+    """這個目標字串解析之後,落在這個 repo 裡面嗎。**判不出來一律回 True。**
+
+    **相對路徑以 repo 根為基準** —— 那是 Bash 指令的 cwd 在絕大多數情況下的位置,
+    而**真正的 cwd 不在字串裡**(`gate.py` 開頭那段「答案不在字串裡的東西,
+    再多解析也拿不到」)。所以這裡不猜 cwd,只回答一個更窄的問題:
+    「把它當成 repo 內的相對路徑來看,它落在 repo 裡嗎」。
+
+    **比對前先 `realpath`**:`tmp/../pkg/x.py` 與 `pkg/x.py` 是同一個地方,
+    而字串比對看不出來(`is_source_path` 的票 82 是同一課)。
+
+    **前綴要帶邊界**:比的是 `root + os.sep`,不是裸 `startswith(root)` ——
+    否則 `C:\\projects\\agent-gates-2` 會被判成在 `C:\\projects\\agent-gates` 裡面
+    (F-051 邊界家族;`g1_guard.py` 的 docstring 早就寫過同一句)。
+
+    **`normcase` 兩邊都套**:Windows 的路徑不分大小寫,`C:\\PROJECTS\\…` 與
+    `C:\\projects\\…` 是同一個地方;POSIX 上 `normcase` 是恆等函式,不影響。
+
+    **fail-closed 方向**:`realpath` 丟例外(路徑裡有非法字元、權限問題…)時回
+    `True` = **當作在 repo 內** = 那幾項「repo 外才成立」的許可不適用 = 更嚴。
+    """
+    try:
+        root = os.path.normcase(os.path.realpath(ROOT))
+        p = os.path.normcase(os.path.realpath(os.path.join(ROOT, tok)))
+    except Exception:
+        return True
+    return p == root or p.startswith(root + os.sep)
+
+
 def _target_allowed(token):
     """這個寫入目標在不在許可清單裡。**路徑成分比對,不是子字串**(票 76 A3)。
 
@@ -544,10 +588,21 @@ def _target_allowed(token):
     以 `/` 結尾的清單項(目錄)**不吃尾端補位**:`.dev/` 要求斜線真的出現在
     目標字串裡 —— 否則 `rm -rf .dev` 這種**刪目錄本體**的指令會因為補位
     變成許可,而舊行為擋它(證據目錄不是「`.dev/` 底下的流量」)。
+
+    **兩種錨定,不要合成一種**(票 111,補上票 76 A3 沒補的那一半):
+    成分邊界回答「`mybuild` 是不是 `build`」,**根錨定**回答
+    「這個 `tmp` 是系統的那個,還是 repo 裡的那個」——
+    上面那段 docstring 從票 76 起就引用了 `scanner.py` 的兩種錨定,而只實作了前者。
+    **引用一份正典不會讓你實作它。**
     """
     tok = token.strip().strip('"').strip("'").replace("\\", "/")
     haystack = "/" + tok.lstrip("/")
+    inside = _resolves_inside_repo(tok)
     for t in BASH_ALLOWED_TARGETS:
+        # 「在 repo 之外才成立」的許可,對解析後落在 repo 內的目標不適用。
+        # 方向只有這一個:**repo 之外的判定一個字都沒動**(票 111 反控 ④)。
+        if inside and t in OUTSIDE_REPO_ONLY:
+            continue
         needle = "/" + t.strip("/") + "/"
         if t.endswith("/"):
             if needle in haystack:
@@ -1276,7 +1331,16 @@ def ticket_untested_modules(feature, ticket_id):
         if not os.path.isdir(abs_d):
             continue
         for name in sorted(os.listdir(abs_d)):
-            if not name.startswith(str(ticket_id)):
+            # **前綴要帶邊界**(票 77,由票 111 落地):比的是 `<號>-`,不是 `<號>`。
+            # 裸前綴下 `ticket_id="1"` 命中 `10-*.md`、`"0"` 命中 `01-*.md`,
+            # 於是**別張票**已 commit 的 `Untested by decision` 宣告豁免掉當前票的 R3。
+            # `status.py` 與 `mcp_server.py` 的同一件事早就修成這樣,而這一份
+            # ——**權威層那一份**—— 被留在原地,還被寫進另一支的 docstring 當成知情
+            # (F-085 的知情版:修好一個命中之後沒找同類)。
+            #
+            # ⚠ **補零不在這一層**:`"1"` 回 None 是正確行為。補零是呼叫者對
+            # 本 repo 命名慣例的知識,下游不見得補零,埋進來會在別的 repo 出錯。
+            if not name.startswith(str(ticket_id) + "-"):
                 continue
             rel = "%s/%s" % (d, name)
             mods = committed_declaration(rel)
