@@ -39,6 +39,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -375,6 +376,97 @@ class TestTheBareAuthorityLabelIsGone:
         assert bare == [], u"裸標籤 authority: 還在:%s" % bare
         assert _value_of(out, u"authority ledger") is not None, out
         assert _value_of(out, u"authority config") is not None, out
+
+
+class TestTheExemptionsLineGivesEveryRecordAHome:
+    """票 116 B-7 —— `exemptions` 那一行要**逐桶**,而留白要有自己的桶。
+
+    ## 修之前是什麼樣子
+
+    `status.py:613` 只問一件事:`r.get("outcome") == "blocked"`。
+    於是輸出是「總 N 筆;outcome=blocked M 筆」——
+    **而「沒有 `outcome` 這個鍵」的那些既不在 blocked 也不在 granted**,
+    報表上**沒有它們的位置**。
+
+    實測(2026-09-08,上游帳本 223 筆):`granted` 182 / `blocked` 1 /
+    **沒有這個鍵 40**。那 40 筆是票 08 之前的 5 鍵舊格式。
+
+    `.get()` 讓「**沒有這個鍵**」與「**值不是 blocked**」在輸出上長得一模一樣。
+
+    > **留白要有自己的桶,不能併進蓋章。**(票 67 那 72 筆的同一句)
+
+    ## ⚠ 這一行在本票之前**一個測試都沒有**
+
+    2026-09-08 全庫查過:沒有任何測試引用 `exemptions` 這個 label。
+    所以本組是它的第一份覆蓋 —— **而那也是它能默默錯這麼久的原因**。
+    """
+
+    GRANTED = {"ts": u"2026-09-01T00:00:00+00:00", "file": "a.py",
+               "at_commit": False, "outcome": "granted", "ticket": "01"}
+    BLOCKED = {"ts": u"2026-09-01T00:01:00+00:00", "file": "b.py",
+               "at_commit": False, "outcome": "blocked", "ticket": "01"}
+    NO_KEY = {"file": "c.py", "module": "c", "ticket": "01",
+              "declared_in": "0004", "reason": "gate-self-modification"}
+
+    def _val(self, tmp_path, recs):
+        return _value_of(render(_make_root(tmp_path, with_exemptions=recs)),
+                         u"exemptions")
+
+    def test_the_buckets_add_up_to_the_total(self, tmp_path):
+        """**紅燈甲**:各桶相加 == 總筆數。
+
+        相加對不上就代表有一群紀錄無家可歸,**而它們會靜靜消失在某個 `else` 裡**。
+        """
+        val = self._val(tmp_path, [self.GRANTED, self.GRANTED,
+                                   self.BLOCKED, self.NO_KEY])
+        nums = [int(x) for x in re.findall(r"(\d+) 筆", val)]
+        assert nums, u"那一行印不出任何筆數:%r" % val
+        total = nums[0]
+        assert total == 4, u"總筆數報錯:%r" % val
+        assert sum(nums[1:]) == total, (
+            u"各桶相加 %d != 總筆數 %d —— 有紀錄無家可歸:%r"
+            % (sum(nums[1:]), total, val))
+
+    def test_a_record_without_the_outcome_key_has_its_own_bucket(self, tmp_path):
+        """**紅燈甲後半**:沒有 `outcome` 鍵的那些**不是** granted 也**不是** blocked。
+
+        修之前它們被 `.get()` 靜默併進「不是 blocked」那一邊。
+        """
+        val = self._val(tmp_path, [self.GRANTED, self.NO_KEY])
+        assert u"未記錄" in val, (
+            u"沒有 outcome 鍵的紀錄沒有自己的桶 —— 留白被併進蓋章了:%r" % val)
+        m = re.search(r"granted (\d+) 筆", val)
+        assert m and int(m.group(1)) == 1, (
+            u"granted 把沒有 outcome 鍵的那一筆也算進去了:%r" % val)
+
+    def test_an_out_of_range_outcome_is_not_silently_bucketed(self, tmp_path):
+        """**紅燈乙(反控,`F-087`)**:值域外的值不得被靜默歸進任何一桶。
+
+        `outcome` 的值域從產生端看是**封閉**的 ——
+        `gate.py:2079` 是唯一的寫入點,而它是一個三元式:
+
+            "outcome": "blocked" if verdict else "granted",
+
+        ⇒ 只有兩種值。**而封閉是今天的性質,不是永遠的保證。**
+        這一條釘住「哪天它不再封閉時會有東西說話」:
+        多一種值就要多一個桶,而不是讓它靜靜落進既有的某一格。
+        """
+        weird = dict(self.GRANTED)
+        weird["outcome"] = "surprise"
+        val = self._val(tmp_path, [self.GRANTED, weird])
+        nums = [int(x) for x in re.findall(r"(\d+) 筆", val)]
+        assert sum(nums[1:]) == nums[0], (
+            u"值域外的 outcome 讓各桶相加對不上總數 —— 它被靜默丟掉了:%r" % val)
+        assert u"其他" in val, (
+            u"值域外的 outcome 沒有落進「其他」桶 —— 那一天沒有東西會說話:%r" % val)
+
+    def test_a_missing_ledger_is_still_unrecorded(self, tmp_path):
+        """**負控**:帳本不存在時仍然是「未記錄」,不是「0 筆」。
+
+        少了它,一支「一律印 0 筆」的實作會讓上面幾條過 ——
+        而**「沒有帳本」與「帳本是空的」是兩件事**。
+        """
+        assert self._val(tmp_path, None) == UNRECORDED
 
 
 class TestOutpostHasALedgerLineToo:

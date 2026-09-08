@@ -142,6 +142,44 @@ def _git(root, args):
     return out.stdout.decode("utf-8", "replace").strip()
 
 
+def _exemption_buckets(recs):
+    """豁免帳本的 `outcome` **逐桶**。回一行字串。
+
+    ## 為什麼不是「總 N 筆;outcome=blocked M 筆」(票 116 B-7)
+
+    舊寫法只問 `r.get("outcome") == "blocked"`,於是
+    **「沒有 `outcome` 這個鍵」與「值不是 blocked」在輸出上長得一模一樣**。
+    實測(2026-09-08,上游帳本 223 筆):`granted` 182 / `blocked` 1 /
+    **沒有這個鍵 40**(票 08 之前的 5 鍵舊格式)——
+    那 40 筆既不在 blocked 也不在 granted,**報表上沒有它們的位置**。
+
+    > **留白要有自己的桶,不能併進蓋章。**
+    > (票 67 那 72 筆的同一句:全部標成「無法判定」才是誠實的,
+    > 併進「可轉正」會換來一個由留白換來的綠燈。)
+
+    ## 值域是封閉的,所以**枚舉**;而「其他」桶守著它哪天不封閉
+
+    `outcome` 的唯一寫入點是 `gate.py` 的
+    `"outcome": "blocked" if verdict else "granted"` —— 一個三元式,
+    **只有兩種值**(`F-087`:封閉且可窮舉時,枚舉勝過比對)。
+
+    但**封閉是今天的性質,不是永遠的保證**。所以留一個「其他」桶:
+    多一種值時它會出現在輸出上,而不是靜靜落進既有的某一格。
+    **各桶相加恆等於總筆數** —— 那是「沒有紀錄無家可歸」的機器保證。
+    """
+    granted = len([r for r in recs if r.get("outcome") == "granted"])
+    blocked = len([r for r in recs if r.get("outcome") == "blocked"])
+    missing = len([r for r in recs if "outcome" not in r])
+    other = len(recs) - granted - blocked - missing
+    last = recs[-1] if recs else None
+    val = u"總 %d 筆;granted %d 筆;blocked %d 筆;%s(無此欄)%d 筆" % (
+        len(recs), granted, blocked, UNRECORDED, missing)
+    if other:
+        val += u";其他 %d 筆" % other
+    val += u";最後一筆 %s" % (_field(last, "ts") if last else UNRECORDED)
+    return val
+
+
 def _read_jsonl(path):
     """逐行讀 jsonl。回傳 list of dict;**檔不存在回 None**。
 
@@ -610,10 +648,7 @@ def _evidence(root, gate, ticket):
     if ex is None:
         exval = UNRECORDED
     else:
-        blocked = len([r for r in ex if r.get("outcome") == "blocked"])
-        last = ex[-1] if ex else None
-        exval = u"總 %d 筆;outcome=blocked %d 筆;最後一筆 %s" % (
-            len(ex), blocked, _field(last, "ts") if last else UNRECORDED)
+        exval = _exemption_buckets(ex)
     out.append(_line(u"exemptions", exval,
                      _rel(root, ex_log) if ex_log else NO_FUNC))
 
