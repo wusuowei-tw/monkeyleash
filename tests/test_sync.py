@@ -65,11 +65,52 @@ def _w(root, rel, text):
 
 
 def _h(root, rel):
-    p = root / rel
-    if not p.exists():
-        return None
-    return hashlib.sha256(io.open(p, "rb").read().replace(b"\r\n", b"\n")
-                          ).hexdigest()
+    """**判準釘在使用端:直接呼叫 `sync.file_hash`,不自己重寫一份。**(票 114 乙1)
+
+    在此之前這裡是一份**自己寫的** `sha256(內容.replace(b"\\r\\n", b"\\n"))` ——
+    它比 `sync._norm` **少了 `\\r` -> `\\n` 那一步**,兩份判準當時已經不一致。
+    本檔十餘條斷言全部靠 `_h` 說「一不一樣」,所以它證明的不是「sync 算對了」,
+    是「sync 與這份副本一致」—— 而它們已經不一致了(`F-058` 家族)。
+
+    那個漂當時是**潛伏**的,不是正在誤判:本檔的檔案都由 `_w()` 以
+    `newline="\\n"` 寫出,語料裡沒有單獨的 `\\r`,所以缺的那一步碰不到。
+    **潛伏不等於沒事** —— 改用 `newline=""` 寫一次測試檔就會踩到,而那時沒有東西會說話。
+
+    缺檔仍然回 `None`:`sync.file_hash` 讀不到時回 `None`(它自己的 except),
+    所以原本那個 `if not p.exists()` 的行為由它接住,不必在這裡再寫一次。
+
+    三份生產實作的行為一致由 `tests/test_line_ending_parity.py` 釘住。
+    """
+    return sync.file_hash(str(root / rel))
+
+
+class TestTheHashHelperItselfDiscriminates:
+    """**反控:先證明 `_h` 真的分得出內容,再拿它去驗別的東西。**
+
+    本檔十餘條斷言的形狀是 `assert _h(...) == _h(...)` 或
+    `assert _h(dst, rel) == before` —— 它們全部靠 `_h` 說「一不一樣」。
+    而**一個恆回同一個值的 `_h` 會讓那些斷言全部綠**,
+    包含「別的桶沒被動到」那幾條 —— 那正是它們要抓的缺陷。
+
+    **恆真的斷言與有效的斷言在測試輸出上長得一模一樣**,所以這一條要明寫。
+    (查過:本檔在此之前沒有任何 `!=` 斷言,沒有現成同義的可引用。)
+    """
+
+    def test_two_different_files_hash_differently(self, tmp_path):
+        _w(tmp_path, "a.txt", "內容甲\n")
+        _w(tmp_path, "b.txt", "內容乙\n")
+        assert _h(tmp_path, "a.txt") != _h(tmp_path, "b.txt"), (
+            "_h 對兩份不同內容給出相同的值 —— 本檔所有 `==` 斷言都失去意義")
+
+    def test_a_missing_file_is_none_not_a_constant(self, tmp_path):
+        """缺檔回 `None`,而 `None` 不得等於任何真實檔案的值。
+
+        少了這一條,`_h` 回 `None` 的那條路徑會讓
+        「兩個都不存在的檔案」互相相等 —— 一個 `==` 斷言因此恆真。
+        """
+        _w(tmp_path, "a.txt", "內容甲\n")
+        assert _h(tmp_path, "nope.txt") is None
+        assert _h(tmp_path, "a.txt") is not None
 
 
 def _git(root, *a):

@@ -52,6 +52,11 @@ def content_hash(raw):
     擋的卻是做對事的人,而那種規則最後會被整條關掉。
 
     判準不掛在一個沒被宣告帶走的檔案上 —— 正規化之後,行尾設定怎麼變都不影響判定。
+
+    **同判準的另外兩份在 `.claude/portable/sync.py`**:`_norm`(經 `file_hash`)
+    與 `_read`(經 `canon_drift`)。三份**刻意不共用**(票 42:權威層 import
+    `portable/` 會多一個失效點,而閘門起不來的樣子跟沒裝一模一樣)。
+    行為一致由 `tests/test_line_ending_parity.py` 釘住 —— **綁行為,不綁字面**。
     """
     norm = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     return hashlib.sha256(norm).hexdigest()

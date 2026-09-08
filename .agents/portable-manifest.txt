@@ -139,6 +139,15 @@ tests/test_portable_output_encoding.py copy
 # 「帶走測試卻不帶走它驗的東西」那個形狀在這裡不成立。
 # 測試本身不碰真實帳本:全部用手造的紀錄串列,只有 CLI 那半讀檔案。
 tests/test_ledger_verify.py     copy
+# 票 114 刀一 B-4:行尾正規化的三端對帳。**出貨**:它驗的三處
+# (`.claude/hooks/redlight.py` 的 `content_hash`、`.claude/portable/sync.py` 的
+# `_norm` 與 `_read`)分別落在 `.claude/hooks/` 與 `.claude/portable/` 前綴底下
+# (兩者都標 copy),所以下游一定有它們 ——
+# 「帶走測試卻不帶走它驗的東西」那個形狀在這裡不成立。
+# **下游更需要這一條**:三份判準漂開的後果之一是 `canon_drift` 對下游
+# `CLAUDE.md` 正典段判錯,而它判錯的樣子是一次看起來成功的同步。
+# 本檔不碰真實檔案:語料是六個位元組字面,檔案全寫在 `tmp_path` 底下。
+tests/test_line_ending_parity.py copy
 # 票 89 第 3 條:`KNOWN_GAPS` 每一項必須有票號。**出貨**:它驗的
 # `.claude/portable/g1_verify.py` 落在 `.claude/portable/` 前綴底下(標 copy),
 # 所以下游一定有那個 list —— 「帶走測試卻不帶走它驗的東西」那個形狀不成立。

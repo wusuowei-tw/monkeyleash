@@ -48,6 +48,34 @@
 **紅燈形狀(一句)**:斷言 `sync` 用的正規化函式**就是** `redlight.content_hash` 那一個物件;
 改掉 `redlight.content_hash` 的行為(例如多正規化一種行尾),`sync` 的雜湊要跟著變。
 
+> **⚠ 更正(2026-09-08 裁決,F-036 加註 —— 上面兩段原句保留,不刪):**
+>
+> **(一)「`sync` 改用 `redlight.content_hash`」被票 42 否決,不做。**
+> 那是要 `portable/` 反過來被 `hooks/` 綁,而票 42 的裁決是
+> **權威層要依賴最少的東西 —— 讓它與 `portable/` 互相依賴會多一個失效點,
+> 而閘門起不來的樣子跟沒裝一模一樣(全靜默)**。
+> 逐字理由見 `.claude/portable/friction_heading.py` 的 docstring
+> (那一份是同型問題的前例:兩份正則漂開,處置是**綁行為不綁字面**)。
+> 連帶地,「斷言**同一個物件**(`a is b`)」那個紅燈形狀也不適用 ——
+> 三份實作刻意保持獨立,`is` 永遠為假。
+>
+> **(二)受害符號不是兩個,是三個。** 步驟 0 的全庫掃描(2026-09-08,
+> 以 `7e46b85` 的樹為底)量到生產碼**第三處**:
+> `.claude/portable/sync.py:377` 的 `_read`,它正規化之後餵給 `canon_drift`,
+> 而那裡 `sa != sb` 是**拒絕條件**(該函式 docstring 逐字:「這是拒絕的條件,不是警告」)。
+> 票面原本只寫兩個,是因為當時沒有掃過。
+>
+> **(三)實際裁決 = B2:三端對帳,一個字都不改實作。**
+> 對帳釘在 `tests/test_line_ending_parity.py`,綁的是**行為一致**不是字面相同 ——
+> 與 `tests/test_gate.py::TestBothHeadingCriteriaAgree` 同型。
+> 三端:`sync.file_hash`(②的使用端)/ `gate._hash_bytes`(①的使用端)/
+> `sync._read`(③,**只能釘定義端**,理由寫在該測試檔的 docstring 裡)。
+>
+> **(四)附帶處置(裁決乙1)**:`tests/test_sync.py` 的 `_h` **當時已經漂開**
+> (只做 `\r\n`→`\n`,漏掉 `\r`→`\n`),而它是該檔十餘條斷言的判準來源。
+> 已改成呼叫 `sync.file_hash`。`tests/test_gate.py:1525` / `:2588` 兩處逐字正確,
+> 本票不動,只在對帳測試的 docstring 裡點名它們是同判準副本。
+
 ---
 
 ## 刀二 —— B-3:兩份「非原始碼目錄」清單
