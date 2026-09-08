@@ -102,18 +102,189 @@ def _ticket_dirs():
     return out
 
 
-def test_the_scan_actually_looks_at_something():
-    """**反控:先證明這條測試真的掃到了目錄。**
+# ── 適用性判斷 —— **獨立於上面那個掃描器** ──────────────────────────────────
+#
+# 這段的存在理由,以及它為什麼不能用 `_ticket_dirs()` 的回傳值,
+# 寫在 `_a_ticket_directory_exists_on_disk` 的 docstring 裡。**先讀那一段再改這裡。**
 
-    掃到 0 個目錄時上面那條會**恆綠**,而恆綠的斷言與有效的斷言
-    在測試輸出上長得一模一樣。本 repo 一定至少有一個票目錄
-    (`docs/tickets/<feature>/`,票就住在那裡)。
+# 直接寫死的磁碟位置。**刻意與 `gate.TICKET_DIRS` 重複** —— 買的就是獨立性。
+# 漂掉的話由 `test_the_independent_condition_still_matches_the_templates` 出聲,
+# 那是**吵的**;共用一份的話漂掉是**靜默的**。
+_TICKET_DIR_SHAPES = (
+    ("docs/tickets", None),        # docs/tickets/<feature>/
+    (".scratch", "issues"),        # .scratch/<feature>/issues/
+)
+
+
+def _a_ticket_directory_exists_on_disk():
+    """這個 repo 到底有沒有票目錄。**直接看磁碟,不問掃描器。**
+
+    ## 為什麼不能用 `_ticket_dirs()` 的回傳值來決定
+
+    **那等於讓被測對象決定要不要測它。** 掃描器壞掉時會回 0 個目錄,
+    而用它當跳過條件的話,結果會是 **skip 而不是紅** ——
+    正是這條反控本來要防的事(掃描器壞了,而沒有東西說話)。
+
+    「這個判斷要獨立於被它決定的那個東西」與 `CLAUDE.md` 的
+    **「這次量測的輸入,有沒有一部分是從被量的東西身上拿的?」** 是同一條:
+    材料來自被量的對象 ⇒ 只證明得了自洽。
+
+    ## 為什麼形狀要寫死到 `<feature>/issues` 這一層
+
+    `.scratch/` 這一層**在淨室裡是存在的** —— `verify_gates.py:136` 會在目標 repo
+    寫 `.scratch/verify/spec.md`。所以「`.scratch/` 在不在」分不出「有沒有票目錄」,
+    要問的是 `.scratch/<feature>/issues/` 在不在。
+    (這一格是實測撞出來的,不是設計出來的:第一版差點寫成只看 `.scratch/`。)
     """
+    for head, tail in _TICKET_DIR_SHAPES:
+        base = ROOT / head
+        if not base.is_dir():
+            continue
+        try:
+            names = os.listdir(str(base))
+        except OSError:
+            continue
+        for name in names:
+            d = base / name if tail is None else base / name / tail
+            if d.is_dir():
+                return True
+    return False
+
+
+WHY_NOT_APPLICABLE = (
+    u"此 repo 沒有票目錄(`docs/tickets/` 在 portable-manifest 標 skip,"
+    u"不隨安裝出貨;`.scratch/<feature>/issues/` 也不由安裝器建立)—— "
+    u"本檢查不適用。**這是「不適用」不是「壞掉」**:"
+    u"票目錄的存在是這個 repo 的**資料**,不是框架的性質,"
+    u"而框架測試只能斷言框架的性質(淨室 verify_gates 的收尾判準)。"
+)
+
+
+def _skip_unless_this_repo_has_tickets():
+    """兩條(衛生 + 反控)**共用同一個獨立條件**,不各判各的。
+
+    各判各的話,兩條的適用範圍會漂開,而漂開時**兩條都還是綠的**。
+    """
+    if not _a_ticket_directory_exists_on_disk():
+        pytest.skip(WHY_NOT_APPLICABLE)
+
+
+def test_the_scan_actually_looks_at_something():
+    """**反控:先證明底下那條真的掃到了目錄。**
+
+    掃到 0 個目錄時底下那條會**恆綠**,而恆綠的斷言與有效的斷言
+    在測試輸出上長得一模一樣。
+
+    ⚠ **本條只在「這個 repo 有票目錄」時適用。**
+    在剛裝好的 repo 裡沒有票目錄是**正常的**(它還沒開過票),
+    而原本這裡寫的是無條件斷言 —— 於是它在淨室裡紅了
+    (票 114,run `34178844263`)。**那條紅是對的,錯的是斷言**:
+    它斷言的是「這個 repo 有票」= **資料**,而框架測試只能斷言**框架的性質**。
+    """
+    _skip_unless_this_repo_has_tickets()
     dirs = _ticket_dirs()
     assert dirs, (
-        "一個票目錄都沒掃到 —— `gate.TICKET_DIRS` 展開後全部不存在?"
-        "那底下那條測試是空的。TICKET_DIRS=%r,features=%r"
-        % (gate.TICKET_DIRS, _features()))
+        "磁碟上有票目錄,而掃描器一個都沒展開出來 —— **掃描器壞了**。"
+        "(適用性由 `_a_ticket_directory_exists_on_disk()` 獨立判定,"
+        "所以這裡不會因為掃描器回 0 而變成 skip。)"
+        "TICKET_DIRS=%r,features=%r" % (gate.TICKET_DIRS, _features()))
+
+
+class TestTheSkipConditionIsIndependentOfTheScanner:
+    """**釘住那個關鍵條件:跳不跳過,不得由掃描器決定。**
+
+    弄錯的話這次的修等於白修:掃描器壞掉回 0 ⇒ 變成 skip 而不是紅,
+    而**一條 skip 掉的測試與一條沒寫的測試,在輸出上長得一模一樣**。
+    """
+
+    def test_a_broken_scanner_is_red_not_skipped(self, monkeypatch):
+        """磁碟有票目錄、而掃描器回 0 ⇒ **必須紅**,不得 skip、不得綠。
+
+        造法:磁碟不動,把 `gate.TICKET_DIRS` 清空(行程內注入,
+        monkeypatch 自動還原)—— 掃描器因此回 0,而獨立條件仍然為真。
+
+        ⚠ **本條自己也要走同一個適用性條件。** 它的前提是「這個 repo 有票目錄」,
+        而那是**資料**不是框架性質 —— 與它守護的那條犯的是同一個錯。
+        (實測:第一版沒加,淨室當場再紅一次。**修好一個守衛之後,
+        要回頭問它自己的守衛有沒有同一個病** —— `F-085` 的同檔同類那一圈。)
+        """
+        _skip_unless_this_repo_has_tickets()
+        assert _a_ticket_directory_exists_on_disk(), (
+            "前提不成立:這個 repo 現在沒有票目錄,本條無從證明任何事")
+        monkeypatch.setattr(gate, "TICKET_DIRS", ())
+        assert _ticket_dirs() == [], "注入沒生效,掃描器仍回得出目錄"
+
+        try:
+            test_the_scan_actually_looks_at_something()
+        except AssertionError:
+            return                                    # 正確:紅
+        except BaseException as e:                    # pytest.skip 也走這裡
+            pytest.fail(
+                u"掃描器壞掉時應該**紅**,實得 %s:%s —— "
+                u"跳過條件八成又用了掃描器的回傳值" % (type(e).__name__, e))
+        pytest.fail(u"掃描器壞掉時應該**紅**,實得:通過")
+
+    def test_a_scanner_based_condition_would_have_been_caught(self, monkeypatch):
+        """**反控的反控**:證明上一條真的分得出兩種寫法。
+
+        少了它,上一條可能因為別的理由通過。這裡把「錯的寫法」
+        (拿掃描器的回傳值當適用性條件)就地寫出來,證明在同一個注入下
+        它與獨立條件**給出相反的答案**。
+
+        ⚠ 同上:本條的前提也是「這個 repo 有票目錄」,所以走同一個適用性條件。
+        """
+        _skip_unless_this_repo_has_tickets()
+        monkeypatch.setattr(gate, "TICKET_DIRS", ())
+        wrong = bool(_ticket_dirs())                  # 錯的寫法:問掃描器
+        right = _a_ticket_directory_exists_on_disk()  # 對的寫法:問磁碟
+        assert wrong is False and right is True, (
+            u"這個注入分不出兩種寫法,上一條因此沒有資訊量:"
+            u"掃描器說 %r,磁碟說 %r" % (wrong, right))
+
+    def test_the_independent_condition_still_matches_the_templates(self):
+        """寫死的形狀與 `gate.TICKET_DIRS` **漂開時要出聲**。
+
+        `_TICKET_DIR_SHAPES` 刻意重複了模板的知識(買的是獨立性),
+        而重複必然漂(`F-058` 家族)。這條把漂變成吵的。
+        """
+        shapes = set()
+        for head, tail in _TICKET_DIR_SHAPES:
+            shapes.add("%s/%%s" % head if tail is None else "%s/%%s/%s" % (head, tail))
+        assert shapes == set(gate.TICKET_DIRS), (
+            u"獨立條件的形狀與 gate.TICKET_DIRS 漂開了:"
+            u"本檔 %r,gate %r —— 兩邊都要改" % (sorted(shapes), sorted(gate.TICKET_DIRS)))
+
+    def test_a_repo_without_ticket_dirs_skips_instead_of_failing(
+            self, tmp_path, monkeypatch):
+        """**這一格就是淨室紅掉的那一格**(票 114,run `34178844263`)。
+
+        剛裝好的 repo 沒有票目錄(`docs/tickets/` 標 skip 不出貨),
+        而修法之前這裡是無條件斷言,於是它在那裡**紅**——
+        「那些紅與新專案無關,會訓練人忽略訊號」(淨室收尾判準)。
+
+        造法:把 `ROOT` 指到一個空的 tmp,磁碟上因此沒有任何票目錄。
+        """
+        import sys as _sys
+        monkeypatch.setattr(_sys.modules[__name__], "ROOT", tmp_path)
+        assert not _a_ticket_directory_exists_on_disk()
+
+        try:
+            test_the_scan_actually_looks_at_something()
+        except AssertionError as e:
+            pytest.fail(u"沒有票目錄時應該 **skip**,實得紅:%s" % e)
+        except BaseException as e:
+            assert type(e).__name__ == "Skipped", (
+                u"應該 skip,實得 %s:%s" % (type(e).__name__, e))
+            return
+        pytest.fail(u"沒有票目錄時應該 **skip**,實得:通過(那是靜默的空綠)")
+
+    def test_the_skip_message_says_which_and_why(self):
+        """skip 訊息要讓人分得出「不適用」與「壞掉」。
+
+        只寫「skipped」的話,一個真的壞掉的環境看起來與一個正常的新 repo 一樣。
+        """
+        for needle in (u"沒有票目錄", u"不適用", u"skip", u"資料", u"框架的性質"):
+            assert needle in WHY_NOT_APPLICABLE, needle
 
 
 def test_no_ticket_shaped_file_is_invisible_to_every_implementation():
@@ -128,7 +299,11 @@ def test_no_ticket_shaped_file_is_invisible_to_every_implementation():
       - 對 mcp 不存在    -> `ticket(n)` 讀不到它
 
     **而放它進去的人不會知道。** 這條就是那個會說話的東西。
+
+    ⚠ **與上面那條反控共用同一個適用性條件**(`_skip_unless_this_repo_has_tickets`)。
+    各判各的話兩條的適用範圍會漂開,**而漂開時兩條都還是綠的**。
     """
+    _skip_unless_this_repo_has_tickets()
     bad = []
     for rel, d in _ticket_dirs():
         for name in sorted(os.listdir(d)):
