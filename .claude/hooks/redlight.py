@@ -79,6 +79,12 @@ def current_ticket():
 # 跳過清單是**明列**的,不是「所有點開頭的目錄」—— 後者會跳過 .claude/hooks/,
 # 而閘門自己就住在那裡:實作明明存在,紀錄卻宣告 impl_exists=False,
 # R3 拿這種紀錄去判定會無條件放行。又是一次「以錯的來源決定可見範圍」(F-019)。
+#
+# ⚠ `gate.NON_SOURCE_DIRS` 看起來像本清單的副本,**兩份刻意不同,合併會 fail-open**
+# —— 那份問「會不會被執行」,本份問「反查實作時要不要進去」。票 114 B-3 實測:
+# 把本份併過去會讓 `.scratch/` 底下的碼脫離站別限制(R7 的官方出口就指向那裡),
+# 並讓 `gate.PROTOTYPE_RE` 靜默變死碼。
+# 差集由 `tests/test_non_source_list_parity.py` 釘住 —— **對的是差集,不是相等。**
 _SEARCH_SKIP = {".git", ".venv", "node_modules", "__pycache__", ".cache",
                 ".scratch", ".dev", "tests", "docs", ".agents", "skills",
                 "build", "logs", "assets", "tradingagents.egg-info"}

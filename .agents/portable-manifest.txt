@@ -148,6 +148,14 @@ tests/test_ledger_verify.py     copy
 # `CLAUDE.md` 正典段判錯,而它判錯的樣子是一次看起來成功的同步。
 # 本檔不碰真實檔案:語料是六個位元組字面,檔案全寫在 `tmp_path` 底下。
 tests/test_line_ending_parity.py copy
+# 票 114 刀二 B-3:兩份目錄清單的**差集**對帳。**出貨**:它驗的兩份
+# (`gate.NON_SOURCE_DIRS` 與 `redlight._SEARCH_SKIP`)都住在 `.claude/hooks/`
+# 前綴底下(標 copy),所以下游一定有它們。
+# **下游更需要這一條**:合併那兩份會讓 `.scratch/` 底下的碼脫離站別限制,
+# 而 R7 的擋下訊息正是叫人把腳本寫到那裡 —— 下游看到兩份相似的清單想合併時,
+# 這條測試是唯一會出聲的東西。
+# 本檔不碰真實檔案:只讀兩個模組常數,注入在行程內、finally 還原。
+tests/test_non_source_list_parity.py copy
 # 票 89 第 3 條:`KNOWN_GAPS` 每一項必須有票號。**出貨**:它驗的
 # `.claude/portable/g1_verify.py` 落在 `.claude/portable/` 前綴底下(標 copy),
 # 所以下游一定有那個 list —— 「帶走測試卻不帶走它驗的東西」那個形狀不成立。
