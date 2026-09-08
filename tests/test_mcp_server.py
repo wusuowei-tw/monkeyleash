@@ -397,6 +397,70 @@ class TestStatusAllIsVerbatim:
 # ⑤ 票號:兩式都試(裁 4 後半)
 # ─────────────────────────────────────────────────────────────────────────────
 
+class TestTicketPathDelegatesToTheSharedLookup:
+    """票 114 刀三:找檔的判準收成一份(`.claude/portable/ticket_lookup.find`)。
+
+    在此之前 `_ticket_path` 與 `status._find_ticket_file` 是**兩份逐字幾乎相同**
+    的實作;2026-09-08 實測對八組輸入答案全同,**而那是巧合不是保證**(`F-058` 家族)。
+
+    ⚠ **共用的是判準,不是來源。** `TICKET_DIRS` 仍留在本檔
+    (`mcp_server.py:98`,票 42 的反方向:MCP 不要 import gate),
+    它與 `gate.TICKET_DIRS` 的一致由本檔既有的對帳測試釘住。
+    """
+
+    def test_it_delegates_to_the_shared_lookup_module(self):
+        assert getattr(mcp_server, "ticket_lookup", None) is not None, (
+            "mcp_server 沒有用 ticket_lookup 的判定 —— 它自己有一份")
+
+    def test_swapping_the_shared_lookup_changes_the_answer(self, tmp_path, monkeypatch):
+        """**反控**:上一條只證明那個名字在,不證明它被呼叫。
+
+        少了這一條,`import ticket_lookup` 放著不用也會讓上一條綠。
+        """
+        root = _make_root(tmp_path, ticket_files={u"10-tenth.md": u"# 票 10\n"})
+        monkeypatch.setattr(mcp_server.ticket_lookup, "find",
+                            lambda dirs, ticket: u"SENTINEL")
+        assert mcp_server._ticket_path(root, u"testfeat", u"10") == u"SENTINEL"
+
+    def test_the_directory_expansion_stays_in_this_layer(self, tmp_path, monkeypatch):
+        """目錄清單由本層從**自己的** `TICKET_DIRS` 展開後傳進去。
+
+        共用模組不讀任何 `TICKET_DIRS` —— 讀了就把來源綁死,
+        而本檔的來源刻意與 `status` 不同(那邊從已載入的 gate 取)。
+        """
+        root = _make_root(tmp_path, ticket_files={u"10-tenth.md": u"# 票 10\n"})
+        seen = {}
+
+        def _spy(dirs, ticket):
+            seen["dirs"] = list(dirs)
+            seen["ticket"] = ticket
+            return None
+
+        monkeypatch.setattr(mcp_server.ticket_lookup, "find", _spy)
+        mcp_server._ticket_path(root, u"testfeat", u"10")
+        assert seen["ticket"] == u"10"
+        assert seen["dirs"] and all(os.path.isabs(d) for d in seen["dirs"]), seen
+
+    def test_the_shared_module_does_not_drag_gate_into_this_process(self):
+        """裁 3 的隔離不得被 import 這一側繞過。
+
+        `mcp_server.py:12-14` 逐字:「`status.render()` 會 `exec_module` 目標 repo 的
+        `gate.py`,而 `render_all` 會開 git。**走子程序不是效能取捨,
+        是把那兩件事關到另一個行程去**」。共用模組若長出那些相依,
+        隔離就從這條 import 路徑漏掉了。
+        """
+        src = io.open(str(PORTABLE / "ticket_lookup.py"), encoding="utf-8").read()
+        tree = ast.parse(src)
+        mods = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                mods.update(a.name.split(".")[0] for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                mods.add(node.module.split(".")[0])
+        assert mods <= {"os"}, (
+            "ticket_lookup import 了 %s —— mcp_server 這個行程不得有那些" % sorted(mods))
+
+
 class TestTicketTriesBothForms:
     """裁 4 後半:`n` 與 `n.zfill(2)` **皆須邊界命中**。
 

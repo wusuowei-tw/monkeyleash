@@ -81,6 +81,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from friction_heading import HEADING  # noqa: E402
+import ticket_lookup  # noqa: E402  (依票號找票檔,與 status 同一份;票 114 刀三)
 
 # `status.py` 的絕對路徑。**argv[1] 釘的就是這個常數**(紅燈②)——
 # 寫成常數而不是就地組字串,測試才驗得出它指到真的那一支。
@@ -218,17 +219,22 @@ def status_all() -> str:
 
 
 def _ticket_path(root, feature, num):
-    """`<num>-` 開頭的票檔。**邊界是那個 `-`**(裁 4 前半),沒有就回 None。"""
-    prefix = str(num) + u"-"
+    """`<num>-` 開頭的票檔。**邊界是那個 `-`**(裁 4 前半),沒有就回 None。
+
+    判準本身住在 `ticket_lookup.find`(票 114 刀三)——
+    `status._find_ticket_file` 用的是同一份,兩邊不再各寫一次。
+
+    ⚠ **共用的是判準,不是來源。** 目錄清單在這一層從**本檔自己的**
+    `TICKET_DIRS` 展開(票 42 的反方向:這個行程不得有 `gate`),
+    展開後才傳進去 —— 共用模組不讀任何 `TICKET_DIRS`。
+    `TICKET_DIRS` 與 `gate.TICKET_DIRS` 的一致由既有的對帳測試釘住。
+    """
+    dirs = []
     for tmpl in TICKET_DIRS:
-        rel = tmpl % feature
-        d = os.path.join(root, *rel.split("/"))
-        if not os.path.isdir(d):
-            continue
-        for name in sorted(os.listdir(d)):
-            if name.startswith(prefix) and name.endswith(".md"):
-                return os.path.join(d, name)
-    return None
+        d = os.path.join(root, *(tmpl % feature).split("/"))
+        if os.path.isdir(d):
+            dirs.append(d)
+    return ticket_lookup.find(dirs, num)
 
 
 @mcp.tool()

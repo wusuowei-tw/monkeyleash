@@ -1438,6 +1438,21 @@ def ticket_untested_modules(feature, ticket_id):
     形狀抄 `check_legacy_list`(綁 go-live 樹),理由同一個:**無法自我服務**。
 
     宣告不存在、或票還沒 commit = 不豁免(fail-closed)。
+
+    **票檔是 `.md`。這一層是判定(發 R3 豁免),範圍不得寬於
+    `status._find_ticket_file` / `mcp_server._ticket_path` 那兩份 ——
+    寬了就等於讓票目錄裡任何一個 `<號>-` 開頭的檔案都能發豁免。**
+
+    票目錄住在 `docs/`(非原始碼,任何站別都寫得動),所以少了副檔名這一格,
+    「新建一個 `<號>-x.txt` + 一行宣告 + commit」就能拿到豁免 ——
+    而 `sorted()` 讓 `.txt` 排在真票之前,連**蓋掉真票**都做得到
+    (票 114 實測:`114-a.txt` 勝過 `114-c.md`)。**那是豁免可被自助**,
+    正是 `check_legacy_list` 綁 go-live 樹要防的同一件事。
+
+    三份行為一致由 `tests/test_ticket_path_parity.py` 釘住(綁行為,不綁字面);
+    「票目錄裡不得有 `<號>-` 開頭的非 `.md` 檔」由
+    `tests/test_ticket_dirs_are_md_only.py` 守著 —— 少了它,一個
+    `<號>-x.txt` 會變成**沒有人看的東西**。
     """
     if not feature or not ticket_id:
         return set(), None
@@ -1456,7 +1471,12 @@ def ticket_untested_modules(feature, ticket_id):
             #
             # ⚠ **補零不在這一層**:`"1"` 回 None 是正確行為。補零是呼叫者對
             # 本 repo 命名慣例的知識,下游不見得補零,埋進來會在別的 repo 出錯。
-            if not name.startswith(str(ticket_id) + "-"):
+            #
+            # **`.md` 過濾是票 114 刀三加的**,理由在 docstring:這一層是判定,
+            # 範圍不得寬於 status / mcp 那兩份。加它是 fail-closed
+            # (最壞 = 誤擋,人會回報);不加是 fail-open(靜默發豁免)。
+            if not (name.startswith(str(ticket_id) + "-")
+                    and name.endswith(".md")):
                 continue
             rel = "%s/%s" % (d, name)
             mods = committed_declaration(rel)

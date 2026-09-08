@@ -62,6 +62,9 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ticket_lookup                                        # noqa: E402
+
 UNRECORDED = u"未記錄"
 UNPROVEN = u"未證明"
 NO_FUNC = u"未記錄(該 repo 的 gate 無此函式)"
@@ -659,15 +662,29 @@ def _find_ticket_file(root, gate, feature, ticket):
     ⚠ `gate.py` 有語意相同的一份(`:1265`),**本票不修它** ——
     那一份在權威層,改它要有自己的紅燈與驗收。兩份暫時不一致,
     是知情的,不是忘了。見票 101 第八節。
+
+    > **⚠ 更正(2026-09-08,票 114 刀三,F-036 加註 —— 上面三行原句保留,不刪):**
+    >
+    > **(甲)「兩份暫時不一致」已經不成立。** 票 111 補上 `gate` 那份的
+    > **前綴邊界**,票 114 補上它的 **`.md` 過濾**;兩份現在行為一致,
+    > 由 `tests/test_ticket_path_parity.py` 釘住 —— **綁行為,不綁字面**。
+    > 「刻意不共用」仍然成立(票 42:權威層不得依賴 `portable/`);
+    > 不成立的只有「不一致」那三個字。
+    >
+    > **(乙)`:1265` 這個行號指到別的東西** —— 現在那裡是
+    > `stage_allows_src_write` 的收尾三引號,與票檔查找無關。
+    > **正解是引符號名:`gate.ticket_untested_modules`。**
+    > 換成新的行號只是把一個會過期的東西換成另一個會過期的東西
+    > (`CLAUDE.md`:行號是位置,標題是身分)。
+    >
+    > **(丙)判準本身已收進 `.claude/portable/ticket_lookup.find`**,
+    > 與 `mcp_server._ticket_path` 共用一份。上面關於邊界與補零的段落保留,
+    > 因為**它記錄的是為什麼**;而目錄展開(`_ticket_dirs`)刻意留在這一層 ——
+    > 來源不進共用模組(裁決,票 114)。
     """
     if not feature or not ticket:
         return None
-    prefix = str(ticket) + "-"
-    for d in _ticket_dirs(root, gate, feature):
-        for name in sorted(os.listdir(d)):
-            if name.startswith(prefix) and name.endswith(".md"):
-                return os.path.join(d, name)
-    return None
+    return ticket_lookup.find(_ticket_dirs(root, gate, feature), ticket)
 
 
 def _status_line_of(path):

@@ -156,6 +156,20 @@ tests/test_line_ending_parity.py copy
 # 這條測試是唯一會出聲的東西。
 # 本檔不碰真實檔案:只讀兩個模組常數,注入在行程內、finally 還原。
 tests/test_non_source_list_parity.py copy
+# 票 114 刀三 B-2:portable 側唯一一份「依票號找票檔」。**出貨**:它驗的
+# `.claude/portable/ticket_lookup.py` 落在 `.claude/portable/` 前綴底下(標 copy),
+# 所以下游一定有它。本檔含裁 3 的相依約束(不得 import gate/status/subprocess),
+# 用 ast **枚舉** import 而不是掃字串 —— 封閉集合用枚舉不用比對。
+tests/test_ticket_lookup.py     copy
+# 票 114 刀三:gate 那份與共用模組的跨層對帳。**出貨**:兩端分別落在
+# `.claude/hooks/` 與 `.claude/portable/` 前綴底下(兩者都標 copy)。
+# **下游更需要這一條**:gate 那份是判定(發 R3 豁免),範圍一旦寬於找檔那份,
+# 票目錄裡任何一個 `<號>-` 開頭的檔案都能發豁免,而票目錄在 docs/ 底下人人寫得動。
+tests/test_ticket_path_parity.py copy
+# 票 114 刀三步驟 5:規範的另一半。gate 只認 `.md` 之後,一個 `<號>-x.txt`
+# 會變成**沒有人看的東西**(三份實作都看不到它),而放它進去的人不會知道。
+# **出貨**:每個裝了框架的 repo 都有票目錄,這條規範在那裡一樣成立。
+tests/test_ticket_dirs_are_md_only.py copy
 # 票 89 第 3 條:`KNOWN_GAPS` 每一項必須有票號。**出貨**:它驗的
 # `.claude/portable/g1_verify.py` 落在 `.claude/portable/` 前綴底下(標 copy),
 # 所以下游一定有那個 list —— 「帶走測試卻不帶走它驗的東西」那個形狀不成立。

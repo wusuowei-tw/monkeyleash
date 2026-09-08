@@ -800,6 +800,55 @@ class TestFindTicketFileHasABoundary:
         got = status._find_ticket_file(root, gate, feature, u"100")
         assert got is not None and os.path.basename(got) == u"100-b.md", got
 
+    # ── 票 114 刀三:判準收成一份 ────────────────────────────────────────────
+    #
+    # 在此之前 `_find_ticket_file` 與 `mcp_server._ticket_path` 是**兩份逐字
+    # 幾乎相同**的實作;2026-09-08 實測對八組輸入答案全同,**而那是巧合不是保證**
+    # (`F-058` 家族)。本票收進 `.claude/portable/ticket_lookup.find`。
+
+    def test_it_delegates_to_the_shared_lookup_module(self):
+        """**判準只有一份** —— 本檔不得自己再寫一次邊界與副檔名。
+
+        測「有沒有真的委派」而不是「答案對不對」:一個自己重寫一份的實作
+        會給出**一模一樣的答案**,而它會在下一次只改一邊的時候漂開,
+        **那時沒有東西會說話**。
+        """
+        assert getattr(status, "ticket_lookup", None) is not None, (
+            "status 沒有用 ticket_lookup 的判定 —— 它自己有一份")
+
+    def test_swapping_the_shared_lookup_changes_the_answer(self, tmp_path, monkeypatch):
+        """**反控**:上一條只證明那個名字在,不證明它被呼叫。
+
+        少了這一條,`import ticket_lookup` 放著不用也會讓上一條綠 ——
+        而**恆真的斷言與有效的斷言在測試輸出上長得一模一樣**。
+        做法:把共用模組的 `find` 換掉,答案必須跟著變。
+        """
+        root, gate, feature = self._dir_with(tmp_path)
+        monkeypatch.setattr(status.ticket_lookup, "find",
+                            lambda dirs, ticket: u"SENTINEL")
+        assert status._find_ticket_file(root, gate, feature, u"10") == u"SENTINEL"
+
+    def test_the_directory_expansion_stays_in_this_layer(self, tmp_path, monkeypatch):
+        """**目錄清單由本層展開後傳進去**,共用模組不讀 `gate.TICKET_DIRS`。
+
+        裁決(票 114):來源留在各自的呼叫端 —— `status` 從它已載入的 gate 取,
+        `mcp_server` 用自己的常數。共用模組若自己去讀,那個來源就被綁死了。
+        """
+        root, gate, feature = self._dir_with(tmp_path)
+        seen = {}
+
+        def _spy(dirs, ticket):
+            seen["dirs"] = list(dirs)
+            seen["ticket"] = ticket
+            return None
+
+        monkeypatch.setattr(status.ticket_lookup, "find", _spy)
+        status._find_ticket_file(root, gate, feature, u"10")
+        assert seen["ticket"] == u"10"
+        assert seen["dirs"] and all(os.path.isabs(d) for d in seen["dirs"]), seen
+        assert any(d.replace(os.sep, "/").endswith(u"docs/tickets/%s" % feature)
+                   for d in seen["dirs"]), seen
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 票 105 乙段:Evidence 的 `report:` 行
