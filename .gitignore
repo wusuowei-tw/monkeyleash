@@ -30,6 +30,12 @@ __pycache__/
 /.dev/*
 !/.dev/gate-exemptions.jsonl
 !/.dev/provenance.jsonl
+# 已知斷點白名單(票 116 B-6)。**進版控,與豁免帳本同軌** ——
+# 它是**判斷紀錄**:「這一處對不上是對的,理由是 X」。
+# 不進版控的話那個判斷只存在於一台機器上,而下一個讀 `ledger_verify`
+# 報告的人會從頭再查一次那四筆(`F-110`:留白的判斷等於沒有判斷)。
+# 內容 per-repo(`.dev/` 標 `generate`,不隨安裝出貨)。
+!/.dev/known-chain-breaks.txt
 
 # 紅燈豁免清單 —— **票 54 改為進版控。原理由保留(F-036),更正寫在下面。**
 #
