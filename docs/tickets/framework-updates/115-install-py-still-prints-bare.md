@@ -61,6 +61,76 @@ install.py       21
 > 與票 94「六站是名字不是計數」同一族。改的時候一起處理,不要留一個
 > 叫「三支」而掃四支的測試。
 
+---
+
+## ⚠ 動工前置(2026-09-08 落地,來源:票 114 各輪報告的候選清單)
+
+> **這兩項原本只活在 `.dev/reports/` 裡,而 `.dev/` 不進版控** ——
+> 也就是說**它們原本會隨機器消失**。落到票面上是為了讓它們跨得過下一台機器。
+> (票 114 已收,那些報告不再有票在指著它們。)
+
+### (c) ⛔ 票面「四支」這個數字**已過期**,動工前要先定掃描範圍
+
+上面〈修法〉寫「四支既有實作可抄:`g1_verify` / `shadow_review` / `user_layer` / `verify_gates`」。
+**那是照 `def _out` 數出來的,而家族比它大。**
+
+實測(票 114 刀一,2026-09-08):
+
+```
+$ grep -rn "def _out" .claude/portable/ .claude/hooks/ --include=*.py
+.claude/portable/g1_verify.py:44:def _out(text):
+.claude/portable/shadow_review.py:101:def _out(text):
+.claude/portable/user_layer.py:470:def _out(msg):
+.claude/portable/verify_gates.py:38:def _out(text):
+```
+
+**但同一個寫法還有 inline 的 5 處**,`grep "def _out"` 撈不到:
+
+```
+.claude/portable/sync.py:702 / :709 / :720 / :746   (4 處,無函式包裝)
+.claude/portable/ledger_verify.py:162               (1 處,無函式包裝)
+```
+
+**⇒ stdout utf-8 輸出家族 = `def` 4 份 + inline 5 處,共 6 個檔案。**
+
+**動工前要裁的是**:本票的「抄一份 `_out`」要抄哪一種、
+以及那個測試 class 的掃描範圍寫 **4** 還是 **6**。
+**寫 4 的話,`sync.py` 與 `ledger_verify.py` 那 5 處永遠不在任何測試的視野裡。**
+
+> **這一格是 `F-109` 的形狀**:票面寫下一個會變的數字而沒有標基準。
+> 「四支」在寫下的當時是對的(它量的是 `def _out`),
+> 而讀的人會以為它量的是「這個家族有幾份」。
+
+### (b) `_out` 家族的四份**方向不一致**,合併前要先裁哪一個對
+
+`tests/test_portable_output_encoding.py` 的 docstring **自述只涵蓋三支**,逐字:
+
+> `verify_gates.py` / `g1_verify.py` / `shadow_review.py` 都是**「證明別的東西是對的」那一類工具**
+
+⇒ **`user_layer.py` / `ledger_verify.py` / `sync.py` 三支不在那份測試的視野裡。**
+
+而 `user_layer._write`(`:455-467`)與另外三份**方向相反**:
+
+```python
+    try:
+        stream.buffer.write(msg.encode("utf-8"))
+        stream.buffer.flush()
+    except Exception:
+        stream.write(msg)          # ← fail-soft:退回會炸的那條路
+```
+
+三個具體差異(票 114 刀一實測):
+1. **不補 `"\n"`**(類 A 是 `(text + "\n")`)。
+2. **沒有前置 `sys.stdout.flush()`** —— 類 A 那一行是為了避免文字層/二進位層交錯。
+3. **有 `try/except` 退回 `stream.write(msg)`** —— **類 A 是 fail-loud,這一份是 fail-soft。**
+
+**⇒ 本票若把 `install.py` 也加進來,要先裁「哪一個方向是對的」** ——
+抄錯一份就是把 fail-soft 散播到第五個檔案,
+而 fail-soft 在這一族的後果正是票 62 要消掉的東西(炸掉時看不出來)。
+
+**本票不強制合併那四份**(上面〈修法〉已寫「不夾帶」),
+但**必須明說抄的是哪一份、為什麼**。
+
 ## 裝新下游前要不要
 
 **要,而且是這一批裡最直接的一件。**
