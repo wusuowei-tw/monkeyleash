@@ -170,6 +170,18 @@ tests/test_ticket_path_parity.py copy
 # 會變成**沒有人看的東西**(三份實作都看不到它),而放它進去的人不會知道。
 # **出貨**:每個裝了框架的 repo 都有票目錄,這條規範在那裡一樣成立。
 tests/test_ticket_dirs_are_md_only.py copy
+# 票 116 B-8:帳本的 `declared_in` 記身分不記位置。**出貨**:它驗的
+# `.claude/hooks/gate.py` 落在 `.claude/hooks/` 前綴底下(標 copy),
+# 所以下游一定有它。本檔只用 `ast` 讀 `gate.py` 的呼叫點形態 ——
+# **那是框架的性質,在任何 repo 都成立**,不碰 `docs/adr/`。
+tests/test_declared_in_is_an_identity.py copy
+# 票 116 B-8 的**上游專屬**那一半:編號在 `docs/adr/` 底下恰好對應一個檔。
+# **標 skip,不出貨** —— 它斷言的是「**這個 repo 的 ADR 集合**跟得上 gate.py 的引用」,
+# 那是**資料**不是框架的性質:`docs/adr/` 標 `ask` 不隨安裝出貨,
+# 而兩個下游的那份停在裝機時那一版(2026-09-08 實測:兩邊都沒有 `F-0016`)。
+# 出貨的話它會在每個下游紅,而那些紅與新專案無關 —— 訓練人忽略訊號(F-031)。
+# 前例:`tests/test_adr_numbering.py` 同樣標 skip,同樣是 ADR 集合的性質。
+tests/test_adr_numbers_resolve_upstream.py skip
 # 票 89 第 3 條:`KNOWN_GAPS` 每一項必須有票號。**出貨**:它驗的
 # `.claude/portable/g1_verify.py` 落在 `.claude/portable/` 前綴底下(標 copy),
 # 所以下游一定有那個 list —— 「帶走測試卻不帶走它驗的東西」那個形狀不成立。

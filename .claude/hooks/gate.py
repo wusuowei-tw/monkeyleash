@@ -2175,8 +2175,11 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
     # 閘門自身:R2 豁免(死鎖),R3 不豁免。放行但**不靜默** —— 記帳並回報。
     gate_self = r in GATE_SELF
     if gate_self:
+        # `declared_in` 記**編號**不記路徑(票 116 B-8):帳本跟著 repo 走,
+        # 而 `docs/adr/` 在 portable-manifest 標 `ask`(安裝時不帶過去)——
+        # 路徑只在寫它的那台 repo 上有意義。**引身分,不引位置。**
         note_exemption(exemptions, r, os.path.splitext(os.path.basename(r))[0],
-                       ticket, "docs/adr/0004-gate-self-modification.md",
+                       ticket, "0004",
                        reason="gate-self-modification")
         _err(self_modification_note(r) + "\n")
 
@@ -2239,9 +2242,13 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
             # 寫測試不需要先解鎖任何東西)。
             up_ok, up_why = upstream_identical_staged(r)
             if up_ok:
+                # 編號不記路徑(票 116 B-8)。**這一條特別要緊**:
+                # `F-0016` 是票 10 之後才有的 ADR,兩個下游都沒有那個檔 ——
+                # 記路徑的話,下一次 sync 帶下新 gate.py 的那一刻,
+                # 這裡就開始寫一個下游永遠不會有的檔名。
                 note_exemption(exemptions, r,
                                os.path.splitext(os.path.basename(r))[0], ticket,
-                               "docs/adr/F-0016-r2-content-bound-exemption.md",
+                               "F-0016",
                                reason="upstream-identical")
             else:
                 # **說出是哪一個前提沒滿足**,不是把人指向錯的方向(票 13):
@@ -2370,8 +2377,9 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
         # 而測試全綠、訊息什麼都不說。這是簽名改動最貴的失敗方式(票 13 C)。
         prov_ok, prov_why = upstream_backed(r)
         if prov_ok:
+            # 編號不記路徑(票 116 B-8)。
             note_exemption(exemptions, r, base, ticket,
-                           "docs/adr/F-0014-upstream-provenance.md",
+                           "F-0014",
                            reason="upstream-provenance")
             return None
         if r not in legacy_no_redlight() and any(os.path.exists(c) for c in cands):
