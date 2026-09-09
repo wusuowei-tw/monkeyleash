@@ -27,10 +27,17 @@
 
 單一邏輯 `.claude/hooks/gate.py`,兩層呼叫:
 
-- **pre-commit 為唯一權威判定** — `.git/hooks/pre-commit` → `gate.py --pre-commit`,擋 commit。
+- **pre-commit 為唯一權威判定** — 擋 commit。**掛載點以 `core.hooksPath` 為準**:
+  有設 → git 只跑那個目錄裡的 hook,`.git/hooks/` 整個被忽略;沒設 → 跑 `.git/hooks/pre-commit`。
+  本 repo 的 `bootstrap.sh` 設 `.githooks`;兩條路徑的 hook **兩段都接**
+  (`leak_scan` + `gate.py --pre-commit`),走哪條都不掉權威層。
   **在已安裝的副本上**綁得住所有人(含非 Claude 的 agent 與人工 commit)。
-  **未安裝的副本上這句不成立**:`.git/hooks/` 不進版控,clone 不會帶走它,
-  而且完全靜默 —— 前哨照跑、測試照綠,沒有東西會說權威層不在。這是已知缺陷,不是留白。
+  **未安裝的副本上這句不成立** —— 但缺的不是檔案:`.githooks/pre-commit` 進版控、clone 帶得走,
+  帶不走的是 `core.hooksPath` 那一行 local config(ADR 0007)。接法:每個 clone 跑一次
+  `sh bootstrap.sh`(它在設定前有三道 fail-closed,任一道不過就拒絕設)。
+  **缺席不再完全靜默**(票 27 之後):`authoritative_layer()` 判 hook 的**內容**而非檔案存不存在,
+  `.claude/portable/status.py` 的 `authority config` 印出設定值。**但偵測碰不到 clone 下來直接手動 commit 的人** ——
+  那個缺口關不掉,明寫在 `not_installed_notice()` 裡。
 - **agent hook 為前哨** — `.claude/settings.json` PreToolUse → `gate.py`,早點紅比 commit 才紅好。
   「繞過前哨仍會在 commit 被擋」**只在權威層已安裝時成立**;沒裝時前哨會直接說出這件事,
   並指出它自己涵蓋不到誰(clone 下來直接手動 commit 的人)。
