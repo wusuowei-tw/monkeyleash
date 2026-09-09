@@ -550,3 +550,133 @@ PreToolUse:Bash hook error: [python "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py"]
 
 依 `F-151` 下半:這次對帳的三格材料裡,兩格是本機量的,一格(右式的 1583)
 **來自被對的那一側**。那一格沒有獨立來源,所以這次對帳**證明得了自洽,證明不了一致**。
+
+### 2026-09-09 更正
+
+**上面那個結論錯了。追加更正,原文不改寫**(`F-036`)——
+被推翻的推論留在原地才看得出它是怎麼錯的;把它改掉會讓這一頁讀起來像從來沒錯過。
+
+#### 錯在哪
+
+原結論把「**收集數**對得上」讀成「**通過數**對得上」。
+`1570 + 12 + 1 = 1583` 這個算式裡,後兩項是**收集數**,第一項是**通過數** ——
+三個加數不同單位,而**相加不會報錯**。
+右式那個 1583 若是 passed 口徑,左式就不是同一件東西,等號成立只是巧合。
+
+#### 新事實
+
+桌機在 `74464ca` 上**不帶 `--ignore` / `--deselect`** 跑出 **1583 passed / 0 failed**。
+**材料由裁決者從桌機回報檔 `2026-09-08T121546Z-restore-test-pass.md` 第 4-1 節讀出,
+本機未讀過該檔。**
+
+#### 三個未證明的現況
+
+| 原未證明 | 現況 |
+|---|---|
+| ① 桌機那個 1583 是不是 passed 口徑 | **已有答案:是 passed 口徑。** |
+| ② 那 12 格是否全過 | **仍未證明**,見下。 |
+| ③ 那 1 格 deselect 掉的是否會過 | **已有答案,而且是「不會過」**——見下。 |
+
+①有了答案之後,原算式**當場垮掉**:桌機那 1583 是**不帶任何排除**跑出來的 passed,
+而左式是「筆電排除掉兩批之後的 passed」加上「那兩批的收集數」。
+**兩邊算的不是同一個量。**
+
+#### 真正的結論:存在跨機器落差(`F-142`)
+
+`TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce`
+在**桌機綠、筆電紅**。同一個 commit、同一條測試、兩台結果相反 ⇒ **跨機器落差**。
+
+**今天只查因,不修。**
+
+#### 查因:兩種排序都紅 ⇒ 不是排序污染
+
+```
+$ python -m pytest -q -p no:randomly tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce
+F                                                                        [100%]
+...
+E       AssertionError: 〔原因字串主控台亂碼〕:['.claude/portable/g1_guard.py']
+E       assert not ['.claude/portable/g1_guard.py']
+
+tests\test_gate.py:870: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce
+1 failed in 0.40s
+```
+
+```
+$ python -m pytest -q tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce
+F                                                                        [100%]
+...
+E       AssertionError: 〔原因字串主控台亂碼〕:['.claude/portable/g1_guard.py']
+E       assert not ['.claude/portable/g1_guard.py']
+
+tests\test_gate.py:870: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce
+1 failed in 13.78s
+```
+
+**兩種都紅**(`-p no:randomly` 加了也一樣)⇒ **不是排序或污染,是真的機器差異。**
+兩次的差別只有耗時(0.40s / 13.78s),那是隨機化外掛的收集成本,與判定無關。
+
+環境對照:
+
+```
+$ git log --oneline -1 -- .claude/portable/g1_guard.py
+2dc3419 票 92 落地:protected_entries() 改用 utf-8-sig —— BOM 不再吃掉第一條保護路徑
+
+$ python -VV
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+```
+
+#### 落差的機制(**已證明的那一半**)
+
+判定走 `gate.redlight_missing()`,而它讀的紀錄檔是:
+
+```
+.claude/hooks/gate.py:61:RUN_LOG = os.path.join(ROOT, ".dev", "test-runs.jsonl")               # 證據
+```
+
+那個檔**不進版控**:
+
+```
+$ git check-ignore -v .dev/test-runs.jsonl
+.gitignore:30:/.dev/*	.dev/test-runs.jsonl
+```
+
+⇒ **紅燈證據是 per-machine 的,不隨 clone 走。**
+
+筆電這台的 8 筆紀錄**全部是 green,一筆紅燈都沒有**:
+
+```
+$ grep -c "test_g1_guard.py" .dev/test-runs.jsonl
+8
+
+$ grep "test_g1_guard.py" .dev/test-runs.jsonl
+{"test_file": "tests/test_g1_guard.py", "time": "2026-09-04T00:29:05.079605+00:00", "result": "green", ...}
+{"test_file": "tests/test_g1_guard.py", "time": "2026-09-05T00:06:40.409272+00:00", "result": "green", ...}
+{"test_file": "tests/test_g1_guard.py", "time": "2026-09-05T00:09:56.792459+00:00", "result": "green", ...}
+{"test_file": "tests/test_g1_guard.py", "time": "2026-09-05T00:51:03.274473+00:00", "result": "green", ...}
+{"test_file": "tests/test_g1_guard.py", "time": "2026-09-05T00:55:29.235119+00:00", "result": "green", ...}
+{"test_file": "tests/test_g1_guard.py", "time": "2026-09-05T00:59:17.074295+00:00", "result": "green", ...}
+{"test_file": "tests/test_g1_guard.py", "time": "2026-09-05T01:53:40.518791+00:00", "result": "green", ...}
+{"test_file": "tests/test_g1_guard.py", "time": "2026-09-08T23:35:11.052305+00:00", "result": "green", ...}
+```
+
+(八筆的 `impl_hash` 皆為 `33ca8e52…`,內容穩定;`ticket_id` 皆 `null`。)
+
+`redlight_missing()` 只在找到 `result == "red"` 的紀錄時回 `None`(= 合格);
+這台一筆都沒有 ⇒ 它回訊息 ⇒ `undrained` 非空 ⇒ 紅。**這一段是構造,不是機率。**
+
+#### 這一段裡哪一半是推論
+
+**已證明**:筆電這台沒有紅燈紀錄,所以這條測試在這台**必紅**。
+**未證明**:桌機那台有紅燈紀錄。我沒有看過桌機的 `.dev/test-runs.jsonl` ——
+「桌機綠是因為它的帳本裡有一筆 red」是**最合理的解釋,不是量到的事實**。
+依 `F-113`:一個候選解釋提出來之後要問「它預測的東西在這一次真的出現了嗎」,
+而這一格**在桌機那一側沒有被觀測**。
+
+#### 仍未證明
+
+**那 12 格在兩台各自的通過狀況,兩台都未逐格量。**
+本機只跑過 `--collect-only`(得 12),桌機那 1583 是總數不是分項。
