@@ -142,3 +142,74 @@
 - 票 118(淨室 skip 沒有理由也沒有預期值)—— 同族:沒有機器在管
 - `F-031` / `F-110`
 - `CLAUDE.md` 的 skills 更新規矩(唯一入口 `bash scripts/skills-update.sh`,R5 是機器保證)
+
+---
+
+# 2026-09-09 第六站複量(上游本機)
+
+**狀態不變:`candidate`。本節只加,不改上面任何一個字(`F-036`)。**
+**量測地點**:上游桌機(hostname `DESKTOP-T2I45T1`),HEAD `3a37399`,只讀。
+**本節只複量上游那一列;下游兩列沒有重量**(本輪不碰下游)。
+
+## 第六站(GPT 視窗)報來的數
+
+```
+reason_counts          = {"gate-self-modification": 223}
+ticket_declared_count  = 0
+```
+
+## 本窗獨立複量(不同視窗、不同工具、同一份檔案)
+
+```
+$ wc -l < .dev/gate-exemptions.jsonl
+223
+
+$ grep -o '"reason": "[^"]*"' .dev/gate-exemptions.jsonl | sort | uniq -c
+    223 "reason": "gate-self-modification"
+```
+
+**⇒ 兩邊吻合。`reason` 的值域在這份帳本上只有一個,筆數 223 筆。**
+
+## 這對本票的前提說了什麼
+
+散文那句前提逐字是:
+
+> Every line records a case where gate **R3** waived the "must have a test file" rule
+> because a **ticket** declared that module untested.
+
+符合它的紀錄需要 `reason == "ticket-declared"`。**這份帳本裡是 0 筆。**
+
+| | 立案時(2026-09-08) | 本次複量(2026-09-09) |
+|---|---|---|
+| 上游筆數 | **219 筆** | **223 筆**(**+4 筆**) |
+| `gate-self-modification` | 219 筆 | **223 筆** |
+| 符合前提(`ticket-declared`) | **0 筆** | **0 筆** |
+
+**⇒ 分母長了 4 筆,分子還是 0。前提符合率 0 / 223。**
+新增那 4 筆**全部**還是 `gate-self-modification` ——
+**不是樣本太小,是那條路徑在這個 repo 上從來沒有被走過。**
+
+> **⚠ 這 4 筆是本票立案之後才寫進去的**(票 115 / 116 的落地各自觸發了
+> R2 的 gate 自我修改豁免)。**帳本會長,而散文不會自己重驗** ——
+> 每多一筆,那段散文在下一次 code-review 時就多報一筆假陽性。
+> `F-031` 的成本**是隨時間增加的**,這一節就是它的第一個增量量測。
+
+## 順帶量到的一格:`declared_in` 現在有兩種形狀
+
+```
+$ grep -o '"declared_in": [^,]*' .dev/gate-exemptions.jsonl | sort | uniq -c
+      3 "declared_in": "0004"
+    220 "declared_in": "docs/adr/0004-gate-self-modification.md"
+```
+
+**票 116 B-8 的落地(記編號不記路徑)只影響它之後寫入的 3 筆**;
+**前面 220 筆仍是舊的路徑形狀。**
+⇒ 本票動工時要處理的對帳邏輯,**兩種形狀都會遇到**,
+不能假設 `declared_in` 是編號。**這一格立案時不知道,現在知道了。**
+
+## 本節未證明
+
+- **下游兩列沒有複量**(64 筆 / 46 筆仍是 2026-09-08 的數)。本輪不碰下游。
+- **沒有重驗「那些 ADR 打得開但不含 `Untested by decision`」那一格** ——
+  本節只複量 `reason` 的分布,沒有重跑 ② 那半。
+- **沒有查這段散文有沒有被執行過** —— 上面那條「未證明」原封不動,仍然成立。
