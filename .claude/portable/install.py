@@ -31,6 +31,35 @@ sys.path.insert(0, HERE)
 import claude_md  # noqa: E402
 import manifest  # noqa: E402  (同目錄,安裝器與標記表是一組的)
 
+
+def _out(text):
+    """輸出走 **utf-8 位元組**,不走 `print`(票 62 家族第四支,票 115)。
+
+    `print` 用主控台的編碼,而 Windows 的 cp950 編不出很多東西 —— 那不是亂碼,
+    是 `UnicodeEncodeError` 未捕捉、**行程當場死掉**。
+
+    **這一支特別要緊**:安裝完成報告是**下游第一次見到這個框架的畫面**。
+    它在 cp950 主控台上死掉的樣子,是一個看起來像「裝壞了」的 traceback ——
+    而實際上 repo 已經裝好了,死的只是最後那段報告。
+    **看不懂的第一印象比看不懂的擋下訊息更貴**:後者至少還有 pre-commit 擋著。
+
+    **寫法與 `verify_gates.py` / `g1_verify.py` / `shadow_review.py` 一致**,
+    不是新發明的。`flush` 的理由:本檔的輸出全部走這裡,而
+    `sys.stdout.buffer` 是二進位層 —— 不先 flush 文字層的話,
+    萬一將來有人加回一個 `print`,兩層的輸出會交錯。
+
+    ## ⚠ 刻意**不做** `try/except` 退回 `stream.write`
+
+    `user_layer._write` 是那樣寫的,而**那條退路在 cp950 上照樣會炸** ——
+    它沒有救到任何東西,只是把「為什麼炸」藏起來。
+    **票 62 要消掉的正是「炸掉時看不出來」,而 fail-soft 就是那個東西本身。**
+    (票 115 裁一,2026-09-09。)
+    """
+    sys.stdout.flush()
+    sys.stdout.buffer.write((text + "\n").encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+
 HOOK = ("#!/bin/sh\n"
         "# 六站閘門 — 洩漏偵測 + 權威判定。邏輯不在這裡,只呼叫共用腳本。\n"
         "# 洩漏偵測在前:秘密一旦進了歷史,擋下 commit 是唯一便宜的時點。\n"
@@ -500,46 +529,46 @@ def main(target):
     blocked = verify(target)
     pending = write_decisions_pending(target, buckets, carried_untracked, unmarked)
 
-    print("裝好了:%s" % target)
-    print("  複製      %d 個檔案" % len(buckets["copy"]))
-    print("  產生      .dev/(狀態與空證據)、.agents/legacy-no-redlight.txt(%d 筆)" % len(legacy))
-    print("  鏡像      %s" % (", ".join(mirrors) or "(無 skills 可鏡像)"))
-    print("  權威層    %s(這台機器,不進版控)"
-          % os.path.relpath(hook, target).replace("\\", "/"))
-    print("  可攜層    %s + bootstrap.sh(進版控,mode 100755)"
-          % os.path.relpath(portable_hook, target).replace("\\", "/"))
+    _out("裝好了:%s" % target)
+    _out("  複製      %d 個檔案" % len(buckets["copy"]))
+    _out("  產生      .dev/(狀態與空證據)、.agents/legacy-no-redlight.txt(%d 筆)" % len(legacy))
+    _out("  鏡像      %s" % (", ".join(mirrors) or "(無 skills 可鏡像)"))
+    _out("  權威層    %s(這台機器,不進版控)"
+         % os.path.relpath(hook, target).replace("\\", "/"))
+    _out("  可攜層    %s + bootstrap.sh(進版控,mode 100755)"
+         % os.path.relpath(portable_hook, target).replace("\\", "/"))
     # **C 的代價要說出來(票 58 甲)。** 裝出來的 repo 上,`.githooks/` 在
     # `bootstrap.sh` 跑之前是**死的** —— 只看目錄結構的人會以為權威層走那裡,
     # 而實際走 `.git/hooks/`。不說的話,這就是本票自己製造的下一則 F-099。
-    print("\n**`.githooks/` 現在是死的,要跑一次 `sh bootstrap.sh` 才會生效。**")
-    print("    現在生效的是 .git/hooks/pre-commit(這台機器,clone 帶不走)。")
-    print("    `.githooks/` 進了版控,所以**下一個 clone 只要跑那一行**就接上 ——")
-    print("    在此之前,那一步是「先手工造一個 hook,再跑一行 config」。")
-    print("    這一步關不掉:git 刻意不讓 clone 自動執行任何東西(ADR 0007)。")
-    print("  go-live   %s" % go_live)
+    _out("\n**`.githooks/` 現在是死的,要跑一次 `sh bootstrap.sh` 才會生效。**")
+    _out("    現在生效的是 .git/hooks/pre-commit(這台機器,clone 帶不走)。")
+    _out("    `.githooks/` 進了版控,所以**下一個 clone 只要跑那一行**就接上 ——")
+    _out("    在此之前,那一步是「先手工造一個 hook,再跑一行 config」。")
+    _out("    這一步關不掉:git 刻意不讓 clone 自動執行任何東西(ADR 0007)。")
+    _out("  go-live   %s" % go_live)
     if carried_untracked:
-        print("\n帶過去了但來源 repo 還沒把它們進版控 —— 確認不是暫存檔:")
+        _out("\n帶過去了但來源 repo 還沒把它們進版控 —— 確認不是暫存檔:")
         for p in carried_untracked:
-            print("    %s" % p)
+            _out("    %s" % p)
     # 被 .gitignore 蓋住的框架檔:帶了,但要說。
     # 不說的話,下一個人不會知道他的 .gitignore 正在對抗安裝器 ——
     # 而那個狀態的後果是「裝出沒有閘門的 repo」,且安裝過程安靜又成功(票 18)。
     hidden = ignored_framework_files()
     if hidden:
-        print("\n**來源的 .gitignore 蓋住了這些框架檔**,已強制帶過去 ——"
-              "請確認那是刻意的:")
+        _out("\n**來源的 .gitignore 蓋住了這些框架檔**,已強制帶過去 ——"
+             "請確認那是刻意的:")
         for p in hidden:
-            print("    %s" % p)
+            _out("    %s" % p)
     # ask / 未涵蓋鄰居 / 未進版控 —— **落地成檔案**,不只印終端機。
     # 印出來沒人看等於沒列;寫成 decisions-pending.md,人回頭找得到,也進得了版控。
     if pending:
-        print("\n要人決定的項目已寫進:%s" % os.path.relpath(pending, target).replace("\\", "/"))
-        print("    (別只看終端機 —— 那份檔案是這些決定的落地處)")
+        _out("\n要人決定的項目已寫進:%s" % os.path.relpath(pending, target).replace("\\", "/"))
+        _out("    (別只看終端機 —— 那份檔案是這些決定的落地處)")
     else:
-        print("\n沒有待決定項目。")
-    print("\n閘門實測(R2 在 idle 站擋下原始碼提交):")
+        _out("\n沒有待決定項目。")
+    _out("\n閘門實測(R2 在 idle 站擋下原始碼提交):")
     for line in blocked.strip().splitlines():
-        print("    %s" % line)
+        _out("    %s" % line)
 
 
 if __name__ == "__main__":

@@ -63,6 +63,115 @@ install.py       21
 
 ---
 
+## ✅ 落地(2026-09-09)—— 裁決「甲+」
+
+### 動工前量到的三件(都與票面原本的預期不同)
+
+| | 票面原本 | 實測 |
+|---|---|---|
+| 互動提示 | 「`install.py` 若有同型的東西,照同一條裁決」 | **`install.py` 沒有任何 `input()`** ⇒ 那一條**沒有對象**,不必處理 |
+| 21 這個數字 | `grep "^\s*print("` 數的 | 用 `ast`(與 `_print_calls` 同一支判準)重數**也是 21** ⇒ 數字站得住,**但對的理由是這一支剛好沒有跨行 `print`,不是判準對** |
+| 「四支既有實作可抄」 | `def _out` 數的 4 支 | 家族實為 **`def` 4 份 + inline 5 處 = 6 個檔案**(見上方〈動工前置〉(c)) |
+
+### 裁一:抄類 A,**不抄 `user_layer._write`**
+
+`install.py` 從零加一支 `_out`:補 `"\n"`、前置 `sys.stdout.flush()`、
+`sys.stdout.buffer.write(...encode("utf-8"))`、`flush`。
+**沒有 `try/except` 退回 `stream.write`。**
+
+**三條理由**:
+
+1. **「pytest 抓輸出會不會炸」不成立** —— `tests/test_portable_output_encoding.py`
+   **自己造** cp950 主控台(`io.TextIOWrapper` 換掉整個 `sys.stdout`),
+   被測程式拿到的 `.buffer` 就是底下那個 `BytesIO`。**`subprocess` / `capsys` / `capfd` 三者零命中。**
+2. **`user_layer._write` 的 `except` 退回的是 `stream.write(msg)`** ——
+   **在 cp950 上那條照樣會炸**。它沒有救到任何東西,只是把「為什麼炸」藏起來。
+3. **票 62 要消掉的正是「炸掉時看不出來」。fail-soft 就是那個東西本身。**
+
+這一條由 `TestInstallOutWritesUtf8Bytes::test_out_does_not_swallow_the_reason`
+用 `ast` 釘住(**不是行為測試** —— fail-soft 的症狀是「沒有症狀」,行為看不見它)。
+
+### 裁二:**列舉**,不做目錄全掃
+
+`parametrize` 加入 `"install.py"`(四支);
+class 更名 `TestNoBarePrintRemainsInTheThreeTools` → **`TestNoBarePrintRemainsInTheListedModules`**
+(名字裡不再有任何數量詞,票 94)。
+
+**為什麼不能全掃**(已寫進 class docstring,不留在對話裡):
+其餘模組**刻意保留** cp950 編得動的 `print`(`_carries` 的 docstring 逐字:
+「那是範圍,不是遺漏」)⇒ **全掃會把「刻意保留」報成「還沒改」,那是一條會誤擋的規則。**
+
+**代價也寫進去了**:列舉會漏 —— 新增一支有裸 `print` 的工具時這條不會叫,
+除非有人記得加進清單。另補一條 `test_the_listed_modules_are_the_ones_that_exist`
+擋住「清單打錯名字」那個失敗方式。
+
+### 裁三:不碰 `.agents/legacy-no-redlight.txt`
+
+`install.py` 在該清單第 23 行 ⇒ **R3 整條豁免** ⇒ 紅燈只能來自測試那一側。
+**動完之後該不該把它拿掉,本票不處理,不夾帶**(那會動到
+`TestLegacyNoRedlightList`,而那是票 124 的題目)。
+
+### ⚠ 撤回一個說法:**「端到端由 CI 淨室守著」在編碼這一格不成立**
+
+`tests/test_install.py:339-341` 寫著「端到端由 CI 的淨室驗證守著」——
+**那句話對它自己的題目(`core.hooksPath`)成立,對編碼這一格不成立**:
+
+```
+$ grep -n "runs-on" .github/workflows/tests.yml
+20:    runs-on: ubuntu-latest
+```
+
+**CI 跑 Linux ⇒ locale 是 utf-8 ⇒ cp950 在那裡不會發生。**
+淨室證得到「安裝跑得完」,**證不到「cp950 主控台上不會炸」**。
+
+> **⇒ 票面不得把淨室算成這一格的覆蓋。**
+> 唯一的覆蓋是 `TestInstallOutWritesUtf8Bytes`(它自己造 cp950 情境,
+> 所以在 Linux 上一樣會紅)。
+> `F-113` 的同一條反過來用:**不要拿一個不會發生的環境去宣稱覆蓋。**
+
+### 紅燈先行(順序沒有顛倒)
+
+先只加 `parametrize`、**還沒動 `install.py`** 時跑:
+
+```
+E       AssertionError: install.py 還有 21 個裸 print(行號 [503, 504, 505, 506, 507, 509, 514, 515, 516, 517, 518, 519, 540, 521, 529, 536, 537, 539, 542, 523, 532])—— 輸出要走 _out,否則同一份輸出裡會有兩種編碼:留著的 print 走 locale(Windows 上是 cp950),_out 走 utf-8。
+FAILED tests/test_portable_output_encoding.py::TestNoBarePrintRemainsInTheThreeTools::test_the_module_has_no_bare_print[install.py]
+1 failed, 15 passed in 0.16s
+```
+
+改完之後 `grep -c "print(" .claude/portable/install.py` = **0**。
+
+### 驗收
+
+```
+$ python -m pytest -q tests/test_portable_output_encoding.py tests/test_install.py
+44 passed in 1.55s
+
+$ PYTHONIOENCODING=utf-8 python -m pytest -q -p no:randomly --tb=short
+1589 passed, 3 skipped, 3 xfailed in 109.90s (0:01:49)
+```
+
+**1583 → 1589,+6,逐條指得出來**:
+
+| 來源 | 條 |
+|---|---|
+| `parametrize` 多一個 `install.py` | **+1** |
+| `test_the_listed_modules_are_the_ones_that_exist`(新) | **+1** |
+| `TestInstallOutWritesUtf8Bytes`(新,四條) | **+4** |
+
+### ⚠ 一個本票**沒有**處理的殘留
+
+更名之後,`.claude/portable/shadow_review.py:651` 的註解裡仍寫著舊名
+`TestNoBarePrintRemainsInTheThreeTools`。**沒有改,而那是刻意的**:
+
+`shadow_review.py` **不在** `legacy-no-redlight` 上 ⇒ 改它(即使只是註解)
+需要一筆屬於本票、記在 `tests/test_shadow_review.py` 上的紅燈 ——
+**而純註解修改造不出那種紅燈**。那正是**票 119** 的題目。
+
+**登記在這裡,不繞過。**(票 62 的票面 `:426` 也有一處舊名,同理未動 —— 那是歷史紀錄,`F-036`。)
+
+---
+
 ## ⚠ 動工前置(2026-09-08 落地,來源:票 114 各輪報告的候選清單)
 
 > **這兩項原本只活在 `.dev/reports/` 裡,而 `.dev/` 不進版控** ——

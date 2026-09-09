@@ -279,8 +279,42 @@ class TestG1VerifyMainSurvivesACp950Console:
         assert "保護清單" in text or "第一級" in text
 
 
-class TestNoBarePrintRemainsInTheThreeTools:
-    """**第二刀的機器版判準:三支工具裡不得再有裸 `print`。**
+class TestNoBarePrintRemainsInTheListedModules:
+    """**第二刀的機器版判準:列舉的模組裡不得再有裸 `print`。**
+
+    ## ⚠ 這是**列舉**,不是目錄全掃 —— 而且現在不能全掃
+
+    `parametrize` 那份清單是**手列**的。看起來「掃 `.claude/portable/` 整個目錄」
+    比較不會漏,**而那會在其餘模組上紅** ——
+    因為它們**刻意保留**了 cp950 編得動的 `print`(本檔 `_carries` 的 docstring 逐字:
+    「修法 (a) 只把**會炸的那幾個** `print` 改走 buffer,其餘 cp950 編得動的
+    `print` **刻意留著**,**那是範圍,不是遺漏**」)。
+
+    **⇒ 全掃會把「刻意保留」報成「還沒改」,而那是一條會誤擋的規則。**
+    要能全掃,得先有一票把那些模組也收乾淨;**在那之前,列舉是誠實的那一邊**
+    (票 115 裁決,2026-09-09)。
+
+    **代價寫出來**:列舉會漏 —— 新增一支有裸 `print` 的工具時,
+    **這條不會叫**,除非有人記得把它加進清單。**那是這個選擇的已知缺口。**
+
+    ## ⚠ `install.py` 這一支:結構斷言**等於**行為保證
+
+    另外三支**留著** cp950 安全的 `print`,所以「沒有裸 `print`」對它們
+    只是「會炸的那些已經改掉」—— **證不到整份輸出同編碼**,
+    因此它們**各自另有行為測試**(整支 `main` 導進 cp950 緩衝、整份輸出解得回來)。
+
+    **`install.py` 不同:它的 `print` 一個不留,全部走 `_out`。**
+    ⇒ 對這一支,「沒有裸 `print`」**就是**「整份輸出都是 utf-8 位元組」
+    —— 結構斷言在這裡剛好等於行為保證。
+
+    **⚠ 但那只涵蓋「通道對不對」,不涵蓋「新通道本身對不對」** ——
+    後者由 `TestInstallOutWritesUtf8Bytes` 守(見下)。
+
+    ## 為什麼名字裡不再有數量詞
+
+    舊名是 `TestNoBarePrintRemainsInTheThreeTools` —— **`Three` 是寫死的計數**,
+    而清單今天變成四支。**名字不是計數**(票 94 的同一條):
+    寫死一個會漂的數字,等於保證它過期,**而過期時沒有東西會說話**。
 
     ## 為什麼需要一條原始碼層的斷言,而不是只靠行為測試
 
@@ -300,13 +334,24 @@ class TestNoBarePrintRemainsInTheThreeTools:
     """
 
     @pytest.mark.parametrize("filename", ["verify_gates.py", "g1_verify.py",
-                                          "shadow_review.py"])
+                                          "shadow_review.py", "install.py"])
     def test_the_module_has_no_bare_print(self, filename):
         left = _print_calls(filename)
         assert not left, (
             "%s 還有 %d 個裸 print(行號 %s)—— 輸出要走 _out,"
             "否則同一份輸出裡會有兩種編碼:留著的 print 走 locale(Windows 上是 cp950),"
             "_out 走 utf-8。" % (filename, len(left), left))
+
+    def test_the_listed_modules_are_the_ones_that_exist(self):
+        """**列舉的每一支都要真的在** —— 打錯檔名時 `_print_calls` 會丟
+        `FileNotFoundError`,而那讀起來像環境壞了,不像清單打錯。
+
+        (這一條是列舉這個選擇的代價的另一半:清單要維護,
+        而維護清單的第一個失敗方式是把名字打錯。)
+        """
+        for filename in ("verify_gates.py", "g1_verify.py",
+                         "shadow_review.py", "install.py"):
+            assert (PORTABLE / filename).exists(), filename
 
     def test_the_check_can_actually_see_a_bare_print(self, tmp_path):
         """**反控:這個偵測器真的看得到 print,包含跨行的那種。**
@@ -326,6 +371,91 @@ class TestNoBarePrintRemainsInTheThreeTools:
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
             and n.func.id == "print"]
         assert found == [1, 2], "跨行的 print 沒被算到 —— 偵測器本身有洞"
+
+
+class TestInstallOutWritesUtf8Bytes:
+    """`install._out` 這支**新通道**本身對不對(票 115)。
+
+    ## 為什麼結構斷言不夠
+
+    上面那條(`TestNoBarePrintRemainsInTheListedModules`)答的是
+    **「還有沒有人走舊通道」** —— 它數 `print` 呼叫。
+    **它答不出「新通道對不對」**:一支寫錯的 `_out`
+    (少了 `.encode("utf-8")`、寫到 `sys.stdout` 而不是 `.buffer`、
+    或是加了 `try/except` 退回文字層)**照樣讓那條全綠**,
+    因為那個檔裡確實一個 `print` 都沒有了。
+
+    > **「舊路沒人走」與「新路是通的」是兩個問題。**
+
+    ## 為什麼只測 `_out`,不測整支 `main()`
+
+    `install.main(target)` **會真的裝一個 repo** —— 第一個輸出出現在
+    `install.py:532`,而在它之前 `main` 已經跑完 21 個呼叫
+    (`git init`、三次 `git config`、`copy_into`、四次 `git commit`、`verify()`)。
+    **那不是一條單元測試該做的事**,而 `tests/test_install.py` 早已裁過同一件事:
+    「**這一條驗的是本組函式,不是整支 `main()`**」。
+
+    **⚠ 而「端到端由 CI 淨室守著」在【這一格】不成立** ——
+    `.github/workflows/tests.yml:20` 是 `runs-on: ubuntu-latest`,
+    **Linux 的 locale 是 utf-8,cp950 在那裡不會發生**。
+    ⇒ 淨室證得到「安裝跑得完」,**證不到「cp950 主控台上不會炸」**。
+    那一格的唯一覆蓋就是本類(票 115 實測,2026-09-09;`F-113` 的同一條:
+    **不要拿一個沒發生的機制去解釋一個發生了的錯**,反過來也一樣 ——
+    不要拿一個不會發生的環境去宣稱覆蓋)。
+    """
+
+    def test_out_survives_a_cp950_console(self):
+        """**核心**:在真的 cp950 主控台上,`_out` 不得丟例外。
+
+        語料含中文 —— cp950 編得動中文,所以這一條**不是**靠中文紅的;
+        它靠的是 `_out` 走不走二進位層。走文字層的話,
+        `errors="strict"` 的 wrapper 會在**寫得下的字**上放行,
+        而在下一條(含 `✓`)上炸。兩條一起才完整。
+        """
+        inst = _load("install_enc", "install.py")
+        with cp950_console():
+            inst._out(u"裝好了:某個目錄")
+
+    def test_out_survives_a_mark_cp950_cannot_encode(self):
+        """**cp950 編不出的符號**也要活下來 —— 那是票 62 的原始病灶。"""
+        inst = _load("install_enc2", "install.py")
+        with cp950_console() as raw:
+            inst._out(u"驗收 ✓")
+        assert _carries(raw, u"✓"), raw.getvalue()
+
+    def test_the_whole_stream_decodes_as_utf8(self):
+        """**整份輸出解得回來** —— `install.py` 的 `print` 一個不留,
+        所以它的輸出**沒有混編碼**,這條更強的斷言在這一支身上用得上。
+
+        (另外三支用不上:它們刻意留著 cp950 安全的 `print`,
+        於是同一份輸出裡會有兩種編碼 —— 見 `_carries` 的 docstring。)
+        """
+        inst = _load("install_enc3", "install.py")
+        with cp950_console() as raw:
+            inst._out(u"裝好了:某個目錄")
+            inst._out(u"  複製      12 個檔案")
+            inst._out(u"\n閘門實測(R2 在 idle 站擋下原始碼提交):")
+        text = _decode_whole_stream(raw)
+        assert u"裝好了" in text and u"閘門實測" in text, text
+
+    def test_out_does_not_swallow_the_reason(self):
+        """**反控:`_out` 不得有 `try/except` 退回 `stream.write`。**
+
+        `user_layer._write` 是那樣寫的,而**那條退路在 cp950 上照樣會炸** ——
+        它沒有救到任何東西,只是把「為什麼炸」藏起來,
+        而**票 62 要消掉的正是「炸掉時看不出來」**。
+
+        用 `ast` 檢查而不是看行為:fail-soft 的症狀是「**沒有**症狀」,
+        行為測試看不見它(票 115 裁一)。
+        """
+        src = io.open(str(PORTABLE / "install.py"), encoding="utf-8").read()
+        fn = [n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef) and n.name == "_out"]
+        assert len(fn) == 1, "install.py 裡不是恰好一支 _out:%d" % len(fn)
+        handlers = [n for n in ast.walk(fn[0]) if isinstance(n, ast.ExceptHandler)]
+        assert not handlers, (
+            "install._out 有 except 分支 —— fail-soft 會把「為什麼炸」藏起來,"
+            "而那正是票 62 要消掉的東西(票 115 裁一)")
 
 
 # `shadow_review.py` 那一條**不在這個檔裡**,在 `tests/test_shadow_review.py`。
