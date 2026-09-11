@@ -472,3 +472,55 @@ $ python -X utf8 .claude/hooks/gate.py --pre-commit        -> gate-rc=0
   但沒去下游身上跑。同步走票 01 的路徑。
 - ⚠ **`gate.py` 那七格沒有修**(見「同類入口」的 A/B 裁決)。
   **接受 A 就等於接受「R6 的『偽造需要改寫歷史』這句話在下一張票收工之前是假的」。**
+
+### 七、推送與 CI
+
+```
+$ git commit -F <訊息檔>     -> [master 757843a] 5 files changed, 860 insertions(+), 16 deletions(-)
+$ git config --get core.hooksPath -> .githooks            (權威層確實接著,commit 走過兩段)
+$ git push origin master     -> 7ed86c7..757843a  master -> master
+```
+
+**CI run #112(`757843a`)= failure。而它不是本票造成的,紅綠邊界量得出來:**
+
+| run | head_sha | commit | 結論 |
+|---|---|---|---|
+| 108 | `e5abad8` | 立案 128 / 129 + 票 122 補一節 | **success** |
+| **109** | **`992297a`** | **建交班兩份(commander / handover)** | **failure ← 紅從這裡開始** |
+| 110 | `f475311` | 票 87 §十七 + 立案 130 / 131 | failure |
+| 111 | `7ed86c7` | 票 87 §十七追加(本票動工前的 HEAD) | failure |
+| 112 | `757843a` | **本票** | failure(**第 4 輪同一個紅**) |
+
+`992297a` 正是加入 `docs/agents/commander.md` / `handover.md` 的那一筆,
+而那兩個檔沒有 portable-manifest 標記 —— **與本機量到的那一紅同一個**。
+四輪的失敗步驟都是第 6 步「跑測試」(run 112 的 jobs API 逐步確認)。
+
+**用 CI 的旗標在本機重跑一次,佐證本票不新增任何紅:**
+
+```
+$ python -X utf8 -m pytest -q --ignore=tests/test_known_items_regression.py \
+    --deselect "tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce"
+E       assert not ['docs/agents/commander.md', 'docs/agents/handover.md']
+tests\test_upstream_manifest.py:69: AssertionError
+FAILED tests/test_upstream_manifest.py::test_every_tracked_file_is_classified
+1 failed, 1584 passed, 3 skipped, 1 deselected, 3 xfailed in 208.94s (0:03:28)
+```
+
+> **⚠ 這一格的證據有一個洞,寫出來不遮:**
+> **本窗沒有讀到 CI 那一側的失敗測試清單。**
+> `gh` 在這台桌機上不存在(四個安裝路徑全查、皆無),
+> 而 `actions/runs/<id>/logs` 需要認證(實測 `403`),
+> check-run annotations 只回一句 `Process completed with exit code 1.`(無測試名)。
+> ⇒ 「CI 紅的是那一條」是**由紅綠邊界 + 本機同旗標重跑推出來的**,
+> **不是從 CI 的日誌讀出來的**。
+> 兩者結論相同,但**證據等級不同**,而
+> **一個推得很好的結論與一個量到的結論在文字上長得一樣**(`F-111`)。
+> 要補的話:在有 `gh` 的機器上跑 `gh run view 34578546017 --log`
+> (票 85 裁決 2026-09-05 方案 C 的同一條路)。
+
+**處置建議(不在本票範圍,要 Jeff 裁)**:
+`docs/agents/commander.md` / `handover.md` 要標 `copy` 還是 `skip`,
+取決於「交班文件是框架內容還是本 repo 的工作紀錄」——
+`docs/handover/` 目前標 `skip`(「per-repo 的狀態,不是框架內容」),
+而 `docs/agents/*.md` 多數標 `copy`。**兩邊都有先例,所以這不是本窗該替人決定的事。**
+在它被決定之前,**CI 會一直紅,而一條長期紅的 CI 會訓練人忽略 CI**(`F-031`)。
