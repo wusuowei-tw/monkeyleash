@@ -1092,8 +1092,33 @@ def imports_research(content):
 TEXT_ENCODINGS = ("utf-8-sig", "utf-8", "cp950", "cp1252", "latin-1")
 
 
+def decode_text(raw):
+    """位元組 → 文字,依 `TEXT_ENCODINGS` 序。**永遠給得出東西**(latin-1 不會失敗)。
+
+    ## 為什麼從 `read_text_or_none` 裡抽出來(票 133 批一)
+
+    「**位元組從哪來**」與「**位元組怎麼解**」是兩件事,而在 commit 時點
+    只有前者錯(該讀 index,讀了工作樹)。抽開之後來源可以換,
+    **解碼這一半被兩條路原封不動共用** —— 另寫一套的話,
+    cp950 那個假設(F-042 / F-064)會在新那條路上原地復活,
+    而新那條路正是唯一會在 commit 跑的那條。
+
+    ⚠ **與 `.claude/portable/scanner.py` 的 `decode_bytes` 刻意不同**:
+    那邊多一層可讀性檢查與 fail-closed 出口(票 109 / 110),因為它要判
+    「這串東西還算文字嗎」;這裡要判的是 import 敘述與 code 圍籬,
+    **要找的東西全是 ASCII,亂碼不影響它們的可見性**,所以寧可拿到亂碼也要判。
+    兩份不共用程式碼是票 42 的既有裁決(權威層不 import `portable/`)。
+    """
+    for enc in TEXT_ENCODINGS:
+        try:
+            return raw.decode(enc)
+        except Exception:
+            continue
+    return raw.decode("latin-1", "replace")
+
+
 def read_text_or_none(abs_path):
-    """讀成文字:**先拿位元組,再依序解碼**。
+    """**工作樹**那一份:讀成文字:**先拿位元組,再依序解碼**。
 
     只用 `io.open(..., encoding="utf-8")` 的話,zh-TW Windows 上以 cp950 存的 .py
     會丟 UnicodeDecodeError,而上游把它接成「跳過」或「空字串」——
@@ -1103,18 +1128,18 @@ def read_text_or_none(abs_path):
     連位元組都拿不到(權限、路徑不存在)回傳 None —— 那是「**這個問題沒有答案**」,
     呼叫端必須 fail-closed。不得翻譯成「檔案是空的」:空檔案什麼都沒 import,
     而那正好是最鬆的答案。
+
+    ⚠ **對象是檔案系統,而那不是每一個呼叫端都想要的**(票 133)。
+    要判「這一份會不會進 commit」的人要的是 index ⇒ 用 `staged_text`。
+    本支的正當呼叫端是前哨那條路(`content_after_edit` 算不出結果時的磁碟現況)
+    與任何「就是要讀這個檔」的診斷。**簽名與行為一個字沒動。**
     """
     try:
         with io.open(abs_path, "rb") as f:
             raw = f.read()
     except Exception:
         return None
-    for enc in TEXT_ENCODINGS:
-        try:
-            return raw.decode(enc)
-        except Exception:
-            continue
-    return raw.decode("latin-1", "replace")
+    return decode_text(raw)
 
 
 def content_after_edit(path, tool_input):
@@ -1515,7 +1540,21 @@ def logged_exemption_backed(rel_path, base):
     return False
 
 
-FRICTION_LOG = os.path.join(ROOT, "docs", "agents", "friction-log.md")
+# ── friction log 的位置:**相對路徑是單一來源**,絕對路徑由它長出來 ────────
+#
+# 票 133 批一 ① 的一個實測缺陷,寫在這裡免得下一個人再踩:
+# R9 改讀 index 之後需要一個**repo 根相對**的路徑交給 `git show :<path>`,
+# 而第一版是用 `rel(FRICTION_LOG)` 算出來的 —— **那是錯的**。
+#
+# `rel()` 用的是**當下的** `ROOT`,而 `FRICTION_LOG` 是 **import 時**就凍結的絕對路徑。
+# 兩者一旦不同步(測試 `monkeypatch.setattr(gate, "ROOT", tmp)` 只換其中一個),
+# `rel()` 會吐出一條 `../../../../..` 的逃逸路徑,而 `git show :../../..` 毫無意義。
+# 實測長相:`:../../../../../../../../projects/agent-gates/docs/agents/friction-log.md`。
+#
+# **判準**:要交給 git 的相對路徑,不得從一個絕對路徑「反算」回來 ——
+# 反算的結果取決於兩個可以各自漂移的東西。**讓相對的那一份當來源,絕對的那一份長出來。**
+FRICTION_LOG_REL = "docs/agents/friction-log.md"
+FRICTION_LOG = os.path.join(ROOT, *FRICTION_LOG_REL.split("/"))
 
 # 發號用的標題行:`## F-123 …`、`## TSI-038 …`。
 # **前綴必須是字母、號碼必須緊接在 `## ` 之後** —— 這兩個條件一起,
@@ -1527,7 +1566,7 @@ FRICTION_LOG = os.path.join(ROOT, "docs", "agents", "friction-log.md")
 _FRICTION_HEADING = re.compile(r"^##\s+([A-Za-z]+-\d+)(?:\s|$|[^\w-])")
 
 
-def check_friction_numbers(path=None):
+def check_friction_numbers(path=None, cwd=None):
     """權威層規則(票 83):同一份 friction log 裡不得有兩個相同的號。
 
     **它已經撞過一次**(2026-08-26):兩個視窗各發了一個 `F-122`,
@@ -1553,15 +1592,59 @@ def check_friction_numbers(path=None):
     混進一個會誤報的子判定,整條的可信度就跟著它走。
 
     **fail-closed**:讀不到一律當違規,不當作乾淨。
+
+    ## 權威輸入是 **index**,不是工作樹(票 133 批一 ①)
+
+    R9 的命題是「同一份 friction log 裡不得有兩個相同的號」,而**那一份**指的是
+    **要進歷史的那一份** —— 進歷史的是 index。舊版讀工作樹,於是
+    `git add <撞號版>` 之後把工作樹改乾淨,R9 綠、撞號進歷史,**零告警**。
+
+    **答案不是從「別格也是 index」推出來的**:R9 判的對象就是那個檔案本身,
+    而那個檔案會被這次 commit 帶走 ⇒ index 是它唯一正確的對象。
+    (對照:前哨的 `content_after_edit` 那條路正確對象**不是** index ——
+    票 133 的三分類,以及那條硬限制「共用一個讀取函式不等於共用一個正確對象」。)
+
+    ## 來源綁**執行上下文**,不綁函式
+
+      `path` 給了   -> 讀**那個檔**(工作樹)。明確指定一個檔的診斷/測試入口,
+                      既有 20+ 條測試靠它餵語料。**行為一個字沒動。**
+      `path` 沒給   -> 讀**這個 repo 要提交的那一份**(index),`cwd` 供測試指定 repo。
+
+    `mode_pre_commit` 走的是後者,而且**呼叫寫法沒變**(`check_friction_numbers()`)
+    —— 所以 `test_the_rule_is_actually_invoked_at_the_authoritative_layer`
+    那條「規則真的被接上」的斷言仍然守得住它要守的東西。
+
+    ⚠ **`splitlines()` 兩條路共用**:blob 是 LF、工作樹可能是 CRLF,
+    而 `_FRICTION_HEADING` 錨在行首,尾巴那個 `\\r` 不影響比對。
+    **刻意不在這裡改行尾處理**(那是票 121 的範圍)—— 兩條路用同一個切法,
+    差異就不會從切法進來。
     """
     target = path or FRICTION_LOG
-    try:
-        with io.open(target, encoding="utf-8") as f:
-            lines = f.read().splitlines()
-    except Exception as e:
-        return ["[R9] 讀不到 friction log(%s):%s\n"
-                "     讀不到一律當違規,不當作乾淨 —— 一份掃不到的清單給不出綠燈。"
-                % (rel(target), e)]
+    if path is None:
+        # **用 `FRICTION_LOG_REL`,不用 `rel(FRICTION_LOG)`** —— 理由寫在
+        # `FRICTION_LOG_REL` 的定義旁邊(反算會吐出 `../../..` 逃逸路徑)。
+        rel_target = FRICTION_LOG_REL
+        text, why = staged_text(rel_target, cwd=cwd)
+        if why is not None:
+            # **不退回工作樹**(`staged_blob` 的 docstring 逐字要求)。
+            # 但**方向對不代表訊息對**:只說「讀不到」會讓人去找一個
+            # 不存在的損壞檔案,而這裡沒被滿足的前提是「它要在 index 裡」。
+            # 訊息要指向那個前提(票 13),所以直接寫出 `git add`。
+            return ["[R9/fail-closed] %s:%s\n"
+                    "     R9 判的是**要進這次 commit 的那一份**,所以讀 index 不讀工作樹。\n"
+                    "     它不在 index 裡 ⇒ 這個問題沒有答案,而沒有答案不等於乾淨。\n"
+                    "     修法:`git add %s`(新裝的 repo 第一次提交就是這個狀態)。\n"
+                    "     **不退回工作樹** —— 那是另一份東西,退回去就是判錯對象。"
+                    % (rel_target, why, rel_target)]
+        lines = text.splitlines()
+    else:
+        try:
+            with io.open(target, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except Exception as e:
+            return ["[R9] 讀不到 friction log(%s):%s\n"
+                    "     讀不到一律當違規,不當作乾淨 —— 一份掃不到的清單給不出綠燈。"
+                    % (rel(target), e)]
     seen = {}
     dupes = {}
     for lineno, line in enumerate(lines, 1):
@@ -1955,7 +2038,7 @@ def upstream_backed(rel_path, raw=None):
         return False, "比對上游物件時出錯(%s)—— 問不到答案一律不豁免。" % e
 
 
-def staged_blob(rel_path):
+def staged_blob(rel_path, cwd=None):
     """index 裡的那些位元組(`git show :<path>`)。取不到回 `None`。
 
     **為什麼不是工作樹**:commit 要判的是**要進 commit 的那一份**。
@@ -1966,13 +2049,31 @@ def staged_blob(rel_path):
 
     **取不到一律 `None`,呼叫端不得退回工作樹** —— 退回去就是判錯對象,
     而且是往 fail-open 的方向錯。
+
+    `cwd`(票 133 批一新增,預設 `ROOT`):讓紅燈測試餵一個臨時 repo。
+    **既有呼叫端不傳它,行為完全不變。**
     """
     try:
-        out = subprocess.run(["git", "-C", ROOT, "show", ":%s" % rel_path],
+        out = subprocess.run(["git", "-C", cwd or ROOT, "show", ":%s" % rel_path],
                              capture_output=True)
     except Exception:
         return None
     return out.stdout if out.returncode == 0 else None
+
+
+def staged_text(rel_path, cwd=None):
+    """**index** 那一份的文字。回 `(text, None)` 或 `(None, 理由)`(票 133 批一)。
+
+    位元組來自 `staged_blob`,解碼走**同一個** `decode_text` ——
+    來源是一格開關,解碼只留一份。
+
+    **必須解包。** 回的是 tuple,而 `(None, "…")` 在 `if` 裡**是真的** ——
+    忘了解包的話 fail-closed 整條翻成 fail-open(票 13 C 的同一個失敗方式)。
+    """
+    raw = staged_blob(rel_path, cwd=cwd)
+    if raw is None:
+        return None, ("`%s` 不在 index 裡(`git show :%s` 問不到)" % (rel_path, rel_path))
+    return decode_text(raw), None
 
 
 def upstream_identical_staged(rel_path):

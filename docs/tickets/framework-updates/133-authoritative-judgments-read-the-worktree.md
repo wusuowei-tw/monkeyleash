@@ -539,6 +539,114 @@ R4 走正典/鏡像 `SKILL.md` 內容不同。
 
 ---
 
+## 批一進度
+
+**基準**:HEAD `23c72d5` 乾淨;`python .claude/hooks/gate.py --pre-commit` → **rc=0**。
+三條退路唸過(第一條 `git checkout -- .claude/hooks/gate.py` 不跑 hook,
+所以復原不依賴閘門還活著)。
+
+⚠ **基準值本身的弱點,先寫出來**:index 為空時 `mode_pre_commit` **不會進入
+per-file 的 `check()` 迴圈**,所以「rc 與基準相同」對住在 `check()` 裡的格
+(R1 / R8 / R2 / R3)是一個**比它看起來弱**的信號。
+⇒ 那幾格要在**有東西 staged** 的狀態下再驗一次 rc(每格 commit 前本來就會有)。
+R4 / R5 / R6 / R9 住在 `mode_pre_commit` 直接呼叫的那一層,不受這個弱點影響。
+
+### ① R9 —— **已落地**
+
+**(a) 這一格的問題與答案**
+
+> **問**:R9 在 commit 的時點,權威輸入該是哪一個版本?
+> **答**:**index。**
+
+R9 的命題是「同一份 friction log 裡不得有兩個相同的號」,而**那一份**指的是
+**要進歷史的那一份** —— 進歷史的是 index。
+**這個答案不是從「別格也是 index」推出來的**:R9 判的對象就是那個檔案本身,
+而那個檔案會被這次 commit 帶走 ⇒ index 是它唯一正確的對象。
+
+**(b) 紅燈** —— 2×2 真值表 + 一格 fail-closed + 一格硬限制反控,合計 6 條:
+
+```
+$ python -X utf8 -m pytest tests/test_gate.py::TestR9JudgesTheStagedFrictionLog -p no:randomly -q
+5 failed, 1 passed in 1.90s
+```
+**唯一綠的那一條正是反控**(`test_the_explicit_path_argument_still_reads_the_worktree`)
+—— 它修法之前本來就該綠。紅燈紀錄 `ticket_id: "133"`、
+`impl_hash: 771d0a9e…`(改動**前**的 `gate.py`)。
+
+**(c) 實作**
+
+| 位置 | 做了什麼 |
+|---|---|
+| `gate.py` `decode_text(raw)` | **新**。從 `read_text_or_none` 抽出解碼那一半,兩條路共用 |
+| `gate.py` `read_text_or_none(abs_path)` | 行為**一個字沒動**;docstring 補「誰該用我、誰該用 `staged_text`」 |
+| `gate.py` `staged_blob(rel_path, cwd=None)` | 加 `cwd`(預設 `ROOT`),既有呼叫端不傳它 ⇒ 行為不變 |
+| `gate.py` `staged_text(rel_path, cwd=None)` | **新**,回 `(text, why)`,走同一個 `decode_text`。docstring 標「必須解包」(票 13 C) |
+| `gate.py` `FRICTION_LOG_REL` | **新**,相對路徑成為單一來源,絕對路徑由它長出來(理由見下方缺陷) |
+| `gate.py` `check_friction_numbers(path=None, cwd=None)` | `path` 給了 → 工作樹(**不變**);沒給 → index |
+
+**來源綁執行上下文,不綁函式** —— `mode_pre_commit` 的呼叫寫法沒變
+(`check_friction_numbers()`),所以「規則真的被接上」那條斷言仍然守得住它要守的東西。
+
+**(d) 權威層 rc**:`rc=0`,與基準相同。
+**而這個 0 不是「沒跑」**:R9 現在走 `staged_text`,index 讀不到會回 fail-closed 訊息
+→ rc=1;得到 0 表示 index 讀取真的成功了。
+
+**(e) 測試**:本格 6 條全綠;全套(CI 旗標)**1591 passed / 0 紅**。
+
+---
+
+### ⚠ ① 過程中撞到的兩件事,都不是「換來源」那麼簡單
+
+**第一件 —— 我自己的實作缺陷:相對路徑不得從絕對路徑反算。**
+
+第一版用 `rel(FRICTION_LOG)` 算要交給 `git show :<path>` 的相對路徑。**那是錯的**:
+`rel()` 用**當下的** `ROOT`,而 `FRICTION_LOG` 是 **import 時**凍結的絕對路徑。
+測試只 patch 其中一個(`monkeypatch.setattr(gate, "ROOT", tmp)`)時,`rel()` 吐出:
+
+```
+[R9/fail-closed] ../../../../../../../../projects/agent-gates/docs/agents/friction-log.md:
+  `…` 不在 index 裡(`git show :../../../../../../../../projects/…` 問不到)
+```
+
+> **判準(可搬走)**:**要交給 git 的相對路徑,不得從一個絕對路徑反算回來** ——
+> 反算的結果取決於**兩個可以各自漂移的東西**。
+> 讓**相對的那一份當來源**,絕對的那一份長出來。
+
+處置:新增 `FRICTION_LOG_REL` 為單一來源。**這一格是「換來源」會順手製造的新缺陷**,
+而它只在 `ROOT` 被 patch 時現形 —— **正常執行永遠碰不到**。
+⇒ **批二那七格會遇到同一個陷阱**(它們也要相對路徑),寫在這裡先行預警。
+
+**第二件 —— 改動照出一個既有的證據隔離漏洞(不是我造成的)。**
+
+`tests/test_r5_mounts.py::_wire_pre_commit` 的 docstring 第一句說
+「把 `mode_pre_commit()` 的鄰居**全部**停掉」,而它**一直沒有停 R9** ——
+卻一直是綠的。原因:舊版 R9 讀 `FRICTION_LOG` 這個**絕對路徑常數**,
+而該 fixture 只 patch `gate.ROOT` ⇒ **R9 跨出臨時 repo 去讀了真 repo 的那份 log**,
+而那份剛好乾淨。
+
+> **一條宣稱「只留 R5 是活的」的 fixture,實際上讓 R9 讀了真 repo。**
+> 它綠的原因不是隔離成立,是**被讀到的資料剛好乾淨**(`F-032`:綠的原因不是你以為的)。
+
+處置:**把 R9 也加進那份停用清單**(它本來就該在裡面),**不放寬 R9 的 fail-closed**。
+**停掉它不減少涵蓋** —— R9「真的被 pre-commit 呼叫」由
+`tests/test_gate.py::TestFrictionNumbersAreUnique::test_the_rule_is_actually_invoked_at_the_authoritative_layer`
+守著(patch `check_friction_numbers` 回假違規、斷言 `mode_pre_commit() == 1`),
+**那條在,所以這是把兩件事分開,不是把守備拿掉。**
+
+---
+
+### ②–⑦ 尚未動工
+
+順序:② R1 `:2154` → ③ R8 `:2293` → ④ R6 `:76` + `:1815`(**兩個讀取點必須同時換**,
+否則會出現「用新清單的 sha 驗舊清單的條目」)→ ⑤ R5 `:3159` → ⑥ R5 `:3184`
+→ **⑦ R4 最後**(裁決)。
+
+**② 與 ③ 住在 `check()` 裡** ⇒ 它們是票 133 三分類裡的 **shared** 類,
+**硬限制適用:不得做全域替換。** 而且它們的 rc 驗證要在**有東西 staged** 的狀態下做
+(見本節開頭那個基準值弱點)。
+
+---
+
 ## 本輪的收尾數字(**下一步排序的依據**)
 
 | 項目 | 數 | 說明 |

@@ -539,11 +539,33 @@ def _wire_pre_commit(monkeypatch, root):
       staged_paths        它要 git;而本組驗的不是 staged 檔案那條路徑
       check_skill_copies  R4 —— 讓 rc==1 只可能來自 R5
       check_legacy_list   R6 —— 同上
+      check_friction_numbers  R9 —— 同上(**票 133 批一 ① 補**,見下)
       shadow_active       影子開著時違規會被寫進 shadow-log 而**回 0**
                           (gate.py:2422-2429)—— 不關的話這一組全部假綠
 
     **簽名要跟著本體走**:`staged_paths` 的替身漏一個參數,`mode_pre_commit`
     會在取清單那一步就掛掉,而本組要驗的是它**擋下之後**的行為(票 42 / test_gate.py:1852)。
+
+    ## ⚠ R9 這一筆是補的,而它補的不只是一個遺漏
+
+    本 docstring 第一句說「把鄰居**全部**停掉」,而 R9 **一直沒有被停** ——
+    它卻一直是綠的。原因是舊版 R9 讀的是 `FRICTION_LOG` 這個**絕對路徑常數**,
+    而本 fixture 只 patch 了 `gate.ROOT` ⇒ **R9 讀的是真 repo 的那份 log**,
+    而那份剛好乾淨。
+
+    > **一條「只留 R5 是活的」的 fixture,實際上讓 R9 跨出臨時 repo 去讀了真 repo。**
+    > 它綠的原因不是隔離成立,是**被讀到的那份資料剛好乾淨**(`F-032` 的形狀:
+    > 綠的原因不是你以為的)。
+
+    票 133 批一 ① 把 R9 改讀 index 之後這件事才現形 —— 臨時目錄不是 git repo,
+    `git show :<path>` 問不到 ⇒ R9 fail-closed ⇒ 本組紅。
+    **修法是把 R9 也停掉**(它本來就該在清單裡),不是放寬 R9 的 fail-closed。
+
+    **停掉它不減少任何涵蓋**:R9「真的被 pre-commit 呼叫」這件事由
+    `tests/test_gate.py::TestFrictionNumbersAreUnique::
+    test_the_rule_is_actually_invoked_at_the_authoritative_layer` 守著
+    (它 patch `check_friction_numbers` 回假違規並斷言 `mode_pre_commit() == 1`)。
+    **那條在,所以這裡停掉它是把兩件事分開,不是把守備拿掉。**
     """
     monkeypatch.setattr(gate, "ROOT", str(root))
     monkeypatch.setattr(gate, "CANON_CODE_REVIEW",
@@ -551,6 +573,9 @@ def _wire_pre_commit(monkeypatch, root):
     monkeypatch.setattr(gate, "staged_paths", lambda cwd=None, gitlinks=None: [])
     monkeypatch.setattr(gate, "check_skill_copies", lambda: [])
     monkeypatch.setattr(gate, "check_legacy_list", lambda: [])
+    # 簽名跟著本體走(票 133 批一 ① 之後本體是 `(path=None, cwd=None)`)。
+    monkeypatch.setattr(gate, "check_friction_numbers",
+                        lambda path=None, cwd=None: [])
     monkeypatch.setattr(gate, "shadow_active", lambda: False)
 
 

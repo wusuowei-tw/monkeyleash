@@ -3973,3 +3973,146 @@ class TestInlineInterpretersAreUndecidable:
         codes = gate.rule_codes()
         assert "R7" in codes
         assert "R10" not in codes, "多了一個規則代號,淨室會要求它的情境:%s" % sorted(codes)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 133 批一 ① —— R9 的權威輸入是 **index**,不是工作樹
+#
+# ## 這一格的問題與答案(票面同文)
+#
+# 問:**R9 在 commit 的時點,權威輸入該是哪一個版本?**
+# 答:**index**。R9 的命題是「同一份 friction log 裡不得有兩個相同的號」,
+#     而「那一份」指的是**要進歷史的那一份** —— 進歷史的是 index。
+#     舊版讀工作樹 ⇒ `git add <撞號版>` 之後把工作樹改乾淨,R9 綠、撞號進歷史。
+#
+# **答案不是「因為別格也是 index」推出來的**:R9 判的對象就是那個檔案本身,
+# 而那個檔案會被這次 commit 帶走,所以 index 是它唯一正確的對象。
+# (對照:`content_after_edit` 那條路的正確對象**不是** index —— 見票 133 三分類。)
+#
+# ## 為什麼 `path` 參數保留讀工作樹
+#
+# `path` 是**明確指定一個檔**的診斷/測試入口(既有 20+ 條測試都靠它)。
+# 「讀這個檔」與「讀這個 repo 要提交的那一份」是兩個問題 ——
+# 照票 133 的硬限制:**共用一個讀取函式不等於共用一個正確對象**,
+# 所以來源綁**執行上下文**(有沒有給 path),不綁函式。
+#
+# ## 2×2 真值表 + 一格 fail-closed
+#
+#            | 工作樹乾淨              | 工作樹撞號
+#   ---------+------------------------+---------------------------
+#   index    | **① 本格本體**(要擋)  | ④ 反控:偵測面不得變小(要擋)
+#   撞號     |                        |
+#   ---------+------------------------+---------------------------
+#   index    | ③ 反控:不得變成永遠紅  | **② 鑑別格**(要放行)
+#   乾淨     | (要放行)              |
+#
+# ② 是鑑別格:「兩邊都讀」的偷懶修法會讓 ① 變綠,而 ② 會抓到它 ——
+# 那一次 commit 進歷史的 log 是乾淨的,擋下來就是誤擋,而誤擋會讓規則被關掉。
+# ⑤ 另加一格:**檔案不在 index 裡 → fail-closed,且訊息要說出怎麼修。**
+#
+# 語料取本檔既有 R9 測試在用的那一組(`## F-001 甲` / `## F-002 乙` / `## F-001 丙`,
+# 見 `TestFrictionNumbersAreUnique::test_a_duplicate_number_is_a_violation`),
+# **不憑空發明新字串**。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_R9_REL = "docs/agents/friction-log.md"
+_R9_DUP = u"## F-001 甲\n\n內文\n\n## F-002 乙\n\n## F-001 丙\n"
+_R9_CLEAN = u"## F-001 甲\n\n內文\n\n## F-002 乙\n\n## F-003 丙\n"
+
+
+def _git133(args, cwd):
+    subprocess.run(["git"] + list(args), cwd=str(cwd), capture_output=True,
+                   check=False)
+
+
+class TestR9JudgesTheStagedFrictionLog:
+
+    def _repo(self, tmp_path, staged, worktree, add=True):
+        """真 git repo:`staged` 進 index,`worktree` 留工作樹。
+
+        `add=False` 用於 ⑤ —— 檔案在磁碟上但**不在 index 裡**。
+        """
+        _git133(["init", "-q"], tmp_path)
+        _git133(["config", "user.email", "t@local"], tmp_path)
+        _git133(["config", "user.name", "t"], tmp_path)
+        p = tmp_path / "docs" / "agents" / "friction-log.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        io.open(str(p), "w", encoding="utf-8", newline="\n").write(staged)
+        if add:
+            _git133(["add", "--", _R9_REL], tmp_path)
+        io.open(str(p), "w", encoding="utf-8", newline="\n").write(worktree)
+        return tmp_path
+
+    def test_a_duplicate_in_the_index_is_caught(self, tmp_path):
+        """① **本格本體**:撞號版在 index、乾淨版在工作樹 → 必須擋。
+
+        舊版讀工作樹 ⇒ 回 `[]` ⇒ 撞號靜默進歷史,而 R9 是
+        **唯一進了權威層的散文規則**(門檻是零誤報 + 零判斷 + 便宜)。
+        """
+        repo = self._repo(tmp_path, staged=_R9_DUP, worktree=_R9_CLEAN)
+        v = gate.check_friction_numbers(cwd=str(repo))
+        assert v, ("index 裡有撞號、工作樹乾淨,R9 卻回報乾淨 —— "
+                   "判的是工作樹,而進歷史的是 index 那一份")
+        assert "F-001" in v[0], u"擋下了但沒說出是哪一個號:%r" % v
+
+    def test_a_duplicate_only_in_the_worktree_is_not_caught(self, tmp_path):
+        """② **鑑別格**:乾淨版在 index、撞號版在工作樹 → 必須放行。
+
+        那一次 commit 進歷史的 log 是乾淨的 ⇒ **擋下來就是誤擋**。
+        這一格抓的是「兩邊都讀」那個偷懶修法 —— 它讓 ① 變綠,
+        代價是每一個「工作樹還在草稿中」的狀態都擋死 commit。
+        """
+        repo = self._repo(tmp_path, staged=_R9_CLEAN, worktree=_R9_DUP)
+        v = gate.check_friction_numbers(cwd=str(repo))
+        assert v == [], u"index 是乾淨的卻被擋 —— 判定對象跑到工作樹去了:%r" % v
+
+    def test_an_agreeing_clean_log_passes(self, tmp_path):
+        """③ **反控**:兩邊一致且乾淨 → 放行。
+
+        少了它,「一律回違規」也能讓 ① 過,而那是把權威層變成永遠紅。
+        """
+        repo = self._repo(tmp_path, staged=_R9_CLEAN, worktree=_R9_CLEAN)
+        assert gate.check_friction_numbers(cwd=str(repo)) == []
+
+    def test_an_agreeing_duplicate_is_still_caught(self, tmp_path):
+        """④ **反控**:兩邊一致且撞號 → 仍要擋。
+
+        這是最日常的那一格(`git add` 之後沒再改)。少了它,
+        「index 讀不到就跳過」也能讓 ① ② ③ 全過 —— 而那是把 R9 整條關掉,
+        **測試看起來還是綠的**。
+        """
+        repo = self._repo(tmp_path, staged=_R9_DUP, worktree=_R9_DUP)
+        v = gate.check_friction_numbers(cwd=str(repo))
+        assert v and "F-001" in v[0], u"偵測面被弄小了:%r" % v
+
+    def test_a_log_missing_from_the_index_fails_closed_with_a_fix(self, tmp_path):
+        """⑤ **fail-closed,而且訊息要說出怎麼修。**
+
+        檔案在磁碟上、**不在 index 裡**(新裝的 repo 還沒 `git add` 就是這個狀態)。
+        **不得退回工作樹** —— `gate.py:1966` 逐字:「退回去就是判錯對象,
+        而且是往 fail-open 的方向錯」。
+
+        但**方向對不代表訊息對**:一個只說「讀不到」的訊息會讓人去找一個
+        不存在的損壞檔案。訊息要點出那個沒被滿足的前提(票 13)——
+        這裡的前提是「它要在 index 裡」,修法是 `git add`。
+        """
+        repo = self._repo(tmp_path, staged=_R9_CLEAN, worktree=_R9_CLEAN,
+                          add=False)
+        v = gate.check_friction_numbers(cwd=str(repo))
+        assert v, u"不在 index 裡卻回報乾淨 —— fail-open"
+        assert "index" in v[0] and "git add" in v[0], (
+            u"訊息沒說出前提與修法,人會去找一個不存在的損壞檔案:%r" % v)
+
+    def test_the_explicit_path_argument_still_reads_the_worktree(self, tmp_path):
+        """**反控(硬限制那一條)**:給了 `path` 就還是讀工作樹。
+
+        少了它,把整支函式改成讀 index 也會讓 ① 過 ——
+        而那會打壞既有 20+ 條以 `path` 餵語料的測試,
+        以及「明確指定一個檔」這個診斷入口本身。
+        **共用一個讀取函式不等於共用一個正確對象。**
+        """
+        repo = self._repo(tmp_path, staged=_R9_CLEAN, worktree=_R9_DUP)
+        p = str(repo / "docs" / "agents" / "friction-log.md")
+        v = gate.check_friction_numbers(p)
+        assert v and "F-001" in v[0], (
+            u"`path` 那條路不再讀工作樹 —— 診斷入口與既有語料一起被換掉了:%r" % v)
