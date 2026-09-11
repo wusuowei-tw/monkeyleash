@@ -264,24 +264,27 @@ def _decode_wide(raw):
     return _decode_utf32(raw) or _decode_utf16(raw)
 
 
-def read_text(path):
-    """讀檔並解碼。回 `(text, None)` 或 `(None, 理由)` —— 理由非空即 fail-closed。
+def decode_bytes(raw):
+    """一段位元組 → `(text, None)` 或 `(None, 理由)`。理由非空即 fail-closed。
 
-    **先拿位元組再依序解碼。** 讀不到位元組(權限、路徑壞掉)不是「沒問題」,
-    是「這個問題沒有答案」,呼叫端一律計為違規。
+    ## 為什麼這一段從 `read_text` 裡抽出來(票 132)
+
+    「**位元組從哪來**」與「**位元組怎麼解**」是兩件事,而只有前者在 pre-commit
+    是錯的:那裡該讀 index,實際讀了工作樹。抽開之後來源可以換,
+    **解碼這一半原封不動被兩條路共用**。
+
+    > **共用是必要條件,不是整潔。** 另寫一套解碼 = 票 109 / 110 修掉的
+    > UTF-16 / UTF-32 盲區在新那條路上原地復活,而新那條路正是**唯一會在
+    > commit 跑的那條**。兩份實作會分岔,而分岔的方向沒有任何東西會抱怨。
+    > 釘住這件事的是 `tests/test_scanner.py::…::test_a_utf16_blob_is_decoded_by_the_same_ladder`
+    > —— 那條測試不是在測 UTF-16,是在測「只有一個解碼器」。
 
     票 109 之後的順序:① BOM 嗅探 → ② 原本的階梯(每一格的結果都要過
-    可讀性檢查)→ ③ 階梯全不可讀時再試一次 utf-16 → ④ 都不可讀就 fail-closed。
+    可讀性檢查)→ ③ 階梯全不可讀時再試一次寬編碼 → ④ 都不可讀就 fail-closed。
 
     **`latin-1` 不再是保底。** 它仍在階梯裡,但它的結果與別格一樣要過檢查 ——
     這正是把那條死掉的 fail-closed 出口叫醒的那一步。
     """
-    try:
-        with io.open(path, "rb") as f:
-            raw = f.read()
-    except Exception as e:                                   # noqa: BLE001
-        return None, "讀不到檔案:%s" % e
-
     # 空檔案是合法的文字檔,不是壞檔案 —— 這一格要在所有檢查之前。
     if not raw:
         return u"", None
@@ -338,6 +341,94 @@ def read_text(path):
 
     # ④ 真正的 fail-closed 出口 —— 票 109 之前這裡是死碼。
     return None, "解不出可讀文字(控制字元佔比過高,可能是二進位或未知編碼)"
+
+
+def read_text(path):
+    """**工作樹**那一份:讀檔並解碼。回 `(text, None)` 或 `(None, 理由)`。
+
+    **先拿位元組再依序解碼。** 讀不到位元組(權限、路徑壞掉)不是「沒問題」,
+    是「這個問題沒有答案」,呼叫端一律計為違規。
+
+    ⚠ **這支函式的對象是檔案系統,而那不是每一個呼叫端都想要的**(票 132)。
+    要判「這一份會不會進 commit」的人要的是 index ⇒ 用 `read_staged_text`。
+    本支的正當呼叫端是:
+      - `--review`(公開稽核 **目前工作樹狀態**,概念上沒有暫存區可比)
+      - `leak_scan.py <檔案...>`(手動掃,路徑根本不必在 git 裡)
+    簽名與行為**一個字沒動** —— 票 132 只是把它旁邊多開了一條路。
+    反控:`tests/test_scanner.py::…::test_the_worktree_reader_is_unchanged`。
+    """
+    try:
+        with io.open(path, "rb") as f:
+            raw = f.read()
+    except Exception as e:                                   # noqa: BLE001
+        return None, "讀不到檔案:%s" % e
+    return decode_bytes(raw)
+
+
+def staged_blob(rel, cwd=None):
+    """**index** 裡那一份的位元組。回 `(raw, None)` 或 `(None, 理由)`。
+
+    ## 為什麼不是工作樹(票 132)
+
+    commit 要判的是**要進 commit 的那一份**。工作樹與 index 可以不同
+    (`git add` 之後又改了一次),而讀錯對象的失敗方式是**靜默的** ——
+    兩者多數時候一樣,所以日常與測試都不會發現,只有在
+    **「先 add 一份機敏的、再把工作樹改乾淨」**時才漏,而那正是要防的形狀。
+
+    > **這條判準不是本票發明的。** `.claude/hooks/gate.py:1957` 的
+    > `staged_blob()` docstring 逐字寫過,連攻擊步驟都寫了 ——
+    > 而它寫在那裡的同時,這支掃描器三百行外照樣讀工作樹整整一段時間。
+    > **註解不是機制**(`F-086`)。
+
+    **取不到一律回理由,呼叫端不得退回工作樹** —— 退回去就是判錯對象,
+    而且是往 fail-open 的方向錯。正控:
+    `tests/test_scanner.py::…::test_a_path_not_in_the_index_fails_closed`。
+
+    ## 指令形式:`git cat-file blob :0:<path>`
+
+    **`:0:` 明寫 stage 0**(一般狀態)。衝突中的 index 沒有 stage 0 ⇒
+    非零退出碼 ⇒ fail-closed,而那是對的:未解決的衝突不該被掃成乾淨。
+
+    **用 plumbing(`cat-file blob`)不用 `git show`**:輸出契約穩定、
+    不吃 pager 與 textconv 設定。本機實測三格(2026-09-11):
+    `git rev-parse :0:CLAUDE.md` → blob sha;`git cat-file blob :0:<路徑>` → 原內容;
+    `:0:no-such-file.txt` → `rc=128`。
+
+    ⚠ **與 `gate.py` 那份的指令字面不同**(那邊是 `git show :<path>`)。
+    兩份**刻意不共用程式碼**(票 42:權威層 import `portable/` 會多一個失效點,
+    而閘門起不來的樣子跟沒裝一模一樣)—— 但**字面不同這件事要寫出來**,
+    否則下一個讀的人會以為其中一份是筆誤。兩者語意等價,本支選 plumbing。
+
+    `rel` 必須是 **repo 根相對、正斜線**的路徑 —— 也就是 `staged_paths()`
+    回傳的那個形狀(靠 `-z` 拿到原樣 UTF-8,F-064)。**不接受絕對路徑**:
+    `:0:<絕對路徑>` 在 git 眼裡不是同一個東西。
+    正控(非 ASCII 路徑往返):
+    `tests/test_scanner.py::…::test_a_cjk_path_survives_the_blob_lookup`。
+    """
+    try:
+        out = subprocess.run(["git", "cat-file", "blob", ":0:%s" % rel],
+                             capture_output=True, cwd=cwd)
+    except Exception as e:                                   # noqa: BLE001
+        return None, "問不到 index 內容(git 跑不起來):%s" % e
+    if out.returncode != 0:
+        return None, ("index 裡沒有這一份(`git cat-file blob :0:%s` 退出碼 %s):"
+                      "%s —— 判不出來一律計為違規,**不退回工作樹**"
+                      % (rel, out.returncode,
+                         (out.stderr or b"").decode("utf-8", "replace").strip()[:200]))
+    return out.stdout, None
+
+
+def read_staged_text(rel, cwd=None):
+    """**index** 那一份:拿 blob 位元組,走**同一個** `decode_bytes`。
+
+    與 `read_text` 的差別只有位元組的來源。解碼一個字都不換 ——
+    理由寫在 `decode_bytes` 的 docstring 裡(另寫一套 = 票 109 / 110 的盲區
+    在唯一會於 commit 執行的那條路上復活)。
+    """
+    raw, why = staged_blob(rel, cwd=cwd)
+    if why is not None:
+        return None, why
+    return decode_bytes(raw)
 
 
 # git 的檔案模式是**封閉集合**,所以判定用枚舉、不用 pattern:
@@ -473,14 +564,25 @@ def _globally_skipped(rel, self_paths, skip_suffix, skip_parts,
 
 
 def scan_paths(paths, groups, root=".", self_paths=(),
-               skip_suffix=SKIP_SUFFIX, skip_parts=SKIP_PARTS):
+               skip_suffix=SKIP_SUFFIX, skip_parts=SKIP_PARTS, reader=None):
     """掃一批檔案,回傳 `Hit` 串列(空 = 乾淨)。
 
     只回結果不印、不決定退出碼 —— 呈現與退出碼屬於各掃描器的入口,
     這裡只負責判定。這樣兩支掃描器共用的是**判定**,而它們各自的訊息
     (被擋時該怎麼辦)本來就不一樣,不該被合一硬壓成同一句。
+
+    `reader`:位元組**來源**。`(abs_path, rel) -> (text, 理由)`;
+    `None` = 工作樹(`read_text`)。pre-commit 傳 index 那一份(票 132)。
+
+    **為什麼是一個參數,不是分岔成兩支函式。** 底下那一整段遮罩邏輯
+    (票 32 / F-066 / F-067 的四種比對面聯集、整行遮罩、`unmappable` 判定)
+    只該有一份:分岔的話兩份會漂開,而**遮罩邏輯漂開的方向是「報告裡多洩一點」**
+    —— 那種漂開沒有任何測試會抱怨,因為兩邊都還是「擋下了」。
+    **來源是一格開關,判定是一整套;把開關做成開關,不要複製那一套。**
     """
     self_paths = tuple(p.replace("\\", "/") for p in self_paths)
+    read = reader if reader is not None else (lambda abs_path, _rel:
+                                              read_text(abs_path))
     hits = []
     for p in paths:
         rel = rel_path(root, p)
@@ -490,7 +592,7 @@ def scan_paths(paths, groups, root=".", self_paths=(),
         if not active:
             continue
 
-        text, why = read_text(p)
+        text, why = read(p, rel)
         if why is not None:
             # **讀不動 ≠ 沒問題。** 已知的二進位副檔名在上面就濾掉了;
             # 走到這裡還讀不動的是意料外的東西,而意料外的東西一律擋。

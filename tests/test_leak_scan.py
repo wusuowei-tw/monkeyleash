@@ -995,3 +995,131 @@ class TestReviewModeDoesNotVouchForAnUnreadUtf32File:
             u"    stderr:%s" % err)
         assert "notes.md" in err, (
             u"退出碼非 0 但檔名沒出現在報告裡 —— 人無從知道是哪一個檔:%s" % err)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 132 —— `--staged` 的**內容**必須來自 index,不是工作樹
+#
+# `--staged` 的檔名一直是對的(`staged_paths` 問 `git diff --cached`),
+# 而內容從 `leak_scan.py:310` 那一行起就換成了工作樹的座標,
+# `scanner.read_text` 在 `scanner.py:280` 打開檔案系統 —— **index 在那一行不存在。**
+#
+# 攻擊路徑三步,不需要 `--no-verify`、不需要特殊權限:
+#   ① `git add <機敏版>`  ② 工作樹改回乾淨版(不重新 add)  ③ `git commit`
+# ③ 的 pre-commit 掃到的是乾淨版 → 回 0 → 放行,而進歷史的是 index 那份機敏版。
+#
+# 本組是一張 **2×2 真值表**,四格都要,理由各自不同:
+#
+#           | 工作樹乾淨            | 工作樹機敏
+#   --------+----------------------+---------------------------
+#   index   | **① 本票本體**(要 1) | ④ 反控:偵測面不得變小(要 1)
+#   機敏    |                      |
+#   --------+----------------------+---------------------------
+#   index   | ③ 反控:不得變成永遠紅 | **② 鑑別格**(要 0)
+#   乾淨    | (要 0)               |
+#
+# ② 是**鑑別格**:一個「兩邊都掃」的偷懶修法會讓 ① 過,而 ② 會抓到它 ——
+# 因為那一次 commit 進歷史的是乾淨版,擋下來就是誤擋。
+# 少了 ③ 的話「一律回 1」也能讓 ① 過,而那是把 pre-commit 變成永遠紅;
+# 少了 ④ 的話「index 讀不到就跳過」也能讓 ① ② ③ 過,而那是把偵測整條關掉。
+# (形狀照 `test_an_ordinary_staged_file_is_still_scanned` 的既有反控。)
+#
+# 假秘密一律取本檔既有語料 `_AWS`(`\bAKIA[0-9A-Z]{16}\b` 那條通用規則的正樣本,
+# 由 `test_every_generic_pattern_has_a_positive_control` 每輪證明它真的命中)——
+# **不憑空發明新字串**:新字串命中的可能是巧合,而巧合守不住任何東西。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SECRET_LINE = u"aws_access_key_id = " + _AWS + u"\n"
+_CLEAN_LINE = u"aws_access_key_id = <佔位符>\n"
+
+
+def _git132(args, cwd):
+    import subprocess
+    subprocess.run(["git"] + list(args), cwd=str(cwd), capture_output=True,
+                   check=False)
+
+
+class TestTheStagedBlobIsWhatGetsScanned:
+
+    def _repo(self, tmp_path, monkeypatch, staged, worktree):
+        """真 git repo:`staged` 進 index,`worktree` 留工作樹。
+
+        兩者不同時,**index 那一份才是要進歷史的那一份** ——
+        判定對象必須是它(`gate.py:1957` `staged_blob` 的 docstring 逐字寫過這條)。
+        """
+        _git132(["init", "-q"], tmp_path)
+        _git132(["config", "user.email", "t@local"], tmp_path)
+        _git132(["config", "user.name", "t"], tmp_path)
+        p = tmp_path / "notes.txt"
+        io.open(str(p), "w", encoding="utf-8", newline="\n").write(staged)
+        _git132(["add", "notes.txt"], tmp_path)
+        io.open(str(p), "w", encoding="utf-8", newline="\n").write(worktree)
+        monkeypatch.setattr(ls, "ROOT", str(tmp_path))
+        monkeypatch.setattr(ls, "LOCAL_PATTERNS_FILE",
+                            str(tmp_path / "none.local.txt"))
+        return tmp_path
+
+    def test_the_staged_blob_is_what_gets_scanned(self, tmp_path, monkeypatch,
+                                                  capsys):
+        """① **本票本體**:機敏版在 index、乾淨版在工作樹 → 必須擋。
+
+        現在放行,而且**零告警** —— 那是靜默 fail-open,
+        在唯一的權威層上(`.githooks/pre-commit` 第一段),繞過之後沒有第二道。
+        """
+        self._repo(tmp_path, monkeypatch,
+                   staged=_SECRET_LINE, worktree=_CLEAN_LINE)
+        rc = ls.main(["--staged"])
+        err = capsys.readouterr().err
+        assert rc == 1, (
+            u"index 裡是機敏版、工作樹是乾淨版,`--staged` 回了 %r ——\n"
+            u"    掃的是工作樹,而進歷史的是 index 那一份。秘密偷渡成功,零告警。\n"
+            u"    stderr:%s" % (rc, err))
+        assert "notes.txt" in err, (
+            u"擋下了但報告沒說是哪個檔 —— 人無從知道要洗哪一份:%s" % err)
+
+    def test_a_secret_only_in_the_worktree_is_not_blocked(self, tmp_path,
+                                                          monkeypatch, capsys):
+        """② **鑑別格**:乾淨版在 index、機敏版在工作樹 → 必須放行。
+
+        那一次 commit 進歷史的是乾淨版,**擋下來就是誤擋**。
+        這一格存在的理由是它會抓到「兩邊都掃」那個偷懶修法 ——
+        那個修法讓 ① 變綠,而代價是每一個「工作樹裡還留著真 token 的暫存檔」
+        都擋死 commit,而**被煩到的規則會被整條關掉**。
+        """
+        self._repo(tmp_path, monkeypatch,
+                   staged=_CLEAN_LINE, worktree=_SECRET_LINE)
+        rc = ls.main(["--staged"])
+        err = capsys.readouterr().err
+        assert rc == 0, (
+            u"index 是乾淨的,`--staged` 卻回了 %r —— 判定對象跑到工作樹去了。\n"
+            u"    stderr:%s" % (rc, err))
+
+    def test_an_agreeing_clean_file_still_passes(self, tmp_path, monkeypatch,
+                                                 capsys):
+        """③ **反控**:index 與工作樹一致且乾淨 → 仍要回 0。
+
+        少了它,「一律回 1」也能讓 ① 過 —— 而那是把 pre-commit 變成永遠紅,
+        方向是 fail-closed 卻擋住做對事的人,那種規則最後會被關掉。
+        """
+        self._repo(tmp_path, monkeypatch,
+                   staged=_CLEAN_LINE, worktree=_CLEAN_LINE)
+        rc = ls.main(["--staged"])
+        err = capsys.readouterr().err
+        assert rc == 0, (
+            u"index 與工作樹一致且乾淨,卻回了 %r:%s" % (rc, err))
+
+    def test_an_agreeing_dirty_file_is_still_caught(self, tmp_path, monkeypatch,
+                                                    capsys):
+        """④ **反控**:index 與工作樹一致且機敏 → 仍要回 1。
+
+        這是最日常的那一格(`git add` 之後沒再改)。
+        少了它,「index 讀不到就跳過」也能讓 ① ② ③ 全過,
+        而那是把偵測整條關掉 —— **測試看起來還是綠的**。
+        """
+        self._repo(tmp_path, monkeypatch,
+                   staged=_SECRET_LINE, worktree=_SECRET_LINE)
+        rc = ls.main(["--staged"])
+        err = capsys.readouterr().err
+        assert rc == 1, (
+            u"index 與工作樹一致且含機敏樣本,卻回了 %r —— 偵測面被弄小了:%s"
+            % (rc, err))

@@ -931,3 +931,121 @@ class TestUtf32DecodingDoesNotOverreach:
         text, why = sc.read_text(_wb(tmp_path, "plain.txt",
                                      _ASCII_LINE.encode("utf-8")))
         assert why is None and _AWS in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 132 —— 位元組的**來源**多一個:index
+#
+# `read_text` 一直做兩件事:① 拿位元組 ② 依序解碼(票 109 / 110 的 BOM 嗅探、
+# UTF-16 / UTF-32、可讀性檢查、fail-closed 出口)。**只有 ① 在 pre-commit 是錯的。**
+# 所以本票把 ② 抽成 `decode_bytes`,加一支 `read_staged_text` 走同一個 ②。
+#
+# **共用 ② 是必要條件,不是整潔。** 另寫一套解碼 = 票 109 / 110 修掉的
+# UTF-16 / UTF-32 盲區在新那條路上原地復活,而新那條路正是唯一會在 commit 跑的。
+# 下面 `test_a_utf16_blob_is_decoded_by_the_same_ladder` 就是釘這件事的 ——
+# 它不是在測 UTF-16,它是在測**兩條路共用同一個解碼器**。
+#
+# `read_text` 的公開簽名與行為一個字不動 —— 上面整批既有斷言就是它的反控。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CJK_REL = u"docs/計畫/台股筆記.txt"
+
+
+def _git132(args, cwd):
+    import subprocess
+    subprocess.run(["git"] + list(args), cwd=str(cwd), capture_output=True,
+                   check=False)
+
+
+def _repo132(tmp_path, rel, staged_bytes, worktree_bytes):
+    """真 git repo:`staged_bytes` 進 index,`worktree_bytes` 留工作樹。"""
+    _git132(["init", "-q"], tmp_path)
+    _git132(["config", "user.email", "t@local"], tmp_path)
+    _git132(["config", "user.name", "t"], tmp_path)
+    p = tmp_path / rel.replace("/", os.sep)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    io.open(str(p), "wb").write(staged_bytes)
+    _git132(["add", "--", rel], tmp_path)
+    io.open(str(p), "wb").write(worktree_bytes)
+    return tmp_path
+
+
+class TestStagedBytesComeFromTheIndex:
+    """判定對象是「要進 commit 的那一份」,不是「磁碟上現在那一份」。
+
+    判準不是本票發明的 —— `.claude/hooks/gate.py:1957` 的 docstring 逐字寫過,
+    連攻擊步驟都寫了(「先 add 一份乾淨的、再把工作樹改壞」)。
+    它寫在那裡,而這支掃描器三百行外照樣讀工作樹:**註解不是機制。**
+    """
+
+    def test_read_staged_text_reads_the_index_not_the_worktree(self, tmp_path):
+        """本組主張:回的是 index 那一份的位元組。"""
+        _repo132(tmp_path, "notes.txt",
+                 _ASCII_LINE.encode("utf-8"),
+                 u"aws_access_key_id = <佔位符>\n".encode("utf-8"))
+        text, why = sc.read_staged_text("notes.txt", cwd=str(tmp_path))
+        assert why is None, u"index 裡的 blob 讀不出來:%s" % why
+        assert _AWS in text, (
+            u"讀到的不是 index 那一份 —— 樣本不在文字裡。\n"
+            u"    拿到的是:%r" % text)
+
+    def test_the_worktree_reader_is_unchanged(self, tmp_path):
+        """**反控**:同一份 repo 上 `read_text` 仍然回工作樹那一份。
+
+        少了它,把 `read_text` 整支改成讀 index 也會讓上面那條過 ——
+        而那會連帶改壞 `--review`(廣泛稽核工作樹狀態,概念上沒有暫存區可比)
+        與手動掃描(`leak_scan.py <檔案...>`,路徑根本不必在 git 裡)。
+        """
+        _repo132(tmp_path, "notes.txt",
+                 _ASCII_LINE.encode("utf-8"),
+                 u"aws_access_key_id = <佔位符>\n".encode("utf-8"))
+        text, why = sc.read_text(str(tmp_path / "notes.txt"))
+        assert why is None, u"工作樹那一份讀不出來:%s" % why
+        assert _AWS not in text, (
+            u"`read_text` 開始回 index 那一份了 —— `--review` 與手動掃描"
+            u"的對象被一起換掉:%r" % text)
+
+    def test_a_cjk_path_survives_the_blob_lookup(self, tmp_path):
+        """非 ASCII 路徑(F-042 家族第 n 次)。
+
+        `staged_paths` 靠 `-z` 拿到原樣的 UTF-8 路徑,而本票把那個字串
+        接成 `:<path>` 再交回 git —— **那是一條新的路徑往返**,要自己驗。
+        只用 ASCII 測的話這一格永遠不會現身。
+        """
+        _repo132(tmp_path, _CJK_REL,
+                 _CJK_LINE.encode("utf-8"),
+                 u"沒有秘密\n".encode("utf-8"))
+        text, why = sc.read_staged_text(_CJK_REL, cwd=str(tmp_path))
+        assert why is None, u"中文路徑的 blob 讀不出來:%s" % why
+        assert _AWS in text, u"中文路徑取到的不是 index 那一份:%r" % text
+
+    def test_a_utf16_blob_is_decoded_by_the_same_ladder(self, tmp_path):
+        """兩條路必須共用同一個解碼器。
+
+        這一格**不是在測 UTF-16** —— 它在測「新那條路沒有自己另寫一套解碼」。
+        另寫一套的話,票 109 / 110 修掉的盲區會在唯一會於 commit 執行的那條路上
+        原地復活,而**兩份實作分岔的方向沒有任何東西會抱怨**。
+        """
+        _repo132(tmp_path, "u16.env",
+                 b"\xff\xfe" + _CJK_LINE.encode("utf-16-le"),
+                 u"乾淨\n".encode("utf-8"))
+        text, why = sc.read_staged_text("u16.env", cwd=str(tmp_path))
+        assert why is None, u"index 裡的 UTF-16 blob 解不開:%s" % why
+        assert _AWS in text, (
+            u"index 裡的 UTF-16 blob 解出來沒有樣本 —— "
+            u"新這條路多半自己另寫了一套解碼:%r" % text)
+
+    def test_a_path_not_in_the_index_fails_closed(self, tmp_path):
+        """**取不到一律 `(None, 理由)`,不退回工作樹。**
+
+        `gate.py:1966` 逐字:「退回去就是判錯對象,而且是往 fail-open 的方向錯」。
+        工作樹上刻意放一份**乾淨**的同名檔 —— 若實作偷偷退回工作樹,
+        它會拿到一個乾淨結果並回報 `why is None`,而那是一個假綠燈。
+        """
+        _repo132(tmp_path, "tracked.txt", b"x\n", b"x\n")
+        io.open(str(tmp_path / "untracked.txt"), "wb").write(u"乾淨\n".encode("utf-8"))
+        text, why = sc.read_staged_text("untracked.txt", cwd=str(tmp_path))
+        assert why is not None, (
+            u"不在 index 裡的路徑回了 `why is None` —— 多半退回工作樹了。\n"
+            u"    拿到的文字:%r" % text)
+        assert text is None, u"fail-closed 那條路還是回了文字:%r" % text

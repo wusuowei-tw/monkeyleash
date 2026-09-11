@@ -192,12 +192,28 @@ def review_allowed(rel):
     return ext in REVIEW_ALLOWED_EXT
 
 
-def scan(paths, review=False):
+def staged_reader(abs_path, rel):
+    """`scan_paths` 的 `reader`:位元組從 **index** 來,不從工作樹來(票 132)。
+
+    `scan_paths` 已經算好 repo 根相對的 `rel`(正斜線),那正是 `:0:<path>`
+    要的形狀,所以 `abs_path` 在這條路上**刻意不被使用** ——
+    它是簽名的一部分(工作樹那條路要它),不是這裡的判定依據。
+    """
+    return scanner.read_staged_text(rel, cwd=ROOT)
+
+
+def scan(paths, review=False, staged=False):
     """回 0 乾淨 / 1 有命中 / 2 機制錯誤(pattern 讀不到)。
 
     `review=True` 是**公開審查模式**(票 39):副檔名改白名單
     (deny-by-default),而且**未內容掃描的清單一律進報告**——
     含清單是空的那一次(Q5:「印出來是空的」與「沒印」是兩件事)。
+
+    `staged=True` 把**內容的來源**換成 index(票 132)。
+    **兩個旗標各管一件事,正交** —— `review` 管副檔名政策與報告,
+    `staged` 管位元組從哪來。把來源綁到 `review` 上的話,
+    `--staged --review` 會變成「稽核 index」而 `--staged` 單獨用是「稽核工作樹」,
+    **同一個旗標在兩種組合下指不同的對象** —— 那正是票 132 要修的病的形狀。
     """
     try:
         groups = load_patterns()
@@ -223,7 +239,8 @@ def scan(paths, review=False):
             rest.append(p)
 
     hits = certs + scanner.scan_paths(rest, groups, root=ROOT,
-                                      self_paths=SELF_PATHS)
+                                      self_paths=SELF_PATHS,
+                                      reader=staged_reader if staged else None)
 
     if review:
         # **必要部分,不是選項。** 清單不在,「跳過」這件事就不存在於報告上,
@@ -319,7 +336,12 @@ def main(argv):
         # **「問不到」早就回 2 了**(上面那個 `StagedListingFailed`),
         # 所以這裡回 0 是對的,不是漏網。
         # 負控:`tests/test_leak_scan.py::…::test_an_empty_staged_list_still_returns_zero`。
-        return scan(paths, review=review) if paths else 0
+        #
+        # 票 132:`staged=True` —— **清單與內容必須來自同一個對象**。
+        # 舊版清單問 index、內容讀工作樹,於是 `git add` 之後把工作樹改乾淨
+        # 就能讓機敏版靜默進歷史。正控:
+        # `tests/test_leak_scan.py::TestTheStagedBlobIsWhatGetsScanned`(2×2 真值表)。
+        return scan(paths, review=review, staged=True) if paths else 0
 
     paths = [a for a in argv if not a.startswith("-")]
     if not paths:
