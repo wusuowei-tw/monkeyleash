@@ -730,27 +730,143 @@ $ python -X utf8 -m pytest tests/ -q --no-header
 
 ---
 
-### ③–⑦ 尚未動工
+### ③ R8 —— **已落地**
 
-順序:③ R8 → ④ R6(**兩個讀取點必須同時換**,否則會出現「用新清單的 sha
+**(a) 這一格的問題與答案**
+
+> **問**:R8 在 commit 的時點,權威輸入該是哪一個版本?
+> **答**:**index。**
+
+R8 的命題是「生產程式碼不得 import `research/`」,而**那份程式碼**指的是
+**要進歷史的那一份** —— 進歷史的是 index。舊版兩個時點都讀工作樹 ⇒
+`git add <import 了 research 的版本>` 之後把工作樹改乾淨,R8 綠、
+對 `research/` 的依賴進歷史,**零告警**。
+
+**這個答案不是從「R1 / R9 也是 index」推出來的**:R8 判的對象就是那個 `.py` 檔本身,
+而那個檔會被這次 commit 帶走 ⇒ index 是它唯一正確的對象。
+**對照**:`content` 有給值那條路的正確對象**不是** index —— 那是前哨,
+問的是「這次編輯之後會變成什麼」(票 07 / F-046 的判定對象裁決)。
+⇒ 本格與 ② 同屬三分類的 **shared** 類,**硬限制成立:沒有做全域替換。**
+
+**(b) ⚠ 讀取點行號在動工前又過期了 —— 本票第三次**
+
+動工指令給的是 `sed -n '2280,2320p'`,而那一段實際落在 **R1**(批一 ② 新增的碼)上。
+成因與 `:2154` 完全相同:**批一 ② 自己**在 R8 上方插了 +38 行。
+
+> 三次分別是:`:2154`(被批一 ① 推走)、`:2430/:2431`(本節表格與實測差 1 行)、
+> `:2280–2320`(被批一 ② 推走)。**同一張票、同一個機制、三次。**
+> 已另案登記為**票 136**。判準不變:**引名不引行號。**
+
+**(c) 紅燈** —— 2×2 真值表 + 四條硬限制反控 + 一條邊界 + **一組漂移守衛**,
+**9 個 import 形式**參數化,合計 **75 條**:
+
+```
+$ python -X utf8 -m pytest tests/test_gate.py -k "R8CorpusStillClassifies or R8JudgesTheStagedSource or R8SentryPathIsUntouched or an_agreeing_clean_source_passes_r8 or a_source_missing_from_the_index" -q --no-header
+19 failed, 56 passed, 562 deselected in 14.98s
+```
+
+紅 19 = ①(9)+ ②(9)+ ⑥(1);綠 56 = ③(1)+ ④(9)+ ⑤a–d(36)+ 守衛(10)。
+**紅綠分佈是動工前預測的,預測與實測逐格一致。**
+
+**⚠ 本格的斷言與 ② 不同**:問的是「**訊息裡有沒有 R8**」,不是「有沒有被擋」。
+因為 **R8 在 `check()` 裡不是最後一關** —— 後面還排著 legacy 清單豁免與 R3 的兩半,
+乾淨那幾格會走到 R3,而 R3 在臨時 repo 本來就會說話。
+**這是既有慣例不是新發明**:`tests/test_edit_result.py` 逐字
+`assert not (msg and "R8" in msg)`。
+
+**⚠ 語料是【複製】不是【引用】**(9 違規 + 1 乾淨,逐字取自
+`tests/test_research_stage.py` 的 `TestR8ProductionMustNotImportResearch`
+與票 104 的 `TestTheSyntaxAxisIsEnumeratedNotSampled`)。
+那些字串是 parametrize 的**內嵌字面值**,沒有具名常數可引;
+而該檔另用自己的 `_load()` 把 `gate.py` 載成 `gate_research`,**與 `test_gate.py` 的
+`gate` 是不同的模組實體**。
+⇒ 複製就是第二份來源,**而註解不是機制** ⇒ 加了 10 條
+`TestTheR8CorpusStillClassifiesAsItsSourceSays`,拿 `imports_research()` 對每個樣本
+問一次分類。上游那批改了行為的話,**守衛會先紅,而不是讓 2×2 靜靜地全綠而測不到東西**。
+「改成引用」登記為候選,**記在語料正上方的註解裡**(下一個動語料的人會先看到),
+**本票不做**。
+
+**(d) 實作**
+
+| 位置 | 做了什麼 |
+|---|---|
+| `gate.py` `check()` docstring | 把 R8 併進既有那段三分支表(原本只寫 R1) |
+| `gate.py` R8 判定區 | `body is None and at_commit` → `staged_text(r)`,取不到 fail-closed |
+| `gate.py` R8 判定區 | 原本的工作樹讀改成 `elif body is None:`,**內文一個字沒動** |
+| `gate.py` R8 判定區 | **註解改寫** —— 舊註解「退回磁碟現況」在 commit 時點會變成錯的 |
+
+**沒有新增任何函式**;**`read_text_or_none` 一個字沒動**。
+波及面動工前已查證為零:全庫只有兩個呼叫端(R8、前哨的 `content_after_edit`),
+而後者要的就是工作樹 —— 而且該函式的 docstring 早在批一 ① 就寫好路標
+(「要判『這一份會不會進 commit』的人要的是 index ⇒ 用 `staged_text`」)。
+
+**偵察時點名的三個陷阱,逐條處置**:
+
+| 陷阱 | 處置 | 憑什麼說處理了 |
+|---|---|---|
+| R8 之後還有東西(legacy / R3 兩半) | 新分支只取代「取得 body 那一步」,後面三段出口與 legacy / R3 一個字沒動 | `git diff` 落在 R8 區的兩個 hunk 都結束在 `if body is None:` 之前 |
+| R8 有三段出口,不得混回去 | 新 fail-closed 訊息**不含** `不得 import research/` | ⑥ 的斷言 `assert "不得 import research/" not in msg` 綠 |
+| 那句註解會變成錯的 | 改寫成「兩種 None,對象不同」的分流 | 見 (d) 表第四列 |
+
+**(e) fail-closed 訊息**(比照 R1 / R9:要指向沒被滿足的**前提**):
+
+```
+[R8/fail-closed] <path>:`<path>` 不在 index 裡(`git show :<path>` 問不到)
+     R8 判的是**要進這次 commit 的那一份**,所以讀 index 不讀工作樹。
+     它不在 index 裡 ⇒ 「它有沒有 import research/」這個問題沒有答案,
+     而沒有答案不等於答案是「沒有」。
+     修法:`git add <path>`。
+     **不退回工作樹** —— 那是另一份東西,退回去就是判錯對象。
+```
+
+**(f) 測試**:本格 75 條全綠;全套 **1794 passed / 1 failed**。
+
+```
+$ (完整 75 條選擇)
+75 passed, 562 deselected in 21.60s
+
+$ python -X utf8 -m pytest tests/ -q --no-header
+1 failed, 1794 passed, 3 skipped, 3 xfailed in 280.38s (0:04:40)
+```
+
+算術核對:批一 ② 收工時 `1719 passed`,本批新增 75 條 ⇒ 1719 + 75 = **1794** ✓。
+唯一那條紅仍是 `TestLegacyNoRedlightList`(**票 137**,既有缺口,本票不碰、不查)。
+
+**⚠ 選擇器陷阱,順帶記一句**:`-k "R8"` 只選到 **74** 條 ——
+⑥ 那條(`test_a_source_missing_from_the_index_fails_closed_with_a_reason`)
+名字裡沒有 `r8`。`-k` 不分大小寫,所以 `..._passes_r8_at_commit` 反而被選到。
+**`-k "R8"` 讀起來像「R8 的全部」,實際是「名字裡有 r8 的那些」,而差的那一條正是邊界格。**
+要選整批請用類別名列舉(上面 (c) 那條指令)。
+
+**⚠ 本格未做**:**有東西 staged 時的權威層 rc 驗證**(② 那輪用手動探測補過)。
+R8 也住 `check()`,本節開頭那個基準值弱點同樣適用。**要不要比照辦理,未裁。**
+
+---
+
+### ④–⑦ 尚未動工
+
+順序:④ R6(**兩個讀取點必須同時換**,否則會出現「用新清單的 sha
 驗舊清單的條目」)→ ⑤ R5 `to-spec` → ⑥ R5 `code-review` → **⑦ R4 最後**(裁決)。
 
-**行號全部於 `f0a9ef3 + 批一 ②(未提交)` 重量**(舊值已被批一 ① ② 推走,見上節 (b)):
+**行號全部於「批一 ③ 已套用、未提交」的工作樹重量**(舊值已被批一 ③ 再推走一次):
 
-| # | 規則 | 符號(**身分**) | 行號(量測於本輪工作樹) |
-|---|---|---|---|
-| ③ | R8 | `check()` 內 `body = read_text_or_none(...)` → `read_text_or_none` | `:2430` → `:1120` |
-| ④ | R6 | `read_go_live()` + `legacy_no_redlight()` | `:66` + `:1884` |
-| ⑤ | R5 | `check_to_spec_override()`,內文讀取 | `:3287`(讀取 `:3297`) |
-| ⑥ | R5 | `check_third_axis_mount()`,內文讀取 | `:3313`(讀取 `:3322`) |
-| ⑦ | R4 | `skill_mirror_violations()`,內容比對兩行 | `:3142`(比對 `:3206`+`:3207`) |
+| # | 規則 | 符號(**身分**) | 行號(本輪重量) | 上一輪的值 |
+|---|---|---|---|---|
+| ④ | R6 | `read_go_live()` + `legacy_no_redlight()` | `:66` + `:1884` | 同(在改動點上方,未被推移) |
+| ⑤ | R5 | `check_to_spec_override()`,內文讀取 | `:3320`(讀取 `:3330`) | `:3287`(`:3297`) |
+| ⑥ | R5 | `check_third_axis_mount()`,內文讀取 | `:3346`(讀取 `:3355`) | `:3313`(`:3322`) |
+| ⑦ | R4 | `skill_mirror_violations()`,內容比對兩行 | `:3175`(比對 `:3239`+`:3240`) | `:3142`(`:3206`+`:3207`) |
+
+**⑤⑥⑦ 各被推移 +33 行**,④ 在改動點上方所以沒動。
+**這就是票 136 那一族在同一張票內的第四次現身** —— 而它每一次都不會有東西出聲。
 
 ⚠ **這張表在下一批落地之後會再過期一次。** 動工前**以符號名重新定位**,
 不要拿這裡的數字直接 `sed -n`。
 
-**③ 住在 `check()` 裡**(② 已完成)⇒ 它是票 133 三分類裡的 **shared** 類,
-**硬限制適用:不得做全域替換。** 而且它的 rc 驗證要在**有東西 staged** 的狀態下做
-(見本節開頭那個基準值弱點)。
+**④–⑦ 都不住在 `check()` 裡**(③ 已完成,`check()` 內的格全數收完)⇒
+它們**不受**「不得做全域替換」那條硬限制,但 ④ 有自己的硬限制(兩個讀取點同時換)。
+它們住在 `mode_pre_commit` 直接呼叫的那一層 ⇒ **不受**本節開頭那個
+「index 為空時不進 per-file 迴圈」的基準值弱點影響(同 R9)。
 
 ---
 
