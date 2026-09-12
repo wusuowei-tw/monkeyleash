@@ -2233,11 +2233,12 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
       commit 時問「你是不是還停在前置站就在交原始碼」—— 實作做完後站別本來就會
       往 review / idle 走,拿寫入時的問題去問 commit 會擋掉每一次合法提交。
 
-    at_commit 也改變 **R1 的判定對象**(票 133 批一 ②),同樣不是放寬它:
+    at_commit 也改變 **R1 與 R8 的判定對象**(票 133 批一 ② / ③),同樣不是放寬它:
       `content` 有給值 -> 用它(前哨:這次編輯之後會變成什麼,還沒進 index)。
       content 為 None + 寫入時點 -> 讀工作樹(診斷/前哨入口,行為一個字沒動)。
       content 為 None + commit 時點 -> 讀 **index**,取不到 fail-closed。
     **來源綁執行上下文,不綁函式** —— 共用一個讀取函式不等於共用一個正確對象。
+    (所以 `read_text_or_none` 與 `staged_text` 兩支都在,誰用哪一支由時點決定。)
     """
     r = rel(path)
 
@@ -2424,10 +2425,42 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
         # **邊界比對**:研究套件是 `research`,不是 `research_utils`(F-051,在 imports_research 裡)。
         if not _under_research(r):
             # 判定對象是**套用編輯後的整檔結果**,不是編輯片段(票 07 / F-046)。
-            # content 為 None = 呼叫端算不出結果(提交時、或 anchor 套不上),
-            # 退回磁碟現況;連磁碟都讀不到才是真的沒有答案。
+            #
+            # content 為 None = 呼叫端算不出結果。**而那有兩種,對象不同**
+            # (票 133 批一 ③):
+            #   提交時   -> 要進歷史的是 **index** 那一份,讀它。
+            #   anchor 套不上(前哨)-> 這次編輯本來就會失敗,磁碟現況是唯一
+            #                          有意義的近似,維持舊行為。
+            # 舊版兩種都讀工作樹 ⇒ `git add <import 了 research 的版本>` 之後
+            # 把工作樹改乾淨,R8 綠、對 research/ 的依賴進歷史,**零告警**。
+            #
+            # **答案不是從「R1 / R9 也是 index」推出來的**:R8 判的對象就是那個
+            # .py 檔本身,而那個檔會被這次 commit 帶走 ⇒ index 是它唯一正確的對象。
+            # 票 133 的硬限制:**共用一個讀取函式不等於共用一個正確對象** ——
+            # 所以 `read_text_or_none` 本身一個字沒動(它的另一個呼叫端
+            # `content_after_edit` 要的就是工作樹)。
+            #
+            # ⚠ **必須解包** —— `staged_text` 回的是 tuple,而 `(None, "…")`
+            # 在 `if` 裡**是真的**;忘了解包的話 fail-closed 整條翻成 fail-open。
             body = content
-            if body is None:
+            if body is None and at_commit:
+                body, why = staged_text(r)
+                if why is not None:
+                    # **不退回工作樹**(`staged_blob` 的 docstring 逐字要求)。
+                    # 訊息要指向那個**沒被滿足的前提**(票 13),不是只說「讀不到」。
+                    # 而且要與底下兩段出口分得開 —— 票 07 的代價逐字:
+                    # 誤導的訊息比沒有訊息貴,它讓人去檢查一個根本沒問題的地方。
+                    return ("[R8/fail-closed] %s:%s\n"
+                            "     R8 判的是**要進這次 commit 的那一份**,所以讀 index "
+                            "不讀工作樹。\n"
+                            "     它不在 index 裡 ⇒ 「它有沒有 import research/」"
+                            "這個問題沒有答案,\n"
+                            "     而沒有答案不等於答案是「沒有」。\n"
+                            "     修法:`git add %s`。\n"
+                            "     **不退回工作樹** —— 那是另一份東西,"
+                            "退回去就是判錯對象。"
+                            % (r, why, r))
+            elif body is None:
                 body = read_text_or_none(os.path.join(ROOT, r))
             if body is None:
                 # 原本這裡是 `body = ""` —— 讀不到被翻譯成「檔案是空的」,

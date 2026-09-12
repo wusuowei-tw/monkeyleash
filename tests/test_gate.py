@@ -4370,3 +4370,306 @@ def test_a_spec_missing_from_the_index_fails_closed_with_a_reason(r1_spec, layou
         u"訊息沒點名是哪個檔 —— 人不知道要去 add 什麼:msg=%r" % msg)
     assert "index" in msg and "git add" in msg, (
         u"訊息沒說出前提與修法,人會去找一個不存在的損壞檔案:msg=%r" % msg)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 133 批一 ③ —— R8 在 commit 時點的權威輸入是 **index**,不是工作樹
+#
+# ## 這一格的問題與答案
+#
+# 問:**R8 在 commit 的時點,權威輸入該是哪一個版本?**
+# 答:**index**。R8 的命題是「生產程式碼不得 import research/」,而「那份程式碼」
+#     指的是**要進歷史的那一份** —— 進歷史的是 index。
+#
+# 現行 R8 在 `content is None` 時走 `read_text_or_none(ROOT/r)`,**兩個時點都讀工作樹**
+# ⇒ `git add <import 了 research 的版本>` 之後把工作樹改乾淨,R8 綠、
+# 對 research/ 的依賴靜默進歷史。**失敗方式是靜默的。**
+#
+# **答案不是從「R1 / R9 也是 index」推出來的**:R8 判的對象就是那個 .py 檔本身,
+# 而那個檔會被這次 commit 帶走 ⇒ index 是它唯一正確的對象。
+# (對照:`content` 有給值那條路的正確對象**不是** index —— 那是前哨,
+#  問的是「這次編輯之後會變成什麼」(票 07 / F-046 的判定對象裁決),
+#  它還沒進 index,也不該進。票 133 的硬限制:
+#  **共用一個讀取函式不等於共用一個正確對象。**)
+#
+# ## ⚠ 與 R1 的三個差異(照抄 R1 的改法會出事)
+#
+# 1. **R8 之後還有東西** —— legacy 清單豁免、R3 的兩半都排在它後面,
+#    而 R1 那一支是 `return None` 結束整個分支。
+# 2. **R8 有三段出口**(讀不到 / 不是合法 Python / 真的 import 了),R1 只有兩段。
+# 3. **R8 前面還有 R2** —— 站別不對的話根本走不到 R8,所以本批一律 monkeypatch
+#    `load_stage` 成 implement(既有 R8 測試就是這個做法)。
+#
+# ⇒ **因此本批的斷言一律只問「訊息裡有沒有 R8」,不問「有沒有被擋」。**
+#    乾淨那幾格會走到 R3,而 R3 在臨時 repo 裡本來就會說話(沒有紅燈紀錄)——
+#    那與本票無關。既有 R8 測試(`test_edit_result.py`)用的就是這個寫法:
+#    `assert not (msg and "R8" in msg)`。
+#
+# ## 2×2 真值表 + 硬限制 + 邊界
+#
+#            | 工作樹乾淨              | 工作樹 import 了 research
+#   ---------+------------------------+----------------------------
+#   index    | **① 本格本體**(要擋)  | ④ 反控:偵測面不得變小(要擋)
+#   違規     |                        |
+#   ---------+------------------------+----------------------------
+#   index    | ③ 反控:不得變成永遠紅  | **② 鑑別格**(要放行)
+#   乾淨     | (要放行)              |
+#
+# ⑤ **硬限制**:`at_commit=False`,或 `content` 有給值 → 行為一個位元組都不准動。
+# ⑥ **邊界**:檔案不在 index 裡 → fail-closed,訊息要點名檔案與原因。
+#
+# ## 語料出處(**逐字複製,未發明新樣本**)
+#
+# 違規 9 個:`tests/test_research_stage.py` 的
+#   `TestR8ProductionMustNotImportResearch::test_production_importing_research_is_blocked`(4 個)
+#   + `TestTheSyntaxAxisIsEnumeratedNotSampled`(票 104)判為 True 的 5 個。
+# 乾淨 1 個:同檔 `test_a_boundary_neighbour_is_not_a_research_import` 的第一個
+#   (`import research_utils` —— F-051 那個邊界)。
+#
+# ⚠ **複製就是第二份來源,而註解不是機制** ⇒ 底下有一組**漂移守衛**,
+# 拿 `imports_research()` 對每一個樣本問一次分類。上游那批改了行為的話,
+# 守衛會先紅,而不是讓 2×2 靜靜地測不到東西。
+#
+# 📌 **候選(未開票,票 133 批一 ③ 裁決:登記不做)——「複製 vs 引用」**
+#     更好的做法是把那 10 個字串抽成 `tests/test_research_stage.py` 的**具名常數**
+#     再 import 進來,**一份來源**就不需要漂移守衛。
+#     沒有在本票做的理由:那要動到另一個測試檔,而本票的範圍是判定對象。
+#     **記在這裡是因為下一個動這組語料的人會先看到這裡** ——
+#     動工的觸發條件:任何人要在這組語料裡增刪樣本時。
+#     ⚠ 這一句是**紀錄不是機制**:沒有東西會在它被忽略時出聲(CLAUDE.md 的祈使句那條)。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 違規樣本:`imports_research()` 判 True。每一個都是**合法 Python**
+# (不合法會走 `parses_as_python` 那一段,那是另一個出口,不是本批要驗的)。
+_R8_BAD = [
+    ("plain", u"import research\n"),
+    ("dotted", u"import research.explore\n"),
+    ("from", u"from research import explore\n"),
+    ("from_dotted", u"from research.explore import thing\n"),
+    ("aliased", u"import research as r\n"),
+    ("aliased_dotted", u"import research.explore as e\n"),
+    ("multi_name", u"import os, research\n"),
+    ("star", u"from research import *\n"),
+    # ⚠ 票 104 逐字標注「**現行行為,未裁是否正確**」。本批沿用它,
+    # 因為本批驗的是**判定對象**,不是判定內容 —— 那一軸改判的那天,
+    # 上面的漂移守衛會先紅,而不是這一批。
+    ("relative_module", u"from .research import x\n"),
+]
+
+# 乾淨樣本:F-051 的邊界鄰居。**不是新字串**。
+_R8_CLEAN = u"import research_utils\n"
+
+# 每支測試要一條**自己的**生產檔路徑,才能共用同一個 git repo。
+_R8_SEQ = []
+
+
+def _r8_uniq():
+    _R8_SEQ.append(1)
+    return u"m%d" % len(_R8_SEQ)
+
+
+@pytest.fixture(scope="session")
+def _r8_index_repo(tmp_path_factory):
+    """整個 session **一個** git repo(理由同 `_r1_index_repo`)。"""
+    repo = tmp_path_factory.mktemp("r8_index_repo")
+    _git133(["init", "-q"], repo)
+    _git133(["config", "user.email", "t@local"], repo)
+    _git133(["config", "user.name", "t"], repo)
+    return repo
+
+
+@pytest.fixture
+def r8_src(_r8_index_repo, monkeypatch):
+    """回一個建構子:`(staged, worktree, add=True) -> 絕對路徑`。
+
+    兩個 monkeypatch,缺一不可:
+
+    - `ROOT` 指到臨時 repo —— 同 `spec_root` 的理由,而且 `staged_blob` 的
+      `cwd` 預設就是 `ROOT`,一步餵了 `rel()` 與 git 兩條路。
+    - `load_stage` 成 implement —— **R2 排在 R8 前面**,站別不對的話
+      根本走不到 R8(既有 R8 測試就是這個做法)。
+      `STAGES_DEF` 是 import 時凍結的絕對路徑,指著**真** repo 的定義檔,
+      所以 `load_stage_defs()` 仍然讀得到,R2-fc 不會觸發。
+
+    `add=False` 用於 ⑥ —— 檔案在磁碟上但**不在 index 裡**。
+    """
+    monkeypatch.setattr(gate, "ROOT", str(_r8_index_repo))
+    monkeypatch.setattr(gate, "load_stage", lambda: ("implement", "133"))
+
+    def build(staged, worktree, add=True):
+        rel_path = u"macro_audit/%s.py" % _r8_uniq()
+        p = _r8_index_repo / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        io.open(str(p), "w", encoding="utf-8", newline="\n").write(staged)
+        if add:
+            _git133(["add", "-f", "--", rel_path], _r8_index_repo)
+        io.open(str(p), "w", encoding="utf-8", newline="\n").write(worktree)
+        return str(p)
+
+    return build
+
+
+def _r8_said(msg):
+    """訊息裡有沒有 R8。
+
+    **只問這個,不問「有沒有被擋」** —— 乾淨那幾格會往下走到 R3,
+    而 R3 在臨時 repo 裡本來就會說話(沒有紅燈紀錄),那與本票無關。
+    寫法同既有的 `test_edit_result.py`。
+    """
+    return "R8" in (msg or "")
+
+
+class TestTheR8CorpusStillClassifiesAsItsSourceSays:
+    """**漂移守衛**:本批的語料是從別的檔**複製**來的,而複製會漂。
+
+    2×2 的每一格都假設「這 9 個是違規、那 1 個是乾淨」。
+    假設若靜靜變假,2×2 會**全綠而什麼都沒測到**。
+    這一組把假設本身變成斷言 —— **註解不是機制,斷言才是。**
+    """
+
+    @pytest.mark.parametrize("shape,body", _R8_BAD,
+                             ids=[s for s, _ in _R8_BAD])
+    def test_every_bad_sample_is_still_a_research_import(self, shape, body):
+        assert gate.imports_research(body) is True, (
+            u"語料漂了:`%s` 不再被判為 import research ⇒ "
+            u"用它當違規樣本的每一格都會變成「測不到東西的綠」:%r" % (shape, body))
+
+    def test_the_clean_sample_is_still_not_a_research_import(self):
+        assert gate.imports_research(_R8_CLEAN) is False, (
+            u"乾淨樣本漂了:`%r` 現在被判為 import research ⇒ "
+            u"所有「乾淨」那一側的格子都在測錯東西" % _R8_CLEAN)
+
+
+@pytest.mark.parametrize("shape,body", _R8_BAD, ids=[s for s, _ in _R8_BAD])
+class TestR8JudgesTheStagedSource:
+    """2×2 真值表裡有違規樣本的三格,九個 import 形式各跑一輪。"""
+
+    def test_a_research_import_in_the_index_is_caught(self, r8_src, shape, body):
+        """① **本格本體**:違規版在 index、乾淨版在工作樹 → R8 必須說話。
+
+        現行讀工作樹 ⇒ R8 沉默 ⇒ 對 research/ 的依賴靜默進歷史。
+        """
+        p = r8_src(staged=body, worktree=_R8_CLEAN)
+        msg = gate.check(p, None, at_commit=True)
+        assert _r8_said(msg), (
+            u"index 裡有 `%s`、工作樹乾淨,R8 卻沒說話 —— "
+            u"判的是工作樹,而進歷史的是 index 那一份:path=%s msg=%r"
+            % (shape, p, msg))
+
+    def test_a_research_import_only_in_the_worktree_is_not_caught(
+            self, r8_src, shape, body):
+        """② **鑑別格**:乾淨版在 index、違規版在工作樹 → R8 不可說話。
+
+        抓「乾脆兩邊都讀」那個偷懶修法 —— 它讓 ① 變綠,
+        代價是每一個「工作樹還在草稿中」的狀態都擋死 commit。
+        """
+        p = r8_src(staged=_R8_CLEAN, worktree=body)
+        msg = gate.check(p, None, at_commit=True)
+        assert not _r8_said(msg), (
+            u"index 是乾淨的,R8 卻說話了 —— 判定對象跑到工作樹去了:"
+            u"shape=%s path=%s msg=%r" % (shape, p, msg))
+
+    def test_an_agreeing_research_import_is_still_caught(self, r8_src, shape, body):
+        """④ **反控**:兩邊一致且違規 → 仍要說話(最日常的那一格)。
+
+        少了它,「index 讀不到就跳過」也能讓 ① ② ③ 全過 —— 那是把 R8 整條關掉,
+        **而測試看起來還是綠的**。
+        """
+        p = r8_src(staged=body, worktree=body)
+        msg = gate.check(p, None, at_commit=True)
+        assert _r8_said(msg), (
+            u"偵測面被弄小了 —— 兩邊都有 `%s` 還沉默:path=%s msg=%r"
+            % (shape, p, msg))
+
+
+def test_an_agreeing_clean_source_passes_r8_at_commit(r8_src):
+    """③ **反控**:兩邊一致且乾淨 → R8 不得說話。
+
+    少了它,「一律回違規」也能讓 ① 過,而那是把 R8 變成永遠紅。
+    """
+    p = r8_src(staged=_R8_CLEAN, worktree=_R8_CLEAN)
+    msg = gate.check(p, None, at_commit=True)
+    assert not _r8_said(msg), u"兩邊都乾淨 R8 卻說話:path=%s msg=%r" % (p, msg)
+
+
+@pytest.mark.parametrize("shape,body", _R8_BAD, ids=[s for s, _ in _R8_BAD])
+class TestR8SentryPathIsUntouched:
+    """⑤ **硬限制反控**:`at_commit=False` 或 `content` 有給值 → 行為不變。
+
+    本票只動「commit 時點且 content 為 None」那一格。少了這一批,
+    把 R8 整條改成讀 index 也會讓 ① ② ③ ④ 全過 —— 而那會把前哨
+    (票 07 / F-046 的「判定對象是套用編輯後的整檔結果」)一起換掉。
+    """
+
+    def test_at_write_time_a_dirty_worktree_is_still_caught(self, r8_src, shape, body):
+        """⑤a:`at_commit=False` + content=None → 仍讀工作樹(違規 → 說話)。"""
+        p = r8_src(staged=_R8_CLEAN, worktree=body)
+        msg = gate.check(p, None, at_commit=False)
+        assert _r8_said(msg), (
+            u"寫入時點不再讀工作樹 —— 前哨被一起換掉了:"
+            u"shape=%s path=%s msg=%r" % (shape, p, msg))
+
+    def test_at_write_time_a_clean_worktree_still_passes(self, r8_src, shape, body):
+        """⑤b:`at_commit=False` + content=None → 仍讀工作樹(乾淨 → 沉默)。
+
+        與 ⑤a 相反的一半:少了它,「寫入時點一律擋」也能讓 ⑤a 綠。
+        """
+        p = r8_src(staged=body, worktree=_R8_CLEAN)
+        msg = gate.check(p, None, at_commit=False)
+        assert not _r8_said(msg), (
+            u"寫入時點跑去讀 index 了 —— 前哨的正確對象不是 index:"
+            u"shape=%s path=%s msg=%r" % (shape, p, msg))
+
+    def test_given_content_wins_over_both_sources(self, r8_src, shape, body):
+        """⑤c:`content` 有給值 → 用它,即使兩邊都乾淨、即使 at_commit=True。
+
+        這是前哨真正在走的形態:`content_after_edit` —— 「這次編輯之後會變成
+        什麼」,它還沒有進 index(票 07 / F-046)。
+        """
+        p = r8_src(staged=_R8_CLEAN, worktree=_R8_CLEAN)
+        msg = gate.check(p, body, at_commit=True)
+        assert _r8_said(msg), (
+            u"呼叫端交出來的內容有 `%s` 卻沒被判 —— "
+            u"content 那條路被 index 蓋掉了:path=%s msg=%r" % (shape, p, msg))
+
+    def test_given_clean_content_is_not_overridden_by_the_index(
+            self, r8_src, shape, body):
+        """⑤d:`content` 給的是乾淨的 → R8 沉默,即使 index 與工作樹都違規。
+
+        與 ⑤c 相反的一半:少了它,「content 有給值時順便也讀 index」
+        會讓 ⑤c 綠,而那條修法會在前哨誤擋每一次「正在把 import 刪掉」的編輯
+        —— 那正是 `test_edit_result.py::test_an_edit_that_removes_the_import_is_allowed`
+        守著的方向。
+        """
+        p = r8_src(staged=body, worktree=body)
+        msg = gate.check(p, _R8_CLEAN, at_commit=True)
+        assert not _r8_said(msg), (
+            u"content 給的是乾淨的 R8 卻說話 —— 判定對象跑去 index 了:"
+            u"shape=%s path=%s msg=%r" % (shape, p, msg))
+
+
+def test_a_source_missing_from_the_index_fails_closed_with_a_reason(r8_src):
+    """⑥ **邊界:不在 index 裡 → fail-closed,而且訊息要說出是哪個檔、為什麼。**
+
+    檔案在磁碟上、**不在 index 裡**。工作樹刻意放**乾淨**的那一份:
+    退回工作樹的修法會在這裡拿到一個假綠燈。
+
+    **不得退回工作樹** —— `staged_blob` 的 docstring 逐字:「退回去就是判錯對象,
+    而且是往 fail-open 的方向錯」。
+
+    但**方向對不代表訊息對**(票 13):只說「讀不到」會讓人去找一個不存在的
+    損壞檔案,而這裡沒被滿足的前提是「它要在 index 裡」。
+    R8 既有的三段出口本來就分得開「讀不到」與「你 import 了 research」
+    (票 07 的代價逐字:誤導的訊息比沒有訊息貴)—— 新增這一段不得把它們混回去。
+    """
+    p = r8_src(staged=_R8_CLEAN, worktree=_R8_CLEAN, add=False)
+    msg = gate.check(p, None, at_commit=True)
+    assert msg, u"不在 index 裡卻放行 —— fail-open:path=%s" % p
+    assert _r8_said(msg) and "fail-closed" in msg, (
+        u"沒標明是 R8 的 fail-closed 那一支:msg=%r" % msg)
+    assert os.path.basename(p) in msg, (
+        u"訊息沒點名是哪個檔 —— 人不知道要去 add 什麼:msg=%r" % msg)
+    assert "index" in msg and "git add" in msg, (
+        u"訊息沒說出前提與修法,人會去找一個不存在的損壞檔案:msg=%r" % msg)
+    assert "不得 import research/" not in msg, (
+        u"把「讀不到」說成「你 import 了 research」—— 票 07 的那個代價回來了:%r" % msg)
