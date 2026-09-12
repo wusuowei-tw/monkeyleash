@@ -60,10 +60,71 @@ CANON_CODE_REVIEW = os.path.join(ROOT, ".agents", "skills", "code-review", "SKIL
 EXEMPTION_LOG = os.path.join(ROOT, ".dev", "gate-exemptions.jsonl")   # 證據
 RUN_LOG = os.path.join(ROOT, ".dev", "test-runs.jsonl")               # 證據
 
-LEGACY_LIST = os.path.join(ROOT, ".agents", "legacy-no-redlight.txt")  # 凍結定義,只減不增
+# ── 凍結清單的位置:**相對路徑是單一來源**,絕對路徑由它長出來 ──────────────
+#
+# 理由與 `FRICTION_LOG_REL` 逐字相同(票 133 批一 ①):R6 改讀 index 之後需要一個
+# **repo 根相對**的路徑交給 `git show :<path>`,而從 `LEGACY_LIST` 這個
+# **import 時凍結的絕對路徑**反算回來是錯的 —— `rel()` 用的是**當下的** `ROOT`,
+# 測試 `monkeypatch.setattr(gate, "ROOT", tmp)` 只換其中一個時會吐出
+# `../../../..` 的逃逸路徑,而 `git show :../../..` 毫無意義。
+#
+# **判準**:要交給 git 的相對路徑,不得從一個絕對路徑「反算」回來 ——
+# 反算的結果取決於兩個可以各自漂移的東西。**讓相對的那一份當來源。**
+LEGACY_LIST_REL = ".agents/legacy-no-redlight.txt"
+LEGACY_LIST = os.path.join(ROOT, *LEGACY_LIST_REL.split("/"))  # 凍結定義,只減不增
 
 
-def read_go_live():
+def _legacy_list_lines(path=None, cwd=None):
+    """凍結清單的**行**。回 `(lines, why)`;`why` 非 None 表示讀不到。
+
+    ## 來源綁**執行上下文**,不綁函式(票 133 批一 ④)
+
+      `path` 給了   -> 讀**那個檔**(工作樹)。`check()` 裡 R3 的兩個豁免查詢、
+                      以及明確指定一個檔的測試入口走這條。**行為一個字沒動。**
+      `path` 沒給   -> 讀**這個 repo 要提交的那一份**(index),`cwd` 供測試指定 repo。
+
+    **預設是 index,不是工作樹** —— 預設值就是「新東西」會拿到的東西,
+    而閘門的紀律是**新東西預設被守**(CLAUDE.md 的黑名單 / fail-closed 那一條)。
+
+    ⚠ **兩個讀取點共用本函式,而那是刻意的**:`read_go_live()` 取第一行的 sha、
+    `legacy_no_redlight()` 取其餘行的路徑 —— **它們是同一份資料的兩半**。
+    分開各讀一次的話,只換一支就會得到「A 版的 sha × B 版的條目」,
+    而那個組合**在任何真實版本裡都不存在**:它是誰都沒寫過的第三種清單,
+    會被 fail-closed 報成「清單有問題」,把人推去刪一份本來正確的清單(票 55)。
+    **共用一次讀取,那個狀態就構造不出來。**
+
+    **必須解包。** 回的是 tuple,而 `(None, "…")` 在 `if` 裡**是真的**(票 13 C)。
+    """
+    if path is not None:
+        try:
+            return io.open(path, encoding="utf-8").read().splitlines(), None
+        except Exception as e:
+            return None, "讀不到 %s(%s)" % (rel(path), e)
+    text, why = staged_text(LEGACY_LIST_REL, cwd=cwd)
+    if why is not None:
+        return None, why
+    return text.splitlines(), None
+
+
+def _go_live_from_lines(lines):
+    """從清單的行取 go-live sha。取不到回 None。"""
+    for line in lines:
+        if line.startswith("# go-live:"):
+            return line.split(":", 1)[1].strip() or None
+    return None
+
+
+def _entries_from_lines(lines):
+    """從清單的行取路徑集合(去註解、去空行)。"""
+    out = set()
+    for line in lines:
+        line = line.split("#", 1)[0].strip()
+        if line:
+            out.add(line.replace("\\", "/"))
+    return out
+
+
+def read_go_live(path=None, cwd=None):
     """紅燈紀錄機制上線的 commit —— 清單的入場券就是「在這個 commit 的樹裡」。
     不用日期(可改),用樹(要改寫歷史才動得了)。
 
@@ -71,14 +132,13 @@ def read_go_live():
     而 sha 綁死產生它的那個 repo:寫死的話照抄過去會拿一個在目標 repo
     不存在的 commit 去驗每一筆,安裝的強制驗證當場失敗。
     sha 與它定義的清單是同一件事,住在同一個檔案裡。
+
+    `path` / `cwd` 的語意見 `_legacy_list_lines`:**沒給讀 index,給了讀工作樹。**
     """
-    try:
-        for line in io.open(LEGACY_LIST, encoding="utf-8"):
-            if line.startswith("# go-live:"):
-                return line.split(":", 1)[1].strip() or None
-    except Exception:
+    lines, why = _legacy_list_lines(path, cwd)
+    if why is not None:
         return None
-    return None
+    return _go_live_from_lines(lines)
 
 
 MOUNT_CACHE = os.path.join(ROOT, ".cache", "mount-check.json")        # 快取
@@ -1668,7 +1728,7 @@ def check_friction_numbers(path=None, cwd=None):
     return out
 
 
-def check_legacy_list():
+def check_legacy_list(path=None, cwd=None):
     """權威層規則:凍結清單裡每一筆都必須在 LEGACY_GO_LIVE 的樹裡。
 
     沒有這條的話,清單檔本身落在 .agents/(非原始碼)、沒有任何規則守它,
@@ -1677,14 +1737,45 @@ def check_legacy_list():
     「有一條測試會抓到」不算守住:沒有機制強制那條測試被跑。
 
     與 R4/R5 同構,回傳違規訊息串列。**fail-closed**:清單讀不到算違規。
+
+    ## 權威輸入是 **index**,不是工作樹(票 133 批一 ④)
+
+    R6 的命題是「凍結清單裡每一筆都必須在 go-live 的樹裡」,而**那份清單**指的是
+    **要進歷史的那一份** —— 進歷史的是 index。舊版讀工作樹,於是
+    `git add <偷渡了一筆的版本>` 之後把工作樹改回乾淨,R6 綠、那一筆進歷史,
+    而它是一個**永久的 R3 豁免**。
+
+    **答案不是從「R1 / R8 / R9 也是 index」推出來的**:R6 判的對象就是那個清單檔本身,
+    而那個檔會被這次 commit 帶走 ⇒ index 是它唯一正確的對象。
+
+    ⚠ **兩個讀取點【一次讀完】** —— `lines` 讀一次,sha 與條目都從它長出來。
+    分開呼叫 `read_go_live()` 與 `legacy_no_redlight()` 的話,只換一支就會混搭出
+    「A 版的 sha × B 版的條目」,而那份清單誰都沒寫過。守它的是
+    `test_r6_reports_a_sha_and_an_entry_from_the_same_list`。
     """
-    if not os.path.exists(LEGACY_LIST):
-        return ["[R6] 找不到豁免清單 %s —— 讀不到一律當違規,不當作乾淨。" % rel(LEGACY_LIST)]
-    go_live = read_go_live()
+    lines, why = _legacy_list_lines(path, cwd)
+    if why is not None:
+        if path is not None:
+            # 明確指定一個檔卻讀不到 —— 訊息與行為與修法前相同。
+            return ["[R6] 找不到豁免清單 %s —— 讀不到一律當違規,不當作乾淨。"
+                    % rel(path)]
+        # **不退回工作樹**(`staged_blob` 的 docstring 逐字要求)。
+        # 訊息要指向那個沒被滿足的前提(票 13),而**不得沿用「清單只減不增」那一句**
+        # —— 票 55 記過:那句話會把人推去刪一份本來正確的清單,而刪完 R6 仍然紅。
+        return ["[R6/fail-closed] %s:%s\n"
+                "     R6 判的是**要進這次 commit 的那一份**清單,所以讀 index "
+                "不讀工作樹。\n"
+                "     它不在 index 裡 ⇒ 「清單裡每一筆是不是都在 go-live 的樹裡」"
+                "這個問題沒有答案,\n"
+                "     而沒有答案不等於答案是「沒問題」。\n"
+                "     修法:`git add %s`。\n"
+                "     **不退回工作樹** —— 那是另一份東西,退回去就是判錯對象。"
+                % (LEGACY_LIST_REL, why, LEGACY_LIST_REL)]
+    go_live = _go_live_from_lines(lines)
     if not go_live:
         return ["[R6] %s 沒有 go-live sha(第一行應為 `# go-live: <sha>`)。\n"
                 "     讀不到基準點就無從驗證清單 —— 不是「沒基準所以都算過」。"
-                % rel(LEGACY_LIST)]
+                % (rel(path) if path is not None else LEGACY_LIST_REL)]
     # ── 先驗**那個 commit 在不在**,再逐條驗路徑(票 55)────────────────────
     #
     # `git cat-file -e <go-live>:<path>` 的**非零退出碼有兩種原因**,
@@ -1716,7 +1807,9 @@ def check_legacy_list():
                 % go_live]
 
     out = []
-    for p in sorted(legacy_no_redlight()):
+    # **從同一份 `lines` 長出來** —— 不是再呼叫一次 `legacy_no_redlight()`。
+    # 再呼叫一次就是再讀一次,而兩次讀取之間來源可以不一致(見本函式 docstring)。
+    for p in sorted(_entries_from_lines(lines)):
         try:
             rc = subprocess.call(["git", "cat-file", "-e", "%s:%s" % (go_live, p)],
                                  cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -1881,7 +1974,7 @@ def is_source_path(rel_path):
                 or os.path.basename(r) in NON_SOURCE_NAMES)
 
 
-def legacy_no_redlight():
+def legacy_no_redlight(path=None, cwd=None):
     """機制上線前就存在、因此無法誠實提供紅燈紀錄的既有 .py。
 
     豁免的只有 R3 的**後半**(紅燈紀錄);前半(對應測試檔須存在)照常適用。
@@ -1892,16 +1985,17 @@ def legacy_no_redlight():
     偽造需要改寫歷史。同一個原則的第三次出現(閘門自我修改、票宣告接縫、本清單)。
 
     **fail-closed**:清單讀不到 = 沒有任何豁免,不是全部豁免。
+
+    `path` / `cwd` 的語意見 `_legacy_list_lines`:**沒給讀 index,給了讀工作樹。**
+    ⚠ **`check()` 裡 R3 的兩個呼叫端必須明確傳 `path=LEGACY_LIST`** ——
+    寫入時點沒有 index 這回事(那個檔案可能根本還沒 `git add`)。
+    留成裸呼叫的話,它們的行為會被預設值連帶換掉**而原始碼一個字都沒動**;
+    守它的是 `test_r3_legacy_exemption_at_write_time_still_reads_the_worktree`。
     """
-    out = set()
-    try:
-        for line in io.open(LEGACY_LIST, encoding="utf-8"):
-            line = line.split("#", 1)[0].strip()
-            if line:
-                out.add(line.replace("\\", "/"))
-    except Exception:
+    lines, why = _legacy_list_lines(path, cwd)
+    if why is not None:
         return set()
-    return out
+    return _entries_from_lines(lines)
 
 
 PROVENANCE = os.path.join(ROOT, ".dev", "provenance.jsonl")   # 控制,不是證據
@@ -2492,7 +2586,12 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
         # 出口不變:補測試 → 從清單移除(R6 守著只減不增與刪檔排水);新檔案不受影響
         # (它不在凍結清單裡,入場券是「在上線 commit 的樹裡」,偽造不了)。
         # 放在 R8 之後:既有檔案被改成 import research 仍要被 R8 擋,legacy 不豁免那個。
-        if r in legacy_no_redlight():
+        # **明確傳 `path=LEGACY_LIST`(工作樹)** —— 票 133 批一 ④ 之後,
+        # `legacy_no_redlight()` 的預設是 index,而**這一格兩個時點共用**:
+        # 寫入時點沒有 index 這回事(該檔可能還沒 `git add`)。
+        # 留成裸呼叫的話,行為會被預設值連帶換掉**而這一行一個字都沒動** ——
+        # 「一個字不動」與「行為不動」在這裡分家,要的是後者。
+        if r in legacy_no_redlight(path=LEGACY_LIST):
             return None
 
         base = os.path.splitext(os.path.basename(r))[0]
@@ -2553,7 +2652,9 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
                            "F-0014",
                            reason="upstream-provenance")
             return None
-        if r not in legacy_no_redlight() and any(os.path.exists(c) for c in cands):
+        # 同上一處:**明確傳工作樹**,理由見那段註解。
+        if (r not in legacy_no_redlight(path=LEGACY_LIST)
+                and any(os.path.exists(c) for c in cands)):
             # 後半接受的位置必須與前半的 cands 完全相同,否則會出現通過前半、
             # 卡死後半、且無合法解法的死路。
             why = redlight_missing(base, [os.path.relpath(c, ROOT).replace(os.sep, "/")

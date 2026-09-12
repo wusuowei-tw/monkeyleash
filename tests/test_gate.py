@@ -955,7 +955,7 @@ class TestLegacyNoRedlightList:
         lst = tmp_path / "legacy.txt"
         lst.write_text("# 產生指令:...\n\npkg/thing.py\n", encoding="utf-8")
         monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
-        assert gate.legacy_no_redlight() == {"pkg/thing.py"}
+        assert gate.legacy_no_redlight(path=str(lst)) == {"pkg/thing.py"}
 
 
 class TestTheListItselfIsGuarded:
@@ -999,7 +999,7 @@ class TestTheListItselfIsGuarded:
         lst.write_text("# go-live: %s\n%s\nnot/in/the/tree.py\n"
                        % (go_live, sample), encoding="utf-8")
         monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
-        v = gate.check_legacy_list()
+        v = gate.check_legacy_list(path=str(lst))
         assert len(v) == 1 and "not/in/the/tree.py" in v[0], v
 
     def test_it_holds_when_the_gate_itself_is_absent_from_the_tree(
@@ -1032,7 +1032,8 @@ class TestTheListItselfIsGuarded:
             "# go-live: %s\n%s\n" % (sha, sample))
         monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
         monkeypatch.setattr(gate, "ROOT", str(repo))
-        assert gate.check_legacy_list() == [], "gate.py 不在樹裡的 repo 形狀下誤報"
+        assert gate.check_legacy_list(path=str(lst)) == [], \
+            "gate.py 不在樹裡的 repo 形狀下誤報"
 
     def test_a_path_absent_from_that_tree_is_still_named(
             self, tmp_path, monkeypatch):
@@ -1055,7 +1056,7 @@ class TestTheListItselfIsGuarded:
             "# go-live: %s\na.py\nnever/existed.py\n" % sha)
         monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
         monkeypatch.setattr(gate, "ROOT", str(repo))
-        v = gate.check_legacy_list()
+        v = gate.check_legacy_list(path=str(lst))
         assert len(v) == 1 and "never/existed.py" in v[0], v
 
     def test_the_shipped_list_is_clean(self):
@@ -1072,7 +1073,8 @@ class TestTheListItselfIsGuarded:
 
     def test_an_unreadable_list_is_not_silently_clean(self, tmp_path, monkeypatch):
         monkeypatch.setattr(gate, "LEGACY_LIST", str(tmp_path / "gone.txt"))
-        assert gate.check_legacy_list() != [], "清單消失時竟然回報乾淨(fail-open)"
+        assert gate.check_legacy_list(path=str(tmp_path / "gone.txt")) != [], \
+            "清單消失時竟然回報乾淨(fail-open)"
 
 
 class TestR6SeparatesAMissingCommitFromAMissingPath:
@@ -1157,7 +1159,7 @@ class TestR6SeparatesAMissingCommitFromAMissingPath:
         monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
         monkeypatch.setattr(gate, "ROOT", str(repo))
 
-        v = gate.check_legacy_list()
+        v = gate.check_legacy_list(path=str(lst))
         assert v, "go-live commit 不在這個 repo,卻回報乾淨(fail-open)"
         joined = "\n".join(v)
         assert "不在這個 repo" in joined, joined
@@ -1185,7 +1187,7 @@ class TestR6SeparatesAMissingCommitFromAMissingPath:
         monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
         monkeypatch.setattr(gate, "ROOT", str(repo))
 
-        v = gate.check_legacy_list()
+        v = gate.check_legacy_list(path=str(lst))
         assert len(v) == 1, v
         assert "never/existed.py" in v[0], v
         assert "不在機制上線 commit" in v[0], v
@@ -1206,7 +1208,7 @@ class TestR6SeparatesAMissingCommitFromAMissingPath:
             "# go-live: %s\npkg/thing.py\n" % sha)
         monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
         monkeypatch.setattr(gate, "ROOT", str(repo))
-        assert gate.check_legacy_list() == [], "一切正常卻擋下"
+        assert gate.check_legacy_list(path=str(lst)) == [], "一切正常卻擋下"
 
     def test_the_two_messages_are_told_apart_by_more_than_wording(
             self, tmp_path, monkeypatch):
@@ -1226,11 +1228,11 @@ class TestR6SeparatesAMissingCommitFromAMissingPath:
         io.open(lst, "w", encoding="utf-8").write(
             "# go-live: %s\nnever/existed.py\n" % sha)
         monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
-        real_violation = "\n".join(gate.check_legacy_list())
+        real_violation = "\n".join(gate.check_legacy_list(path=str(lst)))
 
         io.open(lst, "w", encoding="utf-8").write(
             "# go-live: %s\nnever/existed.py\n" % foreign)
-        missing_commit = "\n".join(gate.check_legacy_list())
+        missing_commit = "\n".join(gate.check_legacy_list(path=str(lst)))
 
         assert real_violation and missing_commit
         assert real_violation != missing_commit
@@ -1269,20 +1271,21 @@ class TestGoLiveShaTravelsWithTheList:
         lst.write_text("# go-live: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"
                        "macro_audit/classify.py\n", encoding="utf-8")
         monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
-        assert gate.read_go_live() == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        assert gate.read_go_live(path=str(lst)) == \
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
     def test_the_sha_line_is_not_mistaken_for_a_path(self, tmp_path, monkeypatch):
         lst = tmp_path / "legacy.txt"
         lst.write_text("# go-live: deadbeef\nmacro_audit/classify.py\n", encoding="utf-8")
         monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
-        assert gate.legacy_no_redlight() == {"macro_audit/classify.py"}
+        assert gate.legacy_no_redlight(path=str(lst)) == {"macro_audit/classify.py"}
 
     def test_a_list_without_a_sha_is_a_violation_not_a_pass(self, tmp_path, monkeypatch):
         """讀不到基準點就無從驗證清單 —— fail-closed,不是「沒基準所以都算過」。"""
         lst = tmp_path / "legacy.txt"
         lst.write_text("macro_audit/classify.py\n", encoding="utf-8")
         monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
-        v = gate.check_legacy_list()
+        v = gate.check_legacy_list(path=str(lst))
         assert v and "go-live" in v[0], v
 
     def test_the_shipped_list_carries_its_own_sha(self):
@@ -4673,3 +4676,333 @@ def test_a_source_missing_from_the_index_fails_closed_with_a_reason(r8_src):
         u"訊息沒說出前提與修法,人會去找一個不存在的損壞檔案:msg=%r" % msg)
     assert "不得 import research/" not in msg, (
         u"把「讀不到」說成「你 import 了 research」—— 票 07 的那個代價回來了:%r" % msg)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 133 批一 ④ —— R6 的權威輸入是 **index**,不是工作樹
+#
+# ## 這一格的問題與答案
+#
+# 問:**R6 在 commit 的時點,權威輸入該是哪一個版本?**
+# 答:**index**。R6 的命題是「凍結清單裡每一筆都必須在 go-live 的樹裡」,
+#     而**那份清單**指的是要進歷史的那一份。舊版讀工作樹 ⇒
+#     `git add <乾淨版>` 之後把工作樹改回去,或反過來 —— 兩邊任一種錯位都靜默。
+#
+# ## ⚠ 本格與 ① ② ③ 的三個結構差異
+#
+# **一、兩個讀取點,同一個檔案的兩半。**
+# `read_go_live()` 讀第一行的 `# go-live: <sha>`,`legacy_no_redlight()` 讀其餘行的路徑
+# —— **同一個 `LEGACY_LIST`**。只換一支會得到「A 版的 sha × B 版的條目」,
+# 而那個組合**在任何真實版本裡都不存在**:它是誰都沒寫過的第三種清單。
+# ⇒ 本批有一格(⑦)專門釘這件事,判準是**訊息裡的 sha 與路徑必須同源**。
+#
+# **二、預設方向與 R9 相反的那一半。**
+# R9 的既有測試每一條都傳 `path`,所以批一 ① 改預設不動它們;
+# **R6 的既有測試一條都不傳**(13 條靠 monkeypatch `LEGACY_LIST`)。
+# 裁決 A1:**預設(無參數)讀 index**,那 13 條機械式改成明確傳 `path=`。
+# ⇒ 本檔上方那 13 處的改動是本批的一部分,不是順手重構。
+#
+# **三、`check()` 裡 R3 的兩個呼叫端會被預設值連帶換掉。**
+# `:2495` / `:2556` 目前是裸的 `legacy_no_redlight()`,預設一旦改成 index,
+# **它們的行為會跟著變,而原始碼一個字都沒動** ——
+# 那是「一個字不動」與「維持現狀」在本格分家的地方。
+# ⇒ ⑤c 專門釘住它:**寫入時點的 R3 豁免仍讀工作樹**。
+#    它現在是綠的,實作時若把那兩處留成裸呼叫,它會紅。
+#
+# ## 2×2 真值表 + 筆數反控 + 硬限制 + 邊界 + 同源守衛
+#
+#            | 工作樹清單乾淨          | 工作樹清單有違規筆
+#   ---------+------------------------+----------------------------
+#   index    | **① 本格本體**(要點名) | ④ 反控:偵測面不得變小
+#   有違規筆 |                        |
+#   ---------+------------------------+----------------------------
+#   index    | ③ 反控:不得變成永遠紅  | **② 鑑別格**(不可點名)
+#   乾淨     |                        |
+#
+# 判準(裁決 C,兩個都放):
+#   **正控用「訊息點名哪一筆路徑」** —— index 那一筆要出現、工作樹那一筆不得出現。
+#   **反控用「違規筆數」** —— `len(v)`,不依賴字串比對。
+#
+# ## 語料(**全部取自本檔既有的 R6 測試,未發明新字串**)
+#
+#   違規筆(不在 go-live 樹裡):`never/existed.py`(:1188 既有)、
+#                               `not/in/the/tree.py`(:1002 既有)
+#   乾淨筆(在樹裡):            `pkg/thing.py`(`_repo` 既有造的那個檔)
+#   清單檔格式:                 `# go-live: <sha>\n<paths>\n`(既有)
+#   建 go-live repo 的手法:     `TestR6SeparatesAMissingCommitFromAMissingPath._repo`
+# ─────────────────────────────────────────────────────────────────────────────
+
+_R6_CLEAN_ENTRY = u"pkg/thing.py"          # 在樹裡 —— 既有語料
+_R6_BAD_A = u"never/existed.py"            # 不在樹裡 —— 既有語料(:1188)
+_R6_BAD_B = u"not/in/the/tree.py"          # 不在樹裡 —— 既有語料(:1002)
+
+_R6_LIST_REL = u".agents/legacy-no-redlight.txt"
+
+
+def _r6_list_text(sha, entries):
+    """清單檔內容。格式取自既有測試,未改。"""
+    return u"# go-live: %s\n%s\n" % (sha, u"\n".join(entries))
+
+
+@pytest.fixture
+def r6_repo(tmp_path, monkeypatch):
+    """一個兩 commit 的 repo,清單檔住在 `.agents/legacy-no-redlight.txt`。
+
+    **兩個 commit** 是為了 ⑦ —— 它需要兩個都存在、但不同的 go-live sha,
+    才分得出「sha 來自哪一份清單」。
+
+    `ROOT` 與 `LEGACY_LIST` 一起 patch:前者供 `staged_blob` 的 `cwd` 預設值與
+    `git cat-file`,後者供工作樹那條路。**兩個不同步的話會撞上批一 ① 那個
+    `../../..` 逃逸路徑陷阱**,所以這裡讓它們指向同一個 repo。
+
+    回 `(repo, sha_head, sha_first, build)`。
+    `build(index_entries, worktree_entries, add=True, index_sha=None, worktree_sha=None)`
+    把兩份不同的清單分別放進 index 與工作樹,回清單檔的絕對路徑。
+    """
+    repo = tmp_path / "r6repo"
+    repo.mkdir()
+    for c in ("init -q", "config user.email t@t", "config user.name t"):
+        subprocess.run(["git"] + c.split(), cwd=str(repo), capture_output=True)
+    (repo / "pkg").mkdir()
+    io.open(str(repo / "pkg" / "thing.py"), "w", encoding="utf-8",
+            newline="\n").write("x = 1\n")
+    _git133(["add", "-A"], repo)
+    _git133(["commit", "-qm", "first"], repo)
+    sha_first = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                               capture_output=True).stdout.decode().strip()
+    io.open(str(repo / "pkg" / "other.py"), "w", encoding="utf-8",
+            newline="\n").write("y = 2\n")
+    _git133(["add", "-A"], repo)
+    _git133(["commit", "-qm", "second"], repo)
+    sha_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                              capture_output=True).stdout.decode().strip()
+    assert sha_head != sha_first, u"兩個 commit 竟然同 sha —— 本 fixture 的前提垮了"
+
+    lst = repo / ".agents" / "legacy-no-redlight.txt"
+    lst.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(gate, "ROOT", str(repo))
+    monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
+
+    def build(index_entries, worktree_entries, add=True,
+              index_sha=None, worktree_sha=None):
+        io.open(str(lst), "w", encoding="utf-8", newline="\n").write(
+            _r6_list_text(index_sha or sha_head, index_entries))
+        if add:
+            _git133(["add", "-f", "--", _R6_LIST_REL], repo)
+        io.open(str(lst), "w", encoding="utf-8", newline="\n").write(
+            _r6_list_text(worktree_sha or sha_head, worktree_entries))
+        return str(lst)
+
+    return repo, sha_head, sha_first, build
+
+
+class TestR6JudgesTheStagedList:
+    """2×2 真值表四格。**無參數呼叫 = 權威層那條路 = 讀 index。**"""
+
+    def test_a_bad_entry_in_the_index_is_named(self, r6_repo):
+        """① **本格本體**:違規筆在 index、工作樹乾淨 → 必須點名 index 那一筆。
+
+        舊版讀工作樹 ⇒ 回 `[]` ⇒ 一筆不該在清單裡的路徑靜默進歷史,
+        而清單的**唯一**價值就是「無法自我服務」——
+        一筆偷渡進去的條目等於一個永久的 R3 豁免。
+        """
+        _repo, _sha, _first, build = r6_repo
+        build(index_entries=[_R6_CLEAN_ENTRY, _R6_BAD_A],
+              worktree_entries=[_R6_CLEAN_ENTRY])
+        v = gate.check_legacy_list()
+        assert v, u"index 的清單有違規筆、工作樹乾淨,R6 卻回報乾淨 —— 判的是工作樹"
+        joined = u"\n".join(v)
+        assert _R6_BAD_A in joined, (
+            u"沒點名 index 那一筆(%s):%r" % (_R6_BAD_A, v))
+        assert len(v) == 1, u"筆數不對 —— 應該只有 index 那一筆:%r" % v
+
+    def test_a_bad_entry_only_in_the_worktree_is_not_named(self, r6_repo):
+        """② **鑑別格**:index 乾淨、工作樹有違規筆 → 不可點名。
+
+        抓「乾脆兩邊都讀」那個偷懶修法 —— 它讓 ① 變綠,
+        代價是每一個「清單改了還沒 add」的狀態都擋死 commit。
+        """
+        _repo, _sha, _first, build = r6_repo
+        build(index_entries=[_R6_CLEAN_ENTRY],
+              worktree_entries=[_R6_CLEAN_ENTRY, _R6_BAD_B])
+        v = gate.check_legacy_list()
+        assert v == [], u"index 的清單是乾淨的卻被擋 —— 判定對象跑到工作樹去了:%r" % v
+        assert _R6_BAD_B not in u"\n".join(v), (
+            u"點名了工作樹那一筆(%s)—— 那一份不會進這次 commit:%r"
+            % (_R6_BAD_B, v))
+
+    def test_an_agreeing_clean_list_passes(self, r6_repo):
+        """③ **反控**:兩邊一致且乾淨 → 不擋。
+
+        少了它,「一律回違規」也能讓 ① 過,而那是把 R6 變成永遠紅。
+        """
+        _repo, _sha, _first, build = r6_repo
+        build(index_entries=[_R6_CLEAN_ENTRY], worktree_entries=[_R6_CLEAN_ENTRY])
+        assert gate.check_legacy_list() == [], u"兩邊都乾淨卻被擋"
+
+    def test_an_agreeing_bad_entry_is_still_named(self, r6_repo):
+        """④ **反控**:兩邊一致且有違規筆 → 仍要點名(最日常的那一格)。
+
+        少了它,「index 讀不到就跳過」也能讓 ① ② ③ 全過 —— 那是把 R6 整條關掉,
+        **而測試看起來還是綠的**。
+        """
+        _repo, _sha, _first, build = r6_repo
+        build(index_entries=[_R6_CLEAN_ENTRY, _R6_BAD_A],
+              worktree_entries=[_R6_CLEAN_ENTRY, _R6_BAD_A])
+        v = gate.check_legacy_list()
+        assert v and _R6_BAD_A in u"\n".join(v), u"偵測面被弄小了:%r" % v
+
+
+def test_r6_counts_only_the_staged_bad_entries(r6_repo):
+    """**筆數反控**(裁決 C 的第二個判準)。
+
+    index 放**兩筆**違規、工作樹放**零筆** → `len(v)` 必須是 2。
+
+    **為什麼要有一格不靠路徑字串**:字串斷言擋不住「兩邊都讀」再去重的修法
+    —— 那種修法下 `_R6_BAD_A` 仍然出現在訊息裡,正控會綠。
+    筆數問的是**集合來自哪一份**,不是**某一筆在不在**。
+    """
+    _repo, _sha, _first, build = r6_repo
+    build(index_entries=[_R6_CLEAN_ENTRY, _R6_BAD_A, _R6_BAD_B],
+          worktree_entries=[_R6_CLEAN_ENTRY])
+    v = gate.check_legacy_list()
+    assert len(v) == 2, (
+        u"違規筆數不等於 index 那一份的筆數 —— 集合來源不對:%r" % v)
+    joined = u"\n".join(v)
+    assert _R6_BAD_A in joined and _R6_BAD_B in joined, joined
+
+
+def test_r6_reports_a_sha_and_an_entry_from_the_same_list(r6_repo):
+    """⑦ **同源守衛:兩個讀取點必須同時換。**
+
+    兩份清單**連 go-live sha 都不同**:
+      index    -> `sha_head` + `never/existed.py`
+      工作樹    -> `sha_first` + `not/in/the/tree.py`
+
+    R6 的違規訊息裡同時帶著 **sha 的前 7 碼**與**那一筆路徑**,
+    所以「只換一支」會留下指紋:
+
+    | 只換了誰 | 訊息裡的 sha | 訊息裡的路徑 |
+    |---|---|---|
+    | 兩支都換(**對**) | `sha_head[:7]` | `never/existed.py` |
+    | 只換 `legacy_no_redlight` | `sha_first[:7]` | `never/existed.py` |
+    | 只換 `read_go_live` | `sha_head[:7]` | `not/in/the/tree.py` |
+    | 兩支都沒換(現況) | `sha_first[:7]` | `not/in/the/tree.py` |
+
+    ⇒ **同時斷言 sha 與路徑,四種狀態就分得開。**
+
+    **為什麼這一格不是多餘的**:①②③④ 全部用同一個 sha,
+    所以「只換 `read_go_live`」在那四格裡**完全看不出來** ——
+    它讀到的 sha 兩邊一樣。**混搭出來的那份清單誰都沒寫過**,
+    而 fail-closed 會把它報成「清單有問題」,把人推去刪一份本來正確的清單
+    (票 55 已經記過這個失敗形狀)。
+    """
+    _repo, sha_head, sha_first, build = r6_repo
+    build(index_entries=[_R6_CLEAN_ENTRY, _R6_BAD_A],
+          worktree_entries=[_R6_CLEAN_ENTRY, _R6_BAD_B],
+          index_sha=sha_head, worktree_sha=sha_first)
+    v = gate.check_legacy_list()
+    joined = u"\n".join(v)
+    assert v, u"index 的清單有違規筆卻回報乾淨:%r" % v
+    assert _R6_BAD_A in joined, (
+        u"路徑來自工作樹那一份 —— `legacy_no_redlight` 沒換:%s" % joined)
+    assert _R6_BAD_B not in joined, (
+        u"訊息裡出現工作樹那一筆 —— 兩邊都讀了:%s" % joined)
+    assert sha_head[:7] in joined, (
+        u"sha 來自工作樹那一份 —— `read_go_live` 沒換(混搭清單):%s" % joined)
+    assert sha_first[:7] not in joined, (
+        u"訊息裡出現工作樹那一份的 sha:%s" % joined)
+
+
+class TestR6ExplicitPathStillReadsTheWorktree:
+    """⑤ **硬限制反控**:給了 `path` 就讀工作樹,行為與修法前相同。
+
+    少了這一批,把三支整個改成讀 index 也會讓 ① ② ④ ⑦ 過 ——
+    而那會打壞本檔上方那 13 條既有測試,以及 `check()` 裡 R3 的兩個呼叫端。
+    **共用一個讀取函式不等於共用一個正確對象。**
+    """
+
+    def test_check_legacy_list_with_a_path_reads_the_worktree(self, r6_repo):
+        """⑤a:`check_legacy_list(path=…)` → 工作樹那一份(違規 → 點名)。"""
+        _repo, _sha, _first, build = r6_repo
+        lst = build(index_entries=[_R6_CLEAN_ENTRY],
+                    worktree_entries=[_R6_CLEAN_ENTRY, _R6_BAD_B])
+        v = gate.check_legacy_list(path=lst)
+        assert v and _R6_BAD_B in u"\n".join(v), (
+            u"給了 path 卻沒讀工作樹 —— 那 13 條既有測試會一起壞:%r" % v)
+
+    def test_check_legacy_list_with_a_path_does_not_peek_at_the_index(self, r6_repo):
+        """⑤b:與 ⑤a 相反的一半 —— 工作樹乾淨時不得因為 index 髒而擋。
+
+        少了它,「給了 path 就兩邊都讀」也能讓 ⑤a 綠。
+        """
+        _repo, _sha, _first, build = r6_repo
+        lst = build(index_entries=[_R6_CLEAN_ENTRY, _R6_BAD_A],
+                    worktree_entries=[_R6_CLEAN_ENTRY])
+        v = gate.check_legacy_list(path=lst)
+        assert v == [], u"給了 path 仍去看了 index:%r" % v
+
+    def test_the_two_readers_with_a_path_read_the_worktree(self, r6_repo):
+        """⑤c:`read_go_live(path=…)` 與 `legacy_no_redlight(path=…)` 各自也要讀工作樹。
+
+        **分開測**:`check_legacy_list` 往下傳參數,與兩支自己認得參數
+        是兩件事;只測外層的話,一個「外層吃掉 path、內層仍讀 index」的實作會綠。
+        """
+        _repo, _sha, sha_first, build = r6_repo
+        lst = build(index_entries=[_R6_CLEAN_ENTRY],
+                    worktree_entries=[_R6_CLEAN_ENTRY, _R6_BAD_B],
+                    worktree_sha=sha_first)
+        assert gate.read_go_live(path=lst) == sha_first, (
+            u"`read_go_live(path=…)` 沒讀工作樹那一份的 sha")
+        assert _R6_BAD_B in gate.legacy_no_redlight(path=lst), (
+            u"`legacy_no_redlight(path=…)` 沒讀工作樹那一份的條目")
+
+
+def test_r3_legacy_exemption_at_write_time_still_reads_the_worktree(fake_repo):
+    """⑤d **硬限制,而且是最容易被預設值靜默改掉的那一格。**
+
+    `check()` 裡 R3 的兩個 `legacy_no_redlight()` 呼叫端目前是**裸呼叫**。
+    預設方向一旦改成 index,**它們的行為會跟著變,而原始碼一個字都沒動** ——
+    「一個字不動」與「維持現狀」在這裡分家。
+
+    本條釘住**維持現狀**那一邊:寫入時點(前哨)沒有 index 這回事,
+    那個檔案可能根本還沒 `git add`。
+
+    語料與手法完全沿用既有的
+    `test_a_listed_file_is_exempt_from_the_redlight_requirement`
+    —— `fake_repo` 的臨時目錄**不是 git repo**,所以「讀 index」在這裡
+    必然失敗而回空集合 ⇒ 豁免消失 ⇒ R3 擋 ⇒ 本條會紅。
+    """
+    root, probe = fake_repo
+    (root / "tests" / "test_thing.py").unlink()
+    (root / "legacy.txt").write_text("pkg/thing.py\n", encoding="utf-8")
+    assert gate.check(probe, "x = 2") is None, (
+        u"寫入時點的 R3 legacy 豁免不再讀工作樹 —— "
+        u"`check()` 裡那兩個裸呼叫被預設值連帶換掉了")
+
+
+def test_a_list_missing_from_the_index_fails_closed_with_a_reason(r6_repo):
+    """⑥ **邊界:清單檔不在 index → fail-closed,訊息要說出前提與修法。**
+
+    檔案在磁碟上、**不在 index 裡**(清單剛改好還沒 `git add` 就是這個狀態)。
+    工作樹刻意放**乾淨**的那一份:退回工作樹的修法會在這裡拿到一個假綠燈。
+
+    **不得退回工作樹** —— `staged_blob` 的 docstring 逐字:「退回去就是判錯對象,
+    而且是往 fail-open 的方向錯」。
+
+    ⚠ **訊息不得沿用「清單只減不增」那一句** —— 票 55 記過:
+    那句話會把人推去刪一份本來正確的清單,而刪完 R6 仍然紅。
+    這裡沒被滿足的前提是「它要在 index 裡」,修法是 `git add`。
+    """
+    _repo, _sha, _first, build = r6_repo
+    build(index_entries=[_R6_CLEAN_ENTRY], worktree_entries=[_R6_CLEAN_ENTRY],
+          add=False)
+    v = gate.check_legacy_list()
+    assert v, u"清單不在 index 裡卻回報乾淨 —— fail-open"
+    joined = u"\n".join(v)
+    assert "R6" in joined and "fail-closed" in joined, (
+        u"沒標明是 R6 的 fail-closed 那一支:%s" % joined)
+    assert "index" in joined and "git add" in joined, (
+        u"訊息沒說出前提與修法,人會去找一個不存在的損壞檔案:%s" % joined)
+    assert "清單只減不增" not in joined, (
+        u"沿用了票 55 明令不得用在這條路徑上的那句話 —— 它會讓人去刪清單:%s" % joined)
