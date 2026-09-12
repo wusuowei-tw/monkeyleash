@@ -88,7 +88,7 @@ R5 的兩個掛載點算**兩格**(兩條獨立判定,各自可以單獨壞掉)�
 
 | # | 規則 | 讀取點(**本輪核對**) | 消費端 | 鏡頭 / 鏈(本輪追) | 證據等級 |
 |---|---|---|---|---|---|
-| 1 | R1 規格書禁程式碼 | `:2154` ✅ | — | 同函式內 | **已成立** |
+| 1 | R1 規格書禁程式碼 | `:2154` ✅(基準 `25f5264`)⚠ **已過期 → `:2249`–`:2266`**,見批一 ② | — | 同函式內 | **已成立** |
 | 2 | R8 禁 import `research` | `:2293` ✅ → `:1108` ✅ | — | `read_text_or_none` | **已成立** |
 | 3 | R9 friction 號唯一 | `:1559` ✅ | — | `check_friction_numbers` | **已成立** |
 | 4 | R6 legacy 清單合法性 | `:76` + `:1815` ✅(合一格) | — | `read_go_live` / `legacy_no_redlight` | **已成立** |
@@ -635,14 +635,121 @@ $ python -X utf8 -m pytest tests/test_gate.py::TestR9JudgesTheStagedFrictionLog 
 
 ---
 
-### ②–⑦ 尚未動工
+### ② R1 —— **已落地**
 
-順序:② R1 `:2154` → ③ R8 `:2293` → ④ R6 `:76` + `:1815`(**兩個讀取點必須同時換**,
-否則會出現「用新清單的 sha 驗舊清單的條目」)→ ⑤ R5 `:3159` → ⑥ R5 `:3184`
-→ **⑦ R4 最後**(裁決)。
+**(a) 這一格的問題與答案**
 
-**② 與 ③ 住在 `check()` 裡** ⇒ 它們是票 133 三分類裡的 **shared** 類,
-**硬限制適用:不得做全域替換。** 而且它們的 rc 驗證要在**有東西 staged** 的狀態下做
+> **問**:R1 在 commit 的時點,權威輸入該是哪一個版本?
+> **答**:**index。**
+
+R1 的命題是「規格書裡不得夾程式碼」,而**那份規格書**指的是**要進歷史的那一份**
+—— 進歷史的是 index。舊版兩個時點都讀工作樹 ⇒
+`git add <夾了碼的版本>` 之後把工作樹改乾淨,R1 綠、程式碼進歷史,**零告警**。
+
+**這個答案不是從「R9 也是 index」推出來的**:R1 判的對象就是那個規格檔本身,
+而那個檔會被這次 commit 帶走 ⇒ index 是它唯一正確的對象。
+**對照**:`content` 有給值那條路的正確對象**不是** index —— 那是前哨,
+問的是「這次編輯之後會變成什麼」,它還沒進 index,也不該進。
+⇒ 本格是三分類裡的 **shared** 類,**硬限制成立:沒有做全域替換。**
+
+**(b) ⚠ 這一格的讀取點行號在動工前就過期了 —— 而過期是本票自己造成的**
+
+票面表格第 1 列原寫 `:2154`,而**那個值在票面基準 `25f5264` 上是對的**:
+實測 `git show 25f5264:.claude/hooks/gate.py | sed -n '2150,2158p'`,`:2154` 正是
+R1 的 `try:` 那一行。它過期的原因是 **批一 ① 自己**(`d741482`,
+`119 insertions(+), 18 deletions(-)`,淨 +101 行)在它上面插了程式碼。
+
+> **判準(F-109 的同一句,換到票面上)**:一張票的行號,會被**這張票自己前一批的落地**推走。
+> **引名不引行號** —— 行號是位置,符號名是身分。
+> 這不是「有人寫錯」,是**寫對的那一刻就開始過期**,而過期時沒有任何東西會出聲。
+
+處置:本節以下一律先寫**符號名**,行號只作為「量測於某個 commit」的附註。
+③–⑦ 的行號同此,已在下一節全部重量。
+
+**(c) 紅燈** —— 2×2 真值表 + 四條硬限制反控 + 一條邊界,**8 樣式 × 2 路徑**參數化,
+合計 **116 條**:
+
+```
+$ python -X utf8 -m pytest tests/test_gate.py -k "R1JudgesTheStagedSpec or R1SentryPathIsUntouched or an_agreeing_clean_spec_passes_at_commit or missing_from_the_index_fails_closed" -q --no-header
+34 failed, 83 passed, 445 deselected in 13.87s
+```
+
+**83 而非 82**:`-k` 的 `missing_from_the_index_fails_closed` 子字串多撈到 R9 的一條
+(`--collect-only` 實測 117,扣掉那條 = 116 屬本批)。
+紅的 34 條 = ①(16)+ ②(16)+ ⑥(2);綠的 82 條 = ③(2)+ ④(16)+ ⑤a–d(64)。
+
+**紅綠分佈是動工前預測的,預測與實測逐格一致。**
+預測從 `check()` 的控制流推出(R1 分支三個 return 全部早於第一個消費
+`at_commit` 的分支),實測來自 pytest —— **兩者來源不同。**
+
+**(d) 實作**
+
+| 位置 | 做了什麼 |
+|---|---|
+| `gate.py` `check()` docstring | 補「`at_commit` 也改變 **R1 的判定對象**」那一段三分支表 |
+| `gate.py` `check()` R1 分支 | `body is None and at_commit` → `staged_text(r)`,取不到 fail-closed |
+| `gate.py` `check()` R1 分支 | 原本的磁碟讀那一支改成 `elif body is None:`,**內文一個字沒動** |
+
+**沒有新增任何函式** —— 批一 ① 已經把 `staged_text` / `staged_blob(cwd=)` /
+`decode_text` 抽好了,本格只接上去。
+**相對路徑用的是 `r`(即 `rel(path)` 的結果),不是從絕對路徑反算** ——
+批一 ① 撞到的那個陷阱在這裡不適用:`r` 本來就是相對的,它是 `check()` 的既有輸入。
+
+**(e) fail-closed 訊息**(比照 R9:方向對不代表訊息對,要指向沒被滿足的**前提**):
+
+```
+[R1/fail-closed] <path>:`<path>` 不在 index 裡(`git show :<path>` 問不到)
+     R1 判的是**要進這次 commit 的那一份**,所以讀 index 不讀工作樹。
+     它不在 index 裡 ⇒ 「這份規格書裡有沒有程式碼」這個問題沒有答案,
+     而沒有答案不等於答案是「沒有」。
+     修法:`git add <path>`(規格書剛寫好還沒 add 就是這個狀態)。
+     **不退回工作樹** —— 那是另一份東西,退回去就是判錯對象。
+```
+
+**(f) 測試**:本格 116 條全綠;全套 **1719 passed / 1 failed**。
+
+```
+$ python -X utf8 -m pytest tests/test_gate.py -k "..." -q --no-header
+117 passed, 445 deselected in 13.22s
+
+$ python -X utf8 -m pytest tests/ -q --no-header
+1 failed, 1719 passed, 3 skipped, 3 xfailed in 131.89s (0:02:11)
+```
+
+算術核對:動工前全套 `1685 passed`,本批新增 116 條,其中 34 條當時紅
+⇒ 1685 + 34 = **1719**,與實測相符。
+
+**唯一那條紅是既有缺口,不是本票造成的**:
+`TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce`
+(`.claude/portable/g1_guard.py` 在上線樹裡卻不在凍結清單上,也沒有紅燈紀錄)。
+**三項獨立證據**:(1) 本批 diff 對 `tests/test_gate.py` 是純追加(單一 hunk、0 刪除),
+該測試本體未被碰;(2) 它只讀 `read_go_live` / `git ls-tree` / `is_source_path` /
+`legacy_no_redlight` / `redlight_missing`,與 R1 無交集;
+(3) **單獨執行仍紅**,該次執行中本批 fixture(含 `monkeypatch.setattr(gate, "ROOT", …)`)
+完全未觸發。**已另案登記為票 137,本票不碰、不查。**
+
+---
+
+### ③–⑦ 尚未動工
+
+順序:③ R8 → ④ R6(**兩個讀取點必須同時換**,否則會出現「用新清單的 sha
+驗舊清單的條目」)→ ⑤ R5 `to-spec` → ⑥ R5 `code-review` → **⑦ R4 最後**(裁決)。
+
+**行號全部於 `f0a9ef3 + 批一 ②(未提交)` 重量**(舊值已被批一 ① ② 推走,見上節 (b)):
+
+| # | 規則 | 符號(**身分**) | 行號(量測於本輪工作樹) |
+|---|---|---|---|
+| ③ | R8 | `check()` 內 `body = read_text_or_none(...)` → `read_text_or_none` | `:2430` → `:1120` |
+| ④ | R6 | `read_go_live()` + `legacy_no_redlight()` | `:66` + `:1884` |
+| ⑤ | R5 | `check_to_spec_override()`,內文讀取 | `:3287`(讀取 `:3297`) |
+| ⑥ | R5 | `check_third_axis_mount()`,內文讀取 | `:3313`(讀取 `:3322`) |
+| ⑦ | R4 | `skill_mirror_violations()`,內容比對兩行 | `:3142`(比對 `:3206`+`:3207`) |
+
+⚠ **這張表在下一批落地之後會再過期一次。** 動工前**以符號名重新定位**,
+不要拿這裡的數字直接 `sed -n`。
+
+**③ 住在 `check()` 裡**(② 已完成)⇒ 它是票 133 三分類裡的 **shared** 類,
+**硬限制適用:不得做全域替換。** 而且它的 rc 驗證要在**有東西 staged** 的狀態下做
 (見本節開頭那個基準值弱點)。
 
 ---
