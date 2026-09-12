@@ -2232,6 +2232,12 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
       寫入時問「現在這一站可以寫原始碼嗎」—— 防的是還沒談清楚就開始寫。
       commit 時問「你是不是還停在前置站就在交原始碼」—— 實作做完後站別本來就會
       往 review / idle 走,拿寫入時的問題去問 commit 會擋掉每一次合法提交。
+
+    at_commit 也改變 **R1 的判定對象**(票 133 批一 ②),同樣不是放寬它:
+      `content` 有給值 -> 用它(前哨:這次編輯之後會變成什麼,還沒進 index)。
+      content 為 None + 寫入時點 -> 讀工作樹(診斷/前哨入口,行為一個字沒動)。
+      content 為 None + commit 時點 -> 讀 **index**,取不到 fail-closed。
+    **來源綁執行上下文,不綁函式** —— 共用一個讀取函式不等於共用一個正確對象。
     """
     r = rel(path)
 
@@ -2250,7 +2256,38 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
         if trace is not None:
             trace.append("R1")
         body = content
-        if body is None:
+        if body is None and at_commit:
+            # **commit 時點的權威輸入是 index,不是工作樹**(票 133 批一 ②)。
+            #
+            # R1 的命題是「規格書裡不得夾程式碼」,而「那份規格書」指的是
+            # **要進歷史的那一份** —— 進歷史的是 index。舊版兩個時點都讀工作樹 ⇒
+            # `git add <夾了碼的版本>` 之後把工作樹改乾淨,R1 綠、程式碼進歷史,
+            # **零告警**。失敗方式是靜默的:兩份多數時候一樣,所以日常照不到它。
+            #
+            # **答案不是從「R9 也是 index」推出來的**:R1 判的對象就是那個規格檔
+            # 本身,而那個檔會被這次 commit 帶走 ⇒ index 是它唯一正確的對象。
+            # (對照:`content` 有給值那條路的正確對象**不是** index —— 那是前哨,
+            #  問的是「這次編輯之後會變成什麼」,它還沒進 index,也不該進。
+            #  票 133 的硬限制:**共用一個讀取函式不等於共用一個正確對象**。)
+            #
+            # ⚠ **必須解包** —— `staged_text` 回的是 tuple,而 `(None, "…")`
+            # 在 `if` 裡**是真的**;忘了解包的話 fail-closed 整條翻成 fail-open。
+            body, why = staged_text(r)
+            if why is not None:
+                # **不退回工作樹**(`staged_blob` 的 docstring 逐字要求)。
+                # 但**方向對不代表訊息對**:只說「讀不到」會讓人去找一個不存在的
+                # 損壞檔案,而這裡沒被滿足的前提是「它要在 index 裡」。
+                # 訊息要指向那個前提(票 13),所以直接寫出 `git add`。
+                return ("[R1/fail-closed] %s:%s\n"
+                        "     R1 判的是**要進這次 commit 的那一份**,所以讀 index "
+                        "不讀工作樹。\n"
+                        "     它不在 index 裡 ⇒ 「這份規格書裡有沒有程式碼」這個問題"
+                        "沒有答案,\n"
+                        "     而沒有答案不等於答案是「沒有」。\n"
+                        "     修法:`git add %s`(規格書剛寫好還沒 add 就是這個狀態)。\n"
+                        "     **不退回工作樹** —— 那是另一份東西,退回去就是判錯對象。"
+                        % (r, why, r))
+        elif body is None:
             try:
                 with io.open(os.path.join(ROOT, r), encoding="utf-8") as f:
                     body = f.read()

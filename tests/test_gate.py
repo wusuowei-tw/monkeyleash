@@ -4116,3 +4116,257 @@ class TestR9JudgesTheStagedFrictionLog:
         v = gate.check_friction_numbers(p)
         assert v and "F-001" in v[0], (
             u"`path` 那條路不再讀工作樹 —— 診斷入口與既有語料一起被換掉了:%r" % v)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 133 批一 ② —— R1 在 commit 時點的權威輸入是 **index**,不是工作樹
+#
+# ## 這一格的問題與答案
+#
+# 問:**R1 在 commit 的時點,權威輸入該是哪一個版本?**
+# 答:**index**。R1 的命題是「規格書裡不得夾程式碼」,而「那份規格書」指的是
+#     **要進歷史的那一份** —— 進歷史的是 index。
+#
+# 現行 R1 **完全不看 `at_commit`**:R1 分支的三個 return 全部早於
+# `check()` 裡第一個消費 `at_commit` 的分支,所以 `content is None` 時
+# 兩個時點都讀工作樹 ⇒ `git add <夾了碼的版本>` 之後把工作樹改乾淨,
+# R1 綠、程式碼靜默進歷史。**失敗方式是靜默的** —— 兩份多數時候一樣,
+# 所以日常與既有測試都照不到它。
+#
+# **答案不是從「R9 也是 index」推出來的**:R1 判的對象就是那個規格檔本身,
+# 而那個檔會被這次 commit 帶走 ⇒ index 是它唯一正確的對象。
+# (對照:前哨那條路的正確對象**不是** index —— 呼叫端把 `content` 交出來,
+#  那是「這次編輯之後會變成什麼」,它還沒進 index,也不該進。
+#  票 133 的硬限制:**共用一個讀取函式不等於共用一個正確對象**。)
+#
+# ## 2×2 真值表 + 硬限制 + 邊界
+#
+#            | 工作樹乾淨              | 工作樹夾碼
+#   ---------+------------------------+----------------------------
+#   index    | **① 本格本體**(要擋)  | ④ 反控:偵測面不得變小(要擋)
+#   夾碼     |                        |
+#   ---------+------------------------+----------------------------
+#   index    | ③ 反控:不得變成永遠紅  | **② 鑑別格**(要放行)
+#   乾淨     | (要放行)              |
+#
+# ② 是鑑別格,抓的是「乾脆兩邊都讀」那個偷懶修法:它會讓 ① 變綠,
+# 代價是每一個「工作樹還在草稿中」的狀態都擋死 commit。那一次 commit
+# 進歷史的規格書是乾淨的,擋下來就是誤擋 —— 而 CLAUDE.md 逐字:
+# 「錯在權威層等於擋住做對事的人,那種規則最後會被整條關掉」。
+#
+# ③ 少了它,「一律回違規」也能讓 ① 過,而那是把 R1 變成永遠紅。
+# ④ 少了它,「index 讀不到就跳過」也能讓 ① ② ③ 全過 —— 那是把 R1 整條關掉,
+#    **而測試看起來還是綠的**。
+#
+# ⑤ **硬限制**:`at_commit=False`,或 `content` 有給值 → 行為一個位元組都不准動。
+#    前哨 / PreToolUse 那條路不在本票範圍內,而「順手一起改」是看不見的擴大。
+# ⑥ **邊界**:規格檔不在 index 裡(`git show :<path>` 問不到)→ fail-closed,
+#    訊息要點名檔案與原因。**不得退回工作樹** —— 那是另一份東西。
+#
+# 假樣本一律取本檔既有的 `R1_CODE_SHAPES`(八個樣式,一個樣式命中一支分支),
+# 乾淨樣本取既有反控 1 在用的純散文形狀 —— **不憑空發明新字串**。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 反控 1(`test_a_spec_with_only_prose_is_not_blocked`)逐字在用的那一份。
+_R1_IDX_CLEAN = u"## 問題\n只有散文。"
+
+# 每支測試要一條**自己的**規格路徑,才能共用同一個 git repo(省掉上百次 init)。
+# 用 list 長度當序號:不引進新的 import,而且同一個 process 內單調遞增。
+_R1_IDX_SEQ = []
+
+
+def _r1_uniq():
+    _R1_IDX_SEQ.append(1)
+    return u"n%d" % len(_R1_IDX_SEQ)
+
+
+# R1 的兩條路徑判定,一條一列(與 `R1_SPEC_PATHS` 同一組分支):
+# `docs` 是**前綴**(底下任意深度);`scratch` 是**完整比對**(`[^/]+` 只吃一層)。
+_R1_IDX_LAYOUTS = ["docs", "scratch"]
+
+
+def _r1_layout_path(layout, uniq):
+    if layout == "docs":
+        return u"docs/specs/%s.md" % uniq
+    return u".scratch/%s/spec.md" % uniq
+
+
+@pytest.fixture(scope="session")
+def _r1_index_repo(tmp_path_factory):
+    """整個 session **一個** git repo。
+
+    每支測試各用一條獨佔的規格路徑,所以共用 index 不會互相汙染 ——
+    而 `git init` 在 Windows 上不便宜,一百多次會讓這批測試變成沒人想跑的那種。
+    """
+    repo = tmp_path_factory.mktemp("r1_index_repo")
+    _git133(["init", "-q"], repo)
+    _git133(["config", "user.email", "t@local"], repo)
+    _git133(["config", "user.name", "t"], repo)
+    return repo
+
+
+@pytest.fixture
+def r1_spec(_r1_index_repo, monkeypatch):
+    """回一個建構子:`(layout, staged, worktree, add=True) -> 絕對路徑`。
+
+    `ROOT` 指到那個 repo —— 理由同 `spec_root`:`rel()` 走 `abspath`,
+    ROOT 沒指過去的話路徑會收斂成 `../..` 開頭,被「repo 外不管」那條提早放行,
+    **測試會綠,而它沒測到東西**。
+
+    順帶:`staged_blob` 的 `cwd` 預設就是 `ROOT`,所以 `check()` 不必為了
+    測試多長一個 `cwd` 參數 —— monkeypatch ROOT 這一步同時餵了兩條路。
+
+    `add=False` 用於 ⑥ —— 檔案在磁碟上但**不在 index 裡**。
+    """
+    monkeypatch.setattr(gate, "ROOT", str(_r1_index_repo))
+
+    def build(layout, staged, worktree, add=True):
+        rel_path = _r1_layout_path(layout, _r1_uniq())
+        p = _r1_index_repo / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        io.open(str(p), "w", encoding="utf-8", newline="\n").write(staged)
+        if add:
+            # `-f`:`.scratch/` 在真 repo 裡是 gitignore 的,而本批的判定對象
+            # 是「index 裡有沒有這一份」,不是「它該不該被 ignore」。
+            _git133(["add", "-f", "--", rel_path], _r1_index_repo)
+        io.open(str(p), "w", encoding="utf-8", newline="\n").write(worktree)
+        return str(p)
+
+    return build
+
+
+@pytest.mark.parametrize("layout", _R1_IDX_LAYOUTS)
+@pytest.mark.parametrize("shape,body", R1_CODE_SHAPES,
+                         ids=[s for s, _ in R1_CODE_SHAPES])
+class TestR1JudgesTheStagedSpec:
+    """2×2 真值表的四格,八個樣式 × 兩條路徑各跑一輪。"""
+
+    def test_code_in_the_index_is_caught(self, r1_spec, shape, body, layout):
+        """① **本格本體**:夾碼版在 index、乾淨版在工作樹 → 必須擋。
+
+        現行讀工作樹 ⇒ 回 None ⇒ 程式碼靜默進歷史。
+        """
+        p = r1_spec(layout, staged=body, worktree=_R1_IDX_CLEAN)
+        msg = gate.check(p, None, at_commit=True)
+        assert msg and "R1" in msg, (
+            u"index 裡夾了 `%s`、工作樹乾淨,R1 卻放行 —— "
+            u"判的是工作樹,而進歷史的是 index 那一份:path=%s msg=%r"
+            % (shape, p, msg))
+
+    def test_code_only_in_the_worktree_is_not_caught(self, r1_spec, shape,
+                                                     body, layout):
+        """② **鑑別格**:乾淨版在 index、夾碼版在工作樹 → 必須放行。
+
+        這一格抓「兩邊都讀」那個偷懶修法 —— 它讓 ① 變綠,
+        代價是這一格被錯殺,而權威層的誤擋最後會讓整條規則被關掉。
+        """
+        p = r1_spec(layout, staged=_R1_IDX_CLEAN, worktree=body)
+        msg = gate.check(p, None, at_commit=True)
+        assert msg is None, (
+            u"index 是乾淨的卻被擋 —— 判定對象跑到工作樹去了:"
+            u"shape=%s path=%s msg=%r" % (shape, p, msg))
+
+    def test_an_agreeing_dirty_spec_is_still_caught(self, r1_spec, shape,
+                                                    body, layout):
+        """④ **反控**:兩邊一致且夾碼 → 仍要擋(最日常的那一格)。"""
+        p = r1_spec(layout, staged=body, worktree=body)
+        msg = gate.check(p, None, at_commit=True)
+        assert msg and "R1" in msg, (
+            u"偵測面被弄小了 —— 兩邊都夾了 `%s` 還放行:path=%s msg=%r"
+            % (shape, p, msg))
+
+
+@pytest.mark.parametrize("layout", _R1_IDX_LAYOUTS)
+def test_an_agreeing_clean_spec_passes_at_commit(r1_spec, layout):
+    """③ **反控**:兩邊一致且乾淨 → 放行。
+
+    少了它,「一律回違規」也能讓 ① 過,而那是把權威層變成永遠紅。
+    """
+    p = r1_spec(layout, staged=_R1_IDX_CLEAN, worktree=_R1_IDX_CLEAN)
+    msg = gate.check(p, None, at_commit=True)
+    assert msg is None, u"兩邊都乾淨卻被擋:path=%s msg=%r" % (p, msg)
+
+
+@pytest.mark.parametrize("layout", _R1_IDX_LAYOUTS)
+@pytest.mark.parametrize("shape,body", R1_CODE_SHAPES,
+                         ids=[s for s, _ in R1_CODE_SHAPES])
+class TestR1SentryPathIsUntouched:
+    """⑤ **硬限制反控**:`at_commit=False` 或 `content` 有給值 → 行為不變。
+
+    本票只動「commit 時點且 content 為 None」那一格。少了這一批,
+    把 R1 整條改成讀 index 也會讓 ① ② ③ ④ 全過 —— 而那會把前哨
+    (PreToolUse:內容還沒進 index,也不該進)一起換掉,
+    **共用一個讀取函式不等於共用一個正確對象**。
+    """
+
+    def test_at_write_time_a_dirty_worktree_is_still_caught(self, r1_spec, shape,
+                                                            body, layout):
+        """⑤a:`at_commit=False` + content=None → 仍讀工作樹(夾碼 → 擋)。"""
+        p = r1_spec(layout, staged=_R1_IDX_CLEAN, worktree=body)
+        msg = gate.check(p, None, at_commit=False)
+        assert msg and "R1" in msg, (
+            u"寫入時點不再讀工作樹 —— 前哨被一起換掉了:"
+            u"shape=%s path=%s msg=%r" % (shape, p, msg))
+
+    def test_at_write_time_a_clean_worktree_still_passes(self, r1_spec, shape,
+                                                         body, layout):
+        """⑤b:`at_commit=False` + content=None → 仍讀工作樹(乾淨 → 放行)。
+
+        與 ⑤a 相反的一半:少了它,「寫入時點一律擋」也能讓 ⑤a 綠。
+        """
+        p = r1_spec(layout, staged=body, worktree=_R1_IDX_CLEAN)
+        msg = gate.check(p, None, at_commit=False)
+        assert msg is None, (
+            u"寫入時點跑去讀 index 了 —— 前哨的正確對象不是 index:"
+            u"shape=%s path=%s msg=%r" % (shape, p, msg))
+
+    def test_given_content_wins_over_both_sources(self, r1_spec, shape, body,
+                                                  layout):
+        """⑤c:`content` 有給值 → 用它,即使兩邊都乾淨、即使 at_commit=True。
+
+        這是前哨真正在走的形態:`content_after_edit` —— 「這次編輯之後會變成
+        什麼」,它還沒有進 index。
+        """
+        p = r1_spec(layout, staged=_R1_IDX_CLEAN, worktree=_R1_IDX_CLEAN)
+        msg = gate.check(p, body, at_commit=True)
+        assert msg and "R1" in msg, (
+            u"呼叫端交出來的內容夾了 `%s` 卻沒被判 —— "
+            u"content 那條路被 index 蓋掉了:path=%s msg=%r" % (shape, p, msg))
+
+    def test_given_clean_content_is_not_overridden_by_the_index(
+            self, r1_spec, shape, body, layout):
+        """⑤d:`content` 給的是乾淨的 → 放行,即使 index 與工作樹都夾碼。
+
+        與 ⑤c 相反的一半:少了它,「content 有給值時順便也讀 index」
+        會讓 ⑤c 綠,而那條修法會在前哨誤擋每一次「正在把碼刪掉」的編輯。
+        """
+        p = r1_spec(layout, staged=body, worktree=body)
+        msg = gate.check(p, _R1_IDX_CLEAN, at_commit=True)
+        assert msg is None, (
+            u"content 給的是乾淨的卻被擋 —— 判定對象跑去 index 了:"
+            u"shape=%s path=%s msg=%r" % (shape, p, msg))
+
+
+@pytest.mark.parametrize("layout", _R1_IDX_LAYOUTS)
+def test_a_spec_missing_from_the_index_fails_closed_with_a_reason(r1_spec, layout):
+    """⑥ **邊界:不在 index 裡 → fail-closed,而且訊息要說出是哪個檔、為什麼。**
+
+    檔案在磁碟上、**不在 index 裡**(規格書剛寫好還沒 `git add` 就是這個狀態)。
+    工作樹刻意放**乾淨**的那一份:退回工作樹的修法會在這裡拿到一個假綠燈。
+
+    **不得退回工作樹** —— `staged_blob` 的 docstring 逐字:「退回去就是判錯對象,
+    而且是往 fail-open 的方向錯」。
+
+    但**方向對不代表訊息對**(票 13):只說「讀不到」會讓人去找一個不存在的
+    損壞檔案,而這裡沒被滿足的前提是「它要在 index 裡」——
+    訊息要指向那個前提,並寫出修法。
+    """
+    p = r1_spec(layout, staged=_R1_IDX_CLEAN, worktree=_R1_IDX_CLEAN, add=False)
+    msg = gate.check(p, None, at_commit=True)
+    assert msg, u"不在 index 裡卻回報乾淨 —— fail-open:path=%s" % p
+    assert "R1" in msg and "fail-closed" in msg, (
+        u"擋是擋了,但沒標明是 R1 的 fail-closed 那一支:msg=%r" % msg)
+    assert os.path.basename(p) in msg, (
+        u"訊息沒點名是哪個檔 —— 人不知道要去 add 什麼:msg=%r" % msg)
+    assert "index" in msg and "git add" in msg, (
+        u"訊息沒說出前提與修法,人會去找一個不存在的損壞檔案:msg=%r" % msg)
