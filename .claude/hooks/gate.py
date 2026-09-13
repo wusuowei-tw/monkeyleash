@@ -32,7 +32,14 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PIPELINE = os.path.join(ROOT, ".dev", "pipeline.json")          # 狀態(被寫)
 STAGES_DEF = os.path.join(ROOT, ".agents", "pipeline-stages.yaml")  # 定義(唯讀)
-CANON_CODE_REVIEW = os.path.join(ROOT, ".agents", "skills", "code-review", "SKILL.md")
+# code-review 正典:**相對路徑是單一來源**(票 133 批一 ⑥)。
+# 理由與 `FRICTION_LOG_REL` / `LEGACY_LIST_REL` 逐字相同 —— 要交給
+# `git show :<path>` 的相對路徑不得從絕對路徑反算:`rel()` 用的是**當下的** `ROOT`,
+# 而本常數是 **import 時**凍結的,測試只 patch 其中一個就會吐出 `../../..` 逃逸路徑。
+# ⚠ **與 `TO_SPEC_CANON_REL` 的差別**:to-spec 的路徑原本就在函式內用字面組,
+# 那裡是「把字面抽成常數」;**這裡是真的要解那個反算問題**。
+CANON_CODE_REVIEW_REL = ".agents/skills/code-review/SKILL.md"
+CANON_CODE_REVIEW = os.path.join(ROOT, *CANON_CODE_REVIEW_REL.split("/"))
 
 # 原本是 SRC_DIRS 白名單 —— 那是 fail-open:任何**新**模組都不在名單上,
 # 一律放行。spec 要求「新增一個獨立模組」時整站無防護。改為黑名單:
@@ -3360,8 +3367,19 @@ def _skills_mtime():
 
 
 def _mount_violations_uncached():
-    """實際執行掛載點檢查(R5 的兩項)。"""
-    return check_third_axis_mount() + check_to_spec_override()
+    """實際執行掛載點檢查(R5 的兩項)。
+
+    ⚠ **這是前哨那條鏈**(`mode_hook` → `mount_violations_cached` → 本函式),
+    所以**兩支都必須明確傳 `path`**(工作樹)—— 票 133 批一 ⑤ 改了
+    `check_to_spec_override` 那半、⑥ 補上 `check_third_axis_mount` 那半。
+    兩支的預設都是 index,而前哨時點沒有 index 這回事。
+    留成裸呼叫的話,整條前哨鏈的行為會被預設值連帶換掉**而這一行一個字都沒動**:
+    「一個字不動」與「行為不動」在這裡分家,要的是後者。
+    """
+    return check_third_axis_mount(
+        path=os.path.join(ROOT, *CANON_CODE_REVIEW_REL.split("/"))
+    ) + check_to_spec_override(
+        path=os.path.join(ROOT, *TO_SPEC_CANON_REL.split("/")))
 
 
 def mount_violations_cached():
@@ -3410,6 +3428,13 @@ def check_skill_copies():
         [os.path.join(ROOT, ".claude", "skills"), os.path.join(ROOT, "skills")])
 
 
+# to-spec 正典的位置:**相對路徑是單一來源**(票 133 批一 ⑤)。
+# 與 `FRICTION_LOG_REL` / `LEGACY_LIST_REL` 同一個理由 —— 要交給
+# `git show :<path>` 的相對路徑不得從絕對路徑反算。
+# ⚠ 本支與那兩支不同的是:它的路徑原本就**在函式內用字面組出來**,
+# 不是 import 時凍結的常數,所以這裡是「把字面抽成常數」,不是解一個反算問題。
+TO_SPEC_CANON_REL = ".agents/skills/to-spec/SKILL.md"
+
 MOUNT_MARKERS = (
     "### 3b. Identify the data-integrity sources",
     "**Data Integrity sub-agent prompt**",
@@ -3418,17 +3443,55 @@ MOUNT_MARKERS = (
 )
 
 
-def check_to_spec_override():
+def check_to_spec_override(path=None, cwd=None):
     """R5(P2)to-spec 的 inline snippet 覆寫。
 
     上游允許把 prototype 的 snippet inline 進 spec —— 那與 R1 正面衝突(見 docs/adr/0002)。
     覆寫被 update 蓋掉的話,skill 會開始要求 AI 做 R1 一定會擋的事。
     同樣只判存在與位置(布林),不判內容。
+
+    ## 權威輸入是 **index**,不是工作樹(票 133 批一 ⑤)
+
+    R5 判的是「**要進歷史的那一份**正典」。舊版讀工作樹 ⇒
+    `git add <被上游版蓋掉的>` 之後把工作樹改回來,R5 綠、一份缺覆寫的正典進歷史。
+
+    ## 來源綁**執行上下文**,不綁函式
+
+      `path` 給了   -> 讀**那個檔**(工作樹)。**前哨那條鏈**與既有測試走這條。
+      `path` 沒給   -> 讀 **index**(`mode_pre_commit` 那條路),`cwd` 供測試指定 repo。
+
+    ⚠ **前哨鏈必須明確傳 `path`** —— 它是**間接**的
+    (`mode_hook` → `mount_violations_cached` → `_mount_violations_uncached`),
+    留成裸呼叫的話行為會被預設值連帶換掉**而那一行一個字都沒動**;
+    而前哨時點沒有 index 這回事(skill 檔可能剛被 `skills-update.sh` 改過還沒 add)。
+    守它的是 `test_the_sentry_chain_still_reads_the_worktree`。
+
+    ⚠ **快取不在本票範圍**(裁決):`.cache/mount-check.json` 屬前哨鏈,
+    權威層不走它。但它的鍵**只有 skill 目錄的 mtime,沒有「這是哪個來源的結果」**,
+    而 `git add` 不改檔案 mtime ⇒ **日後若有人把權威層也接上快取,兩側會共用同一份判定**。
+
+    **必須解包** —— `staged_text` 回的是 tuple,`(None, "…")` 在 `if` 裡是真的(票 13 C)。
     """
-    p = os.path.join(ROOT, ".agents", "skills", "to-spec", "SKILL.md")
-    if not os.path.exists(p):
-        return ["[R5] 找不到正典 .agents/skills/to-spec/SKILL.md"]
-    body = io.open(p, encoding="utf-8").read()
+    if path is None:
+        body, why = staged_text(TO_SPEC_CANON_REL, cwd=cwd)
+        if why is not None:
+            # **不退回工作樹**(`staged_blob` 的 docstring 逐字要求)。
+            # **也不得沿用「找不到正典」那一句** —— 那句話描述的是「檔案不存在」,
+            # 而這裡檔案存在、只是不在 index 裡。說錯前提會讓人去找一個
+            # 其實還在的檔案(票 13)。
+            return ["[R5/fail-closed] %s:%s\n"
+                    "     R5 判的是**要進這次 commit 的那一份**正典,所以讀 index "
+                    "不讀工作樹。\n"
+                    "     它不在 index 裡 ⇒ 「覆寫掛載點還在不在、位置對不對」"
+                    "這個問題沒有答案,\n"
+                    "     而沒有答案不等於答案是「沒問題」。\n"
+                    "     修法:`git add %s`。\n"
+                    "     **不退回工作樹** —— 那是另一份東西,退回去就是判錯對象。"
+                    % (TO_SPEC_CANON_REL, why, TO_SPEC_CANON_REL)]
+    else:
+        if not os.path.exists(path):
+            return ["[R5] 找不到正典 .agents/skills/to-spec/SKILL.md"]
+        body = io.open(path, encoding="utf-8").read()
     if "LOCAL OVERRIDE (prototype snippets)" not in body:
         return ["[R5] 正典 to-spec 缺 inline snippet 覆寫掛載點。\n"
                 "     多半是直接跑了 `npx skills update`(會覆蓋本地 patch)。\n"
@@ -3444,16 +3507,46 @@ def check_to_spec_override():
     return []
 
 
-def check_third_axis_mount():
+def check_third_axis_mount(path=None, cwd=None):
     """R5 第三軸掛載點。
 
     `npx skills update` 會用上游版覆蓋正典 code-review,靜默移除本地第三軸。
     brief 目前留空、不影響行為,但掛載點消失代表 patch 沒被重套 —— 擋下,
     不讓「記得重套」這件事依賴人的記性。
+
+    ## 權威輸入是 **index**,不是工作樹(票 133 批一 ⑥)
+
+    判的是「**要進歷史的那一份**正典」。舊版讀工作樹 ⇒
+    `git add <被上游版覆蓋的>` 之後把工作樹改回來,R5 綠、一份少了第三軸的正典進歷史。
+
+    ## 來源綁**執行上下文**,不綁函式
+
+      `path` 給了   -> 讀**那個檔**(工作樹)。**前哨那條鏈**與既有測試走這條。
+      `path` 沒給   -> 讀 **index**(`mode_pre_commit` 那條路),`cwd` 供測試指定 repo。
+
+    ⚠ **前哨鏈必須明確傳 `path`**(與 `check_to_spec_override` 同一行,同一個理由)。
+    ⚠ **快取不在本票範圍**(裁決)—— 見 `check_to_spec_override` 的 docstring。
+
+    **必須解包** —— `staged_text` 回的是 tuple,`(None, "…")` 在 `if` 裡是真的(票 13 C)。
     """
-    if not os.path.exists(CANON_CODE_REVIEW):
-        return ["[R5] 找不到正典 %s" % os.path.relpath(CANON_CODE_REVIEW, ROOT)]
-    body = io.open(CANON_CODE_REVIEW, encoding="utf-8").read()
+    if path is None:
+        body, why = staged_text(CANON_CODE_REVIEW_REL, cwd=cwd)
+        if why is not None:
+            # **不退回工作樹**;**也不得沿用「找不到正典」那一句** ——
+            # 那句話描述的是「檔案不存在」,而這裡檔案存在、只是不在 index 裡。
+            return ["[R5/fail-closed] %s:%s\n"
+                    "     R5 判的是**要進這次 commit 的那一份**正典,所以讀 index "
+                    "不讀工作樹。\n"
+                    "     它不在 index 裡 ⇒ 「第三軸掛載點還在不在、位置對不對」"
+                    "這個問題沒有答案,\n"
+                    "     而沒有答案不等於答案是「沒問題」。\n"
+                    "     修法:`git add %s`。\n"
+                    "     **不退回工作樹** —— 那是另一份東西,退回去就是判錯對象。"
+                    % (CANON_CODE_REVIEW_REL, why, CANON_CODE_REVIEW_REL)]
+    else:
+        if not os.path.exists(path):
+            return ["[R5] 找不到正典 %s" % os.path.relpath(path, ROOT)]
+        body = io.open(path, encoding="utf-8").read()
     missing = [m for m in MOUNT_MARKERS if m not in body]
     if missing:
         return ["[R5] 正典 code-review 缺第三軸掛載點:%s\n"
