@@ -905,22 +905,34 @@ class TestLegacyNoRedlightList:
         assert not stale, (
             "這些已經有合格紅燈紀錄,應從豁免清單移除(債務要隨時間縮減):%s" % stale)
 
-    def test_a_listed_file_is_exempt_from_the_redlight_requirement(self, fake_repo):
-        root, probe = fake_repo
-        (root / "legacy.txt").write_text("pkg/thing.py\n", encoding="utf-8")
-        assert gate.check(probe, "x = 2") is None
+    def test_a_listed_file_is_exempt_from_the_redlight_requirement(self, legacy_repo):
+        """**改用專用真 git fixture(票 133 #10 選項 D 的條件 4)。**
 
-    def test_a_listed_file_is_exempt_from_R3_ENTIRELY_even_without_a_test(self, fake_repo):
+        原本走共用的 `fake_repo` —— 它只 `mkdir`,**不是 git repo**。
+        D 之下「問不出它在不在 go-live 樹裡」= 無法驗證 = 不發豁免,
+        於是這一條會因為**環境**而紅,而它要驗的是**語意**。
+
+        **斷言一個字都沒放寬**:仍然要求列冊的既有檔案拿得到豁免。
+        改的只有 fixture —— 讓「它在 go-live 樹裡」這個前提在測試環境裡真的成立。
+        """
+        repo, _sha, _later, build = legacy_repo
+        build(worktree_entries=[_D_LEGAL])
+        assert gate.check(_d_probe(repo, _D_LEGAL), "x = 2") is None
+
+    def test_a_listed_file_is_exempt_from_R3_ENTIRELY_even_without_a_test(
+            self, legacy_repo):
         """**語意更新(ADR 0006)**:legacy 清單豁免 R3 **整條**,不只紅燈半。
 
         測試檔存在半也豁免 —— 否則 121 個檔案 0 個測試的既有 repo,
         每個既有檔案一被編輯就被 R3 第一半擋死,而 legacy 清單救不了。
         這裡刪掉測試檔:列冊的既有檔案**連測試都沒有**,仍該放行。
+
+        **fixture 換成 `legacy_repo`**,理由同上一條;斷言未動。
         """
-        root, probe = fake_repo
-        (root / "tests" / "test_thing.py").unlink()   # 連測試都沒有
-        (root / "legacy.txt").write_text("pkg/thing.py\n", encoding="utf-8")
-        assert gate.check(probe, "x = 2") is None, \
+        repo, _sha, _later, build = legacy_repo
+        build(worktree_entries=[_D_LEGAL])
+        (repo / "tests" / "test_thing.py").unlink()   # 連測試都沒有
+        assert gate.check(_d_probe(repo, _D_LEGAL), "x = 2") is None, \
             "列冊的既有檔案(無測試)仍被 R3 第一半擋 —— 語意沒改到"
 
     def test_a_new_file_without_a_test_is_still_blocked(self, fake_repo):
@@ -4958,27 +4970,33 @@ class TestR6ExplicitPathStillReadsTheWorktree:
             u"`legacy_no_redlight(path=…)` 沒讀工作樹那一份的條目")
 
 
-def test_r3_legacy_exemption_at_write_time_still_reads_the_worktree(fake_repo):
+def test_r3_legacy_exemption_at_write_time_still_reads_the_worktree(legacy_repo):
     """⑤d **硬限制,而且是最容易被預設值靜默改掉的那一格。**
 
-    `check()` 裡 R3 的兩個 `legacy_no_redlight()` 呼叫端目前是**裸呼叫**。
-    預設方向一旦改成 index,**它們的行為會跟著變,而原始碼一個字都沒動** ——
+    `check()` 裡 R3 的兩個呼叫端明確傳 `path=LEGACY_LIST`(工作樹)。
+    預設方向是 index,所以**留成裸呼叫的話行為會跟著換,而原始碼一個字都沒動** ——
     「一個字不動」與「維持現狀」在這裡分家。
 
     本條釘住**維持現狀**那一邊:寫入時點(前哨)沒有 index 這回事,
     那個檔案可能根本還沒 `git add`。
 
-    語料與手法完全沿用既有的
-    `test_a_listed_file_is_exempt_from_the_redlight_requirement`
-    —— `fake_repo` 的臨時目錄**不是 git repo**,所以「讀 index」在這裡
-    必然失敗而回空集合 ⇒ 豁免消失 ⇒ R3 擋 ⇒ 本條會紅。
+    **fixture 換成 `legacy_repo`(票 133 #10 選項 D 的條件 4),鑑別力不變 ——
+    而且來源是明著構造出來的,不再靠「這個目錄剛好不是 git repo」**:
+
+    | | 清單內容 |
+    |---|---|
+    | **index** | 合法的一份,**不含** `pkg/thing.py` |
+    | **工作樹** | **含** `pkg/thing.py` |
+
+    ⇒ 讀工作樹 = 豁免成立 = 放行(本條);讀 index = 豁免消失 = R3 擋 = 紅。
+    **兩份清單刻意不同** —— 改成相同就沒有鑑別力了。
     """
-    root, probe = fake_repo
-    (root / "tests" / "test_thing.py").unlink()
-    (root / "legacy.txt").write_text("pkg/thing.py\n", encoding="utf-8")
-    assert gate.check(probe, "x = 2") is None, (
+    repo, _sha, _later, build = legacy_repo
+    build(worktree_entries=[_D_LEGAL], index_entries=[])
+    (repo / "tests" / "test_thing.py").unlink()
+    assert gate.check(_d_probe(repo, _D_LEGAL), "x = 2") is None, (
         u"寫入時點的 R3 legacy 豁免不再讀工作樹 —— "
-        u"`check()` 裡那兩個裸呼叫被預設值連帶換掉了")
+        u"`check()` 裡那兩處被預設值連帶換掉了")
 
 
 def test_a_list_missing_from_the_index_fails_closed_with_a_reason(r6_repo):
@@ -5006,3 +5024,417 @@ def test_a_list_missing_from_the_index_fails_closed_with_a_reason(r6_repo):
         u"訊息沒說出前提與修法,人會去找一個不存在的損壞檔案:%s" % joined)
     assert "清單只減不增" not in joined, (
         u"沿用了票 55 明令不得用在這條路徑上的那句話 —— 它會讓人去刪清單:%s" % joined)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 133 批二 #10 —— **選項 D 的紅燈先行**(2026-09-15 裁決:採 D,範圍限定)
+#
+# ## D 的預期保證(票面逐字)
+#
+#   在清單所載 go-live 基準未被更換、且能完成驗證的前提下,
+#   R3 不再因條目被加入清單就直接給予 legacy 豁免;條目必須存在於該基準樹中。
+#
+# ## D 的宣稱邊界(票面逐字,本批有一條特徵測試釘住它)
+#
+#   擋得住「條目造假」;**擋不住「基準造假」**(把第一行的 sha 換成較晚、含目標的
+#   commit)。基準身分那一半在**票 141**。
+#
+# ## 為什麼要一個**真 git repo** 的 fixture(票面條件 4)
+#
+#   共用的 `fake_repo` 只 `mkdir`,**不是 git repo** ⇒ D 之下「無法驗證」
+#   ⇒ 不發豁免 ⇒ 三條驗「豁免成立」的既有測試會因為**環境**而紅,
+#   而它們要驗的是**語意**。所以那三條改用本 fixture,**不放寬斷言**:
+#   仍然要求列冊的既有檔案拿得到豁免,只是讓「它在 go-live 樹裡」這個前提真的成立。
+#   **不全面改造 `fake_repo`** —— 它還有幾十條測試在用。
+#
+# ## 語料
+#
+#   `pkg/thing.py`  —— 沿用既有測試的檔名;**在** go-live 樹裡(合法條目)
+#   `pkg/newbie.py` —— 新增;**不在** go-live 樹裡、在較晚那個 commit 裡(不合法條目)
+#   清單格式 `# go-live: <sha>\n<paths>\n` 與建 repo 的手法沿用 `r6_repo`。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_D_LIST_REL = u".agents/legacy-no-redlight.txt"
+_D_LEGAL = u"pkg/thing.py"        # 在 go-live 樹裡
+_D_ILLEGAL = u"pkg/newbie.py"     # 不在 go-live 樹裡(在較晚那個 commit 裡)
+_D_ABSENT_SHA = u"0123456789abcdef0123456789abcdef01234567"   # 不存在的物件
+
+
+def _d_write(path, text):
+    p = pathlib.Path(str(path))
+    if not p.parent.is_dir():
+        p.parent.mkdir(parents=True)
+    io.open(str(p), "w", encoding="utf-8", newline="\n").write(text)
+
+
+def _d_list_text(sha, entries):
+    """清單檔內容。格式沿用既有的 R6 測試,未改。"""
+    return u"# go-live: %s\n%s\n" % (sha, u"\n".join(entries))
+
+
+def _d_head(repo):
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                          capture_output=True).stdout.decode().strip()
+
+
+def _d_in_tree(repo, sha, rel_path):
+    return subprocess.run(["git", "cat-file", "-e", "%s:%s" % (sha, rel_path)],
+                          cwd=str(repo), capture_output=True).returncode == 0
+
+
+@pytest.fixture
+def legacy_repo(tmp_path, monkeypatch):
+    """**專用的真 git repo**,兩個 commit,用來測 legacy 豁免的**入場資格**。
+
+    | commit | 內容 | 用途 |
+    |---|---|---|
+    | `sha_go_live` | `pkg/thing.py` + `tests/test_thing.py` + 站別定義 | **真正的上線基準** |
+    | `sha_later` | 再加 `pkg/newbie.py` + `tests/test_newbie.py` | 較晚、**含**不合法條目的那棵樹 |
+
+    回 `(repo, sha_go_live, sha_later, build)`。
+    `build(worktree_entries, index_entries=(), worktree_sha=None, index_sha=None,
+    add=True)` 把兩份清單分別放進 index 與工作樹,回清單檔絕對路徑。
+
+    **index 預設是一份【合法但空條目】的清單** —— 這樣 ⑤d 的鑑別力不變
+    (工作樹有那一筆、index 沒有),而且 R6 在整合測試裡不會先於 D 出聲。
+
+    `RUN_LOG` 指向不存在的檔 ⇒ **沒有任何紅燈證據**,R3 後半照常要求。
+    `ROOT` / `LEGACY_LIST` 一起 patch,理由同 `r6_repo`(不同步會撞上
+    批一 ① 的 `../../..` 逃逸路徑陷阱)。
+    """
+    repo = tmp_path / "legacyrepo"
+    repo.mkdir()
+    for c in ("init -q", "config user.email t@t", "config user.name t"):
+        _git133(c.split(), repo)
+
+    # 站別定義取本 repo 那一份 —— 讓 R2 在臨時 repo 裡也問得出「這一站能不能寫原始碼」
+    shutil.copyfile(str(ROOT / ".agents" / "pipeline-stages.yaml"),
+                    str(_mkdir_p(repo / ".agents") / "pipeline-stages.yaml"))
+
+    _d_write(repo / "pkg" / "thing.py", u"x = 1\n")
+    _d_write(repo / "tests" / "test_thing.py", u"def test_x(): pass\n")
+    _git133(["add", "-A"], repo)
+    _git133(["commit", "-qm", "go-live"], repo)
+    sha_go_live = _d_head(repo)
+
+    _d_write(repo / "pkg" / "newbie.py", u"x = 1\n")
+    _d_write(repo / "tests" / "test_newbie.py", u"def test_x(): pass\n")
+    _git133(["add", "-A"], repo)
+    _git133(["commit", "-qm", "later"], repo)
+    sha_later = _d_head(repo)
+
+    # 前提斷言(執行期驗,不是事後推論)——  fixture 建錯時要當場說,
+    # 不要讓它假扮成「D 規格有洞」。
+    assert sha_go_live != sha_later, u"兩個 commit 同 sha —— fixture 前提垮了"
+    assert _d_in_tree(repo, sha_go_live, _D_LEGAL), (
+        u"fixture 前提垮了:合法條目竟然不在 go-live 樹裡")
+    assert not _d_in_tree(repo, sha_go_live, _D_ILLEGAL), (
+        u"fixture 前提垮了:不合法條目竟然在 go-live 樹裡")
+    assert _d_in_tree(repo, sha_later, _D_ILLEGAL), (
+        u"fixture 前提垮了:不合法條目不在較晚那棵樹裡 —— 特徵測試會失去意義")
+
+    lst = repo / ".agents" / "legacy-no-redlight.txt"
+    monkeypatch.setattr(gate, "ROOT", str(repo))
+    monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
+    monkeypatch.setattr(gate, "RUN_LOG", str(repo / "no-such-run-log.jsonl"))
+    monkeypatch.setattr(gate, "load_stage", lambda: ("implement", "01"))
+
+    def build(worktree_entries, index_entries=(), worktree_sha=None,
+              index_sha=None, add=True):
+        _d_write(lst, _d_list_text(index_sha or sha_go_live, list(index_entries)))
+        if add:
+            _git133(["add", "-f", "--", _D_LIST_REL], repo)
+        _d_write(lst, _d_list_text(worktree_sha or sha_go_live,
+                                   list(worktree_entries)))
+        return str(lst)
+
+    return repo, sha_go_live, sha_later, build
+
+
+def _mkdir_p(p):
+    if not p.is_dir():
+        p.mkdir(parents=True)
+    return p
+
+
+def _d_probe(repo, rel_path):
+    return str(pathlib.Path(str(repo)) / rel_path.replace("/", os.sep))
+
+
+# ── D-1 不合法條目:兩條 R3 路徑 × 兩個時點 ──────────────────────────────────
+
+@pytest.mark.parametrize("at_commit", [False, True])
+@pytest.mark.parametrize("has_test", [False, True])
+def test_d_an_entry_absent_from_the_go_live_tree_gets_no_exemption(
+        legacy_repo, has_test, at_commit):
+    """**核心紅燈。** 條目在清單裡,但**不在所載 go-live 樹裡** ⇒ 不得拿到豁免。
+
+    兩條 R3 路徑都要涵蓋:
+      `has_test=False` -> 前半(找不到對應測試)
+      `has_test=True`  -> 後半(測試在、沒有合格紅燈紀錄)
+
+    **舊碼**:`legacy_no_redlight()` 只讀清單、不驗入場資格 ⇒ 兩條路徑都放行(`None`)。
+    **D**:條目不在基準樹裡 ⇒ 豁免不成立 ⇒ R3 照擋。
+    """
+    repo, _sha, _later, build = legacy_repo
+    build(worktree_entries=[_D_ILLEGAL])
+    if not has_test:
+        (repo / "tests" / "test_newbie.py").unlink()
+    msg = gate.check(_d_probe(repo, _D_ILLEGAL), "x = 2", at_commit=at_commit)
+    assert msg and "R3" in msg, (
+        u"不在 go-live 樹裡的條目仍拿到 legacy 豁免(has_test=%s, at_commit=%s):%r"
+        % (has_test, at_commit, msg))
+    if has_test:
+        assert "R3/紅燈" in msg, u"走到的不是紅燈半:%r" % msg
+    else:
+        assert "找不到對應測試" in msg, u"走到的不是測試檔存在半:%r" % msg
+
+
+# ── D-2 反控:合法條目仍然豁免(排除「一律取消 legacy 豁免」)─────────────────
+
+@pytest.mark.parametrize("at_commit", [False, True])
+@pytest.mark.parametrize("has_test", [False, True])
+def test_d_an_entry_present_in_the_go_live_tree_keeps_its_exemption(
+        legacy_repo, has_test, at_commit):
+    """**反控。** 少了它,一支「一律不發 legacy 豁免」的實作也會讓 D-1 全綠 ——
+    而那等於把整份凍結清單廢掉(ADR 0006 的 121 個檔案 0 個測試那個形狀)。
+
+    `has_test=False` 同時守住「豁免的是 R3 **整條**」(ADR 0006 的 2026-08-11 語意更新)。
+    **舊碼與 D 都應放行** ⇒ 這一條**兩邊都綠**,它的價值在於**限制 D 的修法空間**。
+    """
+    repo, _sha, _later, build = legacy_repo
+    build(worktree_entries=[_D_LEGAL])
+    if not has_test:
+        (repo / "tests" / "test_thing.py").unlink()
+    msg = gate.check(_d_probe(repo, _D_LEGAL), "x = 2", at_commit=at_commit)
+    assert msg is None, (
+        u"合法條目(在 go-live 樹裡)竟然拿不到豁免 —— D 把清單整個廢掉了"
+        u"(has_test=%s, at_commit=%s):%r" % (has_test, at_commit, msg))
+
+
+# ── D-3 無法驗證:三種形狀 ──────────────────────────────────────────────────
+
+def test_d_a_list_without_a_go_live_marker_grants_nothing(legacy_repo):
+    """清單**沒有 `# go-live:` 行** ⇒ 驗不了入場資格 ⇒ 不得發豁免。
+
+    舊碼:`legacy_no_redlight()` 只取路徑,沒有 sha 也照樣回條目 ⇒ 放行。
+    """
+    repo, _sha, _later, build = legacy_repo
+    build(worktree_entries=[_D_LEGAL])
+    _d_write(repo / ".agents" / "legacy-no-redlight.txt", u"%s\n" % _D_LEGAL)
+    msg = gate.check(_d_probe(repo, _D_LEGAL), "x = 2")
+    assert msg and "R3" in msg, (
+        u"清單沒有 go-live 基準卻仍發出豁免 —— 「沒有基準」不等於「都算過」:%r" % msg)
+
+
+def test_d_a_baseline_object_that_is_not_here_grants_nothing(legacy_repo):
+    """基準物件**不在這個 repo** ⇒ 判不了 ⇒ 不得發豁免(fail-closed)。
+
+    ⚠ **這一條不宣稱存在性檢查「解決」了淺層 clone** —— 它把「查不到」轉成**擋**,
+    不是消除。淺層 clone 下每一筆 legacy 豁免都會消失,那是**已知代價**(票 55)。
+    """
+    repo, _sha, _later, build = legacy_repo
+    build(worktree_entries=[_D_LEGAL], worktree_sha=_D_ABSENT_SHA)
+    msg = gate.check(_d_probe(repo, _D_LEGAL), "x = 2")
+    assert msg and "R3" in msg, (
+        u"基準物件不在這個 repo,卻仍發出豁免:%r" % msg)
+
+
+def test_d_a_non_git_environment_grants_nothing(tmp_path, monkeypatch):
+    """**非 git 環境** ⇒ 問不出「它在不在那棵樹裡」⇒ 不得發豁免。
+
+    這正是舊 `fake_repo` 的形狀 —— 本條把那個形狀**留下來當紅燈**,
+    而不是用「放寬斷言」把它藏起來。
+    """
+    root = tmp_path / "nogit"
+    _d_write(root / "pkg" / "thing.py", u"x = 1\n")
+    _d_write(root / "tests" / "test_thing.py", u"def test_x(): pass\n")
+    lst = root / "legacy.txt"
+    _d_write(lst, _d_list_text(_D_ABSENT_SHA, [_D_LEGAL]))
+    assert not (root / ".git").exists(), u"前提垮了:這個目錄竟然是 git repo"
+    monkeypatch.setattr(gate, "ROOT", str(root))
+    monkeypatch.setattr(gate, "LEGACY_LIST", str(lst))
+    monkeypatch.setattr(gate, "RUN_LOG", str(root / "no-such-run-log.jsonl"))
+    monkeypatch.setattr(gate, "load_stage", lambda: ("implement", "01"))
+    msg = gate.check(_d_probe(root, _D_LEGAL), "x = 2")
+    assert msg and "R3" in msg, (
+        u"非 git 環境下驗不了入場資格,卻仍發出豁免:%r" % msg)
+
+
+def test_d_cannot_verify_and_proven_illegal_are_different_messages(legacy_repo):
+    """**訊息要分得開**:「無法驗證」與「已證明這一筆不合法」不是同一件事。
+
+    票 55 逐字記過代價:理由錯會**主動把人推向刪清單條目** ——
+    基準壞掉的時候刪條目,刪完照樣紅,而清單本來是對的。
+
+    **同一個 probe、同一組測試檔** ⇒ 兩則訊息的差異只能來自**理由**,
+    不會因為路徑不同而假性通過。
+    **不釘死字串,也不釘死尚未實作的 helper 名稱** —— 只要求兩者可分辨。
+    """
+    repo, _sha, _later, build = legacy_repo
+    probe = _d_probe(repo, _D_ILLEGAL)
+
+    build(worktree_entries=[_D_ILLEGAL])                      # 基準好的,條目不合法
+    proven_illegal = gate.check(probe, "x = 2")
+
+    build(worktree_entries=[_D_ILLEGAL], worktree_sha=_D_ABSENT_SHA)   # 基準壞了
+    cannot_verify = gate.check(probe, "x = 2")
+
+    assert proven_illegal, u"條目不合法卻放行:%r" % proven_illegal
+    assert cannot_verify, u"基準無法驗證卻放行:%r" % cannot_verify
+    assert proven_illegal != cannot_verify, (
+        u"兩種理由給了**同一則**訊息 —— 基準壞掉時人會去刪一份本來正確的清單(票 55):\n"
+        u"%s" % proven_illegal)
+
+
+# ── D-4 sha 的來源:工作樹那一份,不是 index 那一份 ──────────────────────────
+
+def test_d_the_baseline_comes_from_the_same_list_the_entries_came_from(legacy_repo):
+    """**來源鑑別**:R3 用的基準,要與它的條目來自**同一份**清單(工作樹)。
+
+    | | go-live sha | 條目 | 那一筆合法嗎 |
+    |---|---|---|---|
+    | index 清單 | `sha_later`(**含** newbie) | `newbie` | 合法 |
+    | 工作樹清單 | `sha_go_live`(**不含** newbie) | `newbie` | **不合法** |
+
+    R3 的條目來自工作樹(票 133 批一 ④ 明訂,D 不改來源)⇒ 基準也必須是工作樹那一份
+    ⇒ 應判**不合法**。一支「條目讀工作樹、sha 讀 index」的混搭實作會放行。
+
+    ⚠ **鑑別力的誠實邊界**:兩份清單的 sha 不同,所以本條直接分得開的是
+    **sha 從哪一份清單來**;它**不**等於證明了「同一次讀取」——
+    兩次分開讀同一份工作樹清單也會過。要釘「同一次」需要另一種鑑別力
+    (例如在兩次讀取之間換掉檔案內容),本條不宣稱有。
+    """
+    repo, sha_go_live, sha_later, build = legacy_repo
+    build(worktree_entries=[_D_ILLEGAL], worktree_sha=sha_go_live,
+          index_entries=[_D_ILLEGAL], index_sha=sha_later)
+    msg = gate.check(_d_probe(repo, _D_ILLEGAL), "x = 2")
+    assert msg and "R3" in msg, (
+        u"基準看起來取自 index 那一份(`sha_later` 含該筆)—— 混搭來源:%r" % msg)
+
+
+# ── D-5 已知邊界:基準造假(票 141)──────────────────────────────────────────
+
+def test_d_a_swapped_baseline_is_still_accepted_known_gap_ticket_141(legacy_repo):
+    """**特徵測試,不是安全保證。**
+
+    清單第一行的 sha 被換成**較晚、且含目標**的 commit ⇒ 那一筆在那棵樹裡
+    ⇒ 現行判準接受它,**D 預期也接受**(D 不驗證該 sha 是不是核准的上線基準)。
+
+    **這條測試記錄的是一個【已知缺口】的現況,不是要求它永遠放行。**
+    缺口登記在**票 141**(go-live 基準的身分沒有被持續驗證)。
+    ⚠ **票 141 修復時必須回來重新檢視本條** —— 屆時它應該要變成紅的,
+    而那個紅是對的。
+    """
+    repo, _sha, sha_later, build = legacy_repo
+    build(worktree_entries=[_D_ILLEGAL], worktree_sha=sha_later)
+    msg = gate.check(_d_probe(repo, _D_ILLEGAL), "x = 2")
+    assert msg is None, (
+        u"本條描述的是票 141 那個已知缺口的現況;它變紅代表基準身分已經有人驗了"
+        u" —— 回去看票 141,不要把本條改綠:%r" % msg)
+
+
+# ── D-6 未命中不驗 ──────────────────────────────────────────────────────────
+
+def test_d_a_target_not_on_the_list_triggers_no_tree_probe(legacy_repo, monkeypatch):
+    """**只在命中 legacy 條目之後才驗入場資格**(票面條件 5)。
+
+    目標不在清單裡 ⇒ 連問都不必問 ⇒ **不得**為它跑 `git cat-file -e <sha>:<path>`。
+
+    計數器**只認「拿某棵樹問某個路徑」那一種呼叫**
+    (`git cat-file -e <something>:<path>`),**不禁止**其他規則合法使用 git ——
+    `^{commit}` 的存在性檢查、`git show`、`git diff` 都不算。
+
+    **舊碼與 D 都應該是 0 次** ⇒ 本條兩邊皆綠,它限制的是**修法的成本形狀**。
+    """
+    repo, _sha, _later, build = legacy_repo
+    build(worktree_entries=[_D_LEGAL])          # 清單裡只有 thing,沒有 newbie
+
+    seen = []
+    real_call = gate.subprocess.call
+
+    def spy(argv, *a, **kw):
+        try:
+            if (isinstance(argv, (list, tuple)) and len(argv) >= 4
+                    and argv[0] == "git" and argv[1] == "cat-file"
+                    and argv[2] == "-e" and ":" in str(argv[3])
+                    and not str(argv[3]).endswith("^{commit}")):
+                seen.append(str(argv[3]))
+        except Exception:
+            pass
+        return real_call(argv, *a, **kw)
+
+    monkeypatch.setattr(gate.subprocess, "call", spy)
+    gate.check(_d_probe(repo, _D_ILLEGAL), "x = 2")
+    assert seen == [], (
+        u"目標不在 legacy 清單裡,卻仍為它查了入場資格 —— 每次判定都付一個子行程:%r"
+        % seen)
+
+
+# ── D-7 權威入口整合(mode_pre_commit)正反控 ───────────────────────────────
+
+def _d_silence_the_neighbours(monkeypatch, repo):
+    """把 `mode_pre_commit()` 的鄰居停掉,只留 per-file 那條路與 R6 是活的。
+
+    **刻意不停 `check_legacy_list`(R6)** —— 整合測試要證明的正是
+    「擋下這一次的是 **R3**,不是 R6 先出聲」。R6 讀 index,而 index 那一份是乾淨的。
+
+    ⚠ **必須 `chdir` 到那個 repo,否則這一整組測試是空的。**
+    `staged_paths()` 回的是 **repo 相對路徑**,而 `rel()` 走
+    `os.path.relpath(os.path.abspath(path), ROOT)` —— `abspath` 以**行程 cwd** 為基準,
+    不是以 `ROOT`。cwd 留在本專案時,`pkg/newbie.py` 會被解析成
+    `<本專案>/pkg/newbie.py`,相對 `ROOT`(臨時 repo)是 `../../..` 開頭 ⇒
+    `check()` 在「**repo 以外的路徑不歸這裡管**」那一關就回 `None`,
+    **每一個檔案都不會被判定**,而正控與反控會一起變成綠的 —— 反控綠得毫無意義。
+    正式環境沒有這個問題:`pre-commit` 是在 repo 根被 git 叫起來的。
+    """
+    monkeypatch.chdir(str(repo))
+    monkeypatch.setattr(gate, "upstream_shadow_violation", lambda: (None, None))
+    monkeypatch.setattr(gate, "check_skill_copies", lambda: [])
+    monkeypatch.setattr(gate, "check_third_axis_mount", lambda: [])
+    monkeypatch.setattr(gate, "check_to_spec_override", lambda: [])
+    monkeypatch.setattr(gate, "check_friction_numbers",
+                        lambda path=None, cwd=None: [])
+    monkeypatch.setattr(gate, "shadow_active", lambda *a, **k: False)
+
+
+def test_d_mode_pre_commit_blocks_an_entry_absent_from_the_go_live_tree(
+        legacy_repo, monkeypatch, capsys):
+    """**整合正控**:不合法條目只存在於**工作樹**清單 ⇒ R6 沉默(index 乾淨)
+    ⇒ 擋下這次 commit 的必須是 **R3**。
+
+    少了它,一支「判定改對了但沒接上權威層」的實作會讓 D-1 全綠而 commit 照過
+    —— F-017 的形狀。**直接函式全綠與「D 已生效」在輸出上長得一樣。**
+    """
+    repo, _sha, _later, build = legacy_repo
+    build(worktree_entries=[_D_LEGAL, _D_ILLEGAL], index_entries=[_D_LEGAL])
+    _d_write(repo / "pkg" / "newbie.py", u"x = 2\n")
+    _git133(["add", "-f", "--", _D_ILLEGAL], repo)
+    _d_silence_the_neighbours(monkeypatch, repo)
+
+    assert gate.check_legacy_list() == [], (
+        u"前提垮了:R6 對 index 那一份出聲了,這一格就分不出是誰擋的")
+
+    rc = gate.mode_pre_commit()
+    err = capsys.readouterr().err
+    assert rc == 1, u"不合法條目拿到豁免,commit 沒被擋:rc=%r\n%s" % (rc, err)
+    assert "[R3" in err, u"擋下的不是 R3:\n%s" % err
+    assert "[R6" not in err, (
+        u"R6 也出聲了 —— 這一格就證明不了是 D 在擋:\n%s" % err)
+
+
+def test_d_mode_pre_commit_passes_an_entry_present_in_the_go_live_tree(
+        legacy_repo, monkeypatch, capsys):
+    """**整合反控**:合法條目 ⇒ 照常放行(rc 0)。
+
+    少了它,一支「`mode_pre_commit` 永遠回 1」的實作會讓上面那條全綠。
+    """
+    repo, _sha, _later, build = legacy_repo
+    build(worktree_entries=[_D_LEGAL], index_entries=[_D_LEGAL])
+    _d_write(repo / "pkg" / "thing.py", u"x = 2\n")
+    _git133(["add", "-f", "--", _D_LEGAL], repo)
+    _d_silence_the_neighbours(monkeypatch, repo)
+
+    rc = gate.mode_pre_commit()
+    err = capsys.readouterr().err
+    assert rc == 0, u"合法條目竟然被擋下:rc=%r\n%s" % (rc, err)
