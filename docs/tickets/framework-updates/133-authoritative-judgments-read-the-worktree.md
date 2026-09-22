@@ -1919,8 +1919,56 @@ a2 的鏡像(B)與工作樹的正典(B)一致 ⇒ 該沉默。
 
 ---
 
+## 待辦:真正掛 hook 的**違規** `git commit` 端對端驗證
+
+**這一條集中列出,不是新發現** —— 各格自己的限制早已寫在票面,本節只是把它們
+收到一個地方並引用原文,**不另開票**。
+
+| 格 | 原文在哪 | 逐字狀態 |
+|---|---|---|
+| **#10**(R3 legacy 成員豁免) | 〈#10 的落地〉開頭的狀態句 | 「D 已實作並完成直接函式與隔離 `mode_pre_commit` 接線驗證;**真正掛 hook 後的 `git commit` 端對端驗證未做**」 |
+| **#8 / #9**(站別定義來源) | 〈#8/#9 的落地〉§7 | 「**真正掛 hook 的【違規】`git commit` 端對端驗證 —— 未做。**」 |
+
+### 範圍(**兩批修復、三個編號格子**)
+
+- **兩批**:#10 是一批(2026-09-15 落地);#8/#9 是另一批(2026-09-22 落地)。
+- **三個編號格子**:**#8**、**#9**、**#10**。
+
+### 為什麼隔離 `mode_pre_commit()` 的證據**不夠**
+
+**隔離 `mode_pre_commit()` 證明的是「那支函式在替身環境下回什麼」,
+不是「真的 `git commit` 會被攔下來」。** 兩者之間至少隔著:
+
+| 隔著什麼 | 說明 |
+|---|---|
+| **掛載點** | `core.hooksPath` 有沒有設、`.githooks/pre-commit` 有沒有真的被 git 叫到(ADR 0007:那一行是 per-clone local config,clone 帶不走) |
+| **替身** | 隔離跑法把 `upstream_shadow_violation` / `check_skill_copies` / `check_third_axis_mount` / `check_to_spec_override` / `check_friction_numbers` / `shadow_active` 換掉過;**替身換掉的那些在真 commit 裡是活的** |
+| **退出碼的實際效果** | 函式回 1 與「git 真的中止了這次 commit」是兩件事 |
+| **staged 集合** | 真 commit 的 staged 清單由 git 決定,不由測試餵 |
+
+⚠ **本票目前沒有任何一格做過「造一個違規、真的下 `git commit`、看它被擋下」。**
+⚠ **不得**把既有的隔離證據轉述成「已驗證真 hook 會攔」。
+
+---
+
 ## 未證明 / 已知邊界
 
+- **⚠ 診斷訊息的路徑可能與實際讀取路徑不同(`load_stage_defs` 的工作樹分支)。**
+  **情境**:`STAGES_DEF` 被**單獨替換**(patch `STAGES_DEF` 而不動 `ROOT`)時,
+  「定義檔不存在」那則訊息印的是 `STAGES_DEF_REL`(即
+  `.agents/pipeline-stages.yaml`),而實際去讀的是被替換後的那個路徑。
+  **符號**:`gate.py` 的 `load_stage_defs()` —— `rel_def = STAGES_DEF_REL`,
+  而 worktree 分支讀的是 `STAGES_DEF`(**引名不引行號**)。
+  **由來**:2026-09-22 B3 落地時,`rel_def` 由
+  `os.path.relpath(STAGES_DEF, ROOT)` 改成直接取 `STAGES_DEF_REL`
+  (改的理由是 index 分支要把相對路徑交給 `git show :<path>`,不得反算)。
+  **證據來源**:票 99 探針的丙格 ——
+  指定 `tmp/no-such-file.yaml`,而 err 印
+  `定義檔不存在:.agents/pipeline-stages.yaml`;
+  該格仍正確回 err、`stages == []`,斷言未受影響。
+  ⚠ **目前觀測是【診斷指向不準】,不宣稱判定失效** ——
+  沒有任何一格因此判錯,也沒有量過它會不會在別的情境造成判錯。
+  ⚠ **只記錄,不修。**
 - **⚠ `gate.py` 這 14 格,一格都沒有做過繞過實驗。** 「已成立」指的是
   **讀取點與鏈成立**,不是「實測繞過成功」。票 132 的實測在 `leak_scan` 上,
   **同族不等於同一次量測。**
