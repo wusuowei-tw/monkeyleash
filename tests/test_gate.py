@@ -2234,6 +2234,30 @@ class TestUntestedByDecisionCannotBeSelfServed:
         mods, declared_in = gate.ticket_untested_modules("f", "01")
         assert mods == set() and declared_in is None
 
+    # ── 帳本寫在**隔離位置**(票 133 #12,裁決 2026-09-22 甲案) ────────────
+    #
+    # 裁決:`logged_exemption_backed` 改用 `EXEMPTION_LOG`(模組常數)。
+    # 那個常數**已經**被 conftest 的 autouse 隔離 fixture 換到 tmp,
+    # 所以測試要把帳本寫到**它指的那個位置**,而不是自己組 `ROOT/.dev/…`。
+    #
+    # **紅燈階段(2026-09-22)**:當時 `gate.py` 還在讀 `ROOT/.dev/…`,
+    # 所以這幾條是紅的 —— 那是**帳本位置遷移造成的預期紅**,不是新缺陷。
+    # `gate.py` 於 **2026-09-23** 改用 `EXEMPTION_LOG` 之後它們轉綠。
+    _REC = {"file": "pkg/thing.py", "module": "thing",
+            "declared_in": ".scratch/f/issues/01-x.md"}
+
+    def _write_ledger(self, monkeypatch=None):
+        """把一筆可授權的紀錄寫進 **`gate.EXEMPTION_LOG` 指的那個檔**。
+
+        回那個路徑,呼叫端可以核對它**不是** `ROOT/.dev/…`
+        —— 兩個位置分得開,才看得出讀的是哪一份。
+        """
+        p = pathlib.Path(gate.EXEMPTION_LOG)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(self._REC, ensure_ascii=False) + "\n",
+                     encoding="utf-8")
+        return p
+
     def test_the_commit_time_check_does_not_accept_an_uncommitted_ticket(
             self, tmp_path, monkeypatch):
         """`logged_exemption_backed` 是提交時那一半,同一個洞。
@@ -2241,28 +2265,162 @@ class TestUntestedByDecisionCannotBeSelfServed:
         它**不採信紀錄本身**、會回頭打開紀錄指名的票 —— 判準是對的,
         但「打開」用的是 `os.path.exists()`,所以未追蹤的票一樣過關。
         兩半都要綁 commit,只修一半等於沒修(繞道走另一半)。
+
+        ⚠ **本條單獨看擋不住「帳本根本沒讀到」** —— 那種情況也會回 `False`。
+        鑑別力由 `test_the_same_ledger_flips_when_the_ticket_reaches_head` 提供。
         """
         repo = self._repo(tmp_path, monkeypatch)
         self._write_decl(repo, ".scratch/f/issues/01-x.md", commit=False)
-        (repo / ".dev").mkdir(exist_ok=True)
-        (repo / ".dev" / "gate-exemptions.jsonl").write_text(
-            json.dumps({"file": "pkg/thing.py", "module": "thing",
-                        "declared_in": ".scratch/f/issues/01-x.md"},
-                       ensure_ascii=False) + "\n", encoding="utf-8")
+        led = self._write_ledger()
+        assert gate.committed_declaration(".scratch/f/issues/01-x.md") is None, (
+            "前提垮了:票竟然在 HEAD 裡")
         assert gate.logged_exemption_backed("pkg/thing.py", "thing") is False, (
-            "提交時採信了一張未 commit 的票 —— 紀錄可以偽造,票也可以現造")
+            "提交時採信了一張未 commit 的票 —— 紀錄可以偽造,票也可以現造"
+            "(帳本:%s)" % led)
 
     def test_the_commit_time_check_accepts_a_committed_ticket(
             self, tmp_path, monkeypatch):
         """**反控**,同上:合法的那條路要留著。"""
         repo = self._repo(tmp_path, monkeypatch)
         self._write_decl(repo, ".scratch/f/issues/01-x.md", commit=True)
-        (repo / ".dev").mkdir(exist_ok=True)
-        (repo / ".dev" / "gate-exemptions.jsonl").write_text(
-            json.dumps({"file": "pkg/thing.py", "module": "thing",
-                        "declared_in": ".scratch/f/issues/01-x.md"},
-                       ensure_ascii=False) + "\n", encoding="utf-8")
-        assert gate.logged_exemption_backed("pkg/thing.py", "thing") is True
+        led = self._write_ledger()
+        assert led != pathlib.Path(gate.ROOT) / ".dev" / "gate-exemptions.jsonl", (
+            "前提垮了:隔離帳本竟然與 ROOT 底下那一份同路徑,兩者分不開")
+        assert gate.logged_exemption_backed("pkg/thing.py", "thing") is True, (
+            "票已進 HEAD、紀錄在隔離帳本(%s)裡,卻沒放行 —— "
+            "讀的可能是別的檔案" % led)
+
+    def test_the_same_ledger_flips_when_the_ticket_reaches_head(
+            self, tmp_path, monkeypatch):
+        """**鑑別格**:同一份帳本、同一條路徑,只有「票進不進 HEAD」在動。
+
+        這一格存在的理由:上面那條未提交票的負控**單獨看是假綠** ——
+        「正確拒絕」與「帳本根本沒讀到」都會回 `False`,它分不出來。
+        本格把兩個方向綁在同一次執行裡:**後半要求 `True`**,
+        所以「沒讀到帳本」會讓本格紅。
+        """
+        repo = self._repo(tmp_path, monkeypatch)
+        decl = self._write_decl(repo, ".scratch/f/issues/01-x.md", commit=False)
+        led = self._write_ledger()
+
+        # 前半:票只在工作樹
+        assert gate.committed_declaration(".scratch/f/issues/01-x.md") is None
+        before = gate.logged_exemption_backed("pkg/thing.py", "thing")
+
+        # 後半:**帳本與路徑一個字都不動**,只把票 commit 進 HEAD
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "宣告進 HEAD"], cwd=str(repo),
+                       capture_output=True)
+        assert gate.committed_declaration(".scratch/f/issues/01-x.md") == {"thing"}, (
+            "前提垮了:票 commit 了卻讀不到宣告")
+        assert led.exists() and json.loads(led.read_text(encoding="utf-8")
+                                           .strip()) == self._REC, (
+            "前提垮了:帳本在兩個半場之間被動過")
+        after = gate.logged_exemption_backed("pkg/thing.py", "thing")
+
+        assert (before, after) == (False, True), (
+            "同一份帳本(%s)、同一條路徑,只把票推進 HEAD ——\n"
+            "     期望 (False, True),實際 %r。\n"
+            "     後半若是 False,表示那份帳本**根本沒被讀到**"
+            "(讀的是 ROOT/.dev/… 那一份);\n"
+            "     前半若是 True,表示 HEAD 那道沒綁住。\n"
+            "     宣告檔:%s" % (led, (before, after), decl))
+
+
+class TestTheLedgerIsReadFromTheIsolatedConstant:
+    """票 133 #12(裁決 2026-09-22 **甲案**):帳本的讀取路徑改用 `EXEMPTION_LOG`。
+
+    ## 為什麼要有這一組
+
+    `logged_exemption_backed` 目前**自己組** `os.path.join(ROOT, ".dev", …)`,
+    **完全不看 `EXEMPTION_LOG`**。而 conftest 的 autouse 隔離 fixture 換掉的
+    正是 `EXEMPTION_LOG` —— **那一層對這支函式沒有作用**。
+
+    實測(2026-09-22 插樁全套):**44 個測試節點**會走到這支函式,
+    其中 **12 個沒有 patch `ROOT`** ⇒ 讀到的是**真帳本**。
+    它們目前都回 `False`,但那是**資料碰巧如此**(本 repo 的帳本裡
+    沒有任何 `ticket-declared` 紀錄),**不是隔離生效**。
+
+    ## 本組的作法:**兩個方向**,而且方向相反
+
+    只驗一個方向擋不住「兩邊都讀」或「兩邊都不讀」的實作 ——
+    所以兩格的期望值刻意相反,單一種偷懶寫法沒辦法同時讓兩格綠。
+
+    **紅燈階段(2026-09-22)**:本組寫下時 `gate.py` 還在讀 `ROOT/.dev/…`,
+    兩格都是紅的,而紅的原因是**讀錯帳本**(各格的斷言訊息會把兩個路徑都印出來),
+    不是 fixture 或介面錯誤。`gate.py` 於 **2026-09-23** 改用 `EXEMPTION_LOG` 後轉綠。
+    """
+
+    REC = {"file": "pkg/thing.py", "module": "thing",
+           "declared_in": ".scratch/f/issues/01-x.md"}
+    DECL = "**Untested by decision:** thing\n"
+
+    @pytest.fixture()
+    def world(self, tmp_path, monkeypatch):
+        """真 git repo:票**已 commit**(所以 `committed_declaration` 走真 HEAD)。
+
+        回 `(repo, root_ledger, iso_ledger)` —— 兩個帳本路徑**分得開**,
+        才看得出讀的是哪一份。
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            subprocess.run(["git"] + c.split(), cwd=str(repo),
+                           capture_output=True)
+        (repo / "pkg").mkdir()
+        (repo / "pkg" / "thing.py").write_text("x = 1\n", encoding="utf-8")
+        d = repo / ".scratch" / "f" / "issues"
+        d.mkdir(parents=True)
+        (d / "01-x.md").write_text("# 票\n\n" + self.DECL, encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "seed"], cwd=str(repo),
+                       capture_output=True)
+
+        monkeypatch.setattr(gate, "ROOT", str(repo))
+        # `EXEMPTION_LOG` 刻意放在 repo **外**,與 `ROOT/.dev/…` 明顯不同路徑
+        iso = tmp_path / "isolated" / "gate-exemptions.jsonl"
+        iso.parent.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(gate, "EXEMPTION_LOG", str(iso))
+
+        root_ledger = repo / ".dev" / "gate-exemptions.jsonl"
+        root_ledger.parent.mkdir(parents=True, exist_ok=True)
+
+        # 前提:票真的在 HEAD 裡,而且列了該模組(兩格共用的唯一授權來源)
+        assert gate.committed_declaration(".scratch/f/issues/01-x.md") == {"thing"}
+        assert root_ledger != iso
+        return repo, root_ledger, iso
+
+    def _rec_line(self):
+        return json.dumps(self.REC, ensure_ascii=False) + "\n"
+
+    def test_a_record_only_under_root_does_not_grant(self, world):
+        """🔴 方向一:**可授權紀錄在 `ROOT/.dev/`,`EXEMPTION_LOG` 是空帳本** ⇒ 不授權。
+
+        現行程式讀 `ROOT/.dev/…` ⇒ 會授權 ⇒ 本格紅。
+        **紅的原因是讀錯帳本**,不是 fixture:票在 HEAD、紀錄欄位相符,
+        兩者在下面都 assert 過。
+        """
+        _repo, root_ledger, iso = world
+        root_ledger.write_text(self._rec_line(), encoding="utf-8")
+        iso.write_text("", encoding="utf-8")          # 空帳本
+        assert root_ledger.exists() and iso.exists()
+        assert gate.logged_exemption_backed("pkg/thing.py", "thing") is False, (
+            "`EXEMPTION_LOG` 指的是空帳本(%s),卻仍然授權 —— "
+            "它讀的是 ROOT 底下那一份(%s)" % (iso, root_ledger))
+
+    def test_a_record_only_in_the_isolated_ledger_grants(self, world):
+        """🔴 方向二:**`ROOT/.dev/` 無紀錄,`EXEMPTION_LOG` 有有效紀錄** ⇒ 授權。
+
+        現行程式讀 `ROOT/.dev/…`(不存在)⇒ 不授權 ⇒ 本格紅。
+
+        **方向與上一格相反**,所以「一律 False」或「一律 True」都過不了這兩格。
+        """
+        _repo, root_ledger, iso = world
+        assert not root_ledger.exists(), "前提垮了:ROOT 底下不該有帳本"
+        iso.write_text(self._rec_line(), encoding="utf-8")
+        assert gate.logged_exemption_backed("pkg/thing.py", "thing") is True, (
+            "有效紀錄在 `EXEMPTION_LOG`(%s)裡,卻沒授權 —— "
+            "它去讀了 ROOT 底下那一份(%s,不存在)" % (iso, root_ledger))
 
 
 class TestEnforcementDoesNotTeachItsOwnBypass:

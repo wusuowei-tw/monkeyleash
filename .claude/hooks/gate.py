@@ -1667,7 +1667,21 @@ def logged_exemption_backed(rel_path, base):
     留著這一半就是留一條繞道:在被擋當下造一張票、再讓提交時來認它。
     豁免的兩個時點要綁同一個條件,否則鬆的那一邊定義了整條規則。
     """
-    log = os.path.join(ROOT, ".dev", "gate-exemptions.jsonl")
+    # **用 `EXEMPTION_LOG`,不自己組 `ROOT` 相對路徑**(票 133 #12,裁決 2026-09-23)。
+    #
+    # 原本這裡是 `os.path.join(ROOT, ".dev", "gate-exemptions.jsonl")` ——
+    # 同一份帳本因此有**兩個可寫的位置**:寫入端走 `EXEMPTION_LOG`,
+    # 讀取端自己組一份。兩者一旦不同步,**隔離只擋得住其中一半**。
+    #
+    # 實測(2026-09-22 插樁全套):44 個測試節點會走到本函式,其中 **12 個
+    # 沒有 patch `ROOT`** ⇒ 讀到的是**真帳本**,而 conftest 的 autouse 隔離
+    # fixture 換掉的正是 `EXEMPTION_LOG` —— 那一層對本函式**完全沒有作用**。
+    # 那 12 個當時都回 `False`,但那是**資料碰巧如此**(本 repo 帳本裡沒有任何
+    # `ticket-declared` 紀錄),**不是隔離生效**。
+    #
+    # **同一個事實只留一個可寫的位置** —— 與 `FRICTION_LOG_REL` /
+    # `LEGACY_LIST_REL` 那組是同一條判準,只是這裡要收的是「絕對路徑」那一份。
+    log = EXEMPTION_LOG
     if not os.path.exists(log):
         return False
     for line in io.open(log, encoding="utf-8"):
