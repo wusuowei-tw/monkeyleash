@@ -3540,6 +3540,55 @@ UP_SRC = "def f():\n    return 1\n"
 # pipeline.json,否則「不寫」那條斷言測的是一個根本沒被開啟過的檔案。
 _REAL_LOAD_STAGE = gate.load_stage
 
+# ── 票 133 批二 #8/#9(B3 前置)——臨時 repo 也要有一份【index】站別定義 ──
+#
+# **import 時**抓住真 repo 的定義檔路徑,理由與上面 `_REAL_LOAD_STAGE` 同構:
+# fixture 會 patch `gate.ROOT`,而 B3 之後 `STAGES_DEF` 由 `ROOT` 衍生 ——
+# patch 之後再去問就問到臨時 repo 了,而這裡要的是**原本實際被讀的那一份**。
+_REAL_STAGES_DEF = gate.STAGES_DEF
+_STAGES_DEF_REL = ".agents/pipeline-stages.yaml"
+
+
+def _install_stage_defs(repo):
+    """把**真 repo 現行的**站別定義原封複製進 `repo`:寫進工作樹,並 `git add`。
+
+    回 `(路徑, 內容)`,呼叫端可以核對。
+
+    ## 為什麼需要(量到的,不是推的)
+
+    這些 fixture 只 patch `ROOT`,**不** patch `STAGES_DEF`;而 `STAGES_DEF`
+    是 import 時凍結的絕對路徑,指著真 repo —— 所以 `load_stage_defs()`
+    一直讀得到(`r8_src` 的 docstring 逐字寫著這件事)。
+    B3 之後**提交時點改讀 index**(`git show :<rel>`,cwd=`ROOT`),
+    而臨時 repo 的 index 裡沒有這個檔 ⇒ 依設計 fail-closed,
+    於是這些測試會在**走到它們要測的那條規則之前**就被擋下。
+    實測:36 個節點(12 支函式)全部變成 `[R2/fail-closed] …定義檔不在 index 裡`。
+
+    ## 為什麼是「原封複製」而不是「另寫一份」
+
+    **不得另造語意不同的定義** —— 那會讓這些測試改成在測一個真 repo 裡
+    不存在的流程。原封複製 ⇒ 站別語意與修改前**逐字相同**:
+    `implement` 仍可寫、`spec` 仍是前置站,各測試原本靠的那些性質一個沒變。
+
+    ## 為什麼工作樹與 index 都放
+
+    工作樹那一份給**寫入**時點(B3 之後 `STAGES_DEF` 由 `ROOT` 衍生,會指到這裡);
+    index 那一份給**提交**時點。**同一份內容** ⇒ 兩個時點看到的定義一致,
+    不會自己製造出本檔正在測的那種「兩版不一致」。
+
+    ## 它**不動**什麼
+
+    只新增 `.agents/pipeline-stages.yaml` 這一個路徑。
+    目標檔案(`pkg/thing.py` / `macro_audit/*.py`)的 staged / 未 staged 狀態、
+    repo 的歷史、provenance 條件**一律不碰**。
+    """
+    src = io.open(_REAL_STAGES_DEF, encoding="utf-8").read()
+    p = pathlib.Path(str(repo)) / ".agents" / "pipeline-stages.yaml"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    io.open(str(p), "w", encoding="utf-8", newline="\n").write(src)
+    _git133(["add", "-f", "--", _STAGES_DEF_REL], repo)
+    return p, src
+
 
 class TestR2AcceptsAnUpstreamIdenticalStagedFile:
     """票 10:**豁免綁內容,不綁站別。**
@@ -3593,6 +3642,16 @@ class TestR2AcceptsAnUpstreamIdenticalStagedFile:
         io.open(down / "tests" / "test_thing.py", "w",
                 encoding="utf-8").write("x = 1\n")
         (down / ".dev").mkdir()
+        # 票 133 批二 #8/#9:提交時點會讀 index 的站別定義。
+        # **原封複製真 repo 那一份** —— `spec` 仍是前置站,本節的正控才還在。
+        _defs_path, _defs_src = _install_stage_defs(down)
+        assert io.open(str(_defs_path), encoding="utf-8").read() == _defs_src, \
+            u"站別定義複製後內容不一致 —— 本 fixture 的前提垮了"
+        _staged_defs = subprocess.run(["git", "show", ":%s" % _STAGES_DEF_REL],
+                                      cwd=str(down), capture_output=True)
+        assert (_staged_defs.returncode == 0
+                and _staged_defs.stdout.decode("utf-8") == _defs_src), \
+            u"站別定義沒進 index 或 index 內容不一致 —— 提交時點會 fail-closed"
 
         monkeypatch.setattr(gate, "ROOT", str(down))
         monkeypatch.setattr(gate, "PROVENANCE", str(down / ".dev" / "provenance.jsonl"))
@@ -4490,6 +4549,15 @@ def _r8_index_repo(tmp_path_factory):
     _git133(["init", "-q"], repo)
     _git133(["config", "user.email", "t@local"], repo)
     _git133(["config", "user.name", "t"], repo)
+    # 票 133 批二 #8/#9:提交時點會讀 index 的站別定義,所以這個 repo 也要有一份。
+    # **來源是真 repo 的那一份,原封複製**(理由見 `_install_stage_defs`)。
+    p, src = _install_stage_defs(repo)
+    assert io.open(str(p), encoding="utf-8").read() == src, \
+        u"站別定義複製後內容不一致 —— 本 fixture 的前提垮了"
+    staged = subprocess.run(["git", "show", ":%s" % _STAGES_DEF_REL],
+                            cwd=str(repo), capture_output=True)
+    assert staged.returncode == 0 and staged.stdout.decode("utf-8") == src, \
+        u"站別定義沒進 index 或 index 內容不一致 —— 提交時點會 fail-closed"
     return repo
 
 

@@ -31,7 +31,14 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PIPELINE = os.path.join(ROOT, ".dev", "pipeline.json")          # 狀態(被寫)
-STAGES_DEF = os.path.join(ROOT, ".agents", "pipeline-stages.yaml")  # 定義(唯讀)
+# 站別定義檔:**相對路徑是單一來源**(票 133 批二 #8/#9,裁決 2026-09-22 採 B3)。
+# 理由與 `FRICTION_LOG_REL` / `LEGACY_LIST_REL` / `CANON_CODE_REVIEW_REL` 逐字相同 ——
+# 提交時點要把相對路徑交給 `git show :<path>`,而從一個 import 時凍結的絕對路徑
+# 反算回來是錯的(`rel()` 用的是**當下的** `ROOT`,測試只 patch 其中一個就會吐出
+# `../../..` 逃逸路徑,而 `git show :../../..` 毫無意義)。
+# **讓相對的那一份當來源**,絕對路徑由它 + `ROOT` 長出來 —— 同 `LEGACY_LIST` 的樣板。
+STAGES_DEF_REL = ".agents/pipeline-stages.yaml"
+STAGES_DEF = os.path.join(ROOT, *STAGES_DEF_REL.split("/"))  # 定義(唯讀)
 # code-review 正典:**相對路徑是單一來源**(票 133 批一 ⑥)。
 # 理由與 `FRICTION_LOG_REL` / `LEGACY_LIST_REL` 逐字相同 —— 要交給
 # `git show :<path>` 的相對路徑不得從絕對路徑反算:`rel()` 用的是**當下的** `ROOT`,
@@ -1292,25 +1299,97 @@ def rel(path):
         return path.replace("\\", "/")
 
 
-def load_stage_defs():
+STAGE_DEF_SOURCES = ("worktree", "index")
+
+# 提交時點的**來源提示**(票 133 批二 #8/#9;裁決 2026-09-22:**語意要求,非逐字**)。
+#
+# 必須同時說到三件事,用字自訂:
+#   (1) 這次的站別定義取自 **index(暫存區)**
+#   (2) 工作樹裡**尚未暫存**的定義修改**不影響本次提交**
+#   (3) **不承諾** `git add` 之後就會通過
+#
+# **不為這句提示重跑工作樹判定**:它不讀工作樹、不比對兩版,所以它
+# **不宣稱兩版一定不同** —— 只說明「這次判的是哪一份」。
+# 重跑一次只為了產生一句話,會讓一次 `check()` 讀兩次定義,
+# 而「一次判定一次讀取」是本次修法的另一半,兩者不能互相拆台。
+#
+# ⚠ **措辭上的一個坑**:不要寫成「不表示 `git add` 之後就會通過」——
+# 那句話雖然是否定,卻仍然把「git add … 就 … 通過」整串放進訊息裡,
+# 而**讀的人(以及任何比對承諾句型的檢查)分不出肯定與否定**。
+# 所以這裡繞開那個句型,改說「取決於定義本身」。
+STAGE_DEF_INDEX_NOTE = (
+    "     本次站別定義取自**暫存區(index)**;工作樹裡尚未暫存的定義修改,"
+    "不影響本次提交。\n"
+    "     (這不表示兩版一定不同;暫存之後是否通過,仍取決於定義本身怎麼寫。)")
+
+
+def with_stage_def_source(msg, at_commit):
+    """提交時點的 R2/R3 擋下訊息,附上「這次的站別定義是從哪裡來的」。
+
+    `msg` 為 None(放行)或非提交時點 -> 原樣回傳,**一個字不加**。
+    寫入時點判的是工作樹,貼上這段話就是**說一句假話**
+    (而假的訊息比沒有訊息貴 —— 它讓人去檢查一個根本沒問題的地方)。
+    """
+    if msg is None or not at_commit:
+        return msg
+    return msg + "\n" + STAGE_DEF_INDEX_NOTE
+
+
+def load_stage_defs(source="worktree"):
     """讀唯讀定義檔。回傳 (stages, flow, err)。
 
-    **fail-closed**:讀不到、格式壞掉、或沒有任何站宣告 allows_src_write 時,
-    回傳 err 且 stages 為空 —— 呼叫端一律不放行原始碼寫入。
-    閘門壞掉時必須更嚴不能更鬆,否則比沒有閘門危險(你會以為它在守)。
+    ## 來源綁**執行上下文**(票 133 批二 #8/#9,裁決 2026-09-22 採 B3)
+
+      `source="worktree"`(**預設**)-> 讀工作樹那一份。
+      `source="index"`             -> 讀 **index** 那一份(`git show :<rel>`)。
+
+    **預設維持工作樹,所以其他呼叫端一個字都不必動** ——
+    `stage_allows_src_write()`(`status` 的 authority 欄位,票 99)走的就是預設。
+    這不是風格選擇,是量到的:無條件改讀 index 的候選(B2)會讓
+    `stage_allows_src_write('research')` 由 `False` 變成 `True`,
+    而那一行**沒有任何人動過**。只有 `check()` 按時點傳 `source`。
+
+    ## fail-closed,而且**不退回工作樹**
+
+    讀不到、格式壞掉、或沒有任何站宣告 `allows_src_write` 時,回 err 且 stages 為空
+    —— 呼叫端一律不放行原始碼寫入。閘門壞掉時必須更嚴不能更鬆。
+
+    **提交時點 index 那一份讀不到,不得改讀工作樹**:那是另一份東西
+    (可能從未進歷史),退回去就是判錯對象,而且是往 fail-open 的方向錯
+    —— 與 `staged_blob` 的 docstring 同一條判準。
+
+    ## 不合法的 `source` **出聲,不靜默**
+
+    打錯一個字若被靜默當成 worktree,提交時點就會悄悄改用工作樹那一份,
+    **而本次修法要收掉的正是那件事** —— 靜默的 fallback 等於把修法自己關掉,
+    且完全無聲。所以未知值回 err(fail-closed),不猜。
     """
-    rel_def = os.path.relpath(STAGES_DEF, ROOT).replace("\\", "/")
+    rel_def = STAGES_DEF_REL
+    if source not in STAGE_DEF_SOURCES:
+        return [], "", ("內部錯誤:未知的站別定義來源 %r(只接受 %s)"
+                        % (source, " / ".join(STAGE_DEF_SOURCES)))
     try:
         import yaml
     except Exception as e:
         return [], "", "無法載入 yaml 套件(%s)" % e
-    if not os.path.exists(STAGES_DEF):
-        return [], "", "定義檔不存在:%s" % rel_def
-    try:
-        with io.open(STAGES_DEF, encoding="utf-8") as f:
-            doc = yaml.safe_load(f)
-    except Exception as e:
-        return [], "", "定義檔解析失敗:%s(%s)" % (rel_def, e)
+    if source == "index":
+        # **用 `STAGES_DEF_REL`,不用 `rel(STAGES_DEF)`** —— 理由寫在常數旁邊
+        # (反算會吐出 `../../..` 逃逸路徑,而 `git show :../../..` 毫無意義)。
+        text, why = staged_text(rel_def)
+        if why is not None:
+            return [], "", ("定義檔不在 index 裡:%s(%s)" % (rel_def, why))
+        try:
+            doc = yaml.safe_load(text)
+        except Exception as e:
+            return [], "", "index 的定義檔解析失敗:%s(%s)" % (rel_def, e)
+    else:
+        if not os.path.exists(STAGES_DEF):
+            return [], "", "定義檔不存在:%s" % rel_def
+        try:
+            with io.open(STAGES_DEF, encoding="utf-8") as f:
+                doc = yaml.safe_load(f)
+        except Exception as e:
+            return [], "", "定義檔解析失敗:%s(%s)" % (rel_def, e)
     if not isinstance(doc, dict) or not isinstance(doc.get("stages"), list) or not doc["stages"]:
         return [], "", "定義檔缺少有效的 stages 清單:%s" % rel_def
     stages = doc["stages"]
@@ -2557,7 +2636,15 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
         trace.append("R2")
 
     stage, ticket = load_stage()
-    stages, flow, defs_err = load_stage_defs()
+    # 來源綁**執行上下文**(票 133 批二 #8/#9,裁決 2026-09-22 採 B3):
+    #   寫入 -> 工作樹(改了就生效,不必先 `git add`)
+    #   提交 -> **index**(判的是要進這次 commit 的那一份)
+    # **只呼叫一次** —— #8(可寫站 / 範圍)與 #9(research 豁免)共用底下這個
+    # `stages`,所以「同一次判定用兩版定義」那個中間狀態**構造不出來**。
+    # 前輪實測:只換 #9 的候選(B1)會在混搭輸入下用一份「這一站不可寫」的定義
+    # 發出 research 豁免 —— 共用一次讀取就是為了讓那件事不可能發生。
+    stages, flow, defs_err = load_stage_defs(
+        source="index" if at_commit else "worktree")
 
     # 閘門自身:R2 豁免(死鎖),R3 不豁免。放行但**不靜默** —— 記帳並回報。
     gate_self = r in GATE_SELF
@@ -2572,9 +2659,11 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
 
     # R2-fc fail-closed:定義讀不到就不知道哪站可寫 —— 一律不放行
     if defs_err and not gate_self:
-        return ("[R2/fail-closed] %s:站別定義不可用,原始碼寫入一律擋下。\n"
-                "     原因:%s\n"
-                "     閘門壞掉時只能更嚴,不能更鬆。修好定義檔後再寫。" % (r, defs_err))
+        return with_stage_def_source(
+            "[R2/fail-closed] %s:站別定義不可用,原始碼寫入一律擋下。\n"
+            "     原因:%s\n"
+            "     閘門壞掉時只能更嚴,不能更鬆。修好定義檔後再寫。" % (r, defs_err),
+            at_commit)
 
     # 站別讀不到 -> 兩個時點都擋。這是唯一與時點無關的 R2 分支:
     # 「你停在哪一站」這個問題本身沒有答案時,兩種問法都答不出來。
@@ -2607,9 +2696,11 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
     if scope and not gate_self:
         sc = scope.rstrip("/")
         if not (r == sc or r.startswith(sc + "/")):
-            return ("[R2/範圍] %s:current_stage='%s' 只能寫 %s 底下的原始碼。\n"
-                    "     這是探索區,寫不了生產碼 —— 要進生產,把檔案**移出** %s,\n"
-                    "     那是必須走六站的事件(不是第三條出口)。" % (r, stage, scope, scope))
+            return with_stage_def_source(
+                "[R2/範圍] %s:current_stage='%s' 只能寫 %s 底下的原始碼。\n"
+                "     這是探索區,寫不了生產碼 —— 要進生產,把檔案**移出** %s,\n"
+                "     那是必須走六站的事件(不是第三條出口)。" % (r, stage, scope, scope),
+                at_commit)
         # 範圍內:R2 放行(research 本來就在 writable 集合裡,下面的檢查會過),落到 R3
 
     if gate_self:
@@ -2641,10 +2732,12 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
                 # **說出是哪一個前提沒滿足**,不是把人指向錯的方向(票 13):
                 # 缺指標檔要去修使用者層,缺 provenance 要去跑 sync,
                 # 漂移要去看內容 —— 三種修法完全不同,不能共用一句話。
-                return ("[R2/commit] %s:current_stage='%s' 是前置站,卻要提交原始碼。\n"
-                        "     代表這些碼寫在該寫之前。回頭把流程走完,"
-                        "或由使用者調整 current_stage。\n"
-                        "     上游內容豁免不適用:%s" % (r, stage, up_why))
+                return with_stage_def_source(
+                    "[R2/commit] %s:current_stage='%s' 是前置站,卻要提交原始碼。\n"
+                    "     代表這些碼寫在該寫之前。回頭把流程走完,"
+                    "或由使用者調整 current_stage。\n"
+                    "     上游內容豁免不適用:%s" % (r, stage, up_why),
+                    at_commit)
         # 這裡不可 return —— 只有 R2 的問法要換,R3 在 commit 時同樣要驗,
         # 而且權威層更該驗。早一版寫成 return None,等於把 R3 在 commit 時整個跳過。
 
@@ -2832,11 +2925,15 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
                         "     先跑測試確認它在實作不存在時是紅的,再回來寫功能碼。" % (r, why))
 
         if not any(os.path.exists(c) for c in cands):
-            return ("[R3] %s:找不到對應測試(tests/test_%s.py),不可先寫功能碼。\n"
-                    "     請先寫測試、執行它、確認紅燈,再回來寫功能碼。票號:%s\n"
-                    "     若這不是原始碼(誤擋):把它的目錄加進 %s;\n"
-                    "     **不得退回白名單**(docs/adr/0003)"
-                    % (r, base, ticket or "未設定", exemption_hint(r)))
+            # 提交時點附來源提示:這一格會不會擋,取決於 `exempts_r3_in_scope`,
+            # 而那個欄位**這次是從 index 讀的** —— 人要知道自己在看哪一份定義。
+            return with_stage_def_source(
+                "[R3] %s:找不到對應測試(tests/test_%s.py),不可先寫功能碼。\n"
+                "     請先寫測試、執行它、確認紅燈,再回來寫功能碼。票號:%s\n"
+                "     若這不是原始碼(誤擋):把它的目錄加進 %s;\n"
+                "     **不得退回白名單**(docs/adr/0003)"
+                % (r, base, ticket or "未設定", exemption_hint(r)),
+                at_commit)
     return None
 
 

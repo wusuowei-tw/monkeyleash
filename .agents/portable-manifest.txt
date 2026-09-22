@@ -132,6 +132,14 @@ tests/test_leak_scan.py         copy
 tests/test_install.py           copy
 tests/test_cjk_git_paths.py     copy
 tests/test_research_stage.py    copy
+# 票 133 批二 #8/#9(站別定義的來源綁執行上下文,裁決 2026-09-22 採 B3)。
+# **出貨**:它驗的是 `.claude/hooks/gate.py`(標 copy)的 R2/R3 判定,
+# 而站別定義檔 `.agents/pipeline-stages.yaml` 同樣標 `copy` ——
+# 「帶走測試卻不帶走它驗的檔案」那個形狀在這裡不成立。
+# 測試本身不讀這個 repo 的定義內容:每一格自己建臨時 git repo、
+# 自己寫 index 與工作樹兩版定義,`ROOT` / `STAGES_DEF` / `LEGACY_LIST` /
+# `PIPELINE` 四個都 patch 到那個臨時 repo。
+tests/test_stage_defs_source.py copy
 tests/test_shadow.py            copy
 tests/test_edit_result.py       copy
 tests/test_scanner.py           copy
