@@ -21,9 +21,11 @@
 >   `mode_pre_commit` 接線**驗證(2026-09-15,見〈#10 的修法方向〉與〈#10 的落地〉);
 >   **真正掛 hook 後的 `git commit` 端對端驗證【未做】**。
 >   **基準身分驗證不在 D 的範圍內** —— 那個缺口在**票 141**。
-> - **#8–#9(站別定義的來源)**:**已裁決採 B3**(2026-09-22,見〈#8/#9 的裁決〉)。
->   **紅燈與實作【尚未動工】** —— `gate.py` 一個字未改、正式測試未寫。
->   ⚠ **「已裁決」不是「已修復」**,兩者之間還隔著紅燈、實作與驗證。
+> - **#8–#9(站別定義的來源)**:**B3 已實作**(2026-09-22,見〈#8/#9 的落地〉)——
+>   按時點分流、單次 `check()` 共用定義、預設維持工作樹;紅燈先行與
+>   W8 錯誤變體驗證都已完成。
+>   ⚠ **真正掛 hook 的【違規】`git commit` 端對端驗證【未做】** ——
+>   證據到「隔離 `mode_pre_commit()`」為止。
 > - **#11–#14**:**尚未動工。**
 > - **第 15 格(`leak_scan`)**:**攻擊模型未驗。**
 >
@@ -574,6 +576,119 @@ ADR 0006 要防的是「被 R3 擋下的人在清單末尾加一行就豁免到�
 | **1** | 上一輪 rig 缺陷 2 | `mode_pre_commit` 的正反控**必須印出 `staged_paths()` 逐項核對** —— 目標沒進 staged 清單時,輸出**看起來完全正常**,而被量的東西不在裡面 |
 | **2** | 上一輪 rig 缺陷 1 | legacy 清單的 go-live sha 要填**真的 commit**,否則 R6 會蓋掉整個 `mode_pre_commit` 輸出 |
 | **3** | 規格第 5 條 | 「不合法 `source` 值不得靜默退回工作樹」**需要一個自己的案例** —— 原型現在的 `else` 正是會靜默退回的那種寫法,**它不會自己出聲** |
+
+---
+
+### #8/#9 的落地(**2026-09-22,B3 已實作**)
+
+**報告**:`.dev/reports/2026-09-22T045732Z-…-fixture-and-implementation.md` 與
+同日的 W8 補強輪(⚠ `.dev/` 不進版控,只在本機 ⇒ 關鍵數字抄進本節)。
+
+#### 1. 實作(`.claude/hooks/gate.py`)
+
+| 項目 | 落地內容 |
+|---|---|
+| **按時點分流** | `check()` 內 `load_stage_defs(source="index" if at_commit else "worktree")` —— 寫入讀工作樹、提交讀 **index** |
+| **單次 `check()` 共用定義** | `check()` 內**只呼叫一次**;#8(可寫站 / `src_write_scope`)與 #9(`exempts_r3_in_scope`)共用同一個 `stages` ⇒ 「同一次判定用兩版定義」**構造不出來** |
+| **預設維持工作樹** | 簽章 `load_stage_defs(source="worktree")`;`stage_allows_src_write()`(`status` 的 authority 欄位,票 99)裸呼叫,**一個字沒動** |
+| **`pipeline.json`** | **語意不變**,仍是本機執行狀態來源 |
+| **#10** | **語意不變** —— `legacy_exemption(r, path=LEGACY_LIST)` 仍讀工作樹,一行未動 |
+| **fail-closed 不回退** | `source="index"` 讀不到 / 解析失敗 ⇒ 回 err;**沒有 else 回退工作樹** |
+| **不合法 `source`** | `if source not in STAGE_DEF_SOURCES: return [], "", "內部錯誤:未知的站別定義來源 …"` —— 出聲,不靜默 |
+| **來源提示** | `STAGE_DEF_INDEX_NOTE` + `with_stage_def_source(msg, at_commit)`,掛在 `[R2/fail-closed]` / `[R2/範圍]` / `[R2/commit]` / `[R3] 找不到對應測試`;**`at_commit` 為假時一個字不加** |
+
+#### 2. 路徑衍生的**時機**(2026-09-22 澄清)
+
+```python
+STAGES_DEF_REL = ".agents/pipeline-stages.yaml"
+STAGES_DEF = os.path.join(ROOT, *STAGES_DEF_REL.split("/"))
+```
+
+**裁決逐字**:工作樹路徑**允許在模組載入時**由 `ROOT` 與 `STAGES_DEF_REL` 衍生,
+**保留 `STAGES_DEF` 可單獨替換**的既有測試方式;
+**不要求載入後只改 `ROOT` 就自動重算 `STAGES_DEF`。**
+
+⚠ **這是規格時機的澄清,而原先的測試契約比它強** ——
+`RootDerive` 原本要求「只 patch `ROOT`,呼叫時重算」。
+**本輪調整了那條測試的契約,不得寫成斷言完全沒有放寬。**
+改寫後的 `TestTheSpecifiedWorktreeDefinitionIsRead` 驗的是
+**明確指定的工作樹定義檔確實被讀取**(較弱),
+並補一條反控(指定的那一份不存在 ⇒ fail-closed,不得改讀真 repo)。
+
+**為什麼不採較強的那一版**:票 99 那組把 `STAGES_DEF` 指到
+`tmp_path/pipeline-stages.yaml`(**不在任何 `.agents/` 佈局下**)而不動 `ROOT` ——
+改成呼叫時由 `ROOT` 衍生會讓其中 **2 條直接紅、另 2 條變成假綠**,
+而那組守的正是 R2 的 fail-closed 面。
+
+#### 3. W8 的實際守衛(**常數對不對 ≠ 讀取有沒有用它**)
+
+新增 `TestContractTheRelativeConstantIsTheRealSource`(3 條),驗的是**依賴**:
+
+| 條 | 守什麼 |
+|---|---|
+| `test_the_worktree_path_is_derived_from_root_and_the_constant` | `STAGES_DEF == join(ROOT, *STAGES_DEF_REL)` —— 載入時的衍生關係 |
+| `test_the_index_read_follows_the_relative_constant` | 把 `STAGES_DEF_REL` 換到 `.agents/moved-stages.yaml`,**index 讀取要跟著換** |
+| `test_the_index_read_reports_the_constant_it_used` | 常數指到 index 裡沒有的路徑 ⇒ fail-closed,訊息**點名那個路徑** |
+
+**錯誤變體驗證(隔離副本,`git worktree --detach`;未用 `git stash`、未改 master 狀態)**:
+
+| 變體 | 結果 |
+|---|---|
+| 基準(正式實作) | `31 passed`,rc=0 |
+| **A:保留正確相對常數,工作樹路徑改成固定絕對路徑** | **1 紅** —— `test_the_worktree_path_is_derived_from_root_and_the_constant` |
+| **B:保留正確相對常數,index 讀取改回獨立路徑字面** | **2 紅** —— 兩條 index 常數測試 |
+| 還原後 | `31 passed`,rc=0 |
+
+⇒ **「只新增一個正確常數、實際讀取仍用另一份字面」這個形狀被擋住了。**
+
+⚠ 契約測試**不再因介面缺失而跳過**:介面已落地,缺失時以明確斷言失敗
+(`assert hasattr(gate, "STAGES_DEF_REL")`),**不以 `AttributeError` 充當證據**。
+⚠ **舊碼那兩條 `skip` 不得宣稱為有效紅燈。**
+
+#### 4. fixture 舊碼回歸
+
+`tests/test_gate.py` 的 `_r8_index_repo` 與 `world` 兩個 fixture 補上
+**原封複製自真 repo** 的站別定義(工作樹 + `git add` 進 index),
+`_install_stage_defs()` 逐項核對內容一致。
+**目標檔案的 staged / 未 staged 狀態、歷史、provenance 條件一律未動。**
+
+| 檢查 | 結果 |
+|---|---|
+| 共用這兩個 fixture 的 **74 個節點**,用**當時未改的 `gate.py`** 跑 | **74 passed**,rc=0 |
+| 目標分支仍可抵達(`trace`,不靠訊息比對) | 三個情境皆 `['R2', 'R3', 'R8']` |
+| 票 99 四條 | **5 passed**;另以探針確認它們**實際解出的是各自指定的定義**(`['X','Y']` / `['X']`),缺失路徑回 err ⇒ **沒有假綠** |
+| 刻意測「定義缺失」的 `test_an_unreadable_definition_refuses` | **未被補檔掩蓋**(它自己 patch `STAGES_DEF`、走預設 `worktree`) |
+
+⚠ **舊碼仍綠只證明這些回歸檢查通過,不宣稱完整語意等價。**
+
+#### 5. 全套數字
+
+| 階段 | 結果 | pytest 行程退出碼 |
+|---|---|---|
+| 補 fixture(`gate.py` 未動) | `13 failed, 1853 passed, 5 skipped, 3 xfailed` | 1 |
+| 完整 B3(W8 補強前) | `2 failed, 1866 passed, 3 skipped, 3 xfailed` | 1 |
+| **W8 補強後(本節定案)** | **`1 failed, 1871 passed, 3 skipped, 3 xfailed`** | **1** |
+
+**節點數 1,878**(= 1 + 1,871 + 3 + 3)。
+案例**淨增 4 支**(移除 `RootDerive` 1 支;新增工作樹契約 2 支 + W8 3 支):
+1,874 + 4 = 1,878。**沒有為了維持舊數字而合併、刪除或跳過任何測試。**
+
+**唯一的既有紅是票 137**(`test_the_list_is_what_the_generator_would_produce`,
+legacy 清單少 `g1_guard.py`)——
+⚠ **因此不得稱「全套全綠」**,而是「符合預期,含票 137 那一條既有紅」。
+
+#### 6. 訊息措辭的一件事
+
+**承諾句型的樣式檢查也命中了否定句,後續調整措辭。**
+
+(第一版寫「也不表示 `git add` 之後就會通過」,雖是否定句,
+仍整串命中「`git add` … 就 … 通過」的樣式;改為
+「暫存之後是否通過,仍取決於定義本身怎麼寫」。)
+
+#### 7. 仍未做
+
+**真正掛 hook 的【違規】`git commit` 端對端驗證 —— 未做。**
+本輪的提交時點證據到「隔離 `mode_pre_commit()`」為止。
 
 ---
 
