@@ -2327,6 +2327,317 @@ class TestUntestedByDecisionCannotBeSelfServed:
             "     宣告檔:%s" % (led, (before, after), decl))
 
 
+class TestUpstreamProvenanceJudgesTheStagedContent:
+    """票 133 #13 —— R3 的上游成品豁免在**提交時點**應比對 index 那一份。
+
+    ## 量到的(2026-09-23,隔離上下游 repo)
+
+    | 構造 | 站別 | #14 | #13 | `check(at_commit=True)` |
+    |---|---|---|---|---|
+    | 工作樹=上游 · index 漂移 | `spec`(前置站) | `False` | **沒跑** | `[R2/commit]`(`trace:['R2']`) |
+    | 同上內容 | `implement` | 沒跑 | **`True`** | **`None` 放行** |
+    | index=上游 · 工作樹漂移 | `implement` | 沒跑 | `False` | `[R3]` |
+
+    ⇒ **#13 比對的是工作樹那一份**:index 漂移卻放行(漏),
+    index 等於上游卻被擋(誤擋)。
+
+    ⚠ **可達性要分開處理**:站別是**前置站**時 #14 先跑,index 漂移 ⇒ #14 失敗
+    ⇒ `[R2/commit]` 直接返回 ⇒ **#13 到不了**。本類要觀測 #13 的格子
+    一律用 `implement`(非前置站,#14 不會被呼叫),並在前提裡寫明。
+
+    ## 本輪的範圍
+
+    只改**本地受判內容**(輸入①)的來源,且**只在 `check()` 的提交時點**。
+    **provenance 紀錄、上游位置指標、上游 git 物件的取得方式一律不動。**
+    ⚠ **`upstream_backed(raw=None)` 的語意是「讀工作樹」** ——
+    實作不得把「index 讀取失敗」的 `None` 當成 `raw` 傳進去,
+    那會**意外啟動工作樹 fallback**。
+
+    **紅燈階段(2026-09-23)**:寫下時 `gate.py` 未改。
+    """
+
+    UP_SRC = "def f():\n    return 1\n"
+    DRIFT = "def f():\n    return 999\n"
+
+    def _world(self, tmp_path, monkeypatch, index_body, worktree_body,
+               stage="implement", add=True, upstream_body=None,
+               with_test_file=False, rel="pkg/thing.py"):
+        """上游 + 下游兩個**真** git repo。回 `(up, down, sha)`。
+
+        `add=False` ⇒ 目標**不在 index 裡**(用於 index 讀取失敗那幾格)。
+        `with_test_file` ⇒ 下游建 `tests/test_thing.py`(供 R3 前半通過)。
+
+        ⚠ **`add=False` 的格子必須用 `research/` 底下的路徑**:
+        目標不在 index 時,**R8 會先以 `[R8/fail-closed]` 返回**
+        (它同樣判 index),#13 根本到不了 —— 那樣測到的不是本格。
+        `_under_research()` 為真時 R8 整段跳過,而站別 `implement` 的
+        `exempts_r3_in_scope` 不成立,所以 #9 也不會搶先豁免。
+        """
+        up, down = tmp_path / "up", tmp_path / "down"
+        for r in (up, down):
+            r.mkdir()
+            for c in ("init -q", "config user.email t@t", "config user.name t",
+                      "config core.autocrlf false"):
+                subprocess.run(["git"] + c.split(), cwd=str(r),
+                               capture_output=True)
+            defs = io.open(str(ROOT / ".agents" / "pipeline-stages.yaml"),
+                           encoding="utf-8").read()
+            dp = r / ".agents" / "pipeline-stages.yaml"
+            dp.parent.mkdir(parents=True, exist_ok=True)
+            io.open(str(dp), "w", encoding="utf-8", newline="\n").write(defs)
+
+        upp = up / pathlib.Path(rel)
+        upp.parent.mkdir(parents=True, exist_ok=True)
+        io.open(str(upp), "w", encoding="utf-8",
+                newline="\n").write(self.UP_SRC if upstream_body is None
+                                    else upstream_body)
+        _git133(["add", "-A"], up)
+        _git133(["commit", "-qm", "up"], up)
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(up),
+                             capture_output=True).stdout.decode().strip()
+
+        _git133(["add", "-A"], down)
+        _git133(["commit", "-qm", "seed"], down)
+        p = down / pathlib.Path(rel)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        io.open(str(p), "w", encoding="utf-8", newline="\n").write(index_body)
+        if add:
+            _git133(["add", "-f", "--", rel], down)
+        io.open(str(p), "w", encoding="utf-8", newline="\n").write(worktree_body)
+        if with_test_file:
+            (down / "tests").mkdir(exist_ok=True)
+            io.open(str(down / "tests" / "test_thing.py"), "w",
+                    encoding="utf-8", newline="\n").write("x = 1\n")
+
+        (down / ".dev").mkdir(exist_ok=True)
+        io.open(str(down / ".dev" / "pipeline.json"), "w", encoding="utf-8",
+                newline="\n").write(json.dumps(
+                    {"current_stage": stage, "feature": "f", "ticket_id": None},
+                    ensure_ascii=False))
+        io.open(str(down / ".dev" / "provenance.jsonl"), "w", encoding="utf-8",
+                newline="\n").write(json.dumps(
+                    {"path": rel, "upstream_path": rel,
+                     "upstream_commit": sha}, ensure_ascii=False) + "\n")
+        ptr = tmp_path / "upstream-roots.txt"
+        io.open(str(ptr), "w", encoding="utf-8", newline="\n").write(
+            "UPSTREAM_ROOT=%s\n" % str(up).replace("\\", "/"))
+
+        monkeypatch.setattr(gate, "ROOT", str(down))
+        monkeypatch.setattr(gate, "PIPELINE", str(down / ".dev" / "pipeline.json"))
+        monkeypatch.setattr(gate, "PROVENANCE",
+                            str(down / ".dev" / "provenance.jsonl"))
+        monkeypatch.setattr(gate, "UPSTREAM_ROOTS", str(ptr))
+        monkeypatch.setattr(gate, "EXEMPTION_LOG",
+                            str(tmp_path / "no-ledger.jsonl"))
+        monkeypatch.setattr(gate, "LEGACY_LIST",
+                            str(down / ".agents" / "no-legacy.txt"))
+        monkeypatch.chdir(down)
+        return up, down, sha
+
+    def _premises(self, down, stage="implement", staged=True,
+                  rel="pkg/thing.py"):
+        """前提。**站別非前置站** ⇒ #14 不會被呼叫 ⇒ #13 到得了。"""
+        ids = [s["id"] for s in gate.load_stage_defs(source="index")[0]]
+        first_writable = next(
+            (i for i, s in enumerate(gate.load_stage_defs(source="index")[0])
+             if s.get("allows_src_write")), len(ids))
+        pre_implement = set(ids[:first_writable]) - {"idle"}
+        assert (stage in pre_implement) is False, (
+            u"前提垮了:站別 %s 是前置站,#14 會先返回,#13 到不了" % stage)
+        assert gate.rel(rel) == rel
+        assert ((rel in gate.staged_paths(cwd=str(down))) is staged)
+
+    # ── 1. 工作樹漂移、index = 上游 ⇒ 應授予 ──────────────────────────────
+    def test_a_drifted_worktree_does_not_block_an_identical_index(
+            self, tmp_path, monkeypatch):
+        """🔴 index 逐位元組等於上游 ⇒ 提交時應授予上游成品豁免。
+
+        現行讀工作樹(已漂移)⇒ 不豁免 ⇒ 被 R3 擋,
+        **而要進這次 commit 的那一份確實等於上游**。
+        """
+        _up, down, _sha = self._world(tmp_path, monkeypatch,
+                                      self.UP_SRC, self.DRIFT)
+        self._premises(down)
+        msg = gate.check("pkg/thing.py", None, at_commit=True, trace=[],
+                         exemptions=[])
+        assert msg is None, (
+            u"index 那一份等於上游物件,卻沒拿到上游成品豁免 —— "
+            u"判的是工作樹(已漂移)那一份:%r" % msg)
+
+    # ── 2. 工作樹 = 上游、index 漂移 ⇒ 不得授予 ──────────────────────────
+    def test_an_identical_worktree_does_not_excuse_a_drifted_index(
+            self, tmp_path, monkeypatch):
+        """🔴 index 已漂移 ⇒ 提交時**不得**授予上游成品豁免。
+
+        現行讀工作樹(等於上游)⇒ 豁免到手 ⇒ 放行,
+        **而進歷史的是漂移過的那一份**。
+        """
+        _up, down, _sha = self._world(tmp_path, monkeypatch,
+                                      self.DRIFT, self.UP_SRC)
+        self._premises(down)
+        msg = gate.check("pkg/thing.py", None, at_commit=True, trace=[],
+                         exemptions=[])
+        assert msg, (
+            u"index 那一份已經漂移,卻仍拿到上游成品豁免並放行 —— "
+            u"判的是工作樹(等於上游)那一份")
+
+    # ── 3. 兩份相同 ⇒ 結果不得改變 ───────────────────────────────────────
+    def test_both_identical_stays_exempt(self, tmp_path, monkeypatch):
+        """**反控**:兩份都等於上游 ⇒ 仍然豁免。"""
+        _up, down, _sha = self._world(tmp_path, monkeypatch,
+                                      self.UP_SRC, self.UP_SRC)
+        self._premises(down)
+        assert gate.check("pkg/thing.py", None, at_commit=True, trace=[],
+                          exemptions=[]) is None
+
+    def test_both_drifted_stays_blocked(self, tmp_path, monkeypatch):
+        """**反控**:兩份都漂移 ⇒ 仍然不豁免。
+
+        少了這兩格,「提交時一律豁免」或「一律不豁免」各自能讓 1 或 2 變綠。
+        """
+        _up, down, _sha = self._world(tmp_path, monkeypatch,
+                                      self.DRIFT, self.DRIFT)
+        self._premises(down)
+        msg = gate.check("pkg/thing.py", None, at_commit=True, trace=[],
+                         exemptions=[])
+        assert msg and "R3" in msg, msg
+
+    # ── 4. 同一次 check 裡 #14 與 #13 都到得了 ───────────────────────────
+    def test_both_cells_in_one_check_compare_the_index_bytes(
+            self, tmp_path, monkeypatch):
+        """🔴 **同一次 `check()`** 裡 #14 與 #13 先後執行,兩格都應比對 index。
+
+        構造:站別 `spec`(前置站 ⇒ #14 會跑)· index = 上游 ⇒ **#14 成立**
+        ⇒ 它**不 return**、落到 R3 ⇒ #13 接著跑。工作樹刻意漂移。
+
+        插樁記錄**每一次實際比對的本地位元組**。
+
+        ⚠ **本格不宣稱「共用一次快照」** —— 實測是
+        `upstream_backed` 在同一次 `check()` 裡被呼叫**兩次**,各讀各的。
+        本格要的只是:**兩次比對的本地位元組都等於 index 那一份**。
+        """
+        _up, down, _sha = self._world(tmp_path, monkeypatch,
+                                      self.UP_SRC, self.DRIFT, stage="spec")
+        idx = gate.staged_blob("pkg/thing.py")
+        assert idx is not None
+        seen = []
+        real = gate.upstream_backed
+
+        def spy(rel_path, raw=None):
+            seen.append(raw)
+            return real(rel_path, raw=raw)
+
+        monkeypatch.setattr(gate, "upstream_backed", spy)
+        gate.check("pkg/thing.py", None, at_commit=True, trace=[], exemptions=[])
+        assert len(seen) == 2, (
+            u"#14 與 #13 沒有在同一次 check 裡先後執行(呼叫 %d 次)" % len(seen))
+        assert all(r == idx for r in seen), (
+            u"有一次比對用的不是 index 那一份位元組:%r" % (seen,))
+
+    # ── 5. 寫入時點 / 直接裸呼叫 ⇒ 既有行為不變 ──────────────────────────
+    def test_at_write_time_behaviour_is_unchanged(self, tmp_path, monkeypatch):
+        """**反控**:寫入時點仍走工作樹語意(工作樹等於上游 ⇒ 豁免)。"""
+        _up, down, _sha = self._world(tmp_path, monkeypatch,
+                                      self.DRIFT, self.UP_SRC)
+        self._premises(down)
+        assert gate.check("pkg/thing.py", "x = 1\n", at_commit=False,
+                          trace=[], exemptions=[]) is None
+
+    def test_a_bare_call_still_reads_the_worktree(self, tmp_path, monkeypatch):
+        """**反控**:`upstream_backed(rel)` **不傳 `raw`** ⇒ 仍讀工作樹。
+
+        這一支的語意不得被改動 —— `raw=None` 就是「讀工作樹」,
+        而實作若把「index 讀不到」的 `None` 當 `raw` 傳進來,
+        會**意外啟動這條 fallback**(見類別 docstring)。
+        """
+        _up, down, _sha = self._world(tmp_path, monkeypatch,
+                                      self.DRIFT, self.UP_SRC)
+        ok, why = gate.upstream_backed("pkg/thing.py")
+        assert ok is True, (u"裸呼叫不再讀工作樹:%r" % (why,))
+
+    # ── 6. index 讀取失敗 / 空位元組 ─────────────────────────────────────
+    def test_an_index_that_cannot_be_read_does_not_grant(self, tmp_path,
+                                                         monkeypatch):
+        """🔴 目標**不在 index 裡** ⇒ 不得授予上游成品豁免,**不得退回工作樹**。
+
+        工作樹刻意**等於上游** —— 退回工作樹的實作會在這裡拿到假綠燈。
+
+        **路徑用 `research/thing.py`**:目標不在 index 時 R8 會先以
+        `[R8/fail-closed]` 返回,#13 根本到不了(實測過)。
+        """
+        rel = "research/thing.py"
+        _up, down, _sha = self._world(tmp_path, monkeypatch,
+                                      self.UP_SRC, self.UP_SRC, add=False,
+                                      rel=rel)
+        self._premises(down, staged=False, rel=rel)
+        assert gate.staged_blob(rel) is None, u"前提垮了:它在 index 裡"
+        msg = gate.check(rel, None, at_commit=True, trace=[], exemptions=[])
+        assert msg, (
+            u"它不在 index 裡,卻仍拿到上游成品豁免 —— 讀不到不等於「與上游相同」")
+        assert "R8" not in msg, (
+            u"被 R8 搶先返回了,測到的不是 #13:%r" % msg)
+
+    def test_empty_staged_bytes_are_content_not_failure(self, tmp_path,
+                                                        monkeypatch):
+        """🔴 **`b""` 是內容,不是失敗**:index 空、上游也空 ⇒ 應授予。
+
+        工作樹刻意漂移 —— 現行讀工作樹會判成漂移而不豁免。
+        本格與上一格合起來把「成功讀得空位元組」與「讀取失敗」分開。
+        """
+        _up, down, _sha = self._world(tmp_path, monkeypatch,
+                                      u"", self.DRIFT, upstream_body=u"")
+        self._premises(down)
+        assert gate.staged_blob("pkg/thing.py") == b"", u"前提垮了:index 不是空的"
+        msg = gate.check("pkg/thing.py", None, at_commit=True, trace=[],
+                         exemptions=[])
+        assert msg is None, (
+            u"index 是空位元組、上游也是空的 ⇒ 兩者相同,卻沒豁免 —— "
+            u"把「讀得空內容」當成「讀取失敗」了:%r" % msg)
+
+    # ── 契約:index 失敗後**繼續一般 R3 判定**,不新增提前擋下出口 ────────
+    def test_an_unreadable_index_still_runs_the_normal_r3(self, tmp_path,
+                                                          monkeypatch):
+        """**契約格**:index 讀不到 ⇒ #13 不豁免,但**仍跑完一般 R3** 並正常放行。
+
+        #13 後面**沒有**像 #11 那樣的「下一道豁免」,所以這裡配置的是
+        **一般 R3 的合格條件**:對應測試存在 + 紅燈紀錄合格。
+
+        **替身範圍(逐項)**:只換 `gate.redlight_missing` -> `None`(視為合格)。
+        ⚠ **那是替身提供的合格判定,不等於驗證了真實的紅燈證據** ——
+        本格**不宣稱**紅燈紀錄本身被驗過。
+
+        ⚠ **舊碼下本格可以是綠的**(舊碼讀工作樹、也漂移 ⇒ 同樣不豁免),
+        不為了紅燈而改造結果。它抓的是「index 失敗就提前擋下」的實作。
+        """
+        rel = "research/thing.py"
+        _up, down, _sha = self._world(tmp_path, monkeypatch,
+                                      self.UP_SRC, self.DRIFT, add=False,
+                                      with_test_file=True, rel=rel)
+        self._premises(down, staged=False, rel=rel)
+        monkeypatch.setattr(gate, "redlight_missing",
+                            lambda *a, **k: None)          # 替身:視為合格
+        msg = gate.check(rel, None, at_commit=True, trace=[], exemptions=[])
+        assert msg is None, (
+            u"index 讀不到之後沒有走完一般 R3 —— 多了一個提前擋下的出口:%r" % msg)
+
+    def test_an_unreadable_index_is_still_refused_when_r3_does_not_qualify(
+            self, tmp_path, monkeypatch):
+        """**契約反控**:同樣讀不到,但**不符合**一般 R3 條件 ⇒ 由原有 R3 拒絕。
+
+        少了它,「index 讀不到就一律放行」也能讓上一格綠。
+        """
+        rel = "research/thing.py"
+        _up, down, _sha = self._world(tmp_path, monkeypatch,
+                                      self.UP_SRC, self.DRIFT, add=False,
+                                      with_test_file=False, rel=rel)
+        self._premises(down, staged=False, rel=rel)
+        msg = gate.check(rel, None, at_commit=True, trace=[], exemptions=[])
+        assert msg and "R3" in msg, (
+            u"不符合一般 R3 條件卻放行了:%r" % msg)
+        assert "R8" not in msg, (
+            u"被 R8 搶先返回了,測到的不是一般 R3:%r" % msg)
+
+
 class TestBarePackageMarkerJudgesTheStagedContent:
     """票 133 #11 —— 純套件標記豁免在**提交時點**判的應是 index 那一份。
 

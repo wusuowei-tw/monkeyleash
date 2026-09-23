@@ -2959,7 +2959,33 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
         # 而 `(False, "…")` 在 `if` 裡**是真的** —— 忘了解包的話,
         # 每一個同步進來的檔案都會拿到豁免,fail-closed 整條翻成 fail-open,
         # 而測試全綠、訊息什麼都不說。這是簽名改動最貴的失敗方式(票 13 C)。
-        prov_ok, prov_why = upstream_backed(r)
+        # 來源綁**執行上下文**(票 133 #13,裁決 2026-09-23):
+        #   提交 -> 判 **index** 那一份(要進這次 commit 的就是它)
+        #   寫入 -> 維持工作樹(`upstream_backed` 的既有語意,一個字沒動)
+        #
+        # 量到的:舊版兩個時點都讀工作樹,於是
+        #   工作樹=上游、index 漂移 -> **放行**,而進歷史的是漂移那一份;
+        #   index=上游、工作樹漂移 -> **誤擋**,而要進 commit 的那一份確實等於上游。
+        #
+        # ⚠ **`None` 不得當成 `raw` 傳進去** —— `upstream_backed(raw=None)`
+        # 的語意是「讀工作樹」,傳 `None` 會**意外啟動那條 fallback**,
+        # 於是「取不到 index」變成「拿工作樹來比對」,方向正好相反。
+        # 所以這裡先接住 `None`,**自己回一個不豁免的結果**。
+        #
+        # **不提前返回**(與 #11 同語意):#13 是**豁免**不是擋 ——
+        # 取不到就不授予,仍交由後續的一般 R3 判定處理。
+        if at_commit:
+            _staged = staged_blob(r)
+            if _staged is None:
+                # **措辭只說「取不到」**:`staged_blob` 回 `None` 有兩種可能 ——
+                # 目標不在 index,**或** git 本身執行失敗。
+                # 從這裡分不出是哪一種,所以不斷言「它不在 index 裡」。
+                prov_ok, prov_why = False, (
+                    "無法取得 %s 的 index 內容 —— 判不出它是不是同步成品。" % r)
+            else:
+                prov_ok, prov_why = upstream_backed(r, raw=_staged)
+        else:
+            prov_ok, prov_why = upstream_backed(r)
         if prov_ok:
             # 編號不記路徑(票 116 B-8)。
             note_exemption(exemptions, r, base, ticket,
