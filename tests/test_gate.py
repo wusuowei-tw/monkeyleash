@@ -2327,6 +2327,300 @@ class TestUntestedByDecisionCannotBeSelfServed:
             "     宣告檔:%s" % (led, (before, after), decl))
 
 
+class TestBarePackageMarkerJudgesTheStagedContent:
+    """票 133 #11 —— 純套件標記豁免在**提交時點**判的應是 index 那一份。
+
+    ## 量到的(2026-09-23,隔離 repo,`check(at_commit=True)`)
+
+    | 案例 | index | 工作樹 | #11 回傳 | `check()` |
+    |---|---|---|---|---|
+    | 甲 | 空 | 含 `def` | `False` | `[R3]` 擋(**誤擋**) |
+    | 乙 | 含 `def` | 空 | `True` | `None` **放行** |
+    | 丙1 | 空 | 空 | `True` | `None` |
+    | 丙2 | 含 `def` | 含 `def` | `False` | `[R3]` |
+
+    ⇒ **它跟著工作樹走**。乙 是會漏的那一格:`git add` 一個含 `def` 的
+    `__init__.py`,再把工作樹改空,**豁免到手而進歷史的是含 `def` 那一份**;
+    乙 的隔離 `mode_pre_commit()` 退出碼是 **0**。
+
+    ## 本輪的範圍(**只動來源,不動判準**)
+
+    **「純套件標記」的判準逐字不變**:`os.path.basename == "__init__.py"` 且
+    **未匹配** `^\\s*(def|class)\\s`。
+    ⚠ **那不等於「完全沒有程式碼」** —— `import` / 賦值 / `lambda` /
+    **`async def`** 在現行判準下都算純標記(實測)。本輪**不碰**這件事。
+
+    **紅燈階段(2026-09-23)**:寫下時 `gate.py` 未改,甲 / 乙 /「index 讀不到」
+    三格是紅的;其餘為既有行為的反控。
+    """
+
+    EMPTY = u""
+    WITH_DEF = u"def f():\n    return 1\n"
+
+    def _repo(self, tmp_path, monkeypatch, rel, index_body, worktree_body,
+              add=True, stage="implement"):
+        """真 git repo;`index_body` 進 index,`worktree_body` 留工作樹。
+
+        `add=False` 用於「index 讀不到」那一格 —— 檔案在磁碟上但**不在 index 裡**。
+        **其他豁免全部指向不存在的位置**,所以判決歸因得了 #11。
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            subprocess.run(["git"] + c.split(), cwd=str(repo), capture_output=True)
+        # 站別定義要進 index(B3 之後提交時點讀它,否則 R2 就 fail-closed)
+        defs = io.open(str(ROOT / ".agents" / "pipeline-stages.yaml"),
+                       encoding="utf-8").read()
+        dp = repo / ".agents" / "pipeline-stages.yaml"
+        dp.parent.mkdir(parents=True, exist_ok=True)
+        io.open(str(dp), "w", encoding="utf-8", newline="\n").write(defs)
+        _git133(["add", "-A"], repo)
+        _git133(["commit", "-qm", "seed"], repo)
+
+        p = repo / pathlib.Path(rel)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        io.open(str(p), "w", encoding="utf-8", newline="\n").write(index_body)
+        if add:
+            _git133(["add", "-f", "--", rel], repo)
+        io.open(str(p), "w", encoding="utf-8", newline="\n").write(worktree_body)
+
+        (repo / ".dev").mkdir(exist_ok=True)
+        io.open(str(repo / ".dev" / "pipeline.json"), "w", encoding="utf-8",
+                newline="\n").write(json.dumps(
+                    {"current_stage": stage, "feature": "f", "ticket_id": None},
+                    ensure_ascii=False))
+
+        monkeypatch.setattr(gate, "ROOT", str(repo))
+        monkeypatch.setattr(gate, "PIPELINE", str(repo / ".dev" / "pipeline.json"))
+        monkeypatch.setattr(gate, "EXEMPTION_LOG",
+                            str(tmp_path / "no-ledger.jsonl"))          # #12
+        monkeypatch.setattr(gate, "PROVENANCE",
+                            str(repo / ".dev" / "no-provenance.jsonl"))  # #13
+        monkeypatch.setattr(gate, "UPSTREAM_ROOTS",
+                            str(tmp_path / "no-upstream-roots.txt"))
+        monkeypatch.setattr(gate, "LEGACY_LIST",
+                            str(repo / ".agents" / "no-legacy.txt"))     # #10
+        monkeypatch.chdir(repo)
+        return repo
+
+    def _premises(self, repo, rel, expect_staged=True):
+        staged = sorted(gate.staged_paths(cwd=str(repo)))
+        assert gate.rel(rel) == rel, u"前提垮了:路徑逃出 repo(%r)" % gate.rel(rel)
+        assert (rel in staged) is expect_staged, (
+            u"前提垮了:staged 清單=%r(期望目標在其中=%s)" % (staged, expect_staged))
+        assert gate.legacy_exemption(rel, path=gate.LEGACY_LIST) == (False, None)
+        assert gate.upstream_backed(rel)[0] is False
+        assert gate.logged_exemption_backed(rel, "__init__") is False
+
+    # ── 乙:會漏的那一格 ──────────────────────────────────────────────────
+    def test_at_commit_a_def_in_the_index_is_not_a_bare_marker(
+            self, tmp_path, monkeypatch):
+        """🔴 **乙**:index 含 `def`、工作樹空 ⇒ **不得**由 #11 發出純標記豁免。
+
+        現行讀工作樹(空)⇒ 豁免到手 ⇒ `check()` 放行,
+        **而要進這次 commit 的是含 `def` 那一份**。
+        """
+        rel = "pkg/__init__.py"
+        repo = self._repo(tmp_path, monkeypatch, rel, self.WITH_DEF, self.EMPTY)
+        self._premises(repo, rel)
+        msg = gate.check(rel, None, at_commit=True, trace=[], exemptions=[])
+        assert msg, (
+            u"index 那一份含 `def`,卻由 #11 發出純標記豁免並放行 —— "
+            u"判的是工作樹(空)那一份,而進歷史的是 index 那一份")
+
+    # ── 甲:會誤擋的那一格 ────────────────────────────────────────────────
+    def test_at_commit_an_empty_index_is_a_bare_marker(
+            self, tmp_path, monkeypatch):
+        """🔴 **甲**:index 空、工作樹含 `def` ⇒ 應由 #11 判為純標記。
+
+        現行讀工作樹(含 `def`)⇒ 不豁免 ⇒ 被 R3 擋,
+        **而要進這次 commit 的是空的那一份**(它確實是純標記)。
+        """
+        rel = "pkg/__init__.py"
+        repo = self._repo(tmp_path, monkeypatch, rel, self.EMPTY, self.WITH_DEF)
+        self._premises(repo, rel)
+        msg = gate.check(rel, None, at_commit=True, trace=[], exemptions=[])
+        assert msg is None, (
+            u"index 那一份是空的(純標記),卻被擋下 —— "
+            u"判的是工作樹(含 `def`)那一份:%r" % msg)
+
+    # ── 丙:兩份相同,結果不得改變 ────────────────────────────────────────
+    def test_at_commit_both_empty_stays_exempt(self, tmp_path, monkeypatch):
+        """**丙1 反控**:兩份都空 ⇒ 仍然豁免(既有結果不得被改壞)。"""
+        rel = "pkg/__init__.py"
+        repo = self._repo(tmp_path, monkeypatch, rel, self.EMPTY, self.EMPTY)
+        self._premises(repo, rel)
+        assert gate.check(rel, None, at_commit=True, trace=[],
+                          exemptions=[]) is None
+
+    def test_at_commit_both_with_def_stays_blocked(self, tmp_path, monkeypatch):
+        """**丙2 反控**:兩份都含 `def` ⇒ 仍然不豁免。
+
+        少了丙,「提交時一律豁免」或「一律不豁免」各自能讓甲或乙變綠。
+        """
+        rel = "pkg/__init__.py"
+        repo = self._repo(tmp_path, monkeypatch, rel, self.WITH_DEF,
+                          self.WITH_DEF)
+        self._premises(repo, rel)
+        msg = gate.check(rel, None, at_commit=True, trace=[], exemptions=[])
+        assert msg and "R3" in msg, msg
+
+    # ── 寫入反控:明確傳入的 content 不得被任何一版蓋過 ──────────────────
+    def test_at_write_time_explicit_empty_content_wins(self, tmp_path,
+                                                       monkeypatch):
+        """**寫入反控**:`content=""` ⇒ 純標記,**工作樹與 index 都含 `def` 也不算數**。"""
+        rel = "pkg/__init__.py"
+        repo = self._repo(tmp_path, monkeypatch, rel, self.WITH_DEF,
+                          self.WITH_DEF)
+        self._premises(repo, rel)
+        assert gate.is_bare_package_marker(rel, u"") is True
+        assert gate.check(rel, u"", at_commit=False, trace=[],
+                          exemptions=[]) is None
+
+    def test_at_write_time_explicit_def_content_wins(self, tmp_path,
+                                                     monkeypatch):
+        """**寫入反控**:`content` 含 `def` ⇒ 不是純標記,**兩版都空也不算數**。"""
+        rel = "pkg/__init__.py"
+        repo = self._repo(tmp_path, monkeypatch, rel, self.EMPTY, self.EMPTY)
+        self._premises(repo, rel)
+        assert gate.is_bare_package_marker(rel, self.WITH_DEF) is False
+        msg = gate.check(rel, self.WITH_DEF, at_commit=False, trace=[],
+                         exemptions=[])
+        assert msg and "R3" in msg, msg
+
+    def test_at_write_time_content_none_still_reads_the_worktree(
+            self, tmp_path, monkeypatch):
+        """**既有行為的釘子**:寫入時點 `content=None` ⇒ **仍讀工作樹**。
+
+        本輪只動提交時點;寫入時點沒有 index 這回事(檔案可能還沒 `git add`)。
+        """
+        rel = "pkg/__init__.py"
+        repo = self._repo(tmp_path, monkeypatch, rel, self.WITH_DEF, self.EMPTY)
+        self._premises(repo, rel)
+        # 工作樹是空的 ⇒ 讀工作樹就該判成純標記
+        assert gate.is_bare_package_marker(rel, None) is True
+        # **入口也要驗** —— 只斷言 helper 的話,呼叫端把寫入時點一起改掉
+        # 不會有任何東西出聲(index 那一份含 `def`,改讀 index 就會變成不豁免)。
+        assert gate.check(rel, None, at_commit=False, trace=[],
+                          exemptions=[]) is None, (
+            u"寫入時點 content=None 不再走工作樹語意 —— 呼叫端被一起改掉了")
+
+    # ── index 讀不到:不得當成空檔、也不得退回工作樹發豁免 ────────────────
+    def test_an_index_that_cannot_be_read_does_not_grant_the_exemption(
+            self, tmp_path, monkeypatch):
+        """🔴 **index 讀不到** ⇒ **不得**取得 #11 豁免。
+
+        構造:檔案在磁碟上、**不在 index 裡**,工作樹刻意放**空**的那一份 ——
+        退回工作樹的實作會在這裡拿到一個假綠燈。
+
+        **路徑用 `research/__init__.py`**:`R8` 對 `research/` 底下的檔案整段跳過,
+        所以判決不會被 `[R8/fail-closed]` 搶先(站別是 `implement`,
+        #9 的 `exempts_r3_in_scope` 不成立,所以也不會被 #9 豁免)。
+
+        ⚠ **本格只釘「不能因此取得 #11 豁免」**。
+        「立即回錯誤」還是「繼續既有後續判定」**本輪不裁** ——
+        兩者都能讓本格綠,差別見報告。
+        ⚠ **「成功讀得空字串」與「讀取失敗」是兩件事**:前者由丙1 涵蓋(該豁免),
+        本格是後者(不得豁免)。
+        """
+        rel = "research/__init__.py"
+        repo = self._repo(tmp_path, monkeypatch, rel, self.EMPTY, self.EMPTY,
+                          add=False)
+        self._premises(repo, rel, expect_staged=False)
+        assert gate.staged_text(rel)[0] is None, u"前提垮了:它竟然在 index 裡"
+        msg = gate.check(rel, None, at_commit=True, trace=[], exemptions=[])
+        assert msg, (
+            u"它不在 index 裡,卻仍由 #11 發出純標記豁免並放行 —— "
+            u"讀不到不等於空檔")
+
+    def test_an_unreadable_index_still_lets_a_later_exemption_run(
+            self, tmp_path, monkeypatch):
+        """**契約格:區分甲案(提前返回)與乙案(交給後續判定)。**
+
+        裁決(2026-09-23)採**乙案**:#11 無法確認資格就**不授予**,
+        **不回訊息、不提前返回**,仍交由後續規則判定。
+
+        構造:index 讀不到(檔案不在 index 裡)**且**配置一條有效的後續豁免
+        —— 這裡用 **#12**(`logged_exemption_backed`:帳本紀錄 + 票在 HEAD)。
+
+        | 實作 | 預期 |
+        |---|---|
+        | **甲案**(index 失敗就提前返回) | #12 **沒機會跑** ⇒ 被擋 ⇒ **本格紅** |
+        | **乙案**(本輪裁決) | #11 不豁免、#12 跑並放行 ⇒ **本格綠** |
+
+        ⚠ **工作樹刻意放含 `def` 的那一份**,所以**舊碼**(讀工作樹)也會讓 #11
+        不豁免 ⇒ **舊碼下本格是綠的**。它抓的是「把 index 失敗寫成提前返回」
+        這種錯誤實作,**不是**舊碼的來源缺陷(那三格另有紅燈)。
+
+        **觀測範圍**:`is_bare_package_marker` 與 `logged_exemption_backed`
+        各被**包一層記錄**(呼叫真的那一支、原樣回傳)——
+        **是插樁不是替身**,判定完全沒有被換掉。
+        """
+        rel = "research/__init__.py"
+        base = "__init__"
+        ticket_rel = ".scratch/f/issues/01-x.md"
+        repo = self._repo(tmp_path, monkeypatch, rel,
+                          self.EMPTY, self.WITH_DEF, add=False)
+
+        # 後續豁免(#12):票進 HEAD 且列出該模組 + 帳本有對應紀錄
+        t = repo / pathlib.Path(ticket_rel)
+        t.parent.mkdir(parents=True, exist_ok=True)
+        t.write_text(u"# 票\n\n**Untested by decision:** %s\n" % base,
+                     encoding="utf-8")
+        # **只 add 票那一個路徑** —— `git add -A` 會把目標檔案也一起放進 index,
+        # 而本格的前提正是「目標**不在** index 裡」(下面有 assert 擋著)。
+        _git133(["add", "--", ticket_rel], repo)
+        _git133(["commit", "-qm", "宣告進 HEAD"], repo)
+        led = pathlib.Path(gate.EXEMPTION_LOG)
+        led.parent.mkdir(parents=True, exist_ok=True)
+        led.write_text(json.dumps(
+            {"file": rel, "module": base, "declared_in": ticket_rel},
+            ensure_ascii=False) + "\n", encoding="utf-8")
+
+        # 前提
+        assert gate.staged_text(rel)[0] is None, u"前提垮了:它竟然在 index 裡"
+        assert gate.committed_declaration(ticket_rel) == {base}, u"票沒進 HEAD"
+        assert gate.logged_exemption_backed(rel, base) is True, (
+            u"前提垮了:後續豁免(#12)本身不成立,本格就分不出甲乙")
+
+        seen = {"bare": [], "logged": []}
+        real_bare = gate.is_bare_package_marker
+        real_logged = gate.logged_exemption_backed
+
+        def spy_bare(*a, **kw):
+            r = real_bare(*a, **kw)
+            seen["bare"].append(r)
+            return r
+
+        def spy_logged(*a, **kw):
+            r = real_logged(*a, **kw)
+            seen["logged"].append(r)
+            return r
+
+        monkeypatch.setattr(gate, "is_bare_package_marker", spy_bare)
+        monkeypatch.setattr(gate, "logged_exemption_backed", spy_logged)
+
+        msg = gate.check(rel, None, at_commit=True, trace=[], exemptions=[])
+
+        assert seen["bare"] == [False], (
+            u"#11 竟然授予了豁免(或沒被評估):%r" % (seen["bare"],))
+        assert seen["logged"] == [True], (
+            u"後續豁免(#12)**沒有被呼叫** —— index 讀不到時提前返回了"
+            u"(甲案的形狀):%r" % (seen["logged"],))
+        assert msg is None, (
+            u"#11 不豁免、#12 成立,最終卻仍被擋:%r" % msg)
+
+    # ── 範圍:非 __init__.py 不受影響 ────────────────────────────────────
+    def test_a_non_init_file_is_never_a_bare_marker(self, tmp_path,
+                                                    monkeypatch):
+        """**範圍反控**:檔名不是 `__init__.py` ⇒ 兩個時點都不是純標記。"""
+        rel = "pkg/thing.py"
+        repo = self._repo(tmp_path, monkeypatch, rel, self.EMPTY, self.EMPTY)
+        self._premises(repo, rel)
+        assert gate.is_bare_package_marker(rel, u"") is False
+        assert gate.is_bare_package_marker(rel, None) is False
+
+
 class TestTheLedgerIsReadFromTheIsolatedConstant:
     """票 133 #12(裁決 2026-09-22 **甲案**):帳本的讀取路徑改用 `EXEMPTION_LOG`。
 

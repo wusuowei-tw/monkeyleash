@@ -2447,19 +2447,59 @@ def upstream_identical_staged(rel_path):
     return upstream_backed(rel_path, raw=raw)
 
 
-def is_bare_package_marker(rel_path, content):
+def is_bare_package_marker(rel_path, content, at_commit=False):
     """__init__.py 且不含任何 def/class —— 純套件標記,沒有行為可測。
 
     放進去任何邏輯就不再是標記,R3 立刻恢復適用(fail-closed)。
+
+    ## 來源綁**執行上下文**(票 133 #11,裁決 2026-09-23)
+
+      `content` 有給值        -> 用它(**兩個時點都是**,行為一個字沒動)。
+      `content is None` + 提交 -> 讀 **index**(`staged_text`)。
+      `content is None` + 寫入 -> 讀**工作樹**(既有行為,一個字沒動)。
+
+    **寫入時點沒有 index 這回事** —— 檔案可能還沒 `git add`。
+
+    量到的(隔離 repo,`check(at_commit=True)`):舊版在提交時讀工作樹,
+    於是 `git add` 一個含 `def` 的 `__init__.py`、再把工作樹改空,
+    **豁免到手而進歷史的是含 `def` 那一份**(隔離 `mode_pre_commit` 退出碼 0);
+    反方向則是誤擋(index 是空的純標記,卻因工作樹有 `def` 被擋)。
+
+    ## index 讀不到 -> **不豁免,但【不提前返回】**(乙案)
+
+    依據是**維持豁免鏈的語意**:#11 是**豁免**不是擋 ——
+    無法確認資格就**不授予**,**仍交由後續規則判定**
+    (票宣告 / #12 / #13 / R3 紅燈半)。
+    提前返回會**跳過那些本來合法的豁免**,那是另一條規則的職責範圍,
+    不該由本函式決定。
+
+    **「成功讀得空字串」與「讀取失敗」是兩件事**:
+    前者是**真的純標記**(`body` 為 `""` ⇒ 不匹配 ⇒ 豁免);
+    後者回 `False`(不豁免)。兩者在本函式裡分屬不同分支,沒有混在一起。
+
+    ## 判準本身**一個字沒改**
+
+    仍是「檔名為 `__init__.py` **且未匹配** `^\\s*(def|class)\\s`」。
+    ⚠ **那不等於「完全沒有程式碼」** —— `import` / 頂層賦值 / `lambda` /
+    `async def` 在這條判準下都算純標記。**那是判準問題,不是來源問題**,
+    不在本次修法範圍(登記在票 133 的待辦段)。
     """
     if os.path.basename(rel_path) != "__init__.py":
         return False
     body = content
     if body is None:
-        try:
-            body = io.open(os.path.join(ROOT, rel_path), encoding="utf-8").read()
-        except Exception:
-            return False
+        if at_commit:
+            # **不退回工作樹** —— 提交要判的是要進這次 commit 的那一份。
+            # 讀不到就不豁免,**但不回訊息、不提前返回**(見上面的乙案理由)。
+            body, why = staged_text(rel_path)
+            if why is not None:
+                return False
+        else:
+            try:
+                body = io.open(os.path.join(ROOT, rel_path),
+                               encoding="utf-8").read()
+            except Exception:
+                return False
     return not re.search(r"^\s*(def|class)\s", body or "", re.M)
 
 
@@ -2877,7 +2917,9 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
 
         # 豁免:票裡已宣告「不測」的模組(接縫裁決在 spec 階段就定了)。
         # 宣告來源是前一站的產物,不是這裡硬編碼;沒宣告就不豁免。
-        if is_bare_package_marker(r, content):
+        # **時點要傳進去**(票 133 #11):提交時 `content` 為 None,
+        # 判的必須是 index 那一份 —— 不傳的話它會讀工作樹,而那是另一份東西。
+        if is_bare_package_marker(r, content, at_commit):
             return None
 
         untested, declared_in = ticket_untested_modules(load_feature(), ticket)
