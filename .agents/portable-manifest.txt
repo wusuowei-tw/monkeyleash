@@ -105,6 +105,11 @@ scripts/skills-update.sh        copy
 # 讀本 repo 的 commit-map)。**標 skip 不標 copy**:照抄到下游,它會去打
 # 一個與那個 repo 無關的遠端,而且永遠通過 —— 一個永遠綠的檢查比沒有檢查更糟。
 scripts/ticket84-old-sha-probe.py skip
+# 權威層端對端驗證(票 133 六格 / 票 138)。**標 skip 不標 copy**:
+# 本輪只寫出來、**尚未實跑**,而它會在目標 repo 裡建臨時 clone、下真的 commit。
+# 照抄一支沒有被跑過的破壞性驗證腳本到下游,比不給它更糟。
+# 實跑並驗收之後再評估要不要改 copy —— 與它的說明文件同進退。
+scripts/e2e_authority_layer.py  skip
 
 # ── 綁死這個 repo,必須重新產生 ────────────────────────────────
 .agents/legacy-no-redlight.txt  generate
@@ -410,6 +415,11 @@ docs/audits/                    skip
 docs/handover/                  skip
 docs/agents/issue-tracker.md    copy
 docs/agents/domain.md           copy
+# 權威層端對端驗證的操作說明。**標 skip 不標 copy**,理由與
+# `scripts/e2e_authority_layer.py` 同一條:它依賴那支標 skip 的腳本,
+# 又引用了下游沒有的票號(133 / 138 / 141 / 143)。
+# **一份指向下游不存在的東西的說明,比沒有說明更糟。** 兩者同進退。
+docs/agents/authority-layer-e2e.md skip
 # 總指揮端的操作規則與角色方法論 —— **框架層,換一個下游 repo 仍然成立**,
 # 所以照上面那條判準落在 `copy`。
 #
