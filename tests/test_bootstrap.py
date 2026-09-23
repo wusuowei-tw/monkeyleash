@@ -178,7 +178,72 @@ GIT_USR_BIN = r"C:\Program Files\Git\usr\bin"
 GIT_PATH_SEP = ";"
 
 
-def find_sh(which=None, exists=None):
+# ── 第三層:從 `git --exec-path` 推出 Git 安裝根(票 133 端對端驗證帶出來)──
+#
+# 票 96 落地時自己標了一個已知缺口,逐字:
+#   「⚠ **已知不涵蓋**:裝在非預設磁碟/目錄、又剛好在一個 PATH 上沒有 sh 的殼裡跑。」
+#
+# **它被實測撞到了**(2026-09-23):`scripts/e2e_authority_layer.py` 第一次由
+# 裁決者在普通 PowerShell 跑,第 1 案就停在「找不到 sh/bash」——
+# 病因不是那個已知缺口(那台機器的 Git 就在預設位置),
+# 而是**那支腳本自己寫了 `shutil.which("sh")`,沒有用 `find_sh()`**。
+# 修法因此有兩半:腳本改用本函式(消掉第二份實作),
+# 而**本函式順手把那個已知缺口關掉** —— 位置不再只靠寫死的兩條路徑。
+#
+# **`git --exec-path` 為什麼推得出安裝根**:它回的是
+# `<root>/mingw64/libexec/git-core`(實測:`C:/Program Files/Git/mingw64/libexec/git-core`),
+# 往上三層就是 `<root>`。**git 自己知道它裝在哪** —— 問它比猜磁碟代號可靠。
+#
+# **順序是 PATH → 寫死 → 推導**,不是把推導插到前面:
+# 寫死那兩條有既有測試釘著(票 96 的 ①②),而**推導要跑一個子行程** ——
+# 排在後面表示常見情形不必付那個錢,也不會改掉既有測試問的問題。
+
+def git_exec_path(run=None):
+    """`git --exec-path` 的輸出。問不到一律 None(**不猜**)。"""
+    run = subprocess.run if run is None else run
+    try:
+        p = run(["git", "--exec-path"], capture_output=True)
+    except Exception:
+        return None
+    if getattr(p, "returncode", 1) != 0:
+        return None
+    out = p.stdout.decode("utf-8", "replace").strip()
+    return out or None
+
+
+def git_install_root(run=None):
+    """從 exec-path 往上三層推 Git 安裝根。推不出來回 None。
+
+    `<root>/mingw64/libexec/git-core` → `…/libexec` → `…/mingw64` → `<root>`。
+    """
+    ep = git_exec_path(run=run)
+    if not ep:
+        return None
+    d = ep.replace("\\", "/").rstrip("/")
+    for _ in range(3):
+        nd = os.path.dirname(d)
+        if not nd or nd == d:
+            return None                  # 爬到頂了 —— 版面不是預期的那個形狀
+        d = nd
+    return d
+
+
+def derived_candidates(run=None):
+    """(安裝根, [候選殼路徑]) —— 推不出來回 `(None, [])`。
+
+    **副檔名留著 `.exe`**:這一層依構造只在 Windows 版面成立,
+    而那個 `.exe` 就是讓它在 Linux 上不可能誤命中的東西
+    (`sh_env` 的成員判定也靠它 —— 見票 96 的反控 ⑥)。
+    """
+    root = git_install_root(run=run)
+    if not root:
+        return None, []
+    return root, [os.path.join(root, "usr", "bin", "sh.exe"),
+                  os.path.join(root, "bin", "sh.exe"),
+                  os.path.join(root, "bin", "bash.exe")]
+
+
+def find_sh(which=None, exists=None, run=None, tried=None):
     """依序找一個跑得動 `bootstrap.sh` 的殼:`sh` → `bash` → Git for Windows。
 
     ## 為什麼要有這個(票 96)
@@ -212,16 +277,27 @@ def find_sh(which=None, exists=None):
     # **PATH 優先。** 使用者的殼裡有什麼就用什麼 ——
     # 拿寫死的路徑去蓋過它,等於在一台刻意裝了別版 sh 的機器上偷換受測的殼。
     for name in ("sh", "bash"):
+        if tried is not None:
+            tried.append("PATH:%s" % name)
         found = which(name)
         if found:
             return found
     for path in GIT_FOR_WINDOWS:
+        if tried is not None:
+            tried.append(path)
+        if exists(path):
+            return path
+    # 第三層:問 git 自己裝在哪(票 96 自標的已知缺口,2026-09-23 關掉)
+    _root, cands = derived_candidates(run=run)
+    for path in cands:
+        if tried is not None:
+            tried.append(path)
         if exists(path):
             return path
     return None
 
 
-def sh_env(sh=None, environ=None):
+def sh_env(sh=None, environ=None, run=None):
     """跑 `bootstrap.sh` 的環境。**走 Git for Windows 的殼時要把它的工具鏈帶上。**
 
     ## 這是方向 3 自己帶出來的第二個缺口(實測撞到的)
@@ -246,10 +322,20 @@ def sh_env(sh=None, environ=None):
     sh = SH if sh is None else sh
     environ = os.environ if environ is None else environ
     env = dict(environ)
+    usr_bin = None
     if sh and sh in GIT_FOR_WINDOWS:
+        usr_bin = GIT_USR_BIN
+    elif sh:
+        # 推導來的殼要帶**它自己那個安裝根**的工具鏈,不是寫死的那一個 ——
+        # 不然「裝在非預設位置」那一格會叫得動 sh.exe 卻仍然沒有 `cut`,
+        # 而那正是票 96 第二個缺口的形狀,只是換了一個安裝位置。
+        root, cands = derived_candidates(run=run)
+        if root and sh in cands:
+            usr_bin = os.path.join(root, "usr", "bin")
+    if usr_bin:
         # **`GIT_PATH_SEP` 不是 `os.pathsep`** —— 這個分支依構造只在 Windows 上
         # 執行,接的是一個 Windows PATH。理由與那次 CI 紅寫在常數旁邊。
-        env["PATH"] = GIT_USR_BIN + GIT_PATH_SEP + env.get("PATH", "")
+        env["PATH"] = usr_bin + GIT_PATH_SEP + env.get("PATH", "")
     return env
 
 

@@ -303,6 +303,54 @@ def upstream_premises(pinned_sha):
     return out
 
 
+# ── 找殼:**重用票 96 的實作,不寫第三份** ───────────────────────────────
+#
+# 早一版這裡是 `shutil.which("sh") or shutil.which("bash")`。
+# **裁決者在普通 PowerShell 首跑,第 1 案就停在「找不到 sh/bash」** ——
+# 而同一台機器的 Git for Windows 就在預設位置,agent 環境的 PATH 剛好有 `sh`。
+# **那是環境等價性缺陷,不是 bootstrap.sh 的問題**,而且與票 96 同形:
+# 票 96 已經為 `tests/test_bootstrap.py` 解過同一個問題(方向 3)。
+#
+# 所以這裡**不再自己找殼**,直接用那一份:`find_sh()` 與 `sh_env()`。
+# `sh_env()` 是票 96 第二個缺口換來的 —— 走 Git for Windows 的殼時要把
+# 它自己的 coreutils 前置到 PATH,否則 `bootstrap.sh` 會紅在
+# `cut: command not found`,而**那種紅看起來像 bootstrap.sh 壞了**。
+#
+# ⚠ **已知的耦合,原地登記**:那兩支函式住在一個**測試模組**裡,
+# 而這裡是維運腳本。要它們搬到共用位置是另一個決定(會動到測試的佈局),
+# **本輪不做** —— 本輪的判準是「不要再寫第三份」。
+# 這個 import 壞掉會**當場大聲壞掉**(ImportError),不會靜默退化。
+
+def load_bootstrap_helpers():
+    """載入票 96 的 `find_sh` / `sh_env` / `derived_candidates`。"""
+    import importlib.util
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    p = os.path.join(repo, "tests", "test_bootstrap.py")
+    spec = importlib.util.spec_from_file_location("_e2e_sh_helpers", p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def sh_label(sh, hb, run=None):
+    """實際用的是哪一支 —— **只印相對於 Git 安裝根的位置**,不印完整路徑。
+
+    ⚠ `run` 要與呼叫 `find_sh()` 時用的**同一個** —— 兩邊各自推導一次的話,
+    「找到的那一支」與「標籤比對的候選集」可以來自不同的 Git 安裝根,
+    於是一支推導來的殼會被標成 `PATH:...`。**實測撞到過(在探針裡)。**
+    """
+    try:
+        root, cands = hb.derived_candidates(run=run)
+        if root and sh in cands:
+            return "<Git 安裝根>/%s" % os.path.relpath(sh, root).replace("\\", "/")
+        if sh in hb.GIT_FOR_WINDOWS:
+            base = os.path.dirname(os.path.dirname(os.path.dirname(sh)))
+            return "<Git 安裝根>/%s" % os.path.relpath(sh, base).replace("\\", "/")
+    except Exception:
+        pass
+    return "PATH:%s" % os.path.basename(sh)
+
+
 # ── clone 準備 ───────────────────────────────────────────────────────────
 #
 # **每個案例一個 clone。** 下面這份清單就是「案例可變狀態」的全部:
@@ -322,10 +370,20 @@ def prepare_clone(official, dest, pinned_sha, log):
     git(["-C", dest, "config", "user.name", "e2e-probe"], check=True)
     git(["-C", dest, "config", "user.email", "e2e-probe@example.invalid"], check=True)
 
-    sh = shutil.which("sh") or shutil.which("bash")
+    hb = load_bootstrap_helpers()
+    tried = []
+    sh = hb.find_sh(tried=tried)
     if not sh:
-        raise Misuse("找不到 sh/bash —— 跑不了 bootstrap.sh(權威層接不上)。")
-    b = subprocess.run([sh, "bootstrap.sh"], cwd=dest, capture_output=True)
+        raise Misuse(
+            "找不到可用的 sh/bash —— 跑不了 bootstrap.sh(權威層接不上)。\n"
+            "     **試過的每一個位置(依序)**:\n%s\n"
+            "     Git 安裝根(由 `git --exec-path` 往上三層推):%s"
+            % ("\n".join("       %s" % t for t in tried),
+               hb.git_install_root() or "(推不出來)"))
+    log["sh"] = sh_label(sh, hb)
+    log["sh_tried"] = tried
+    b = subprocess.run([sh, "bootstrap.sh"], cwd=dest, capture_output=True,
+                       env=hb.sh_env(sh=sh))
     log["bootstrap_rc"] = b.returncode
     log["bootstrap_out"] = (b.stdout + b.stderr).decode("utf-8", "replace")
     if b.returncode != 0:
@@ -355,6 +413,7 @@ def prepare_clone(official, dest, pinned_sha, log):
         "hook sha256": sha256_file(hook_path),
         "gate.py sha256": sha256_file(os.path.join(dest, GATE_REL)),
         "leak_scan.py sha256": sha256_file(os.path.join(dest, LEAK_REL)),
+        "bootstrap 用的殼": log.get("sh"),
     }
     log["ledger_base_lines"] = line_count(os.path.join(dest, LEDGER_REL))
     return dest
@@ -862,6 +921,24 @@ def main(argv=None):
     for k in ("指標檔格式合法(恰好一行)", "是 git repo", "commit:path 可讀",
               "上游位置識別(遮蔽)"):
         print("  %-22s : %s" % (k, up.get(k)))
+    print()
+
+    # 殼的前置:**一次就印出來**,不要等到第 1 案才發現找不到
+    hb = load_bootstrap_helpers()
+    tried = []
+    sh = hb.find_sh(tried=tried)
+    print("bootstrap.sh 的殼(票 96 的 find_sh,三層:PATH → 寫死 → git --exec-path):")
+    if sh:
+        print("  實際用的           : %s" % sh_label(sh, hb))
+        print("  工具鏈前置到 PATH  : %s"
+              % (hb.sh_env(sh=sh).get("PATH", "") !=
+                 os.environ.get("PATH", "")))
+    else:
+        print("  **找不到** —— 試過的每一個位置(依序):")
+        for t in tried:
+            print("       %s" % t)
+        print("  Git 安裝根(由 `git --exec-path` 往上三層推):%s"
+              % (hb.git_install_root() or "(推不出來)"))
     print()
 
     workroot = tempfile.mkdtemp(prefix=WORK_PREFIX)
