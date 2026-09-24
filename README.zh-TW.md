@@ -119,7 +119,7 @@ PowerShell 沒有 `sh` 這個指令。其餘指令任何殼都跑得動。
 | 測試 | `bootstrap.sh` 之後 | 為什麼 |
 |---|---|---|
 | `TestAuthorityLayerIsWired::test_this_repo_itself_is_wired` | **轉綠** | 它就是那條說「權威層沒裝」的測試。在裝好之前本來就該是紅的。 |
-| `TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce` | **仍然紅** | 它要 `.dev/test-runs.jsonl` 裡的排水證據,而那個檔 gitignored,clone 永遠不會有。這是**已知的缺口,不是你裝壞了**;CI 把這一條跳過,原因見票 54。 |
+| `TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce` | **已退場(票 137,2026-09-24)** | 它原本在**每一台**新機器上都紅:它要 `.dev/test-runs.jsonl` 裡的排水證據,而那個檔 gitignored、clone 永遠不會有(票 124)。排水紀錄現在是 `.agents/legacy-no-redlight.txt` 裡的 `# drained:` 註解,**跟著版控走**;接手的 `TestT137TheRealListUnderTheNewRule` **不讀那份帳本**。CI 也不再為此 deselect 任何測試。 |
 
 然後看 repo 的狀態:
 

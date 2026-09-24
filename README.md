@@ -128,7 +128,7 @@ kind of failure (measured on a clean clone, 2026-09-04):
 | Test | After `bootstrap.sh` | Why |
 |---|---|---|
 | `TestAuthorityLayerIsWired::test_this_repo_itself_is_wired` | **goes green** | It is the test that says *"the authority layer is not installed"*. It should be red until it is. |
-| `TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce` | **stays red** | It needs the drainage evidence in `.dev/test-runs.jsonl`, which is gitignored and therefore never present in a clone. A known gap, not a broken install; CI deselects it. See ticket 54. |
+| `TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce` | **retired (ticket 137, 2026-09-24)** | It used to stay red on *every* fresh machine, because it needed drainage evidence from `.dev/test-runs.jsonl` — gitignored, so never present in a clone (ticket 124). Drainage is now recorded as a `# drained:` comment inside `.agents/legacy-no-redlight.txt`, which travels with the repo, and its replacement `TestT137TheRealListUnderTheNewRule` does not read that ledger. CI no longer deselects anything for this. |
 
 Then look at the state of the repo:
 
