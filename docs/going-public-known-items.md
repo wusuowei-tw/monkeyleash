@@ -547,7 +547,7 @@ A 打中 0 處、原假設已落空、三個候選解釋仍在登記中未追。
 
 | # | 事實 | 範圍 | 狀態 | 期望 |
 |---|---|---|---|---|
-| K5 | ~~`tests.yml` 以 `--deselect` 排除 `tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce`~~ → **已解除(票 137,2026-09-24)**:該測試退場,兩處 `--deselect` 同刀移除;接手的完整性測試把排水紀錄改讀 `.agents/legacy-no-redlight.txt` 裡的 `# drained:` 註解,**不讀 `.dev/test-runs.jsonl`** | CI 的 `--deselect` **0 條**(`--ignore=tests/test_known_items_regression.py` 不在票 137 範圍,原地不動,見 K4) | **已解決** | — |
+| K5 | ~~`tests.yml` 以 `--deselect` 排除 `tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce`~~ → **已解除(票 137,2026-09-24)**:該測試退場,兩處 `--deselect` 同刀移除;接手的完整性測試把排水紀錄改讀 `.agents/legacy-no-redlight.txt` 裡的 `# drained:` 註解,**不讀 `.dev/test-runs.jsonl`** | CI 的 `--deselect` **0 條**(`--ignore=tests/test_known_items_regression.py` 不在票 137 範圍,原地不動,見 K4) | **已解決(票 137;CI run #147 驗證,SHA `b8d55d0…`)** | — |
 
 **排除的理由(2026-08-16,票 54 逐字)**:那條測試要
 `.dev/test-runs.jsonl` 裡的**排水證據**,而 `.gitignore` 第 30 行 `/.dev/*`
