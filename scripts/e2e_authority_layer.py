@@ -1315,10 +1315,18 @@ def main(argv=None):
                     help="只跑防誤用自檢,不跑任何案例")
     ap.add_argument("--smoke", action="store_true",
                     help="煙霧測試:**結果不是證據**,只用來排除腳本自身的機械問題")
+    ap.add_argument("--executor", default=None,
+                    help="正式模式下把執行者寫進報告。**自述,腳本無法驗證身分**;"
+                         "與 --smoke 互斥")
     a = ap.parse_args(argv)
 
     if a.self_check:
         return self_check()
+
+    if a.smoke and a.executor:
+        print("[拒絕] --smoke 與 --executor 互斥 —— 煙霧測試的執行者依定義是 agent,")
+        print("       填一個人名進去等於把「非證據」那一格洗掉。")
+        return 2
 
     if a.round == "B":
         print("[拒絕] B 輪(舊版 gate.py 對照)**本版未實作** ——")
@@ -1421,7 +1429,8 @@ def main(argv=None):
                           "%s-authority-layer-e2e-roundA%s.md"
                           % (stamp, "-SMOKE-not-evidence" if a.smoke else ""))
         write_report(rp, started, before, after, pinned, up, results, report,
-                     smoke=a.smoke)
+                     smoke=a.smoke, executor=a.executor,
+                     script_sha=sha256_file(os.path.abspath(__file__)))
         print()
         print("報告:%s" % rp)
 
@@ -1430,7 +1439,7 @@ def main(argv=None):
 
 
 def write_report(path, started, before, after, pinned, up, results, report,
-                 smoke=False):
+                 smoke=False, executor=None, script_sha=None):
     L = []
     A = L.append
     A(u"# 權威層端對端驗證 —— A 輪(六格)%s"
@@ -1449,6 +1458,10 @@ def write_report(path, started, before, after, pinned, up, results, report,
     A(u"**釘住的 SHA**:`%s`" % pinned)
     A(u"**B 輪**:未實作(【差異】由隔離層既有測試提供)")
     A(u"**執行者**:見下方〈執行安排〉")
+    A(u"**腳本版本**(這支 `.py` 的 sha256):`%s`" % (script_sha or u"(算不出)"))
+    A(u"⚠ **腳本版本與 `--sha` 指定的【受測版本】是兩件事** ——")
+    A(u"`--sha` 釘的是 clone 出來受檢的那個 commit;"
+      u"腳本本身是從正式 repo 的工作樹跑的,兩者可以不同步。")
     A(u"")
     A(u"## 正式 repo 進出")
     A(u"")
@@ -1526,13 +1539,40 @@ def write_report(path, started, before, after, pinned, up, results, report,
     A(u"")
     A(u"## 執行安排")
     A(u"")
-    A(u"本輪由**裁決者本人**在普通終端機執行。")
-    A(u"⚠ **repo 內找不到一份載明「REAL 層材料須來自本人或 CI」的協定文件** ——")
-    A(u"`docs/agents/friction-log.md` 只有一處提到「三層驗收(UNIT / CLEAN / REAL)」,")
-    A(u"`docs/tickets/framework-updates/22-machine-recovery-drill.md` 只記了一次 REAL 層通過,")
-    A(u"**兩處都沒有寫來源規則**。所以這一句是**本輪的口頭裁決**,不是可引用的條文。")
+    # ⚠ **旗標不是身分。** 早一版無論怎麼跑都印「本輪由裁決者本人執行」——
+    # 那在煙霧模式下是**假陳述**(跑的是 agent),而在正式模式下也只是
+    # 「沒有帶 --smoke」這個事實,**推不出是誰按的鍵**。
+    # 一份自己捏造執行者的報告,事後與真的執行紀錄長得一模一樣。
+    if smoke:
+        A(u"**本輪由 agent 執行。**")
+        A(u"")
+        A(u"> ⚠ **煙霧測試 —— 結果不是證據,【不作 REAL 結案材料】。**")
+        A(u"> 目的只有一個:排除腳本自身的機械問題"
+          u"(環境假設、防誤用誤擋、構造沒成立)。")
+    elif executor:
+        A(u"**正式驗收模式。執行者:%s**" % executor)
+        A(u"")
+        A(u"> ⚠ **這是【自述】** —— 由執行者在命令列以 `--executor` 填入,"
+          u"**腳本無法驗證身分**。")
+    else:
+        A(u"**正式驗收模式;執行者身分由本次人工執行紀錄確認。**")
+        A(u"")
+        A(u"> ⚠ **腳本未取得執行者身分** —— **不得僅憑「沒有帶 `--smoke`」"
+          u"就斷言是誰跑的**。")
+        A(u"> 要把身分寫進報告,用 `--executor <名字>`(那仍然是自述)。")
+    A(u"")
+    A(u"**REAL 層材料的來源限制**(條文位置:"
+      u"`docs/agents/commander.md` §六〈只有 Jeff 能做的〉)——")
+    A(u"REAL 層材料必須由**裁決者本人**或 **CI** 產生,**agent 自跑不算**。")
+    A(u"來源逐字:**本輪裁決確認;裁決者轉述此要求源於 2026-09-03,"
+      u"本次未取得該日原始裁決文件。**")
+    A(u"⚠ 不得把它引述成一條已查證的歷史條文。"
+      u"(**2026-09-24 才發現 repo 查無此條** ——"
+      u"`docs/agents/friction-log.md` 一處「三層驗收(UNIT / CLEAN / REAL)」、"
+      u"`docs/tickets/framework-updates/22-machine-recovery-drill.md:531,535`"
+      u"一次「REAL 層通過」,**兩處都沒有寫來源規則**。)")
     A(u"⚠ **人工按下按鈕不自動代表獨立設計或獨立驗收** —— "
-      u"本腳本由 agent 設計與撰寫,執行者是人;兩者不互相背書。")
+      u"本腳本由 agent 設計與撰寫;執行者與設計者不互相背書。")
     A(u"")
     A(u"## 結案")
     A(u"")
