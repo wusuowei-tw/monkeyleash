@@ -138,6 +138,71 @@ def _entries_from_lines(lines):
     return out
 
 
+# ── 排水紀錄(票 137 / C 最小版)────────────────────────────────────────────
+#
+# 格式的權威定義在票 137 票面。這裡只放解析所需的三個常數。
+_DRAIN_MARKER = "drained:"
+_DRAIN_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DRAIN_TICKET_RE = re.compile(r"^[A-Za-z0-9-]+$")
+
+
+def drained_from_lines(lines):
+    """從清單的行取**排水紀錄**。回 `(drained, malformed)`。
+
+        # drained: <path> <YYYY-MM-DD> <ticket>
+
+    ## ⚠ 消費端限制:**只有測試能用它**
+
+    **R3 / R6 / #10 任何判定都不得呼叫本函式。** 讀了就等於讓「清單以外的一行字」
+    也能影響豁免,而那正是 R6 存在的理由(ADR 0006:「被 R3 擋下的人只要在清單
+    末尾加一行就豁免到手」)。排水紀錄回答的是**「這一筆為什麼不在清單上」**,
+    不是**「這一筆能不能豁免」** —— 後者的答案永遠只從 `_entries_from_lines()` 來。
+
+    ## 為什麼是註解行
+
+    行首 `#` 是**構造保證**,不是紀律:`_entries_from_lines()` 對每一行做
+    `line.split("#", 1)[0]`,所以排水紀錄**無論寫什麼都不可能變成清單條目**。
+    「排水紀錄別被讀成豁免」這件事因此不需要任何人記得 —— 它做不到。
+
+    ## 格式錯誤的處置:**不生效,且出聲**
+
+    認得出是排水條目(以 `drained:` 起頭)但欄位不合格 ⇒ 進 `malformed`,
+    **不計入 `drained`**。
+
+      - **不計入**的方向是 fail-closed:少算一筆排水 ⇒ 完整性判定的
+        `expected - entries - drained` 非空 ⇒ **轉紅**,不會誤放行。
+      - **出聲**是因為**一個打錯字的控制行若靜默地不生效,它看起來與生效一模一樣**。
+
+    不以 `drained:` 起頭的註解 = 一般散文,**忽略,且不算格式錯誤** ——
+    舊的散文排水紀錄因此原地保留不刪(F-036),新舊並存。
+
+    ## 只解析傳入的 `lines`
+
+    **不自行開檔。** 呼叫端負責讀,而且該和 `_go_live_from_lines()` /
+    `_entries_from_lines()` **共用同一次讀取** —— 分開各讀一次會混出
+    「A 版的 sha × B 版的條目 × C 版的排水紀錄」,那份清單誰都沒寫過(票 55)。
+    """
+    drained = set()
+    malformed = []
+    for line in lines:
+        stripped = line.lstrip()
+        if not stripped.startswith("#"):
+            continue                                  # 條目或空行,不歸本函式管
+        body = stripped[1:].strip()
+        if not body.startswith(_DRAIN_MARKER):
+            continue                                  # 一般散文:忽略,不算錯
+        fields = body[len(_DRAIN_MARKER):].split()
+        if len(fields) != 3:
+            malformed.append(line)
+            continue
+        path, date, ticket = fields
+        if not _DRAIN_DATE_RE.match(date) or not _DRAIN_TICKET_RE.match(ticket):
+            malformed.append(line)
+            continue
+        drained.add(path.replace("\\", "/"))           # 與 _entries_from_lines 同一種正規化
+    return drained, malformed
+
+
 def read_go_live(path=None, cwd=None):
     """紅燈紀錄機制上線的 commit —— 清單的入場券就是「在這個 commit 的樹裡」。
     不用日期(可改),用樹(要改寫歷史才動得了)。

@@ -63,13 +63,16 @@ jobs:
       #              的個人 pattern 清單,而那個檔的內容本身就是要防的東西,不上 CI。
       #              (此處刻意用描述式、不寫字面路徑 —— 寫了會被
       #               test_nothing_reaches_for_the_user_layer 擋下,而它擋得對。)
-      #   --deselect 清單完整性那一條要 .dev/test-runs.jsonl 裡的排水證據,
-      #              而證據格式是票 49 的題目。等票 49 定案後回來重評。
+      #
+      # **`--deselect` 已於票 137 移除(2026-09-24)。** 原文是:
+      # 「清單完整性那一條要 .dev/test-runs.jsonl 裡的排水證據,而證據格式是票 49 的題目」。
+      # 那條測試已退場,替代品 TestT137TheRealListUnderTheNewRule **不讀帳本** ——
+      # 排水紀錄改成清單檔裡的 `# drained:` 註解,跟著版控走。
+      # ⇒ deselect 的整條理由(票 49 / 票 93)消失,不是「先放著」。
       - name: 跑測試
         run: |
           python -m pytest -q \
-            --ignore=tests/test_known_items_regression.py \
-            --deselect "tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce"
+            --ignore=tests/test_known_items_regression.py
 
       # 票 85:CI 那一側的**收集清單**。只收集不執行 ——
       # 它的用途是拿去跟本機那一份取差集,不是再驗一次測試。
@@ -92,8 +95,7 @@ jobs:
       - name: 收集清單(票 85)
         run: |
           python -m pytest --collect-only -q \
-            --ignore=tests/test_known_items_regression.py \
-            --deselect "tests/test_gate.py::TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce"
+            --ignore=tests/test_known_items_regression.py
 
       # 淨室:真的裝一次、讓每條規則各擋一次、再在新 repo 裡跑一次框架測試。
       #

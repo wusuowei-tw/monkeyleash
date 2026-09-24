@@ -845,31 +845,17 @@ class TestLegacyNoRedlightList:
     這份清單只豁免 R3 的**後半**(紅燈紀錄)。前半(對應測試檔須存在)照常適用。
     """
 
-    def test_the_list_is_what_the_generator_would_produce(self):
-        """清單必須等於「上線 commit 的樹 ∩ 原始碼 .py」,扣掉已排水的。
-
-        原本寫的是 `len(...) > 50` —— 那斷言的是**宿主 repo 有上百個既有 .py**
-        這個事實,不是框架的性質。裝到新專案(五個框架檔)就紅,而那個紅
-        與新專案無關,只會教人「這套測試本來就紅」(票 07、F-031)。
-
-        換成這條之後,兩種環境都成立,而且比原本強:它抓得到「手加一筆」
-        (超出生成集合)與「清單根本沒生成」(缺一大片且沒有排水證據)。
-        """
-        go_live = gate.read_go_live()
-        out = subprocess.run(["git", "ls-tree", "-r", "--name-only", go_live],
-                             cwd=str(ROOT), capture_output=True)
-        tree = [l.strip() for l in out.stdout.decode("utf-8", "replace").splitlines()
-                if l.strip()]
-        expected = {p for p in tree if p.endswith(".py") and gate.is_source_path(p)}
-        entries = gate.legacy_no_redlight()
-
-        assert entries <= expected, (
-            "清單裡有生成集合以外的項目(只減不增):%s" % sorted(entries - expected))
-        undrained = [p for p in sorted(expected - entries)
-                     if gate.redlight_missing(pathlib.Path(p).stem) is not None]
-        assert not undrained, (
-            "這些在上線 commit 的樹裡卻不在清單上,也沒有合格紅燈紀錄可以解釋 ——"
-            "清單沒生成完整:%s" % undrained)
+    # `test_the_list_is_what_the_generator_would_produce` **已退場**(票 137)。
+    #
+    # 它的方向二用 `redlight_missing()` 每次拿**當下的** `.dev/test-runs.jsonl`
+    # 重審一個 2026-08-14 的歷史決定,而那份帳本 gitignored、clone 不會帶走
+    # ⇒ 判定隨機器而變(票 124)。接手者是
+    # `TestT137TheRealListUnderTheNewRule::test_the_real_list_is_the_generator_output_minus_drained`,
+    # **接手對照逐項寫在票 137 票面〈舊測試退場〉**:
+    # 只減不增 → `violations["surplus"]`(同一個集合運算);
+    # 清單根本沒生成 → `assert why is None` + `violations["undrained"]`。
+    # 另外新增五項舊測試沒有的守備面(ls-tree rc、樹為空、
+    # `drained ∩ entries`、`drained ⊆ expected`、`malformed`)。
 
     def test_every_entry_existed_in_the_go_live_commit(self):
         """只減不增:新檔案永遠進不去,它不在那個 commit 的樹裡。
@@ -6269,3 +6255,293 @@ def test_d_mode_pre_commit_passes_an_entry_present_in_the_go_live_tree(
     rc = gate.mode_pre_commit()
     err = capsys.readouterr().err
     assert rc == 0, u"合法條目竟然被擋下:rc=%r\n%s" % (rc, err)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 票 137 / C 最小版 —— 排水紀錄改成機器可讀,完整性判定不再重審歷史
+# ══════════════════════════════════════════════════════════════════════════
+#
+# **本批只有測試,`gate.py` 一個字沒動(紅燈先行)。**
+# 因此 `gate.drained_from_lines` 這個名字**現在不存在**,每一條用到它的
+# 測試會以 `AttributeError` 紅。**那種紅是「介面尚未實作」,不是「行為判錯」** ——
+# 它證明不了三個集合約束有鑑別力,兩者在回報裡分開標(裁決四之一)。
+#
+# ## 為什麼要換掉舊的方向二
+#
+# 舊寫法是 `expected - entries` 裡每一筆都要 `redlight_missing(stem) is None`。
+# 那等於**每次執行都拿當下的 `.dev/test-runs.jsonl` 把一個歷史決定重審一次**,
+# 而那份帳本 gitignored、clone 不會帶走 ⇒ 判定隨機器而變(票 124)。
+# 新寫法問的是「**這筆少掉的,當初有沒有留下排水紀錄**」——
+# 紀錄住在清單檔自己裡面,跟著版控走。
+#
+# ⚠ **本批不宣稱重新驗證過 2026-08-14 那次排水的紅燈證據。**
+# 它把一個既有決定轉成機器可讀,**沒有**證明那個決定當初成立:
+# 歷史說明引用 `impl_hash` 相符,而觸發它的絆線沒有傳 `impl_rel`、
+# 用不到那條分支;桌機帳本未取得,真正的觸發原因仍未確認
+# (見 `.dev/reports/2026-09-24T063336Z-ticket137-recon-standalone.md` §4.3)。
+# **不得替歷史補造證據。**
+#
+# ## 格式(權威定義在票 137 票面,這裡重述到能寫出斷言為止)
+#
+#     # drained: <path> <YYYY-MM-DD> <ticket>
+#
+#   * **必須以 `#` 開頭** —— `_entries_from_lines()` 照舊把它丟掉,
+#     排水紀錄**永遠不會被讀成清單條目**。讀成條目就等於發一張豁免。
+#   * `#` 之後去空白,**必須以 `drained:` 起頭**才算排水條目。
+#   * `drained:` 之後以空白切成**恰好三段**:路徑、日期、票號。
+#   * 日期 `\d{4}-\d{2}-\d{2}`;票號 `[A-Za-z0-9-]+`(下游用自己的前綴,如 `TSA-001`)。
+#   * **認得出是排水條目、但欄位不合格 ⇒ malformed**,不計入 `drained`。
+#     方向是 fail-closed:少算一筆排水 ⇒ 完整性判定**轉紅**,不會誤放行。
+#     malformed 本身也回報,否則一個打錯字的控制行會靜默地不生效。
+#   * **不以 `drained:` 起頭的註解 ⇒ 一般散文,忽略,不算 malformed。**
+#     舊的散文排水紀錄因此原地保留不刪(F-036),新條目加在旁邊。
+#
+# 契約:`drained_from_lines(lines) -> (drained: set[str], malformed: list[str])`
+#   —— **只解析傳入的 lines,不自行開檔**(裁決二)。
+#
+# ## 消費端限制(裁決二之 2)
+#
+# **只有測試用它。** R3 / R6 / #10 任何判定都不得讀排水紀錄 ——
+# 讀了就等於讓「清單以外的一行字」也能影響豁免,而那正是 R6 存在的理由。
+
+_T137_GO_LIVE = "0123456789abcdef0123456789abcdef01234567"
+_T137_GO_LIVE_LINE = "# go-live: " + _T137_GO_LIVE
+
+
+def _t137_integrity(lines, expected):
+    """票 137 的完整性判定 —— **三個集合約束,不碰帳本**。
+
+    **`go_live` / `entries` / `drained` 全部從同一個 `lines` 解析**(裁決二):
+    工作樹的排水紀錄配 index 的條目會混出一份誰都沒寫過的清單(票 55 同形)。
+
+    **不呼叫 `redlight_missing()`、不讀 `.dev/test-runs.jsonl`。**
+    這不是風格:舊判定的環境相依整條就來自那一次呼叫。
+
+    回 violations dict,五個鍵都空才算通過。分成五個鍵而不是一個布林,
+    是為了讓每一條反控**指得出是哪一個約束擋的** —— 只回布林的話,
+    四條反控會因為同一個解析錯誤一起紅,而那證明不了鑑別力(裁決四之二)。
+    """
+    entries = gate._entries_from_lines(lines)
+    drained, malformed = gate.drained_from_lines(lines)
+    return {
+        # 原有斷言,一個字沒放寬:清單只減不增
+        "surplus": sorted(entries - expected),
+        # 方向二新寫法:少掉的每一筆都要有排水紀錄
+        "undrained": sorted(expected - entries - drained),
+        # 不能同時在清單又被排水 —— 那是兩種互斥的狀態
+        "both_listed_and_drained": sorted(drained & entries),
+        # 被排水的必須曾在 go-live 樹裡(否則排的是一個從來不在清單上的東西)
+        "drained_outside_go_live": sorted(drained - expected),
+        # 認得出是排水條目但格式不合法 —— 不生效,且不得靜默
+        "malformed": list(malformed),
+    }
+
+
+def _t137_empty(violations, *, allow=()):
+    """回傳非空的約束名稱,`allow` 裡的除外(給只針對單一約束的反控用)。"""
+    return {k: v for k, v in violations.items() if v and k not in allow}
+
+
+class TestT137DrainRecordsAreMachineReadable:
+    """排水紀錄的解析契約。
+
+    **這一組全部是純函式測試** —— 語料在測試裡自造,不開檔、不讀 `.dev/`。
+    """
+
+    def test_a_drain_record_is_never_read_as_a_list_entry(self):
+        """**這一條對現行碼就該是綠的。**
+
+        它釘的不是新功能,是**別讓新格式變成豁免**:新增一行 `# drained:` 之後,
+        `_entries_from_lines()` 仍須把它當註解丟掉。這一條若紅,
+        代表新格式把一個路徑偷渡進了豁免集合 —— 那比本票原本的紅嚴重一個量級。
+        """
+        lines = [
+            _T137_GO_LIVE_LINE,
+            "# drained: .claude/portable/g1_guard.py 2026-08-14 25",
+            "pkg/a.py",
+        ]
+        entries = gate._entries_from_lines(lines)
+        assert entries == {"pkg/a.py"}, (
+            "排水紀錄被讀成清單條目 —— 那等於發了一張豁免:%s" % sorted(entries))
+        assert ".claude/portable/g1_guard.py" not in entries
+
+    def test_parser_reads_a_well_formed_record(self):
+        lines = [
+            _T137_GO_LIVE_LINE,
+            "# drained: pkg/b.py 2026-08-14 25",
+            "pkg/a.py",
+        ]
+        drained, malformed = gate.drained_from_lines(lines)
+        assert drained == {"pkg/b.py"}, drained
+        assert malformed == [], malformed
+
+    def test_prose_comments_are_ignored_and_are_not_malformed(self):
+        """舊的散文排水紀錄原地保留(F-036),而它不該被報成格式錯誤。"""
+        lines = [
+            _T137_GO_LIVE_LINE,
+            "# 排水紀錄(只減不增,移除不需要批准 —— 那是清單的設計方向):",
+            "#   2026-08-14  移除 .claude/portable/g1_guard.py",
+            "#               票 25 的紅燈對著它在 HEAD 的內容發生過(impl_hash 相符兩筆),",
+            "pkg/a.py",
+        ]
+        drained, malformed = gate.drained_from_lines(lines)
+        assert drained == set(), "散文被當成排水條目:%s" % sorted(drained)
+        assert malformed == [], "散文被當成格式錯誤:%s" % malformed
+
+    @pytest.mark.parametrize("bad", [
+        "# drained: pkg/b.py",                        # 少兩段
+        "# drained: pkg/b.py 2026-08-14",             # 少票號
+        "# drained: pkg/b.py 2026-08-14 25 多餘",      # 多一段
+        "# drained: pkg/b.py 14-08-2026 25",          # 日期格式
+        "# drained: pkg/b.py 2026-8-14 25",           # 日期未補零
+        "# drained: pkg/b.py 2026-08-14 票25",         # 票號含非 ASCII
+        "# drained:",                                 # 空
+    ])
+    def test_malformed_records_are_not_drained_and_are_reported(self, bad):
+        """**fail-closed**:認得出是排水條目、格式不合法 ⇒ 不生效,且要出聲。
+
+        不生效的方向是安全的(少算一筆排水 ⇒ 完整性判定轉紅);
+        出聲是為了不讓一個打錯字的控制行靜默地什麼都不做。
+        """
+        lines = [_T137_GO_LIVE_LINE, bad, "pkg/a.py"]
+        drained, malformed = gate.drained_from_lines(lines)
+        assert drained == set(), "不合法的排水條目竟然生效了:%s" % sorted(drained)
+        assert malformed == [bad], malformed
+
+
+class TestT137ListIntegrityWithoutTheLedger:
+    """三個集合約束的正控與反控 —— **語料自造,不動 `.dev/test-runs.jsonl`**。"""
+
+    _EXPECTED = {"pkg/a.py", "pkg/b.py", "pkg/c.py"}
+
+    def test_integrity_holds_when_the_missing_entry_has_a_drain_record(self):
+        """**正控**:少掉的那一筆有排水紀錄 ⇒ 五個約束全過。"""
+        lines = [
+            _T137_GO_LIVE_LINE,
+            "# 一般散文,不該影響判定。",
+            "# drained: pkg/c.py 2026-08-14 25",
+            "pkg/a.py",
+            "pkg/b.py",
+        ]
+        v = _t137_integrity(lines, self._EXPECTED)
+        assert _t137_empty(v) == {}, v
+
+    def test_a_missing_entry_without_a_drain_record_is_caught(self):
+        """**反控**:清單少一筆、沒有排水紀錄 ⇒ `undrained` 響,且**只有它響**。"""
+        lines = [_T137_GO_LIVE_LINE, "pkg/a.py", "pkg/b.py"]
+        v = _t137_integrity(lines, self._EXPECTED)
+        assert v["undrained"] == ["pkg/c.py"], v
+        assert _t137_empty(v, allow=("undrained",)) == {}, (
+            "不只 undrained 響了 —— 這條反控分不出是哪個約束擋的:%s" % v)
+
+    def test_a_drain_record_outside_the_go_live_tree_is_caught(self):
+        """**反控**:排水紀錄指向一個從來不在 go-live 樹裡的路徑。
+
+        它本來就進不了清單,「排水」二字對它沒有意義 ——
+        放著不擋的話,這個欄位會變成一個誰都可以寫的自由文字欄。
+        """
+        lines = [
+            _T137_GO_LIVE_LINE,
+            "# drained: pkg/c.py 2026-08-14 25",
+            "# drained: pkg/never_existed.py 2026-08-14 25",
+            "pkg/a.py",
+            "pkg/b.py",
+        ]
+        v = _t137_integrity(lines, self._EXPECTED)
+        assert v["drained_outside_go_live"] == ["pkg/never_existed.py"], v
+        assert _t137_empty(v, allow=("drained_outside_go_live",)) == {}, v
+
+    def test_a_path_both_listed_and_drained_is_caught(self):
+        """**反控**:同一路徑既在清單又有排水紀錄 —— 兩種互斥狀態同時成立。
+
+        不擋的話,一筆排水紀錄可以在**不移除條目**的情況下寫上去,
+        而清單看起來仍然完整 —— 排水紀錄就退化成裝飾。
+        """
+        lines = [
+            _T137_GO_LIVE_LINE,
+            "# drained: pkg/b.py 2026-08-14 25",
+            "# drained: pkg/c.py 2026-08-14 25",
+            "pkg/a.py",
+            "pkg/b.py",
+        ]
+        v = _t137_integrity(lines, self._EXPECTED)
+        assert v["both_listed_and_drained"] == ["pkg/b.py"], v
+        assert _t137_empty(v, allow=("both_listed_and_drained",)) == {}, v
+
+    def test_a_surplus_entry_is_still_caught(self):
+        """**原有斷言沒有被放寬**:清單裡有生成集合以外的項目仍然擋。"""
+        lines = [_T137_GO_LIVE_LINE, "pkg/a.py", "pkg/b.py", "pkg/c.py", "pkg/zzz.py"]
+        v = _t137_integrity(lines, self._EXPECTED)
+        assert v["surplus"] == ["pkg/zzz.py"], v
+        assert _t137_empty(v, allow=("surplus",)) == {}, v
+
+    def test_integrity_never_consults_the_redlight_ledger(self, monkeypatch):
+        """**環境相依的那條線在這裡被剪斷**(裁決四之三)。
+
+        兩道:`redlight_missing` 一被呼叫就炸;`RUN_LOG` 指向不存在的路徑,
+        任何順手讀帳本的實作都會在這裡出聲而不是靜靜地回一個值。
+        """
+        def _boom(*a, **k):
+            raise AssertionError(
+                "完整性判定呼叫了 redlight_missing —— 本票就是在拿掉這個依賴")
+
+        monkeypatch.setattr(gate, "redlight_missing", _boom)
+        monkeypatch.setattr(gate, "RUN_LOG",
+                            str(ROOT / ".dev" / "t137-no-such-ledger.jsonl"))
+        lines = [
+            _T137_GO_LIVE_LINE,
+            "# drained: pkg/c.py 2026-08-14 25",
+            "pkg/a.py",
+            "pkg/b.py",
+        ]
+        v = _t137_integrity(lines, self._EXPECTED)
+        assert _t137_empty(v) == {}, v
+
+
+class TestT137TheRealListUnderTheNewRule:
+    """對**真實清單**跑新判定。
+
+    ⚠ **本輪預期紅,而且是兩層紅**:
+      1. `gate.drained_from_lines` 不存在(介面尚未實作);
+      2. 就算實作了,真實清單裡**還沒有** `# drained:` 條目 ——
+         那一行要等下一輪核准才寫(裁決三:本輪不動正式清單內容)。
+    兩層都消掉它才會綠。**不得為了讓它綠而提前改清單。**
+    """
+
+    def test_the_real_list_is_the_generator_output_minus_drained(self):
+        """**一次讀取**,`go_live` / `entries` / `drained` 全從同一份 `lines` 長出來。
+
+        讀不到、`git ls-tree` 失敗、樹是空的 —— **一律明確失敗**,
+        不得把失敗當成空集合而意外通過(那是 F-001 的形狀)。
+        """
+        lines, why = gate._legacy_list_lines()
+        assert why is None, (
+            "清單讀不到,判定不成立(fail-closed,不得當作空集合):%s" % why)
+        go_live = gate._go_live_from_lines(lines)
+        assert go_live, "清單裡沒有 `# go-live:` 基準 —— 判定不成立"
+
+        out = subprocess.run(["git", "ls-tree", "-r", "--name-only", go_live],
+                             cwd=str(ROOT), capture_output=True)
+        assert out.returncode == 0, (
+            "git ls-tree %s 失敗(rc=%r),判定不成立:%s"
+            % (go_live, out.returncode, out.stderr.decode("utf-8", "replace")))
+        tree = [l.strip() for l in out.stdout.decode("utf-8", "replace").splitlines()
+                if l.strip()]
+        assert tree, "go-live 樹是空的 —— 讀成功但沒有內容,判定不成立"
+
+        expected = {p for p in tree if p.endswith(".py") and gate.is_source_path(p)}
+        v = _t137_integrity(lines, expected)
+
+        assert not v["surplus"], (
+            "清單裡有生成集合以外的項目(只減不增):%s" % v["surplus"])
+        assert not v["undrained"], (
+            "這些在上線 commit 的樹裡、不在清單上,**也沒有排水紀錄**:%s"
+            % v["undrained"])
+        assert not v["both_listed_and_drained"], (
+            "這些同時在清單上又有排水紀錄,兩種狀態互斥:%s"
+            % v["both_listed_and_drained"])
+        assert not v["drained_outside_go_live"], (
+            "這些有排水紀錄,卻不在上線 commit 的樹裡:%s"
+            % v["drained_outside_go_live"])
+        assert not v["malformed"], (
+            "這些認得出是排水條目但格式不合法 —— 它們不生效:%s" % v["malformed"])
