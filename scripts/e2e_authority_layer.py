@@ -103,6 +103,33 @@ class Misuse(Exception):
 
 _SKIP_HOOK_FLAGS = {"--no-verify"}
 
+# ── `git config` 的讀取旗標與寫入旗標 ──────────────────────────────────────
+#
+# 早一版這裡是「`git config` 的 argv 只要提到 `core.hooksPath` 就擋」,
+# **於是它把【讀】也擋掉了** —— 裁決者第 2 次跑 A 輪,第 1 案停在
+# `prepare_clone()` 的正面斷言 `git config --get core.hooksPath`
+# (那一行的用途正好相反:它是**確認 bootstrap 真的設好了**)。
+#
+# **修法必須分得出讀與寫,而且不能因此放寬對寫的阻擋。**
+# 所以判準是 **fail-closed 的白名單**:
+#   提到 core.hooksPath 的 `git config`,**必須帶一個明確的讀取旗標**才放行;
+#   帶任何寫入旗標 -> 擋;**一個旗標都沒有 -> 也擋**。
+#
+# 最後那一條是刻意的:`git config core.hooksPath X` 是寫,
+# 而 `git config core.hooksPath`(不給值)是讀 —— **兩者只差一個位置參數**,
+# 從 argv 分辨要靠「有沒有多一個 token」,那種判準一改動就會翻向 fail-open。
+# 要求明確旗標的代價是**誤擋一種沒人在用的讀法**(本腳本一律用 `--get`),
+# 換到的是「新增一種寫法時不會自動獲得放行」。
+#
+# **兩個集合都用枚舉,不用 pattern** —— `git config` 的旗標是封閉集合,
+# 而「比對的漏是未知的,枚舉的漏是不存在的」(CLAUDE.md 常駐檢查項)。
+_CONFIG_READ_FLAGS = frozenset((
+    "--get", "--get-all", "--get-regexp", "--get-urlmatch",
+    "--get-color", "--get-colorbool", "--list", "-l"))
+_CONFIG_WRITE_FLAGS = frozenset((
+    "--add", "--unset", "--unset-all", "--replace-all",
+    "--rename-section", "--remove-section", "--edit", "-e"))
+
 
 def _assert_safe_git_argv(args):
     """檢查**實際 argv**,不是檢查原始碼字串。
@@ -143,10 +170,19 @@ def _assert_safe_git_argv(args):
             if t.startswith("-") and not t.startswith("--") and "n" in t[1:]:
                 raise Misuse("`git commit %s` 的短旗標含 n(= --no-verify)。" % t)
     # 本腳本自己永遠不設 hooksPath —— 那一步只由 `sh bootstrap.sh` 做
-    if sub == "config":
-        for t in toks:
-            if "core.hookspath" in t.lower():
-                raise Misuse("本腳本不得自己設定 core.hooksPath —— 那一步走 bootstrap.sh。")
+    if sub == "config" and any("core.hookspath" in t.lower() for t in toks):
+        writes = [t for t in toks if t in _CONFIG_WRITE_FLAGS]
+        reads = [t for t in toks if t in _CONFIG_READ_FLAGS]
+        if writes:
+            raise Misuse(
+                "本腳本不得自己【寫】core.hooksPath(旗標 %s)—— "
+                "那一步走 bootstrap.sh。" % ", ".join(writes))
+        if not reads:
+            raise Misuse(
+                "提到 core.hooksPath 的 `git config` 沒有明確的讀取旗標 —— "
+                "從 argv 分不出是讀還是寫,fail-closed 照擋。\n"
+                "     讀法請用 %s 之一。" % " / ".join(sorted(_CONFIG_READ_FLAGS)))
+        # 有讀取旗標、沒有寫入旗標 -> **放行**(這是正面斷言要用的那條路)
 
 
 def _assert_safe_env(env):
@@ -163,7 +199,14 @@ def _assert_safe_env(env):
 
 def git(args, cwd=None, extra_env=None, check=False):
     """唯一的 git 出入口。回 `CompletedProcess`(bytes)。"""
-    _assert_safe_git_argv(args)
+    # **把 argv 併進訊息** —— 第 2 次 A 輪的報告只寫了「不得自己設定
+    # core.hooksPath」,**沒有寫是哪一個子行程**,於是診斷要回頭讀原始碼才做得出來。
+    # 一個說不出自己在講哪一次呼叫的擋下訊息,會讓人去檢查錯的地方(票 13)。
+    try:
+        _assert_safe_git_argv(args)
+    except Misuse as e:
+        raise Misuse("%s\n     argv : %r\n     cwd  : %r"
+                     % (e, ["git"] + [str(a) for a in args], cwd))
     env = dict(os.environ)
     if extra_env:
         _assert_safe_env(extra_env)
@@ -880,6 +923,112 @@ def cleanup(workroot, official, marker_id, keep, report):
 
 # ── 主流程 ───────────────────────────────────────────────────────────────
 
+def self_check():
+    """防誤用檢查自己的自檢。**不跑任何案例、不碰 git 以外的東西。**
+
+    ⚠ 這證明的是「那些 argv/env 會不會被擋」,**不是整支腳本安全**。
+
+    住在腳本裡而不是某個臨時目錄:**一個只在作者機器上跑過一次的自檢,
+    下一次沒有人會跑。**
+    """
+    rows = []
+
+    def case(args, expect, label):
+        try:
+            _assert_safe_git_argv(args)
+            got = "放行"
+            why = ""
+        except Misuse as e:
+            got = "擋下"
+            why = str(e).splitlines()[0]
+        rows.append((label, expect, got, "✓" if got == expect else "✗", why))
+
+    # ── 跳過 hook ────────────────────────────────────────────────────
+    case(["-C", "x", "commit", "-m", "y", "--no-verify"], "擋下", "commit --no-verify")
+    case(["-C", "x", "commit", "-n", "-m", "y"], "擋下", "commit -n")
+    case(["-C", "x", "commit", "-nv", "-m", "y"], "擋下", "commit -nv(短旗標束含 n)")
+    case(["-C", "x", "commit", "-am", "y"], "放行", "commit -am(不含 n)")
+    case(["-C", "x", "commit", "-m", "y"], "放行", "一般 commit")
+    # ── 指令層覆寫 hooksPath ─────────────────────────────────────────
+    case(["-c", "core.hooksPath=/tmp/evil", "-C", "x", "commit", "-m", "y"],
+         "擋下", "-c core.hooksPath=")
+    case(["--config-env=core.hooksPath=EVIL", "commit"], "擋下", "--config-env hooksPath")
+    # ── ⭐ 讀 vs 寫(2026-09-24,A 輪第 2 次被誤擋換來的兩格)──────────
+    case(["-C", "x", "config", "--get", "core.hooksPath"],
+         "放行", "⭐ **讀** core.hooksPath(--get)")
+    case(["-C", "x", "config", "--get-all", "core.hooksPath"],
+         "放行", "⭐ 讀 core.hooksPath(--get-all)")
+    case(["-C", "x", "config", "core.hooksPath", ".githooks"],
+         "擋下", "⭐ **寫** core.hooksPath(位置參數)")
+    case(["-C", "x", "config", "--add", "core.hooksPath", ".githooks"],
+         "擋下", "⭐ 寫 core.hooksPath(--add)")
+    case(["-C", "x", "config", "--unset", "core.hooksPath"],
+         "擋下", "⭐ 寫 core.hooksPath(--unset)")
+    case(["-C", "x", "config", "--replace-all", "core.hooksPath", "x"],
+         "擋下", "⭐ 寫 core.hooksPath(--replace-all)")
+    case(["-C", "x", "config", "core.hooksPath"],
+         "擋下", "⭐ 無旗標(讀寫分不出)⇒ fail-closed")
+    # ── 不相干的 config 不受影響 ─────────────────────────────────────
+    case(["-C", "x", "config", "user.name", "e2e"], "放行", "config user.name(寫,不相干)")
+    case(["-C", "x", "config", "--get", "user.email"], "放行", "config --get user.email")
+    # ── 其他子命令 ───────────────────────────────────────────────────
+    case(["-C", "x", "clone", "--no-hardlinks", "a", "b"], "放行", "clone")
+    case(["-C", "x", "diff", "--cached", "--name-only"], "放行", "diff --cached")
+
+    print("=" * 96)
+    print("防誤用自檢 —— argv(⚠ 不宣稱整支腳本安全)")
+    print("=" * 96)
+    print("%-44s %-6s %-6s %-4s %s" % ("案例", "預期", "實際", "", "擋下訊息首行"))
+    print("-" * 96)
+    for label, expect, got, mark, why in rows:
+        print("%-44s %-6s %-6s %-4s %s" % (label, expect, got, mark, why[:44]))
+
+    env_rows = []
+
+    def env_case(env, expect, label):
+        try:
+            _assert_safe_env(env)
+            got = "放行"
+        except Misuse:
+            got = "擋下"
+        env_rows.append((label, expect, got, "✓" if got == expect else "✗"))
+
+    for k in ("GIT_CONFIG_COUNT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        env_case({k: "x"}, "擋下", "env %s" % k)
+    env_case({"FOO": "core.hooksPath=evil"}, "擋下", "env 值提到 hooksPath")
+    env_case({"GIT_TRACE2_EVENT": "t.jsonl"}, "放行", "env GIT_TRACE2_EVENT(追蹤用)")
+
+    print()
+    print("=" * 96)
+    print("防誤用自檢 —— env")
+    print("=" * 96)
+    for label, expect, got, mark in env_rows:
+        print("%-44s %-6s %-6s %s" % (label, expect, got, mark))
+
+    path_rows = []
+    for a, b, want, label in (
+            (r"C:\p\agent-gates", r"C:\p\agent-gates2", False,
+             "agent-gates2 不是 agent-gates 的子路徑(startswith 會判錯)"),
+            (r"C:\p\agent-gates", r"C:\p\agent-gates\sub", True, "真子路徑"),
+            (r"C:\p\agent-gates", r"C:\p\agent-gates", True, "同一個"),
+            (r"C:\p\agent-gates\sub", r"C:\p\agent-gates", False, "反向")):
+        got = is_ancestor_or_same(a, b)
+        path_rows.append((label, want, got, "✓" if got == want else "✗"))
+
+    print()
+    print("=" * 96)
+    print("路徑包含判定(比元件,不用 startswith)")
+    print("=" * 96)
+    for label, want, got, mark in path_rows:
+        print("%-62s want=%-5s got=%-5s %s" % (label, want, got, mark))
+
+    bad = ([r for r in rows if r[3] == "✗"] + [r for r in env_rows if r[3] == "✗"]
+           + [r for r in path_rows if r[3] == "✗"])
+    print()
+    print("整體 : %s" % ("全部符合預期" if not bad else "**有 %d 格不符預期**" % len(bad)))
+    return 0 if not bad else 1
+
+
 def official_state(official):
     return {
         "HEAD": gout(["-C", official, "rev-parse", "HEAD"]),
@@ -894,7 +1043,14 @@ def main(argv=None):
     ap.add_argument("--sha", default=None, help="要釘住的 commit(預設 = 正式 repo 的 HEAD)")
     ap.add_argument("--continue-on-failure", action="store_true",
                     help="不 fail-fast(預設 fail-fast)")
+    ap.add_argument("--self-check", action="store_true",
+                    help="只跑防誤用自檢,不跑任何案例")
+    ap.add_argument("--smoke", action="store_true",
+                    help="煙霧測試:**結果不是證據**,只用來排除腳本自身的機械問題")
     a = ap.parse_args(argv)
+
+    if a.self_check:
+        return self_check()
 
     if a.round == "B":
         print("[拒絕] B 輪(舊版 gate.py 對照)**本版未實作** ——")
@@ -909,6 +1065,10 @@ def main(argv=None):
 
     print("=" * 78)
     print("權威層端對端驗證 —— A 輪(六格)")
+    if a.smoke:
+        print("⚠⚠ **煙霧測試 —— 本輪結果【不是證據】** ⚠⚠")
+        print("     只用來排除腳本自身的機械問題(前置/誤用)。")
+        print("     結案只認裁決者本人執行的那一輪。")
     print("=" * 78)
     print("正式 repo(進入):")
     print("  HEAD               : %s" % before["HEAD"])
@@ -990,8 +1150,10 @@ def main(argv=None):
 
         stamp = started.strftime("%Y-%m-%dT%H%M%SZ")
         rp = os.path.join(official, ".dev", "reports",
-                          "%s-authority-layer-e2e-roundA.md" % stamp)
-        write_report(rp, started, before, after, pinned, up, results, report)
+                          "%s-authority-layer-e2e-roundA%s.md"
+                          % (stamp, "-SMOKE-not-evidence" if a.smoke else ""))
+        write_report(rp, started, before, after, pinned, up, results, report,
+                     smoke=a.smoke)
         print()
         print("報告:%s" % rp)
 
@@ -999,11 +1161,22 @@ def main(argv=None):
     return 0 if (results and not bad) else 1
 
 
-def write_report(path, started, before, after, pinned, up, results, report):
+def write_report(path, started, before, after, pinned, up, results, report,
+                 smoke=False):
     L = []
     A = L.append
-    A(u"# 權威層端對端驗證 —— A 輪(六格)")
+    A(u"# 權威層端對端驗證 —— A 輪(六格)%s"
+      % (u" · **煙霧測試(非證據)**" if smoke else u""))
     A(u"")
+    if smoke:
+        A(u"> ## ⚠⚠ **本報告是煙霧測試,【不是證據】。** ⚠⚠")
+        A(u">")
+        A(u"> 由 **agent** 執行,目的只有一個:**排除腳本自身的機械問題**"
+          u"(前置/誤用類)。")
+        A(u"> **結案只認裁決者本人在普通終端機執行的那一輪** —— 協定不變。")
+        A(u"> 下面每一格的「通過」都**不得**被引用為權威層的證據;"
+          u"它只說「腳本跑得完」。")
+        A(u"")
     A(u"**時間**:%s" % started.isoformat())
     A(u"**釘住的 SHA**:`%s`" % pinned)
     A(u"**B 輪**:未實作(【差異】由隔離層既有測試提供)")

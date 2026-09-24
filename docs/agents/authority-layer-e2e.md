@@ -400,8 +400,50 @@ elif stage not in writable:  return "[R2] ..."   # ← at_commit 為真時**不�
 - 拒絕 `--no-verify`,以及 `git commit -n`(那個 `-n` 就是 `--no-verify`);
 - 拒絕在指令層覆寫 `core.hooksPath`(`-c core.hooksPath=…`、`--config-env=…`);
 - 拒絕 env 挾帶 `GIT_CONFIG*` / `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE`;
-- 腳本**自己永遠不設** `core.hooksPath` —— 那一步只由 `sh bootstrap.sh` 做;
-- 每次 commit **之前**再確認一次 `core.hooksPath` 仍是 `.githooks`。
+- 腳本**自己永遠不【寫】** `core.hooksPath` —— 那一步只由 `sh bootstrap.sh` 做;
+- 每次 commit **之前**再確認一次 `core.hooksPath` 仍是 `.githooks`(**那是讀**)。
+
+### 7.1 🔴 讀與寫要分得開 —— A 輪第 2 次被自己的防誤用擋下
+
+第一版的判準是「`git config` 的 argv 只要提到 `core.hooksPath` 就擋」。
+**於是它把上面最後那一行自己擋掉了**:裁決者第 2 次跑 A 輪,第 1 案停在
+
+```
+前置/誤用:本腳本不得自己設定 core.hooksPath —— 那一步走 bootstrap.sh
+```
+
+而那個子行程是 `git -C <clone> config --get core.hooksPath` ——
+**用途正好相反,它是在確認 bootstrap 真的設好了。**
+
+> **一條「不准寫」的規則把「讀」一起擋掉,防的東西沒少擋,
+> 能證明它有在守的那個動作反而做不了。**
+
+**修法的硬條件是「分得出讀與寫,而且不放寬對寫的阻擋」**,所以判準是
+**fail-closed 的白名單**:提到 `core.hooksPath` 的 `git config`
+**必須帶一個明確的讀取旗標**(`--get` / `--get-all` / …)才放行;
+帶任何寫入旗標(`--add` / `--unset` / `--unset-all` / `--replace-all` / …)⇒ 擋;
+**一個旗標都沒有 ⇒ 也擋**。
+
+最後那一條是刻意的:`git config core.hooksPath X` 是寫,
+而 `git config core.hooksPath` 是讀 —— **兩者只差一個位置參數**,
+靠「有沒有多一個 token」去分,那種判準一改動就會翻向 fail-open。
+代價是誤擋一種沒人在用的讀法,換到的是
+**新增一種寫法時不會自動獲得放行**。
+
+**自檢搬進腳本裡**(`--self-check`),含「讀取放行 / 寫入仍擋」各數格:
+
+```powershell
+python -X utf8 scripts\e2e_authority_layer.py --self-check
+```
+
+> 早一版的自檢住在一個臨時目錄的探針裡。
+> **一個只在作者機器上跑過一次的自檢,下一次沒有人會跑** ——
+> 所以它現在跟著腳本進版控。
+
+⚠ 另外一併修的:**擋下訊息現在帶 argv 與 cwd**。
+第 2 次那份報告只寫了「不得自己設定 core.hooksPath」,
+**沒有寫是哪一個子行程** —— 於是診斷得回頭讀原始碼才做得出來。
+一個說不出自己在講哪一次呼叫的擋下訊息,會讓人去檢查錯的地方(票 13)。
 
 ⚠ **早一版的想法是「搜尋原始碼裡有沒有 `--no-verify` 字串」。那種自檢是假的** ——
 它會命中檢查程式自己與這份說明文字。**要檢查的是那一次真的交給 git 的參數。**
