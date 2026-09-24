@@ -49,6 +49,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -522,6 +523,91 @@ def set_worktree_bytes(clone, rel_path, raw):
     wb(os.path.join(clone, rel_path.replace("/", os.sep)), raw)
 
 
+def restore_worktree_from_head(clone, rel_path):
+    """把**工作樹**那一份還原成 HEAD 的內容。**index 一個位元組都不動。**
+
+    ## 🔴 早一版用 `git checkout HEAD -- <path>`,那是錯的
+
+    `git checkout <tree-ish> -- <path>` **同時重設 index 與工作樹** ——
+    於是前一行的 `git add <改過的定義>` 被抹掉,
+    **違規構造靜默退化成合法構造**,而它看起來仍然像跑完了一個違規案例。
+
+    **煙霧測試撞到**(2026-09-24):`8-reject` / `9-reject`
+    兩格【意外提交成功】。唯讀核對保留的 clone 證實:
+    那兩筆 commit 裡的定義檔 blob 與基準**逐字相同**(`33a5c749…`),
+    而 staged 清單裡根本沒有 `.agents/pipeline-stages.yaml`。
+    ⇒ **不是閘門失效** —— 閘門面對它實際看到的 index(未改的定義)判得是對的。
+
+    > **一個把自己的前提拆掉的構造,結果會與合法對照無法區分 ——
+    > 而它不會有任何東西出聲。** 這就是本輪補上前提斷言的理由。
+
+    用 `git show HEAD:<path>` 取內容再自己寫檔:**那條路只讀,不可能碰到 index。**
+    """
+    p = git(["-C", clone, "show", "HEAD:%s" % rel_path], check=True)
+    wb(os.path.join(clone, rel_path.replace("/", os.sep)), p.stdout)
+
+
+# ── 前提斷言:**構造成立了嗎** ───────────────────────────────────────────
+#
+# 只核對 staged 檔名不夠 —— 檔名在 index 裡不代表**內容**是案例要的那一份。
+# 所以定義檔那幾格要把 index 與工作樹**兩份 YAML 都解出來,比實際欄位**。
+# 前提不成立 ⇒ 丟 `Misuse` ⇒ 記「未完成」,**不執行 commit**。
+
+class Premise(Misuse):
+    """構造前提不成立。**不是閘門的判定,是這個案例沒造出來。**"""
+
+
+def _p(ok, msg):
+    if not ok:
+        raise Premise("構造前提不成立:%s" % msg)
+
+
+def index_yaml(clone, rel_path):
+    import yaml
+    p = git(["-C", clone, "show", ":%s" % rel_path], check=True)
+    return yaml.safe_load(p.stdout.decode("utf-8", "replace"))
+
+
+def worktree_yaml(clone, rel_path):
+    import yaml
+    return yaml.safe_load(r(os.path.join(clone, rel_path.replace("/", os.sep))))
+
+
+def pre_implement_ids(doc):
+    """第一個可寫站之前的站(去掉 idle)—— 與 gate.py 的算法同形。"""
+    ids = [s["id"] for s in doc["stages"]]
+    first = next((i for i, s in enumerate(doc["stages"])
+                  if s.get("allows_src_write")), len(ids))
+    return set(ids[:first]) - {"idle"}
+
+
+def r3_exempt_ids(doc):
+    return {s["id"] for s in doc["stages"] if s.get("exempts_r3_in_scope")}
+
+
+def writable_ids(doc):
+    return {s["id"] for s in doc["stages"] if s.get("allows_src_write")}
+
+
+def index_blob(clone, rel_path):
+    p = git(["-C", clone, "show", ":%s" % rel_path], check=True)
+    return p.stdout
+
+
+def head_text_or_none(clone, rel_path):
+    p = git(["-C", clone, "show", "HEAD:%s" % rel_path])
+    return p.stdout.decode("utf-8", "replace") if p.returncode == 0 else None
+
+
+def norm(raw):
+    """行尾正規化後的雜湊 —— 與 `redlight.content_hash` 同一個判準。
+
+    ⚠ 這是**本腳本自己**對構造的檢查,不是閘門的判定;
+    兩者同形是刻意的(要驗的就是「閘門會不會認為它們相同」)。
+    """
+    return hashlib.sha256((raw or b"").replace(b"\r\n", b"\n")).hexdigest()
+
+
 # ── 案例定義 ─────────────────────────────────────────────────────────────
 #
 # kind:  legal   = 合法對照(預期 commit 成功)
@@ -535,12 +621,21 @@ def build_cases(pinned_sha, up):
     def add(**kw):
         kw.setdefault("forbid", ())
         kw.setdefault("proof", "【接線】")
+        kw.setdefault("premise", None)
         C.append(kw)
 
     # ── #8 R2 站別定義來源 ────────────────────────────────────────────
     def s8_legal(c):
         touch_legacy_member(c)
-    add(cell="#8", cid="8-legal", kind="legal", setup=s8_legal,
+
+    def p8_legal(c, staged):
+        _p(LEGACY_MEMBER in staged, "%s 不在 index" % LEGACY_MEMBER)
+        _p(STAGES_REL not in staged, "定義檔不該進 index")
+        idx = index_yaml(c, STAGES_REL)
+        _p("implement" not in pre_implement_ids(idx),
+           "index 的 implement 竟然是前置站 —— 這是合法對照")
+        _p("implement" in writable_ids(idx), "index 的 implement 不是可寫站")
+    add(cell="#8", cid="8-legal", kind="legal", setup=s8_legal, premise=p8_legal,
         desc="站別定義原版 + legacy 成員的無害改動",
         expect="exit 0;HEAD 前進", rule=None)
 
@@ -548,10 +643,24 @@ def build_cases(pinned_sha, up):
         doc = defs_move_write_to_review(stages_doc(c))
         write_stages(c, doc)
         git(["-C", c, "add", "--", STAGES_REL], check=True)
-        git(["-C", c, "checkout", "HEAD", "--", STAGES_REL], check=False)
-        # ↑ index = 改過的;工作樹 = 原版
+        # **只還原工作樹,index 留著改過的那一份**(見該函式的 docstring)
+        restore_worktree_from_head(c, STAGES_REL)
         touch_legacy_member(c)
+
+    def p8_reject(c, staged):
+        _p(STAGES_REL in staged, "定義檔沒進 index —— 違規構造沒成立")
+        _p(LEGACY_MEMBER in staged, "%s 不在 index" % LEGACY_MEMBER)
+        idx, wt = index_yaml(c, STAGES_REL), worktree_yaml(c, STAGES_REL)
+        # **比實際欄位,不只比檔名**
+        _p("implement" in pre_implement_ids(idx),
+           "index 的 implement 不是前置站(可寫站沒真的往後搬)")
+        _p("implement" not in writable_ids(idx), "index 的 implement 仍是可寫站")
+        _p(writable_ids(idx), "index 的定義沒有任何可寫站 ⇒ 會變 R2/fail-closed")
+        _p("implement" not in pre_implement_ids(wt),
+           "工作樹的 implement 也變成前置站了 —— 工作樹不是基準")
+        _p("implement" in writable_ids(wt), "工作樹的 implement 不是可寫站")
     add(cell="#8", cid="8-reject", kind="reject", setup=s8_reject,
+        premise=p8_reject,
         desc="index 定義 = implement 非可寫站;工作樹定義 = 原版",
         expect="exit 1;[R2/commit];含 index 來源提示",
         rule="R2", must=("[R2/commit]", "本次站別定義取自", LEGACY_MEMBER),
@@ -561,7 +670,17 @@ def build_cases(pinned_sha, up):
         doc = defs_move_write_to_review(stages_doc(c))
         write_stages(c, doc)            # 工作樹 = 改過的,**不 add**
         touch_legacy_member(c)
+
+    def p8_reverse(c, staged):
+        _p(STAGES_REL not in staged, "定義檔進了 index —— 反向構造沒成立")
+        _p(LEGACY_MEMBER in staged, "%s 不在 index" % LEGACY_MEMBER)
+        idx, wt = index_yaml(c, STAGES_REL), worktree_yaml(c, STAGES_REL)
+        _p("implement" not in pre_implement_ids(idx),
+           "index 的 implement 是前置站 —— 方向反了")
+        _p("implement" in pre_implement_ids(wt),
+           "工作樹的 implement 不是前置站 —— 兩份內容其實一樣,這格不區分任何東西")
     add(cell="#8", cid="8-reverse", kind="reverse", setup=s8_reverse,
+        premise=p8_reverse,
         desc="index 定義 = 原版;工作樹定義 = implement 非可寫站",
         expect="exit 0(現行版本判 index)", rule=None,
         proof="【接線】+ 現行版本判 index")
@@ -570,7 +689,15 @@ def build_cases(pinned_sha, up):
     def s9_legal(c):
         set_stage(c, "research")
         stage_bytes(c, "research/probe.py", b"VALUE = 1\n")
-    add(cell="#9", cid="9-legal", kind="legal", setup=s9_legal,
+
+    def p9_legal(c, staged):
+        _p("research/probe.py" in staged, "research/probe.py 不在 index")
+        _p(STAGES_REL not in staged, "定義檔不該進 index")
+        idx = index_yaml(c, STAGES_REL)
+        _p("research" in r3_exempt_ids(idx), "index 的 research 沒有 R3 豁免")
+        _p(not os.path.exists(os.path.join(c, "tests", "test_probe.py")),
+           "tests/test_probe.py 竟然存在 —— 那會換掉 R3 判的那一半")
+    add(cell="#9", cid="9-legal", kind="legal", setup=s9_legal, premise=p9_legal,
         desc="research 站 + research/ 底下新檔(無測試)⇒ #9 豁免 R3",
         expect="exit 0;HEAD 前進", rule=None)
 
@@ -579,17 +706,55 @@ def build_cases(pinned_sha, up):
         doc = defs_drop_research_r3_exemption(stages_doc(c))
         write_stages(c, doc)
         git(["-C", c, "add", "--", STAGES_REL], check=True)
-        git(["-C", c, "checkout", "HEAD", "--", STAGES_REL], check=False)
+        restore_worktree_from_head(c, STAGES_REL)
         stage_bytes(c, "research/probe.py", b"VALUE = 1\n")
+
+    def p9_reject(c, staged):
+        _p(STAGES_REL in staged, "定義檔沒進 index —— 違規構造沒成立")
+        _p("research/probe.py" in staged, "research/probe.py 不在 index")
+        idx, wt = index_yaml(c, STAGES_REL), worktree_yaml(c, STAGES_REL)
+        _p("research" not in r3_exempt_ids(idx),
+           "index 的 research 還留著 R3 豁免 —— 違規構造沒成立")
+        _p("research" in r3_exempt_ids(wt),
+           "工作樹的 research 也沒有 R3 豁免了 —— 工作樹不是基準")
+        # research 仍須可寫且範圍還在,否則落到 [R2/範圍] 而不是 R3
+        rdef = next(s for s in idx["stages"] if s["id"] == "research")
+        _p(rdef.get("allows_src_write"), "index 的 research 不可寫 ⇒ 會變 R2 而不是 R3")
+        _p(rdef.get("src_write_scope"), "index 的 research 沒有 src_write_scope")
+        _p(not os.path.exists(os.path.join(c, "tests", "test_probe.py")),
+           "tests/test_probe.py 竟然存在")
     add(cell="#9", cid="9-reject", kind="reject", setup=s9_reject,
+        premise=p9_reject,
         desc="index 定義拿掉 exempts_r3_in_scope;工作樹保留",
         expect="exit 1;[R3] 找不到對應測試;含 index 來源提示",
         rule="R3", must=("[R3]", "research/probe.py", "本次站別定義取自"))
 
     # ── #10 legacy 條目資格 ───────────────────────────────────────────
+    def go_live_of(c):
+        txt = r(os.path.join(c, LEGACY_REL.replace("/", os.sep)))
+        for line in txt.splitlines():
+            if line.strip().startswith("# go-live:"):
+                return line.split(":", 1)[1].strip()
+        return None
+
+    def in_go_live_tree(c, rel_path):
+        gl = go_live_of(c)
+        _p(gl, "legacy 清單第一行讀不到 go-live 基準")
+        return git(["-C", c, "cat-file", "-e",
+                    "%s:%s" % (gl, rel_path)]).returncode == 0
+
     def s10_legal(c):
         touch_legacy_member(c)
+
+    def p10_legal(c, staged):
+        _p(LEGACY_MEMBER in staged, "%s 不在 index" % LEGACY_MEMBER)
+        _p(LEGACY_REL not in staged, "legacy 清單不該進 index")
+        wt = r(os.path.join(c, LEGACY_REL.replace("/", os.sep)))
+        _p(LEGACY_MEMBER in wt.split(), "%s 不在工作樹的 legacy 清單裡" % LEGACY_MEMBER)
+        _p(in_go_live_tree(c, LEGACY_MEMBER),
+           "%s 不在 go-live 樹裡 ⇒ 豁免不會成立,這格不是合法對照" % LEGACY_MEMBER)
     add(cell="#10", cid="10-legal", kind="legal", setup=s10_legal,
+        premise=p10_legal,
         desc="legacy 清單既有成員(確在 go-live 樹裡)⇒ 豁免成立",
         expect="exit 0;HEAD 前進", rule=None)
 
@@ -599,30 +764,66 @@ def build_cases(pinned_sha, up):
         with io.open(p, "a", encoding="utf-8", newline="\n") as f:
             f.write("pkg/thing.py\n")
         stage_bytes(c, "pkg/thing.py", b"def go():\n    return 1\n")
+
+    def p10_reject(c, staged):
+        _p("pkg/thing.py" in staged, "pkg/thing.py 不在 index")
+        _p(LEGACY_REL not in staged,
+           "legacy 清單進了 index —— 那會讓 R6 一起紅,案例作廢")
+        wt = r(os.path.join(c, LEGACY_REL.replace("/", os.sep)))
+        _p("pkg/thing.py" in wt.split(), "工作樹的 legacy 清單沒有那一筆假條目")
+        idx_list = index_blob(c, LEGACY_REL).decode("utf-8", "replace")
+        _p("pkg/thing.py" not in idx_list.split(),
+           "index 的 legacy 清單也有那一筆 —— 兩份一樣,這格不區分任何東西")
+        _p(not in_go_live_tree(c, "pkg/thing.py"),
+           "pkg/thing.py 竟然在 go-live 樹裡 ⇒ 那一筆是合格條目,不是假條目")
+        _p(not os.path.exists(os.path.join(c, "tests", "test_thing.py")),
+           "tests/test_thing.py 竟然存在")
     add(cell="#10", cid="10-reject", kind="reject", setup=s10_reject,
+        premise=p10_reject,
         desc="工作樹清單加一筆不在 go-live 樹裡的條目(不 add)",
         expect="exit 1;[R3];**不得出現 [R6]**",
         rule="R3", must=("[R3]", "pkg/thing.py"), forbid=("[R6]",))
 
     # ── #11 純套件標記豁免 ────────────────────────────────────────────
+    INIT = "pkg/__init__.py"
+
+    def _init_premise(c, staged, idx_has_def, wt_has_def):
+        _p(INIT in staged, "%s 不在 index" % INIT)
+        idx = index_blob(c, INIT).decode("utf-8", "replace")
+        wt = r(os.path.join(c, INIT.replace("/", os.sep)))
+        has = lambda t: bool(re.search(r"^\s*(def|class)\s", t, re.M))
+        _p(has(idx) is idx_has_def,
+           "index 的 %s 含 def/class = %s,案例要的是 %s"
+           % (INIT, has(idx), idx_has_def))
+        _p(has(wt) is wt_has_def,
+           "工作樹的 %s 含 def/class = %s,案例要的是 %s"
+           % (INIT, has(wt), wt_has_def))
+        _p(idx != wt or idx_has_def == wt_has_def,
+           "index 與工作樹內容一樣 —— 這格不區分任何東西")
+        _p(not os.path.exists(os.path.join(c, "tests", "test___init__.py")),
+           "tests/test___init__.py 竟然存在 —— 那會換掉 R3 判的那一半")
+
     def s11_legal(c):
-        stage_bytes(c, "pkg/__init__.py", b"")
+        stage_bytes(c, INIT, b"")
     add(cell="#11", cid="11-legal", kind="legal", setup=s11_legal,
+        premise=lambda c, s: _init_premise(c, s, False, False),
         desc="index 的 __init__.py 是空的 ⇒ 純標記,豁免成立",
         expect="exit 0;HEAD 前進", rule=None)
 
     def s11_reject(c):
-        stage_bytes(c, "pkg/__init__.py", b"def x():\n    pass\n")
-        set_worktree_bytes(c, "pkg/__init__.py", b"")
+        stage_bytes(c, INIT, b"def x():\n    pass\n")
+        set_worktree_bytes(c, INIT, b"")
     add(cell="#11", cid="11-reject", kind="reject", setup=s11_reject,
+        premise=lambda c, s: _init_premise(c, s, True, False),
         desc="index 含 def;工作樹改成空的",
         expect="exit 1;[R3] 找不到對應測試",
-        rule="R3", must=("[R3]", "pkg/__init__.py"))
+        rule="R3", must=("[R3]", INIT))
 
     def s11_reverse(c):
-        stage_bytes(c, "pkg/__init__.py", b"")
-        set_worktree_bytes(c, "pkg/__init__.py", b"def x():\n    pass\n")
+        stage_bytes(c, INIT, b"")
+        set_worktree_bytes(c, INIT, b"def x():\n    pass\n")
     add(cell="#11", cid="11-reverse", kind="reverse", setup=s11_reverse,
+        premise=lambda c, s: _init_premise(c, s, False, True),
         desc="index 是空的;工作樹含 def",
         expect="exit 0(現行版本判 index)", rule=None,
         proof="【接線】+ 現行版本判 index")
@@ -630,8 +831,15 @@ def build_cases(pinned_sha, up):
     # ── #11② 真 hook 不可構造 —— **靜態觀察,不下 commit** ────────────
     def s11b(c):
         touch_legacy_member(c)
-        set_worktree_bytes(c, "pkg/__init__.py", b"def x():\n    pass\n")
-    add(cell="#11②", cid="11b-static", kind="static", setup=s11b,
+        set_worktree_bytes(c, INIT, b"def x():\n    pass\n")
+
+    def p11b(c, staged):
+        _p(os.path.exists(os.path.join(c, INIT.replace("/", os.sep))),
+           "%s 不在工作樹 —— 這格要的就是「工作樹有、index 沒有」" % INIT)
+        _p(LEGACY_MEMBER in staged, "index 裡沒有別的檔 ⇒ 空的 staged 證明不了什麼")
+        _p(git(["-C", c, "show", ":%s" % INIT]).returncode != 0,
+           "%s 竟然在 index 裡 —— 前提反了" % INIT)
+    add(cell="#11②", cid="11b-static", kind="static", setup=s11b, premise=p11b,
         desc="未暫存的 pkg/__init__.py + 已暫存的別的檔",
         expect="`git diff --cached -z --name-only --diff-filter=ACM` 不含該檔",
         rule=None,
@@ -665,7 +873,27 @@ def build_cases(pinned_sha, up):
         _ledger_record(c, TICKET_REL)
         set_stage(c, "implement", ticket_id=None)
         stage_bytes(c, "pkg/thing.py", b"def go():\n    return 1\n")
+
+    def _p12(c, staged, ticket_in_head, declares_thing):
+        _p("pkg/thing.py" in staged, "pkg/thing.py 不在 index")
+        _p(not os.path.exists(os.path.join(c, "tests", "test_thing.py")),
+           "tests/test_thing.py 竟然存在")
+        pj = json.load(io.open(os.path.join(c, PIPELINE_REL), encoding="utf-8"))
+        _p(pj.get("ticket_id") is None,
+           "pipeline.json 的 ticket_id 不是 null ⇒ 前一格 ticket_untested_modules "
+           "會先豁免掉,#12 不可達")
+        led = r(os.path.join(c, LEDGER_REL.replace("/", os.sep)))
+        _p('"reason": "ticket-declared"' in led, "帳本沒有那一筆 ticket-declared 紀錄")
+        _p(TICKET_REL in led, "帳本那一筆的 declared_in 不是票檔路徑")
+        head = head_text_or_none(c, TICKET_REL)
+        _p((head is not None) is ticket_in_head,
+           "票在 HEAD = %s,案例要的是 %s" % (head is not None, ticket_in_head))
+        if head is not None:
+            got = ("%s thing" % UNTESTED_PREFIX) in head
+            _p(got is declares_thing,
+               "HEAD 那版票宣告 thing = %s,案例要的是 %s" % (got, declares_thing))
     add(cell="#12", cid="12-legal", kind="legal", setup=s12_legal,
+        premise=lambda c, s: _p12(c, s, True, True),
         desc="帳本紀錄 + 票已進 HEAD 且列了該模組;ticket_id 已清空",
         expect="exit 0;HEAD 前進", rule=None,
         proof="【接線】only(見說明:正式配置下新舊路徑相同,無【差異】可驗)")
@@ -678,6 +906,7 @@ def build_cases(pinned_sha, up):
         stage_bytes(c, "pkg/thing.py", b"def go():\n    return 1\n")
     add(cell="#12", cid="12-reject-not-in-head", kind="reject",
         setup=s12_reject_not_in_head,
+        premise=lambda c, s: _p12(c, s, False, False),
         desc="帳本有紀錄,但票只在工作樹、不在 HEAD",
         expect="exit 1;[R3]", rule="R3",
         must=("[R3]", "pkg/thing.py"),
@@ -690,6 +919,7 @@ def build_cases(pinned_sha, up):
         stage_bytes(c, "pkg/thing.py", b"def go():\n    return 1\n")
     add(cell="#12", cid="12-reject-wrong-module", kind="reject",
         setup=s12_reject_wrong_module,
+        premise=lambda c, s: _p12(c, s, True, False),
         desc="票在 HEAD,但它宣告的是別的模組",
         expect="exit 1;[R3]", rule="R3",
         must=("[R3]", "pkg/thing.py"),
@@ -705,10 +935,31 @@ def build_cases(pinned_sha, up):
         w(os.path.join(c, PROVENANCE_REL),
           json.dumps(rec, ensure_ascii=False) + "\n")
 
+    def _p13(c, staged, idx_same, wt_same):
+        """比的是**行尾正規化後的雜湊**,與閘門用的判準同形。"""
+        _p("pkg/thing.py" in staged, "pkg/thing.py 不在 index")
+        _p(os.path.exists(os.path.join(c, PROVENANCE_REL)),
+           "%s 不存在 ⇒ upstream_backed 會回「沒有 provenance 紀錄」" % PROVENANCE_REL)
+        prov = json.loads(r(os.path.join(c, PROVENANCE_REL)).strip().splitlines()[0])
+        _p(prov.get("path") == "pkg/thing.py", "provenance 的 path 對不上目標")
+        _p(prov.get("upstream_commit") == pinned_sha, "provenance 的 commit 不是釘住那個")
+        want = norm(up_raw)
+        gi = norm(index_blob(c, "pkg/thing.py"))
+        gw = norm(io.open(os.path.join(c, "pkg", "thing.py"), "rb").read())
+        _p((gi == want) is idx_same,
+           "index 與上游物件相同 = %s,案例要的是 %s" % (gi == want, idx_same))
+        _p((gw == want) is wt_same,
+           "工作樹與上游物件相同 = %s,案例要的是 %s" % (gw == want, wt_same))
+        if idx_same != wt_same:
+            _p(gi != gw, "index 與工作樹雜湊一樣 —— 這格不區分任何東西")
+        _p(not os.path.exists(os.path.join(c, "tests", "test_thing.py")),
+           "tests/test_thing.py 竟然存在")
+
     def s13_legal(c):
         _provenance(c)
         stage_bytes(c, "pkg/thing.py", up_raw)
     add(cell="#13", cid="13-legal", kind="legal", setup=s13_legal,
+        premise=lambda c, s: _p13(c, s, True, True),
         desc="index 位元組 = 上游物件 ⇒ provenance 豁免成立",
         expect="exit 0;HEAD 前進;帳本出現 upstream-provenance",
         rule=None, needs_upstream=True)
@@ -719,6 +970,7 @@ def build_cases(pinned_sha, up):
         stage_bytes(c, "pkg/thing.py", drifted)
         set_worktree_bytes(c, "pkg/thing.py", up_raw)
     add(cell="#13", cid="13-reject", kind="reject", setup=s13_reject,
+        premise=lambda c, s: _p13(c, s, False, True),
         desc="index 漂移(改內容字元,非行尾);工作樹 = 上游物件",
         expect="exit 1;[R3];**不得出現 [R8**",
         rule="R3", must=("[R3]", "pkg/thing.py"), forbid=("[R8",),
@@ -730,6 +982,7 @@ def build_cases(pinned_sha, up):
         set_worktree_bytes(c, "pkg/thing.py",
                            up_raw + b"\n# drift in worktree only\n")
     add(cell="#13", cid="13-reverse", kind="reverse", setup=s13_reverse,
+        premise=lambda c, s: _p13(c, s, True, False),
         desc="index = 上游物件;工作樹漂移",
         expect="exit 0(現行版本判 index)", rule=None,
         needs_upstream=True, proof="【接線】+ 現行版本判 index")
@@ -794,6 +1047,16 @@ def run_case(case, official, workroot, pinned_sha, up, idx):
                        "--diff-filter=ACM"]).split("\0")
         staged = [x for x in staged if x.strip()]
         res["evidence"]["staged"] = staged
+
+        # ── **構造前提**:不成立就記「未完成」,絕不執行 commit ────────
+        #
+        # 只核對 staged 檔名不夠 —— 檔名在 index 裡不代表**內容**是案例要的
+        # 那一份。8-reject / 9-reject 那兩格【意外提交成功】就是這樣來的:
+        # `git add` 之後被 `git checkout HEAD --` 把 index 一起還原了,
+        # 而結果與合法對照**無法區分**。
+        if case.get("premise"):
+            case["premise"](clone, staged)
+            res["evidence"]["構造前提"] = "成立(已比對 index 與工作樹的實際內容)"
 
         # ── 靜態案例:不下 commit ─────────────────────────────────────
         if case["kind"] == "static":
@@ -875,6 +1138,11 @@ def run_case(case, official, workroot, pinned_sha, up, idx):
                 k for k, v in checks.items() if not v)
         return res
 
+    except Premise as e:
+        res["verdict"] = "未完成"
+        res["why"] = "%s" % e
+        res["actual"] = "(構造不成立,未執行 commit)"
+        return res
     except Misuse as e:
         res["verdict"] = "未完成"
         res["why"] = "前置/誤用:%s" % e
@@ -1217,7 +1485,8 @@ def write_report(path, started, before, after, pinned, up, results, report,
         A(u"")
         A(u"- **判定**:**%s**%s" % (x["verdict"], (u" —— " + x["why"]) if x["why"] else u""))
         ev = x.get("evidence", {})
-        for k in (u"staged", u"rc", u"head_before", u"head_after", u"head 不變",
+        for k in (u"構造前提", u"staged", u"rc", u"head_before", u"head_after",
+                  u"head 不變",
                   u"git trace2 看到 pre-commit hook", u"trace2 樣本", u"帳本新增行"):
             if k in ev:
                 A(u"- **%s**:`%r`" % (k, ev[k]))
