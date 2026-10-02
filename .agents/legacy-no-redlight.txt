@@ -15,6 +15,9 @@
 #   2026-08-14  移除 .claude/portable/g1_guard.py
 #               票 25 的紅燈對著它在 HEAD 的內容發生過(impl_hash 相符兩筆),
 #               R3 後半已能誠實滿足,不必再靠豁免。10 -> 9。
+#   2026-10-02  移除 .claude/hooks/redlight.py
+#               票 145 Station 3 的紅燈對著它在 HEAD 的內容發生過(impl_hash 相符),
+#               R3 後半已能誠實滿足,不必再靠豁免。9 -> 8。
 #
 # 機器可讀的排水紀錄(票 137,格式定義在該票票面)。
 # 上面那段散文**原地保留不刪**(F-036):散文記的是「為什麼」,
@@ -22,8 +25,8 @@
 # ⚠ 本行是**註解**,`_entries_from_lines()` 照舊把它丟掉:
 #   它**不是**豁免條目,既有 9 筆豁免條目一筆未增未減,runtime 判定不變。
 # drained: .claude/portable/g1_guard.py 2026-08-14 25
+# drained: .claude/hooks/redlight.py 2026-10-02 145
 .claude/hooks/gate.py
-.claude/hooks/redlight.py
 .claude/patches/apply_patches.py
 .claude/portable/claude_md.py
 .claude/portable/g1_verify.py
