@@ -575,7 +575,15 @@ class TestTestsUnderTicketUsesTheLatestRecordPerFile:
             root, run_id=u"fixture-570-571", time=u"2026-09-02T02:00:00+00:00",
             ticket_id=u"99", exit_code=0, collected=[u"tests/test_a.py::test_one"],
             deselected=[], outcomes={u"tests/test_a.py::test_one": u"passed"},
-            invocation={u"args": [u"tests"]})
+            invocation={u"args": [u"tests"]},
+            completeness={
+                u"options": {u"lf": False, u"last_failed_no_failures": u"all", u"stepwise": False,
+                             u"stepwise_skip": False, u"maxfail": None, u"collectonly": False,
+                             u"setuponly": False, u"setupplan": False},
+                u"cacheprovider_blocked": False, u"shouldstop": False, u"shouldfail": False,
+                u"pre_narrowing": {u"tests/test_a.py": [u"tests/test_a.py::test_one"]},
+                u"plugins": [{u"name": u"main", u"kind": u"builtin"},
+                             {u"name": u"tests/conftest.py", u"kind": u"root_conftest"}]})
 
         out = render(root)
         red = _value_of(out, u"tests red under ticket 99")
@@ -1328,7 +1336,18 @@ class TestOrphans:
         redlight.record_session(root, run_id=u"odc2-2", time=u"2026-09-02T02:00:00+00:00",
                                 ticket_id=u"99", exit_code=0, collected=[new, keep],
                                 deselected=[], outcomes={new: u"passed", keep: u"passed"},
-                                invocation={u"args": [u"tests"]})
+                                invocation={u"args": [u"tests"]},
+                                completeness={
+                                    u"options": {u"lf": False, u"last_failed_no_failures": u"all",
+                                                 u"stepwise": False, u"stepwise_skip": False,
+                                                 u"maxfail": None, u"collectonly": False,
+                                                 u"setuponly": False, u"setupplan": False},
+                                    u"cacheprovider_blocked": False, u"shouldstop": False,
+                                    u"shouldfail": False,
+                                    u"pre_narrowing": {u"tests/test_x.py": [new, keep]},
+                                    u"plugins": [{u"name": u"main", u"kind": u"builtin"},
+                                                 {u"name": u"tests/conftest.py",
+                                                  u"kind": u"root_conftest"}]})
         out = render(root)
         orphaned = _value_of(out, u"tests orphaned under ticket 99")
         green = _value_of(out, u"tests green under ticket 99")
@@ -1697,8 +1716,8 @@ class TestChainRegressionLocks:
         root = _root_with_redlight(tmp_path)
         c = _chain_conftest(root, monkeypatch)
         _seed_red(["test_target"])
-        _chain_drive(c, root, ["tests"], selected=[CHAIN_X, CHAIN_Y],
-                     outcomes={CHAIN_X: "passed", CHAIN_Y: "passed"}, exitstatus=0)
+        _s_drive(c, root, {u"tests/test_x.py": [CHAIN_X, CHAIN_Y]}, selected=[CHAIN_X, CHAIN_Y],
+                 outcomes={CHAIN_X: "passed", CHAIN_Y: "passed"}, exitstatus=0)
         got = _lines_of(root)
         assert u"tests/test_x.py" in got[u"green"], got
         assert u"tests/test_x.py" not in got[u"red"], got

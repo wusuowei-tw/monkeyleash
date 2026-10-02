@@ -526,7 +526,15 @@ class TestFileCoverage:
 
         位置參數 `tests/test_x.py`(不含 `::`)、無 deselected ⇒ 整檔涵蓋。
         """
-        got = self._coverage_after(tmp_path, monkeypatch, ["tests/test_x.py"], [X_A, X_B])
+        c = _isolated_conftest(monkeypatch, tmp_path)
+        _c_call_collect_wrapper(c, _c_file(tmp_path, "tests/test_x.py"),
+                                _CCollectReport("tests/test_x.py", [_c_item(X_A), _c_item(X_B)]))
+        session = _CompletenessSession([_c_item(X_A), _c_item(X_B)],
+                                       _CConfig(tmp_path, _COption(), _c_plugins(c, tmp_path),
+                                                args=["tests/test_x.py"]))
+        _drive_with_session(c, session, selected=[X_A, X_B],
+                            outcomes={X_A: "passed", X_B: "passed"}, exitstatus=0)
+        got = redlight.file_coverage(redlight.load_runs(str(tmp_path))[0], "tests/test_x.py")
         assert got == "true", got
 
     def test_b1d_a_parent_directory_argument_is_full_coverage(self, tmp_path, monkeypatch):
@@ -534,7 +542,15 @@ class TestFileCoverage:
 
         位置參數 `tests`(上層目錄)、無 deselected ⇒ 整檔涵蓋。
         """
-        got = self._coverage_after(tmp_path, monkeypatch, ["tests"], [X_A, X_B])
+        c = _isolated_conftest(monkeypatch, tmp_path)
+        _c_call_collect_wrapper(c, _c_file(tmp_path, "tests/test_x.py"),
+                                _CCollectReport("tests/test_x.py", [_c_item(X_A), _c_item(X_B)]))
+        session = _CompletenessSession([_c_item(X_A), _c_item(X_B)],
+                                       _CConfig(tmp_path, _COption(), _c_plugins(c, tmp_path),
+                                                args=["tests"]))
+        _drive_with_session(c, session, selected=[X_A, X_B],
+                            outcomes={X_A: "passed", X_B: "passed"}, exitstatus=0)
+        got = redlight.file_coverage(redlight.load_runs(str(tmp_path))[0], "tests/test_x.py")
         assert got == "true", got
 
     def test_b1e_a_file_argument_with_deselection_is_not_full_coverage(self, tmp_path, monkeypatch):
@@ -624,6 +640,12 @@ class TestFixedCommandCoverage:
         c = _isolated_conftest(monkeypatch, tmp_path)
         session = _SessionWithConfig([_Item(X_A), _Item(X_B)], ["tests"], tmp_path)
         session.config.args_source = pytest.Config.ArgsSource.TESTPATHS
+        session.config.option = _COption()
+        session.config.pluginmanager = _c_plugins(c, tmp_path)
+        session.shouldstop = False
+        session.shouldfail = False
+        _c_call_collect_wrapper(c, _c_file(tmp_path, "tests/test_x.py"),
+                                _CCollectReport("tests/test_x.py", [_c_item(X_A), _c_item(X_B)]))
         _drive_with_session(c, session, selected=[X_A, X_B],
                             outcomes={X_A: "passed", X_B: "passed"}, exitstatus=0)
         runs = redlight.load_runs(str(tmp_path))

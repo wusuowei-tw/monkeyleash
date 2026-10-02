@@ -191,12 +191,15 @@ def _run_outcome(report):
     """
     if getattr(report, "failed", False):
         return "failed"
+    # 票 145 Station 4c:xfail / xpass 明確辨識(〈二十三〉7 (vi)),不再籠統記成 other ——
+    # other 不算「執行完成」,而 xfail(skipped + wasxfail)與 non-strict xpass(call passed +
+    # wasxfail)都是測試確實跑完的終態。strict xpass 是 failed,上面已處理。
     xfail = getattr(report, "wasxfail", None) is not None
     when = getattr(report, "when", None)
     if getattr(report, "skipped", False):
-        return "other" if xfail else "skipped"
+        return "xfail" if xfail else "skipped"
     if when == "call" and getattr(report, "passed", False):
-        return "other" if xfail else "passed"
+        return "xpass" if xfail else "passed"
     return None
 
 
@@ -241,8 +244,12 @@ def pytest_sessionfinish(session, exitstatus):
     # 位置參數與它們的來源。沒有 config ⇒ None ⇒ 涵蓋範圍未知(不知道,就不是完整)。
     # 舊版 redlight.py 的 record_session 沒有 `invocation` 參數 ⇒ 照舊不傳。
     import inspect as _inspect
-    if "invocation" in _inspect.signature(_redlight.record_session).parameters:
+    params = _inspect.signature(_redlight.record_session).parameters
+    if "invocation" in params:
         kwargs["invocation"] = _invocation_of(session)
+    # 票 145 Station 4c:選擇 / 執行完整性事實(〈二十三〉7)。收集失敗 ⇒ None ⇒ 涵蓋未知。
+    if "completeness" in params:
+        kwargs["completeness"] = _completeness_of(session)
     _redlight.record_session(_ROOT, **kwargs)
 
 
@@ -265,3 +272,70 @@ def _invocation_of(session):
         "invocation_dir": os.fspath(inv_dir) if inv_dir is not None else None,
         "pyargs": bool(getattr(option, "pyargs", False)),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145 Station 4c:選擇 / 執行完整性事實(〈二十三〉7)
+#
+# **縮小前全集**:`--lf` 在外層 wrapper(`LFPluginCollWrapper`)裡就地改寫 collector 的
+# `report.result`,不發 deselected 通知。本 wrapper 標 trylast ⇒ 在 wrapper 鏈的最內層,
+# `yield` 之後最先拿到 report,當下**複製** nodeid(之後的就地改寫碰不到這份)。
+# 記的是 report 裡的 `pytest.Item`:File collector 的直接子項,以及 Class 之類子 collector 的子項 ——
+# class 內的測試不在 File 的 report 裡,只記 File 的話 class 型測試檔的全集永遠對不上。
+#
+# 存在 `_run` 之外:既有的測試 driver 會在驅動前清空 `_run` 的每個值。
+# 收集出錯 ⇒ `_pre_narrowing_broken` ⇒ 本次 completeness 不寫(涵蓋未知)。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_pre_narrowing = {}
+_pre_narrowing_broken = []
+
+
+@pytest.hookimpl(wrapper=True, trylast=True)
+def pytest_make_collect_report(collector):
+    report = yield
+    try:
+        if _redlight is not None:
+            for node in list(getattr(report, "result", None) or []):
+                if isinstance(node, pytest.Item):
+                    nodeid = _nodeid(node)
+                    _pre_narrowing.setdefault(nodeid.split("::", 1)[0], []).append(nodeid)
+    except Exception:
+        _pre_narrowing_broken.append(True)
+    return report
+
+
+def _plain(value):
+    """config.option 的值照原樣記;不是 JSON 原生型別的,記型別名(寫不出來就整筆 session 遺失)。"""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return "<%s>" % type(value).__name__
+
+
+def _flag(session, name):
+    """session 結束時的 shouldstop / shouldfail → bool;屬性不存在 ⇒ None(缺欄 ⇒ 涵蓋未知)。"""
+    if not hasattr(session, name):
+        return None
+    return bool(getattr(session, name))
+
+
+def _completeness_of(session):
+    """本次 session 的完整性事實。任何一步出錯 ⇒ None(寧可多紅,不讓 pytest 失敗)。"""
+    try:
+        if _pre_narrowing_broken:
+            return None
+        cfg = session.config
+        option = cfg.option
+        pm = cfg.pluginmanager
+        return {
+            "options": dict((k, _plain(getattr(option, k, None)))
+                            for k in _redlight.COMPLETENESS_OPTIONS),
+            "cacheprovider_blocked": bool(pm.is_blocked("cacheprovider")),
+            "shouldstop": _flag(session, "shouldstop"),
+            "shouldfail": _flag(session, "shouldfail"),
+            "pre_narrowing": dict((f, list(ids)) for f, ids in _pre_narrowing.items()),
+            "plugins": _redlight.classify_plugins(_ROOT, pm.list_name_plugin(),
+                                                  pm.list_plugin_distinfo()),
+        }
+    except Exception:
+        return None

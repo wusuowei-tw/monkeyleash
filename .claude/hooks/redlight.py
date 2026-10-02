@@ -218,16 +218,19 @@ def _normalize_invocation(root, invocation):
 
 
 def record_session(root, run_id=None, time=None, ticket_id=None, exit_code=None,
-                   collected=(), deselected=(), outcomes=None, invocation=None):
+                   collected=(), deselected=(), outcomes=None, invocation=None,
+                   completeness=None):
     """追加一筆 run 事實到 `<root>` 的 session 帳本。回傳寫入的內容。
 
     - `collected`:本次收集到的身分(含被 deselect 的;收集錯誤以
       `<檔>::<collection error>` 標記)
     - `deselected`:被排除的身分;`selected` = collected − deselected
-    - `outcomes`:`{身分: "passed" | "failed" | "skipped" | "other"}`,只含 selected
+    - `outcomes`:`{身分: OUTCOME_VALUES 之一}`,只含 selected
     - `exit_code`:runner 的原始退出碼;取不到為 None
     - `invocation`:producer 觀察到的呼叫事實 `{"args", "args_source", "invocation_dir",
       "pyargs"}`(票 145〈十七〉裁決 1 的判定依據);None ⇒ 涵蓋範圍未知
+    - `completeness`:選擇 / 執行完整性事實(票 145〈二十三〉7);不是 dict ⇒ 記 None
+      (涵蓋範圍未知)。producer 負責只放 root 相對路徑與 JSON 原生型別
 
     `run_id` / `time` / `ticket_id` 為 None 時自取(測試可指定以求決定性)。
     寫入失敗不拋例外 —— 紀錄器不得弄死執行器(`TestTheRecorderCannotKillTheRunner`)。
@@ -243,6 +246,7 @@ def record_session(root, run_id=None, time=None, ticket_id=None, exit_code=None,
         "deselected": [str(n).replace("\\", "/") for n in (deselected or ())],
         "outcomes": {str(k).replace("\\", "/"): v for k, v in (outcomes or {}).items()},
         "invocation": _normalize_invocation(root, invocation),
+        "completeness": completeness if isinstance(completeness, dict) else None,
     }
     path = session_log(root)
     try:
@@ -280,7 +284,9 @@ def load_runs(root):
     return out
 
 
-OUTCOME_VALUES = ("passed", "failed", "skipped", "other")
+# "other" 只為讀得動 Station 4c 之前的 session(當時 xfail / xpass 都記成 other);
+# 4c 之後的 producer 寫 "xfail" / "xpass"。"other" 不算「執行完成」(〈二十三〉7 (vi))。
+OUTCOME_VALUES = ("passed", "failed", "skipped", "xfail", "xpass", "other")
 
 
 def validate_session(run):
@@ -290,8 +296,10 @@ def validate_session(run):
       - `run_id`、`time` 為非空字串;`ticket_id` 欄位存在(字串或 null)
       - `exit_code` 欄位存在,為 int(非 bool)或 null
       - `collected`、`deselected` 為字串 list;`deselected ⊆ collected`
-      - `outcomes` 為 `{字串: passed | failed | skipped | other}`;其鍵 ⊆ selected
+      - `outcomes` 為 `{字串: OUTCOME_VALUES 之一}`;其鍵 ⊆ selected
       - `invocation` 若存在且非 null:為 dict,`args` 為 list(元素為字串或 null)或 null
+      - `completeness` 若存在且非 null:為 dict(內部欄位由 `file_coverage` 逐項驗;
+        不合格 ⇒ 涵蓋 `"unknown"`,不讓整筆 run 失去加紅的效果)。沒有這個欄位的舊 session 仍合格
     """
     if not isinstance(run, dict):
         return ["不是物件"]
@@ -341,6 +349,9 @@ def validate_session(run):
             if args is not None and (not isinstance(args, list) or not all(
                     a is None or isinstance(a, str) for a in args)):
                 problems.append("invocation.args 型別不符")
+    comp = run.get("completeness")
+    if comp is not None and not isinstance(comp, dict):
+        problems.append("completeness 型別不符")
     return problems
 
 
@@ -391,9 +402,11 @@ def file_coverage(run, test_file):
     | 某個位置參數是**該檔本身或其上層目錄**、且不含 `::` | true |
     | 位置參數只以 nodeid(含 `::`)指名該檔 | false |
     | 其餘(參數無法判讀、或都與該檔無關) | unknown |
+    | 位置參數涵蓋該檔之後:完整性事實(〈二十三〉7)不全部成立 | 見 `_completeness_verdict` |
 
     **沒有為固定指令另寫分支**:pytest 未給位置參數時以 testpaths 補上
-    `config.args == ["tests"]`,與「位置參數為上層目錄 tests」走同一條規則。
+    `config.args == ["tests"]`,與「位置參數為上層目錄 tests」走同一條規則;
+    完整性事實也一樣 —— 固定全套只是「每一條都剛好成立」的那一種 run。
     """
     if validate_session(run):
         return "unknown"
@@ -423,7 +436,162 @@ def file_coverage(run, test_file):
         elif not sep and (path == "." or tf.startswith(path.rstrip("/") + "/")):
             covering = True
     if covering:
-        return "true"
+        return _completeness_verdict(run, tf, idents)
     if narrowed:
         return "false"
     return "unknown"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145 Station 4c —— 選擇 / 執行完整性(〈二十三〉)
+#
+# 「沒有 deselected」證明不了選擇完整(`--lf` 在收集期就悄悄移除身分),
+# 「有一筆 report」證明不了已執行(`pytest.exit(returncode=0)` 只留 setup report)。
+# 所以 `"true"` 另外要 producer 的正向事實:選項全部關閉、沒有提前停止、
+# 縮小前全集 == 收集結果、每個 selected 身分都到了執行完成的終態、
+# 本次註冊的每個 plugin 都在受支援範圍(白名單)內。**任一缺欄或型別錯 ⇒ unknown。**
+#
+# 白名單變更須走票(〈二十三〉3)。
+# ─────────────────────────────────────────────────────────────────────────────
+
+COMPLETENESS_OPTIONS = ("lf", "last_failed_no_failures", "stepwise", "stepwise_skip",
+                        "maxfail", "collectonly", "setuponly", "setupplan")
+
+PLUGIN_KINDS = ("builtin", "root_conftest", "known_dist", "other")
+SUPPORTED_PLUGIN_KINDS = ("builtin", "root_conftest", "known_dist")
+BUILTIN_MODULE = "_pytest"
+ROOT_CONFTEST = "tests/conftest.py"
+KNOWN_DISTS = ("anyio",)
+OUTSIDE = "<outside>"
+
+# 「執行完成」的終態:call 的 passed / failed、任何 phase 的 skip、明確辨識的 xfail / xpass。
+# 籠統的 "other"(4c 之前的 xfail 記法)不算 —— 不得讓 other 自動取得 completeness。
+EXECUTED_OUTCOMES = ("passed", "failed", "skipped", "xfail", "xpass")
+
+
+def _dist_name(dist):
+    name = getattr(dist, "project_name", None)
+    if not isinstance(name, str):
+        try:
+            name = dist.metadata["name"]
+        except Exception:
+            name = None
+    return name.strip().lower().replace("_", "-") if isinstance(name, str) else None
+
+
+def _defining_module(plugin):
+    """模組物件看 `__name__`;類別看自己的 `__module__`;其他物件看其類別的 `__module__`。"""
+    import types
+    if isinstance(plugin, types.ModuleType):
+        return getattr(plugin, "__name__", None)
+    if isinstance(plugin, type):
+        return getattr(plugin, "__module__", None)
+    return getattr(type(plugin), "__module__", None)
+
+
+def _plugin_path_name(name, root):
+    """路徑型名稱 → root 相對 posix 路徑;root 以外(含跨磁碟)⇒ `<outside>`。"""
+    try:
+        rel = os.path.relpath(os.path.normpath(name), os.path.normpath(os.fspath(root)))
+    except ValueError:
+        return OUTSIDE
+    rel = rel.replace("\\", "/")
+    if rel == ".." or rel.startswith("../") or os.path.isabs(rel):
+        return OUTSIDE
+    return rel
+
+
+def classify_plugins(root, name_plugins, distinfo):
+    """`list_name_plugin()` 與 `list_plugin_distinfo()` 的原始事實 → `[{"name", "kind"}]`。
+
+    依序判定(〈二十三〉3):
+      1. plugin **物件**出現在 distinfo 配對中 ⇒ dist 名稱在 `KNOWN_DISTS` 為 known_dist,否則 other
+         (只看名稱相同不算 —— 名稱可被冒用)
+      2. 名稱是絕對路徑(conftest 的註冊名稱)⇒ root 相對路徑恰為 `ROOT_CONFTEST` 為 root_conftest,否則 other
+      3. 定義模組為 `_pytest` 或 `_pytest.*` ⇒ builtin
+      4. 其他 ⇒ other
+    帳本只記正規化名稱:路徑型一律轉 root 相對路徑(root 以外記 `<outside>`),不記絕對路徑。
+    """
+    dists = [(p, _dist_name(d)) for p, d in (distinfo or [])]
+    out = []
+    for name, plugin in name_plugins or []:
+        name = str(name)
+        is_path = os.path.isabs(name)
+        shown = _plugin_path_name(name, root) if is_path else name
+        paired = [dn for p, dn in dists if p is plugin]
+        if paired:
+            kind = "known_dist" if all(dn in KNOWN_DISTS for dn in paired) else "other"
+        elif is_path:
+            kind = "root_conftest" if shown == ROOT_CONFTEST else "other"
+        else:
+            mod = _defining_module(plugin)
+            builtin = isinstance(mod, str) and (
+                mod == BUILTIN_MODULE or mod.startswith(BUILTIN_MODULE + "."))
+            kind = "builtin" if builtin else "other"
+        out.append({"name": shown, "kind": kind})
+    return out
+
+
+def _is_str_list(v):
+    return isinstance(v, list) and all(isinstance(n, str) for n in v)
+
+
+def _completeness_problems(comp):
+    """completeness 的型別問題清單(空 = 型別正確)。〈二十三〉7 (i)。"""
+    if not isinstance(comp, dict):
+        return ["completeness 缺欄或型別不符"]
+    problems = []
+    options = comp.get("options")
+    if not isinstance(options, dict) or any(k not in options for k in COMPLETENESS_OPTIONS):
+        problems.append("options 缺欄或型別不符")
+    for key in ("cacheprovider_blocked", "shouldstop", "shouldfail"):
+        if not isinstance(comp.get(key), bool):
+            problems.append("%s 缺欄或型別不符" % key)
+    pre = comp.get("pre_narrowing")
+    if not isinstance(pre, dict) or not all(
+            isinstance(k, str) and _is_str_list(v) for k, v in pre.items()):
+        problems.append("pre_narrowing 缺欄或型別不符")
+    plugins = comp.get("plugins")
+    if not isinstance(plugins, list) or not plugins or not all(
+            isinstance(p, dict) and isinstance(p.get("name"), str)
+            and p.get("kind") in PLUGIN_KINDS for p in plugins):
+        problems.append("plugins 缺欄或型別不符")
+    return problems
+
+
+def _completeness_verdict(run, tf, idents):
+    """位置參數已涵蓋 `tf` 之後,依〈二十三〉7 (i)–(vii) 判 `"true"` / `"false"` / `"unknown"`。
+
+    - (i) 缺欄 / 型別錯 ⇒ unknown
+    - (vii) 有 plugin 不在受支援範圍 ⇒ unknown(在支援邊界之外,不知道)
+    - (ii) `lf` / `stepwise` 生效(除非 cacheprovider 被封鎖)⇒ false(縮小機制作用中)
+    - (iii) maxfail / collectonly / setuponly / setupplan ⇒ unknown
+    - (iv) shouldstop / shouldfail ⇒ unknown
+    - (v) 縮小前全集 != 本 run 該檔的 collected ⇒ false
+    - (vi) 有 selected 身分沒到執行完成的終態 ⇒ unknown
+    """
+    comp = run.get("completeness")
+    if _completeness_problems(comp):
+        return "unknown"
+    if any(p["kind"] not in SUPPORTED_PLUGIN_KINDS for p in comp["plugins"]):
+        return "unknown"
+    options = comp["options"]
+    if comp["cacheprovider_blocked"] is not True:
+        if not (options["lf"] is False and options["stepwise"] is False
+                and options["stepwise_skip"] is False):
+            return "false"
+    maxfail = options["maxfail"]
+    if not (maxfail is None or (type(maxfail) is int and maxfail == 0)):
+        return "unknown"
+    if not all(options[k] is False for k in ("collectonly", "setuponly", "setupplan")):
+        return "unknown"
+    if comp["shouldstop"] is not False or comp["shouldfail"] is not False:
+        return "unknown"
+    pre = comp["pre_narrowing"].get(tf)
+    if pre is None or set(pre) != set(idents):
+        return "false"
+    deselected = set(run["deselected"])
+    outcomes = run["outcomes"]
+    if any(outcomes.get(n) not in EXECUTED_OUTCOMES for n in idents if n not in deselected):
+        return "unknown"
+    return "true"
