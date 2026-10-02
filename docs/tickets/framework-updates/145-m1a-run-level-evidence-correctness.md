@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3 進行中(baseline 已量,紅燈未寫);Station 4 未開始。
+**狀態**:動工 —— Station 3 紅燈已寫(待 Jeff 驗收);Station 4 未開始。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -16,6 +16,9 @@
 >
 > - 狀態(舊,第二代):~~`立案(時鐘已定 2026-10-02);未動工 —— Station 2 DONE、Station 3 NOT STARTED。`~~
 >   —— 2026-10-02 Station 3 baseline 量測後由第 3 行取代(見〈十二〉)。
+>
+> - 狀態(舊,第三代):~~`動工 —— Station 3 進行中(baseline 已量,紅燈未寫);Station 4 未開始。`~~
+>   —— 2026-10-02 紅燈寫完並取得證據後由第 3 行取代(見〈十四〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -378,7 +381,7 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 |---|---|
 | Station 1 — Spec | PASS / CLOSED |
 | Station 2 — Ticket | DONE |
-| Station 3 — Red-light | IN PROGRESS(baseline 已量,紅燈未寫) |
+| Station 3 — Red-light | 紅燈已寫,待驗收 |
 | Station 4 — Implementation | NOT STARTED |
 | Station 5 — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
@@ -514,6 +517,55 @@ ODC-1（修訂後全文，取代〈十一〉同條的第 2、3 項）
 Enforcement residual（登記）
 - tests/conftest.py 是 M1-a 的 evidence producer，但被 NON_SOURCE_DIRS 排除，R2 / R3 無法結構性阻止它在錯誤 station 被修改；目前只靠 tracked allowlist + final staged diff 守住。M1-a 結案後另開框架票。
 - .claude/hooks/redlight.py 列在 .agents/legacy-no-redlight.txt，R3 對它整條豁免；依裁決 6 於 transition commit drain。
+
+---
+
+## 十四、Station 3 紅燈證據
+
+### 14.1 執行
+
+| 項 | 值 |
+|---|---|
+| 紅燈 commit(刀②) | `5188f49de0f2e258ae490cab935fd9b666e8345b` |
+| 固定指令 | `python -X utf8 -m pytest -q`(〈十二〉) |
+| exit code | **1** |
+| 摘要行原文 | `14 failed, 1912 passed, 3 skipped, 3 xfailed in 127.31s (0:02:07)` |
+| 既有測試 | 1912 passed —— 與 baseline(`1912 passed, 3 skipped, 3 xfailed`)相同;**既有測試 0 失敗** |
+
+### 14.2 三層集合對照(規劃 case = 新增 nodeid = 實際紅燈 nodeid)
+
+消失集合(修改前收集有、修改後沒有)= **空**。新增集合 = 實際失敗集合 = 下表 14 支,**不多不少**。
+
+| 規劃 case | nodeid | 分類 | 實際失敗原因 |
+|---|---|---|---|
+| RL-1 | `tests/test_redlight.py::TestRunFacts::test_a_full_pass_is_state_a_with_coverage_visible` | 介面紅 | `AttributeError: … has no attribute 'load_runs'` |
+| RL-2 | `tests/test_redlight.py::TestRunFacts::test_one_failure_is_state_b_and_names_the_test` | 介面紅 | `AttributeError: … 'load_runs'` |
+| RL-3 | `tests/test_redlight.py::TestRunFacts::test_zero_collected_is_state_c_and_the_run_is_visible` | 介面紅 | `AttributeError: … 'load_runs'` |
+| RL-4(a) | `tests/test_redlight.py::TestRunFacts::test_a_collection_error_is_state_d` | 介面紅 | `AttributeError: … 'load_runs'` |
+| RL-4(b) | `tests/test_redlight.py::TestRunFacts::test_a_usage_error_is_state_d_not_green` | 介面紅 | `AttributeError: … 'load_runs'` |
+| RL-4(c) | `tests/test_redlight.py::TestRunFacts::test_an_interrupted_run_is_state_d_even_with_passes` | 介面紅 | `AttributeError: … 'load_runs'` |
+| RL-6' | `tests/test_redlight.py::TestRunFacts::test_three_skipped_645_deselected_is_state_f_with_counts` | 介面紅 | `AttributeError: … 'load_runs'` |
+| **RL-6** | `tests/test_status.py::TestTicket139::test_a_narrow_all_skip_record_does_not_retire_the_earlier_red` | **行為紅** | `AssertionError`:`red=(無)`、`green=tests/test_gate.py` |
+| **RL-6b(舊寫入版)** | `tests/test_status.py::TestNarrowSelection::test_a_later_green_without_run_facts_does_not_retire_x` | **行為紅** | `AssertionError`:`red=(無)`、`green=tests/test_x.py` |
+| RL-6b(run 事實版) | `tests/test_status.py::TestNarrowSelection::test_a_narrow_run_that_did_not_select_x_does_not_retire_x` | 介面紅 | `AttributeError: … 'record_session'` |
+| **RL-7** | `tests/test_status.py::TestHistoricalRecords::test_old_green_rows_are_shown_as_run_unknown_not_green` | **行為紅** | `AssertionError`:舊紀錄被印成 green |
+| ODC-2 | `tests/test_status.py::TestOrphans::test_a_renamed_red_test_is_orphaned_not_green` | 介面紅 | `AttributeError: … 'record_session'` |
+| RL-5 | `tests/test_status.py::TestRunEvidence::test_no_run_at_all_is_not_zero_tests_and_not_a_pass` | 介面紅 | `AttributeError: … 'record_session'` |
+| ODC-3 | `tests/test_status.py::TestRunEvidence::test_no_producer_means_undecidable_not_green_not_c` | 介面紅 | `AttributeError: … 'load_runs'` |
+
+### 14.3 帳本
+
+| 時點 | SHA-256 | bytes | lines |
+|---|---|---|---|
+| before(所有 `--collect-only` 之後重取) | `460f714f02c527081d8242520021f611ad0a62c52e3ae592977ae7fc7be7684c` | 552165 | 2043 |
+| after | `05c819a047bd83bf88bfb3aba040c4d55a6e63eddd3de5a396bca03a2457d632` | 564441 | 2089 |
+
+新增 **46** 行(第 2044–2089 行):`ticket_id == "145"` 46 筆、`!= "145"` 0 筆;
+`red` **2** 筆(`tests/test_redlight.py`、`tests/test_status.py`)、`green` **44** 筆、其他 / 缺欄 **0** 筆。
+測試造的假檔名(`tests/test_thing.py`、`tests/test_x.py`、`tests/test_broken.py`)在真實帳本中各 **0** 筆 —— producer 紅燈的隔離有效。
+
+`tests/test_status.py` 那一筆紅燈的 `impl_hash` 為 `bdc3a089…fadf0`,即 `.claude/portable/status.py` 在本 HEAD 的內容 —— Station 4 修改 status.py 時 R3 要求的「屬於票 145、對著改動前內容發生的紅燈」由這一筆滿足。
+(`redlight.py` 仍在 R3 豁免清單;依〈十三〉裁決 6,drain 為 Station 4 前的獨立 transition commit。)
 
 ---
 
