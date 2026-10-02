@@ -413,3 +413,165 @@ class TestRunFacts:
         assert len(run["deselected"]) == 645, len(run["deselected"])
         assert [v for v in run["outcomes"].values()].count("skipped") == 3, run["outcomes"]
         assert "passed" not in run["outcomes"].values(), run["outcomes"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145 Station 3b 紅燈 —— coverage authority(F3)與 session schema(F1)
+#
+# 依據:票 145〈十七〉裁決 1(full_file_coverage ∈ {true, false, unknown},
+# 只有 producer 能正向證明整檔涵蓋時才為 true)、裁決 3(schema fail-closed)。
+#
+# **新介面 `redlight.file_coverage(run, test_file)` 只在測試函式內部取用。**
+# producer 以 pytest 實際的位置參數(`session.config.args`)判斷窄選;
+# 這裡以帶 `config` 的假 session 模擬 —— 屬性照真實 pytest 的名字給
+# (`args`、`rootpath`、`invocation_params.dir`、`option.pyargs`、`getoption`)。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _InvocationParams:
+    def __init__(self, d):
+        self.dir = d
+
+
+class _Option:
+    pyargs = False
+
+
+class _Config:
+    def __init__(self, args, root):
+        self.args = list(args)
+        self.rootpath = root
+        self.invocation_params = _InvocationParams(root)
+        self.option = _Option()
+
+    def getoption(self, name, default=None):
+        return getattr(self.option, name, default)
+
+
+class _SessionWithConfig(_Session):
+    def __init__(self, items, args, root, with_config=True):
+        _Session.__init__(self, items)
+        if with_config:
+            self.config = _Config(args, root)
+
+
+def _reset_conftest_state(c):
+    """每次驅動前把 conftest 模組的累積狀態歸零(避免案例互相污染)。"""
+    c._outcomes.clear()
+    run = getattr(c, "_run", None)
+    if isinstance(run, dict):
+        for k, v in list(run.items()):
+            if hasattr(v, "clear"):
+                v.clear()
+            else:
+                run[k] = None
+
+
+def _drive_with_args(c, root, args, selected=(), deselected=(), outcomes=None,
+                     exitstatus=0, with_config=True):
+    """同 `_drive_session`,但 session 帶 `config.args`(pytest 實際收到的位置參數)。"""
+    def hook(name):
+        return getattr(c, name, None) or (lambda *a, **k: None)
+
+    _reset_conftest_state(c)
+    files = sorted(set(n.split("::", 1)[0] for n in list(selected) + list(deselected)))
+    for f in files:
+        hook("pytest_collectreport")(_CollectRep(f))
+    gone = [_Item(n) for n in deselected]
+    if gone:
+        hook("pytest_deselected")(gone)
+    session = _SessionWithConfig([_Item(n) for n in selected], args, root,
+                                 with_config=with_config)
+    hook("pytest_collection_finish")(session)
+    for nodeid, outcome in (outcomes or {}).items():
+        for rep in _reports_for(nodeid, outcome):
+            hook("pytest_runtest_logreport")(rep)
+    hook("pytest_sessionfinish")(session, exitstatus)
+
+
+X_A = "tests/test_x.py::test_a"
+X_B = "tests/test_x.py::test_b"
+
+
+class TestFileCoverage:
+
+    def _coverage_after(self, tmp_path, monkeypatch, args, selected, deselected=(),
+                        with_config=True):
+        c = _isolated_conftest(monkeypatch, tmp_path)
+        _drive_with_args(c, tmp_path, args, selected=selected, deselected=deselected,
+                         outcomes={n: "passed" for n in selected}, exitstatus=0,
+                         with_config=with_config)
+        runs = redlight.load_runs(str(tmp_path))
+        assert len(runs) == 1, runs
+        return redlight.file_coverage(runs[0], "tests/test_x.py")
+
+    def test_b1a_a_nodeid_argument_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """B1a(F3 producer)。分類:interface-red(`redlight.file_coverage` 不存在)。
+
+        位置參數 `tests/test_x.py::test_a` —— 以 nodeid 指名,未收集的身分不產生 deselected。
+        """
+        got = self._coverage_after(tmp_path, monkeypatch, [X_A], [X_A])
+        assert got == "false", got
+
+    def test_b1b_a_backslash_nodeid_argument_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """B1b(F3 producer)。分類:interface-red(`redlight.file_coverage` 不存在)。
+
+        位置參數 `tests\\test_x.py::test_a`(Windows 反斜線)—— 仍是 nodeid 指名。
+        """
+        got = self._coverage_after(tmp_path, monkeypatch, ["tests\\test_x.py::test_a"], [X_A])
+        assert got == "false", got
+
+    def test_b1c_a_file_argument_without_deselection_is_full_coverage(self, tmp_path, monkeypatch):
+        """B1c(F3 producer)。分類:interface-red(`redlight.file_coverage` 不存在)。
+
+        位置參數 `tests/test_x.py`(不含 `::`)、無 deselected ⇒ 整檔涵蓋。
+        """
+        got = self._coverage_after(tmp_path, monkeypatch, ["tests/test_x.py"], [X_A, X_B])
+        assert got == "true", got
+
+    def test_b1d_a_parent_directory_argument_is_full_coverage(self, tmp_path, monkeypatch):
+        """B1d(F3 producer)。分類:interface-red(`redlight.file_coverage` 不存在)。
+
+        位置參數 `tests`(上層目錄)、無 deselected ⇒ 整檔涵蓋。
+        """
+        got = self._coverage_after(tmp_path, monkeypatch, ["tests"], [X_A, X_B])
+        assert got == "true", got
+
+    def test_b1e_a_file_argument_with_deselection_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """B1e(F3 producer)。分類:interface-red(`redlight.file_coverage` 不存在)。
+
+        位置參數 `tests/test_x.py`,但該檔有 deselected(`-k` 之類)⇒ 不是整檔涵蓋。
+        """
+        got = self._coverage_after(tmp_path, monkeypatch, ["tests/test_x.py"], [X_A],
+                                   deselected=[X_B])
+        assert got == "false", got
+
+    def test_b1f_no_config_means_unknown(self, tmp_path, monkeypatch):
+        """B1f(F3 producer)。分類:interface-red(`redlight.file_coverage` 不存在)。
+
+        假 session 沒有 config / args ⇒ 證明不了整檔涵蓋 ⇒ unknown(不知道,就不是完整)。
+        """
+        got = self._coverage_after(tmp_path, monkeypatch, [], [X_A, X_B], with_config=False)
+        assert got == "unknown", got
+
+    def test_b1g_an_argument_outside_the_root_means_unknown(self, tmp_path, monkeypatch):
+        """B1g(F3 producer)。分類:interface-red(`redlight.file_coverage` 不存在)。
+
+        位置參數是 root 之外的絕對路徑 —— 無法判讀它與 `tests/test_x.py` 的關係 ⇒ unknown。
+        """
+        outside = str(tmp_path.parent / "elsewhere" / "test_x.py")
+        got = self._coverage_after(tmp_path, monkeypatch, [outside], [X_A, X_B])
+        assert got == "unknown", got
+
+
+class TestRunStateSchema:
+
+    def test_b6_a_session_without_collected_is_not_state_c(self):
+        """B6(F1 缺欄)。分類:behavior-red。
+
+        session 缺 `collected` 欄位 —— 那不是「0 collected」,是證據不完整;
+        不得被判成 C(〈十七〉裁決 3:不得以「缺欄 ⇒ 空集合」處理)。
+        """
+        run = {"kind": "session", "run_id": "b6", "time": "2999-01-01T00:00:00+00:00",
+               "ticket_id": "99", "exit_code": 0, "deselected": [], "outcomes": {}}
+        assert redlight.run_state(run) != "C", run

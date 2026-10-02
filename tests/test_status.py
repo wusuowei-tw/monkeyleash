@@ -1369,3 +1369,334 @@ class TestRunEvidence:
         assert NO_RUN in val, val
         assert u"最近一次 run:C" not in val, val
         assert u"tests/test_status.py" not in _value_of(out, u"tests green under ticket 145")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 票 145 Station 3b 紅燈 —— producer → 持久化 run 事實 → status 的串接(F4)
+#
+# 依據:票 145〈十七〉F1–F4、裁決 1–4、Invariant「Absence is not coverage」。
+#
+# **串接的做法**:載入 `tests/conftest.py`,把它的 `_redlight` 換成本檔那一份、
+# `_ROOT` 指到 tmp root;本檔那一份 redlight 的 ROOT / RUN_LOG / PIPELINE 也指到
+# 同一個 tmp root。於是 producer 寫的逐檔紀錄與 run 事實都落在 tmp root,
+# status 再依 root 載入 redlight.py 讀回 —— 三段走的是真的程式碼,只有 pytest 本身是假的。
+#
+# **手寫 JSON 只在 B5 / B9**:缺欄與錯型別是寫入函式寫不出來的形狀(它們的重點正是
+# 「不是正常 producer 產生的紀錄」)。其餘一律透過 `record_run` / `record_session` /
+# conftest hooks 產生。
+# ═══════════════════════════════════════════════════════════════════════════
+
+CHAIN_X = u"tests/test_x.py::test_target"
+CHAIN_Y = u"tests/test_x.py::test_other"
+FAR_FUTURE = u"2999-01-01T00:00:00+00:00"
+
+
+class _ChainItem:
+    def __init__(self, nodeid):
+        self.nodeid = nodeid
+
+
+class _ChainCollectRep:
+    def __init__(self, nodeid, failed=False):
+        self.nodeid = nodeid
+        self.failed = failed
+        self.passed = not failed
+        self.outcome = "failed" if failed else "passed"
+
+
+class _ChainRunRep:
+    def __init__(self, nodeid, when, outcome):
+        self.nodeid = nodeid
+        self.fspath = nodeid.split("::", 1)[0]
+        self.when = when
+        self.outcome = outcome
+        self.passed = outcome == "passed"
+        self.failed = outcome == "failed"
+        self.skipped = outcome == "skipped"
+
+
+def _chain_reports(nodeid, outcome):
+    if outcome == "skipped":
+        return [_ChainRunRep(nodeid, "setup", "skipped"),
+                _ChainRunRep(nodeid, "teardown", "passed")]
+    return [_ChainRunRep(nodeid, "setup", "passed"),
+            _ChainRunRep(nodeid, "call", outcome),
+            _ChainRunRep(nodeid, "teardown", "passed")]
+
+
+class _ChainInvocationParams:
+    def __init__(self, d):
+        self.dir = d
+
+
+class _ChainOption:
+    pyargs = False
+
+
+class _ChainConfig:
+    def __init__(self, args, root):
+        self.args = list(args)
+        self.rootpath = root
+        self.invocation_params = _ChainInvocationParams(root)
+        self.option = _ChainOption()
+
+    def getoption(self, name, default=None):
+        return getattr(self.option, name, default)
+
+
+class _ChainSession:
+    def __init__(self, items, args, root):
+        self.items = list(items)
+        self.testscollected = len(self.items)
+        self.config = _ChainConfig(args, root)
+
+
+def _chain_conftest(root, monkeypatch):
+    """載入 tests/conftest.py,並把它與本檔那一份 redlight 的所有寫入都導到 `root`。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "conftest_for_status_chain", str(ROOT / "tests" / "conftest.py"))
+    c = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(c)
+    monkeypatch.setattr(redlight, "ROOT", root)
+    monkeypatch.setattr(redlight, "RUN_LOG",
+                        str(pathlib.Path(root) / ".dev" / "test-runs.jsonl"))
+    monkeypatch.setattr(redlight, "PIPELINE",
+                        str(pathlib.Path(root) / ".dev" / "pipeline.json"))
+    monkeypatch.setattr(c, "_redlight", redlight)
+    monkeypatch.setattr(c, "_ROOT", pathlib.Path(root))
+    return c
+
+
+def _chain_drive(c, root, args, selected=(), deselected=(), outcomes=None,
+                 collect_errors=(), exitstatus=0):
+    """依 pytest 的呼叫順序驅動 conftest hooks;session 帶 `config.args`。驅動前重置累積狀態。"""
+    def hook(name):
+        return getattr(c, name, None) or (lambda *a, **k: None)
+
+    c._outcomes.clear()
+    run = getattr(c, "_run", None)
+    if isinstance(run, dict):
+        for k, v in list(run.items()):
+            if hasattr(v, "clear"):
+                v.clear()
+            else:
+                run[k] = None
+    files = sorted(set(n.split("::", 1)[0] for n in list(selected) + list(deselected)))
+    for f in files:
+        hook("pytest_collectreport")(_ChainCollectRep(f))
+    for f in collect_errors:
+        hook("pytest_collectreport")(_ChainCollectRep(f, failed=True))
+    gone = [_ChainItem(n) for n in deselected]
+    if gone:
+        hook("pytest_deselected")(gone)
+    session = _ChainSession([_ChainItem(n) for n in selected], args, pathlib.Path(root))
+    hook("pytest_collection_finish")(session)
+    for nodeid, outcome in (outcomes or {}).items():
+        for rep in _chain_reports(nodeid, outcome):
+            hook("pytest_runtest_logreport")(rep)
+    hook("pytest_sessionfinish")(session, exitstatus)
+
+
+def _seed_red(failed_tests):
+    """以既有的 `record_run()` 寫一筆 tests/test_x.py 的 red(本檔 redlight 已導到 root)。"""
+    redlight.record_run("tests/test_x.py", passed=False, failed_tests=failed_tests)
+
+
+def _append_raw_session(root, rec):
+    """手寫一筆 session(只給 B5 / B9 用:寫入函式寫不出缺欄 / 錯型別的形狀)。"""
+    path = redlight.session_log(root)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with io.open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + u"\n")
+
+
+def _lines_of(root):
+    out = render(root)
+    return {k: _value_of(out, u"tests %s under ticket 99" % k)
+            for k in (u"red", u"green", u"orphaned")}
+
+
+class TestCoverageChain:
+
+    def test_b2_a_nodeid_run_does_not_retire_an_unidentified_red(self, tmp_path, monkeypatch):
+        """B2(F3 串接)。分類:behavior-red。
+
+        舊紅的 `failed_tests` 為空(身分不明 ⇒ 視同全檔皆紅)。之後經 producer 以 nodeid
+        指名只跑 test_a 且 passed —— 沒收集到的身分不產生 deselected,但那不是整檔涵蓋。
+        ⇒ 該檔仍在 red、不在 green。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _seed_red([])
+        a = u"tests/test_x.py::test_a"
+        _chain_drive(c, root, [a], selected=[a], outcomes={a: "passed"}, exitstatus=0)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"green"], got
+        assert u"tests/test_x.py" in got[u"red"], got
+
+    def test_b3_a_nodeid_run_does_not_orphan_a_known_red(self, tmp_path, monkeypatch):
+        """B3(F3 串接)。分類:behavior-red。
+
+        已知紅身分 test_b。之後經 producer 以 nodeid 指名只跑 test_a 且 passed ——
+        test_b 沒被收集,只是因為沒被指名(Absence is not coverage)。
+        ⇒ test_b 仍在 red、不在 orphaned。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _seed_red(["test_b"])
+        a = u"tests/test_x.py::test_a"
+        _chain_drive(c, root, [a], selected=[a], outcomes={a: "passed"}, exitstatus=0)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"orphaned"], got
+        assert u"tests/test_x.py" in got[u"red"], got
+
+
+class TestDStateRetiresNothing:
+
+    def test_b4_a_d_run_with_a_collection_error_elsewhere_retires_nothing(
+            self, tmp_path, monkeypatch):
+        """B4(F2)。分類:behavior-red。
+
+        tests/test_x.py 的 X 為紅。之後一個 run:exit 1、另一檔 tests/test_y.py 收集錯誤、
+        X passed —— `run_state` 為 D ⇒ 整個 run 沒有退紅權、不得使任何檔成為 green。
+        ⇒ test_x.py 仍紅、不在 green。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _seed_red(["test_target"])
+        _chain_drive(c, root, ["tests"], selected=[CHAIN_X], outcomes={CHAIN_X: "passed"},
+                     collect_errors=["tests/test_y.py"], exitstatus=1)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"green"], got
+        assert u"tests/test_x.py" in got[u"red"], got
+
+
+class TestSessionSchemaFailClosed:
+
+    def test_b5_a_session_without_deselected_retires_nothing(self, tmp_path, monkeypatch):
+        """B5(F1 缺欄)。分類:behavior-red。
+
+        X 為紅。之後一筆 session **缺 `deselected` 欄位**、X passed(手寫:寫入函式寫不出缺欄)。
+        缺欄不得被當成「沒有 deselected」⇒ X 仍紅、不在 green。
+        """
+        root = _root_with_redlight(tmp_path)
+        _chain_conftest(root, monkeypatch)
+        _seed_red(["test_target"])
+        _append_raw_session(root, {"kind": "session", "run_id": "b5", "time": FAR_FUTURE,
+                                   "ticket_id": "99", "exit_code": 0,
+                                   "collected": [CHAIN_X],
+                                   "outcomes": {CHAIN_X: "passed"}})
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"green"], got
+        assert u"tests/test_x.py" in got[u"red"], got
+
+    def test_b7_an_outcome_outside_collected_retires_nothing(self, tmp_path, monkeypatch):
+        """B7(F1 身分不一致)。分類:behavior-red。
+
+        X 為紅。之後一筆 session 的 outcomes 含一個**不在 collected 裡**的身分(passed),
+        X 也 passed —— outcome 身分不屬於本次 selected ⇒ 該 run 不得進入正常語意。
+        ⇒ X 仍紅、不在 green。
+        """
+        root = _root_with_redlight(tmp_path)
+        _chain_conftest(root, monkeypatch)
+        _seed_red(["test_target"])
+        ghost = u"tests/test_x.py::test_ghost"
+        redlight.record_session(root, run_id=u"b7", time=FAR_FUTURE, ticket_id=u"99",
+                                exit_code=0, collected=[CHAIN_X], deselected=[],
+                                outcomes={CHAIN_X: u"passed", ghost: u"passed"})
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"green"], got
+        assert u"tests/test_x.py" in got[u"red"], got
+
+    def test_b9_a_string_deselected_retires_nothing_and_orphans_nothing(
+            self, tmp_path, monkeypatch):
+        """B9(F1 型別不符)。分類:behavior-red。
+
+        X 為紅。之後一筆 session 欄位都在,但 `deselected` 是**字串**而不是 list
+        (手寫:寫入函式會把它拆成字元 list,寫不出這個形狀)、X passed。
+        錯型別不得照常迭代 ⇒ 不退 X 的紅、該檔不為 green、不產生 orphan。
+        """
+        root = _root_with_redlight(tmp_path)
+        _chain_conftest(root, monkeypatch)
+        _seed_red(["test_target"])
+        _append_raw_session(root, {"kind": "session", "run_id": "b9", "time": FAR_FUTURE,
+                                   "ticket_id": "99", "exit_code": 0,
+                                   "collected": [CHAIN_X, CHAIN_Y],
+                                   "deselected": "tests/test_x.py::test_y",
+                                   "outcomes": {CHAIN_X: "passed", CHAIN_Y: "passed"}})
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"green"], got
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"orphaned"], got
+
+
+class TestAbsenceIsNotCoverage:
+
+    def test_b8_a_run_without_coverage_facts_does_not_orphan(self, tmp_path, monkeypatch):
+        """B8(Absence is not coverage)。分類:behavior-red。
+
+        已知紅身分 test_old。之後一筆**沒有 full_file_coverage 事實**的 session
+        (直接以 `record_session` 寫、不帶任何涵蓋資訊)收集不到 test_old ——
+        沒出現不代表已刪除或改名 ⇒ 不在 orphaned,且仍在 red。
+        """
+        root = _root_with_redlight(tmp_path)
+        _chain_conftest(root, monkeypatch)
+        _seed_red(["test_old"])
+        new = u"tests/test_x.py::test_new"
+        keep = u"tests/test_x.py::test_keep"
+        redlight.record_session(root, run_id=u"b8", time=FAR_FUTURE, ticket_id=u"99",
+                                exit_code=0, collected=[new, keep], deselected=[],
+                                outcomes={new: u"passed", keep: u"passed"})
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"orphaned"], got
+        assert u"tests/test_x.py" in got[u"red"], got
+
+
+class TestChainRegressionLocks:
+
+    def test_l1_three_skipped_645_deselected_keeps_the_red(self, tmp_path, monkeypatch):
+        """L1(RL-6 串接;F4)。分類:regression-lock(現行實作必須通過)。
+
+        X 為紅。之後經 producer 產生「3 skipped、645 deselected、0 passed」的 run
+        (X 在 deselected 裡)⇒ 仍紅。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _seed_red(["test_target"])
+        chosen = [u"tests/test_x.py::test_symlink_%d" % i for i in range(3)]
+        gone = [CHAIN_X] + [u"tests/test_x.py::test_other_%d" % i for i in range(644)]
+        _chain_drive(c, root, ["tests/test_x.py"], selected=chosen, deselected=gone,
+                     outcomes={n: "skipped" for n in chosen}, exitstatus=0)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+    def test_l2_an_interrupted_run_keeps_the_red(self, tmp_path, monkeypatch):
+        """L2(RL-4 串接;F4)。分類:regression-lock(現行實作必須通過)。
+
+        X 為紅。之後經 producer 產生 exit 2(中斷)且 X passed 的 run ⇒ 仍紅。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _seed_red(["test_target"])
+        _chain_drive(c, root, ["tests"], selected=[CHAIN_X], outcomes={CHAIN_X: "passed"},
+                     exitstatus=2)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+    def test_l3_a_full_directory_run_retires_the_red(self, tmp_path, monkeypatch):
+        """L3(正向對照;F4)。分類:regression-lock(現行實作必須通過;4b 後仍必須通過)。
+
+        X 為紅。之後經 producer 以位置參數 `tests`(整個目錄)跑、該檔全選、X passed、
+        無 failure、exit 0 ⇒ X 退紅、該檔在 green。防止修正過頭變成「永遠退不了紅」。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _seed_red(["test_target"])
+        _chain_drive(c, root, ["tests"], selected=[CHAIN_X, CHAIN_Y],
+                     outcomes={CHAIN_X: "passed", CHAIN_Y: "passed"}, exitstatus=0)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"green"], got
+        assert u"tests/test_x.py" not in got[u"red"], got
