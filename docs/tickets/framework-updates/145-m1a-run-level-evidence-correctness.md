@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5b 審查包已建立;待獨立審查。
+**狀態**:動工 —— Station 5b FAIL(S5b-F1 阻擋);回 Station 3c 補紅燈。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -43,6 +43,9 @@
 >
 > - 狀態(舊,第十一代):~~`動工 —— Station 4b 修正完成(固定全套 exit 0);待 Station 5b 審查。`~~
 >   —— 2026-10-02 Station 5b 審查包建立後由第 3 行取代(見〈二十〉)。
+>
+> - 狀態(舊,第十二代):~~`動工 —— Station 5b 審查包已建立;待獨立審查。`~~
+>   —— 2026-10-02 Station 5b 獨立審查 FAIL 後由第 3 行取代(見〈二十一〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -409,16 +412,22 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 4 — Implementation | 實作嘗試完成,Station 5 FAIL |
 | Station 5 — Review | FAIL |
 | Station 3b — Red-light(補,含補件) | PASS / ACCEPTED |
-| Station 4b — Implementation(修正) | 修正完成，待審查 |
-| Station 5b — Review | 審查包已建立，待審 |
+| Station 4b — Implementation(修正) | PASS / ACCEPTED |
+| Station 5b — Review | FAIL |
+| Station 3c — Red-light(補) | NOT STARTED |
+| Station 4c — Implementation(修正) | NOT STARTED |
+| Station 5c — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4b 修正完成，Station 5b 審查包已建立，待獨立審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5b FAIL(S5b-F1 阻擋);回 Station 3c 補紅燈(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第三代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4b 修正完成，Station 5b 審查包已建立，待獨立審查(與票頭第 3 行一致)。~~
+> 2026-10-02 Station 5b 獨立審查 FAIL 後隨第 3 行同步更新(見〈二十一〉)。
 
 > **舊句(F-036,保留不刪,第二代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5 FAIL,回 Station 3b 補紅燈,Station 4b 未開始(與票頭第 3 行一致)。~~
 > Station 4b 落票時第 3 行已更新而本句未同步(Station 4b 報告「尚未證明」第 4 項);2026-10-02 Station 5b-0 修正。
@@ -1066,7 +1075,7 @@ tests orphaned under ticket 145: (無)
 | bytes / 行數(工作複本,LF) | 151293 / 2971 |
 | SHA-256(工作複本) | `86a1c73429f4655fdc268c1544bcf0af054df57eb2a36e2f546f38087ba404bf` |
 | staged blob ID | `94bd4b6dced526b0433a61ba7423cf58ed792f33` |
-| S5b-0 commit | 於 Station 5b-0 回報中給出;Station 5b 結果落票時回填 |
+| S5b-0 commit | `5c637fd0ac1e7c1f6b89a2061fdb6fcf66207461` |
 
 - 審查包的 A–H 段:身分與規則(審查對象一律寫成 TARGET 完整 SHA)、票 145 合約原文、前次 FAIL 原文(F1–F4)、
   `origin/master..TARGET` commit 清單、兩份完整 diff、Station 4b 證據、必答問題 G1–G11、已知例外與未證明事項。
@@ -1075,6 +1084,67 @@ tests orphaned under ticket 145: (無)
 裁決(2026-10-02,Jeff):
 1. **Station 3b 刀③ 的程序違規**(`git diff --check` 有輸出時仍 commit)列為**已知例外**;不改寫歷史。
 2. **Station 4b:PASS / ACCEPTED**。
+
+---
+
+## 二十一、Station 5b 獨立審查（FAIL）與 Station 3c 裁決（2026-10-02，Jeff）
+
+### 21.1 審查報告
+
+- 路徑 docs/audits/2026-10-02-m1a-station5b-independent-review-fail.md
+- 原始證據：.scratch/m1a-s5b/review-report.md（不進版控），LF，30155 bytes，
+  sha256 05951ee66f810e308954f2baa301d8fafb88f431fc9c0f54c9ac166c4c1917fc
+- repo 副本：docs/audits/2026-10-02-m1a-station5b-independent-review-fail.md，30156 bytes，
+  sha256 bc7d9b67ac0f7d030ed4b0cda78013bbf372f504c3f489874fbcb5a6ed0c1e3f，Git blob 見下一行
+- 兩者唯一差異：第 329 行本機使用者資料夾名稱以 `<user>` 遮罩（pre-commit 洩漏偵測擋下，依 F-116 遮罩版不再稱為原始）。
+  其餘逐位元組相同。
+- Git blob：5caacedbd123e3aa47eb39d8819ef66fedac9e11
+- 審查對象 851cbd75b359a6b2a34452265e8a70992fa56996；判決 FAIL；阻擋 1（S5b-F1），非阻擋 5（S5b-F2–F6）
+
+### 21.2 裁決助手外部重現（隔離環境；不是本 repo 的帳本證據；未寫入本 repo 任何檔案）
+
+- 環境：pytest 9.1.1；redlight.py、status.py、tests/conftest.py 取自 TARGET；testpaths = ["tests"]；
+  一個測試檔含模組層 test_a、test_b。
+- R1 全套（實作不存在）⇒ 收集錯誤 ⇒ 整檔紅。
+- R2 全套（test_a 過、test_b 敗）⇒ red = {整檔, test_b}；lastfailed = {test_b}。
+- R3 `pytest -q --lf`（test_b 已修、test_a 被改壞）⇒ 只收集並執行 test_b，passed；deselected = []；
+  invocation args = ["tests"] ⇒ file_coverage = "true"，run_state = A ⇒ ticket_test_state = green。
+- 實際：單獨執行 test_a ⇒ 1 failed。⇒ S5b-F1 在真實執行上成立。
+- 附註 1：審查報告推演的 R2（只跑 nodeid）在真實執行中 lastfailed 仍保留整檔鍵、R3 會跑全檔，該條路徑不重現；
+  但上面「全套 → --lf」的路徑重現，結論不變。
+- 附註 2：即使檔案先前沒有紅，--lf 也會讓「只跑了部分身分」的檔被判 green。問題在 coverage 判定本身，不限整檔紅。
+- 附註 3：審查報告 G5 推演 -x / --maxfail 在 TARGET 上未造成假綠（停止點所在檔必有 failure；之後的檔沒有 outcome，不退紅、不 green）。
+  下面裁決 2 仍把提前停止納入合約，作為正向事實的一部分；它在 3c 的紅燈屬於 behavior-red 還是 regression-lock，於規劃時逐支判定。
+
+### 21.3 裁決
+
+1. Station 5b FAIL 成立；S5b-F1 為阻擋。依流程回 Station 3c（補紅燈）→ 4c（修正）→ 5c（新的獨立審查）。不推、不回滾、不改寫歷史。
+2. 修正方向（合約）—— coverage authority 的正向事實必須涵蓋「選擇完整性 + 執行完整性」：
+   full_file_coverage == "true" 除既有條件外，producer 必須正向記錄足以證明本次沒有任何
+   「會縮小實際執行集合」或「會提前終止執行」的機制生效。至少盤點並分類：
+   - selection / collection narrowing：--lf / --last-failed 等（收集期就過濾、不發 deselected 通知）
+   - execution early-stop：-x / --exitfirst、--maxfail、--sw / --stepwise（含 --sw-skip）等
+   具體清單、每個機制在 pytest 9.1.1 的實際行為（是否走 pytest_deselected、是否提前停止）與原始碼出處，
+   於 Station 3c 規劃時逐項確認並列表。
+   任一必要事實缺欄、型別不明、或機制生效 ⇒ 不得給 "true"；依語意給 "false" 或 "unknown"，兩者都沒有退紅權與 orphan 權。
+   不得以「沒有 deselected」推論選擇完整或執行完整。
+3. Station 3c 紅燈至少要含：
+   (a) --lf silent narrowing：收集結果少了身分、沒有 deselected 通知 ⇒ 不退紅、不 green；
+   (b) 選擇／執行完整性事實缺欄 ⇒ 不得為 "true"；
+   (c) -x / --maxfail 或 --sw：完整收集但部分未執行 ⇒ 不得因 coverage authority 被當成 green 或 orphan-safe；
+   (d) regression lock：固定全套指令（narrowing / early-stop 全關）仍判 "true"；
+   (e) 21.2 的三步情境（全套 → --lf → status 假綠）以 driver 表達（不在真實帳本執行）。
+   3c 規劃時必須逐支標明 behavior-red（現在應該失敗）或 regression-lock（現在就應該通過），
+   驗收照舊：預期紅集合 = 實際失敗集合。
+4. S5b-F2–F6：非阻擋，本票不修，登記到 M1-a 結案後的追蹤票。
+   S5b-F3（固定 skip/xfail 讓整檔紅永遠退不了）需要另裁合約對 applicable 的解讀，在追蹤票處理。
+5. 程序事件：審查者曾嘗試寫入 scratchpad，被 R7 擋下；停手詢問後，Jeff 選擇只讀繼續。
+   審查前後 HEAD、樹狀態、兩本帳皆未變（裁決助手以 status_all 核對）。照實記錄，不影響審查效力。
+6. 結案後追蹤票清單更新為：conftest 不受 R2/R3 管的缺口；session 帳本增長；S5b-F2–F6；上游票 139 少一空行。
+7. 洩漏事件：審查報告照錄 R7 擋下訊息時，帶入了本機使用者資料夾名稱（F-082 型）。
+   pre-commit 洩漏偵測（權威層）在 S5b-1 commit 時擋下，未進入歷史。
+   處置：裁 A，repo 副本遮罩、原檔不動、不豁免偵測。
+   Station 5c 審查者提示新增一條：照錄系統訊息前，先遮罩本機路徑中的使用者名稱。
 
 ---
 
