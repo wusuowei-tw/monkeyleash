@@ -1510,6 +1510,17 @@ tests orphaned under ticket 145: (無)
 
 ---
 
+## 三十、Station 3d 紅燈證據
+
+- 報告:`docs/audits/2026-10-02-m1a-station3d-redlight.md`。
+- S3d-1 `33b8bb4ba6e5601c011d6a50eda9504610c69665`:兩個測試檔各一個接在檔尾的 hunk(`@@ -1063,0 +1064,415 @@`、`@@ -2298,0 +2299,245 @@`),沒有刪除行;commit 前只跑 py_compile。
+- 固定全套(只跑一次,在 S3d-1 上):`13 failed, 1973 passed, 3 skipped, 3 xfailed in 147.44s (0:02:27)`,exit 1;失敗集合恰為〈二十九〉29.2 的 13 支;6 支 regression-lock 與 P4 那 9 支既有測試全部通過。
+- 帳本 H3 → H4 只追加:test-runs 661092 → 673590 bytes(2457 → 2503 行,+46)、test-sessions 3494564 → 4192482 bytes(15 → 16 行,+1);兩本前段 sha256 等於 H3(`352e7d26…` / `b48ee090…`)。
+- status:red 只有 tests/test_redlight.py、tests/test_status.py;最近一次 run 為 B(collected 1992)。
+- 版本固定查證:pytest 只有範圍(`pyproject.toml:34`),anyio 沒有宣告,CI 在執行當下解析(`.github/workflows/tests.yml:50`)⇒ 已記入〈二十九〉第 3 點的已知殘餘。
+
+---
+
 ## 相關
 
 - **票 139** —— 原始 finding。本票承接;其證據與未查邊界不改寫。
