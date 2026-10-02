@@ -231,10 +231,37 @@ def pytest_sessionfinish(session, exitstatus):
     if not hasattr(_redlight, "record_session"):
         return
     selected = _run["selected"] if _run["selected"] is not None else list(_run["outcomes"])
-    _redlight.record_session(
-        _ROOT,
+    kwargs = dict(
         exit_code=exitstatus,
         collected=list(selected) + list(_run["deselected"]) + list(_run["collect_errors"]),
         deselected=list(_run["deselected"]),
         outcomes=dict(_run["outcomes"]),
     )
+    # 票 145 Station 4b:涵蓋範圍的判定依據(〈十七〉裁決 1)—— pytest 實際收到的
+    # 位置參數與它們的來源。沒有 config ⇒ None ⇒ 涵蓋範圍未知(不知道,就不是完整)。
+    # 舊版 redlight.py 的 record_session 沒有 `invocation` 參數 ⇒ 照舊不傳。
+    import inspect as _inspect
+    if "invocation" in _inspect.signature(_redlight.record_session).parameters:
+        kwargs["invocation"] = _invocation_of(session)
+    _redlight.record_session(_ROOT, **kwargs)
+
+
+def _invocation_of(session):
+    """session 的呼叫事實:`config.args`、`args_source`、`invocation_params.dir`、`option.pyargs`。
+
+    屬性一律帶預設值讀;沒有 config ⇒ None。
+    """
+    cfg = getattr(session, "config", None)
+    if cfg is None:
+        return None
+    args = getattr(cfg, "args", None)
+    src = getattr(cfg, "args_source", None)
+    params = getattr(cfg, "invocation_params", None)
+    inv_dir = getattr(params, "dir", None) if params is not None else None
+    option = getattr(cfg, "option", None)
+    return {
+        "args": list(args) if isinstance(args, (list, tuple)) else None,
+        "args_source": getattr(src, "name", None) if src is not None else None,
+        "invocation_dir": os.fspath(inv_dir) if inv_dir is not None else None,
+        "pyargs": bool(getattr(option, "pyargs", False)),
+    }

@@ -178,8 +178,47 @@ def _ticket_of(root):
         return None
 
 
+def _normalize_arg(arg, root, invocation_dir):
+    """一個 pytest 位置參數 → root 相對的 posix 路徑(保留 `::` 之後那段)。
+
+    無法判讀(空字串、落在 root 之外、跨磁碟)⇒ None。**絕對路徑不落帳** ——
+    帳本只存 root 相對路徑,`invocation_dir` 只用來解析,不寫進紀錄。
+    """
+    s = str(arg).replace("\\", "/")
+    path, sep, rest = s.partition("::")
+    if not path:
+        return None
+    base = os.fspath(invocation_dir) if invocation_dir else os.fspath(root)
+    full = path if os.path.isabs(path) else os.path.join(base, path)
+    try:
+        rel = os.path.relpath(os.path.normpath(full), os.path.normpath(os.fspath(root)))
+    except ValueError:
+        return None
+    rel = rel.replace("\\", "/")
+    if rel == ".." or rel.startswith("../"):
+        return None
+    return rel + (sep + rest if sep else "")
+
+
+def _normalize_invocation(root, invocation):
+    """producer 交來的 invocation 事實 → 落帳形狀。不是 dict ⇒ None(涵蓋範圍未知)。"""
+    if not isinstance(invocation, dict):
+        return None
+    args = invocation.get("args")
+    if isinstance(args, (list, tuple)):
+        norm = [_normalize_arg(a, root, invocation.get("invocation_dir")) for a in args]
+    else:
+        norm = None
+    src = invocation.get("args_source")
+    return {
+        "args": norm,
+        "args_source": src if isinstance(src, str) else None,
+        "pyargs": bool(invocation.get("pyargs")),
+    }
+
+
 def record_session(root, run_id=None, time=None, ticket_id=None, exit_code=None,
-                   collected=(), deselected=(), outcomes=None):
+                   collected=(), deselected=(), outcomes=None, invocation=None):
     """追加一筆 run 事實到 `<root>` 的 session 帳本。回傳寫入的內容。
 
     - `collected`:本次收集到的身分(含被 deselect 的;收集錯誤以
@@ -187,6 +226,8 @@ def record_session(root, run_id=None, time=None, ticket_id=None, exit_code=None,
     - `deselected`:被排除的身分;`selected` = collected − deselected
     - `outcomes`:`{身分: "passed" | "failed" | "skipped" | "other"}`,只含 selected
     - `exit_code`:runner 的原始退出碼;取不到為 None
+    - `invocation`:producer 觀察到的呼叫事實 `{"args", "args_source", "invocation_dir",
+      "pyargs"}`(票 145〈十七〉裁決 1 的判定依據);None ⇒ 涵蓋範圍未知
 
     `run_id` / `time` / `ticket_id` 為 None 時自取(測試可指定以求決定性)。
     寫入失敗不拋例外 —— 紀錄器不得弄死執行器(`TestTheRecorderCannotKillTheRunner`)。
@@ -201,6 +242,7 @@ def record_session(root, run_id=None, time=None, ticket_id=None, exit_code=None,
         "collected": [str(n).replace("\\", "/") for n in (collected or ())],
         "deselected": [str(n).replace("\\", "/") for n in (deselected or ())],
         "outcomes": {str(k).replace("\\", "/"): v for k, v in (outcomes or {}).items()},
+        "invocation": _normalize_invocation(root, invocation),
     }
     path = session_log(root)
     try:
@@ -238,11 +280,76 @@ def load_runs(root):
     return out
 
 
+OUTCOME_VALUES = ("passed", "failed", "skipped", "other")
+
+
+def validate_session(run):
+    """一筆 run 事實的 schema 問題清單。**空 list = 合格。**(票 145〈十七〉裁決 3)
+
+    合格的條件(缺一即不合格,**不得**以「缺欄 ⇒ 空集合」或「錯型別照常迭代」處理):
+      - `run_id`、`time` 為非空字串;`ticket_id` 欄位存在(字串或 null)
+      - `exit_code` 欄位存在,為 int(非 bool)或 null
+      - `collected`、`deselected` 為字串 list;`deselected ⊆ collected`
+      - `outcomes` 為 `{字串: passed | failed | skipped | other}`;其鍵 ⊆ selected
+      - `invocation` 若存在且非 null:為 dict,`args` 為 list(元素為字串或 null)或 null
+    """
+    if not isinstance(run, dict):
+        return ["不是物件"]
+    problems = []
+    for key in ("run_id", "time"):
+        v = run.get(key)
+        if not isinstance(v, str) or not v:
+            problems.append("%s 缺欄或非字串" % key)
+    if "ticket_id" not in run:
+        problems.append("ticket_id 缺欄")
+    if "exit_code" not in run:
+        problems.append("exit_code 缺欄")
+    else:
+        ec = run["exit_code"]
+        if ec is not None and (isinstance(ec, bool) or not isinstance(ec, int)):
+            problems.append("exit_code 型別不符")
+    lists = {}
+    for key in ("collected", "deselected"):
+        if key not in run:
+            problems.append("%s 缺欄" % key)
+        elif not isinstance(run[key], list) or not all(isinstance(n, str) for n in run[key]):
+            problems.append("%s 型別不符" % key)
+        else:
+            lists[key] = run[key]
+    outcomes = run.get("outcomes", None)
+    if "outcomes" not in run:
+        problems.append("outcomes 缺欄")
+    elif not isinstance(outcomes, dict) or not all(
+            isinstance(k, str) and v in OUTCOME_VALUES for k, v in outcomes.items()):
+        problems.append("outcomes 型別不符")
+        outcomes = None
+    if "collected" in lists and "deselected" in lists:
+        collected = set(lists["collected"])
+        deselected = set(lists["deselected"])
+        if not deselected <= collected:
+            problems.append("deselected 不屬於 collected")
+        if isinstance(outcomes, dict):
+            stray = sorted(set(outcomes) - (collected - deselected))
+            if stray:
+                problems.append("outcome 身分不屬於 selected:%s" % ", ".join(stray))
+    inv = run.get("invocation")
+    if inv is not None:
+        if not isinstance(inv, dict):
+            problems.append("invocation 型別不符")
+        else:
+            args = inv.get("args")
+            if args is not None and (not isinstance(args, list) or not all(
+                    a is None or isinstance(a, str) for a in args)):
+                problems.append("invocation.args 型別不符")
+    return problems
+
+
 def run_state(run):
     """一個 run 事實的狀態 `"A"`–`"F"`(票 145〈三〉A)。**依序判定,先命中者為準。**
 
     | 條件 | 狀態 |
     |---|---|
+    | schema 不合格(`validate_session()` 非空) | INVALID —— 不是 A–F 任何一個 |
     | exit code 不在 {0, 1, 5}(中斷 / 內部錯誤 / 用法錯誤 / 取不到),或有收集錯誤 | D |
     | 任一身分 failed | B |
     | 0 collected | C |
@@ -252,6 +359,8 @@ def run_state(run):
     **不只看 exit code**:全部 deselected 時 pytest 回 5,但有收集到 ⇒ F,不是 C。
     E(根本沒跑)沒有 run 事實可以輸入,不在本函式值域內。
     """
+    if validate_session(run):
+        return "INVALID"
     ec = run.get("exit_code")
     collected = run.get("collected") or []
     outcomes = run.get("outcomes") or {}
@@ -265,3 +374,56 @@ def run_state(run):
     if "passed" not in values:
         return "F"
     return "A"
+
+
+def file_coverage(run, test_file):
+    """這個 run 對 `test_file` 是否整檔涵蓋:`"true"` / `"false"` / `"unknown"`。
+
+    票 145〈十七〉裁決 1:**只有 producer 能正向證明整檔涵蓋時才為 true;不知道,就不是完整。**
+    依序判定(先命中者為準):
+
+    | 條件 | 結果 |
+    |---|---|
+    | run schema 不合格 | unknown |
+    | 本 run 沒有收集到該檔的任何身分,或該檔有收集錯誤 | unknown |
+    | 該檔有任何 deselected 身分(`-k` / `-m` / `--deselect` / `--lf` 等) | false |
+    | 沒有 invocation 事實、`pyargs`、或 `args` 不是非空 list | unknown |
+    | 某個位置參數是**該檔本身或其上層目錄**、且不含 `::` | true |
+    | 位置參數只以 nodeid(含 `::`)指名該檔 | false |
+    | 其餘(參數無法判讀、或都與該檔無關) | unknown |
+
+    **沒有為固定指令另寫分支**:pytest 未給位置參數時以 testpaths 補上
+    `config.args == ["tests"]`,與「位置參數為上層目錄 tests」走同一條規則。
+    """
+    if validate_session(run):
+        return "unknown"
+    tf = str(test_file).replace("\\", "/")
+    deselected = set(run["deselected"])
+    idents = [n for n in run["collected"] if n.split("::", 1)[0] == tf]
+    if not idents or any(n.endswith("::" + COLLECTION_ERROR) for n in idents):
+        return "unknown"
+    if any(n in deselected for n in idents):
+        return "false"
+    inv = run.get("invocation")
+    if not isinstance(inv, dict) or inv.get("pyargs"):
+        return "unknown"
+    args = inv.get("args")
+    if not isinstance(args, list) or not args:
+        return "unknown"
+    covering = narrowed = False
+    for a in args:
+        if not isinstance(a, str):
+            continue                        # 無法判讀的參數:不證明任何事
+        path, sep, _rest = a.partition("::")
+        if path == tf:
+            if sep:
+                narrowed = True
+            else:
+                covering = True
+        elif not sep and (path == "." or tf.startswith(path.rstrip("/") + "/")):
+            covering = True
+    if covering:
+        return "true"
+    if narrowed:
+        return "false"
+    return "unknown"

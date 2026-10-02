@@ -403,25 +403,43 @@ def _red_identities_of_row(rec):
     return {u"%s::%s" % (f, n) for n in names}
 
 
-def _apply_run(run, red, orphan, green_now):
+_RL_FUNCS = ("validate_session", "run_state", "file_coverage")
+
+
+def _rl_ready(rl):
+    """這份 redlight 有沒有判定所需的三個函式(舊版下游沒有 ⇒ 一律當涵蓋未知)。"""
+    return rl is not None and all(hasattr(rl, n) for n in _RL_FUNCS)
+
+
+def _apply_run(run, red, orphan, green_now, rl=None):
     """一個 run 事實對每個檔的影響(就地更新三個 dict)。
 
-    退紅(〈十三〉修訂後 ODC-1,file-scoped)—— 三項同時成立才退:
-      1. 該檔的測試集合全部被選到(該檔沒有任何 deselected);
-      2. 已知的紅身分本次實際執行且 passed;身分不明時,該檔全部 collected 身分都要 passed;
-      3. 該檔本次沒有任何 failure。
-    另加 I3:exit code 不在 {0, 1}(中斷、內部錯誤、用法錯誤、取不到)的 run 沒有退紅權。
+    **schema 不合格的 run 不產生任何效果**(〈十七〉裁決 3)—— 不加紅、不退紅、
+    不 orphan、不 green;它的存在由 `_evidence` 另行顯示(不靜默丟棄)。
 
-    孤兒(ODC-2):全選的 run 收集不到某個已知紅身分 ⇒ 移到 orphan,**不退紅**;
-    之後若同名身分再被收集到,移回紅,照常判定。改名不視為延續。
+    合格的 run:
+      - 該檔有 failure 或收集錯誤 ⇒ 加紅(收集錯誤 ⇒ 身分不明的整檔紅),不 green。
+      - `run_state == "D"` ⇒ **整個 run 沒有退紅權、不得使任何檔成為 green**(裁決 2)。
+      - 退紅 / orphan / green **只在 `file_coverage(run, f) == "true"` 時進行**(裁決 1):
+        退紅(〈十三〉ODC-1)—— 已知紅身分本次 passed;身分不明時該檔全部 collected 身分 passed;
+        孤兒(ODC-2)—— 整檔涵蓋的 run 收集不到某已知紅身分 ⇒ 移到 orphan,不退紅;
+        同名身分再被收集到 ⇒ 移回紅。改名不視為延續。
+      - `rl` 為 None 或缺函式 ⇒ 無法判定涵蓋 ⇒ 只加紅,不退紅、不 orphan、不 green。
     """
-    collected = [str(n) for n in (run.get("collected") or [])]
-    deselected = set(str(n) for n in (run.get("deselected") or []))
-    outcomes = run.get("outcomes") or {}
-    exit_ok = run.get("exit_code") in (0, 1)
+    ready = _rl_ready(rl)
+    if ready and rl.validate_session(run):
+        return
+    collected = run.get("collected")
+    deselected = run.get("deselected")
+    outcomes = run.get("outcomes")
+    if (not isinstance(collected, list) or not isinstance(deselected, list)
+            or not isinstance(outcomes, dict)):
+        return
+    deselected = set(str(n) for n in deselected)
+    state = rl.run_state(run) if ready else None
     by_file = {}
     for n in collected:
-        by_file.setdefault(_identity_file(n), []).append(n)
+        by_file.setdefault(_identity_file(n), []).append(str(n))
     for f, idents in by_file.items():
         errored = any(n.endswith(u"::<collection error>") for n in idents)
         selected = [n for n in idents if n not in deselected]
@@ -435,27 +453,29 @@ def _apply_run(run, red, orphan, green_now):
                 mine.add(_whole(f))
             green_now[f] = False
             continue
-        if not any(n in deselected for n in idents):
-            present = set(idents)
-            back = set(n for n in orphan.get(f, ()) if n in present)
-            if back:
-                red.setdefault(f, set()).update(back)
-                orphan[f] -= back
-            gone = set(n for n in red.get(f, ())
-                       if not n.endswith(u"::" + WHOLE_FILE) and n not in present)
-            if gone:
-                red[f] -= gone
-                orphan.setdefault(f, set()).update(gone)
-            if exit_ok and red.get(f):
-                if any(n.endswith(u"::" + WHOLE_FILE) for n in red[f]):
-                    if all(outcomes.get(n) == u"passed" for n in idents):
-                        red[f] = set()
-                else:
-                    red[f] = set(n for n in red[f] if outcomes.get(n) != u"passed")
-        green_now[f] = exit_ok and u"passed" in results
+        if not ready or state == u"D" or rl.file_coverage(run, f) != u"true":
+            green_now[f] = False
+            continue
+        present = set(idents)
+        back = set(n for n in orphan.get(f, ()) if n in present)
+        if back:
+            red.setdefault(f, set()).update(back)
+            orphan[f] -= back
+        gone = set(n for n in red.get(f, ())
+                   if not n.endswith(u"::" + WHOLE_FILE) and n not in present)
+        if gone:
+            red[f] -= gone
+            orphan.setdefault(f, set()).update(gone)
+        if red.get(f):
+            if any(n.endswith(u"::" + WHOLE_FILE) for n in red[f]):
+                if all(outcomes.get(n) == u"passed" for n in idents):
+                    red[f] = set()
+            else:
+                red[f] = set(n for n in red[f] if outcomes.get(n) != u"passed")
+        green_now[f] = u"passed" in results
 
 
-def ticket_test_state(records, runs, ticket):
+def ticket_test_state(records, runs, ticket, rl=None):
     """這張票底下每個測試檔的狀態。**純函式,不讀檔。**
 
     回傳 `{test_file: {"state": "red" | "green" | "unknown" | "orphaned",
@@ -466,7 +486,10 @@ def ticket_test_state(records, runs, ticket):
       (producer 在同一個 session 先寫逐檔紀錄、最後寫 run 事實)。
     - **8 欄紀錄沒有 run 事實 ⇒ coverage 未知**:red 紀錄加紅,green 紀錄**不退任何紅**,
       且不能讓該檔變成 green(只到 `unknown`)—— Backward compatibility 2。
-    - `green` 只來自最新一次碰到該檔的 run:exit code ∈ {0, 1}、該檔 ≥1 passed、0 failed。
+    - `green` 只來自最新一次碰到該檔的 run:schema 合格、非 D、對該檔整檔涵蓋(`"true"`)、
+      該檔 ≥1 passed、0 failed。
+    - `rl`:該 root 的 redlight 模組(提供 `validate_session` / `run_state` / `file_coverage`);
+      None ⇒ 涵蓋一律未知(只加紅、不退紅)。
     """
     if not ticket:
         return {}
@@ -490,7 +513,7 @@ def ticket_test_state(records, runs, ticket):
                 red.setdefault(f, set()).update(_red_identities_of_row(rec))
             green_now[f] = False
             continue
-        _apply_run(run, red, orphan, green_now)
+        _apply_run(run, red, orphan, green_now, rl)
 
     out = {}
     for f in set(red) | set(orphan) | set(green_now):
@@ -514,11 +537,24 @@ def _last_run_text(facts, rl, ticket):
     if not mine or rl is None or not hasattr(rl, "run_state"):
         return NO_RUN
     r = mine[-1]
+    problems = rl.validate_session(r) if hasattr(rl, "validate_session") else []
+    if problems:
+        # 不合格的 run:不顯示成 A–F 任何一個,也不從它算計數(錯型別不得照常迭代)
+        return u"INVALID(schema 不合格:%s)" % u";".join(problems)
     outs = list((r.get("outcomes") or {}).values())
     return u"%s(exit %s;collected %d / deselected %d / passed %d / failed %d / skipped %d)" % (
         rl.run_state(r), r.get("exit_code"), len(r.get("collected") or []),
         len(r.get("deselected") or []), outs.count(u"passed"), outs.count(u"failed"),
         outs.count(u"skipped"))
+
+
+def _invalid_count(facts, rl, ticket):
+    """本票 schema 不合格的 run 筆數。無法驗證(舊版 redlight)⇒ 0。"""
+    if rl is None or not hasattr(rl, "validate_session"):
+        return 0
+    return len([r for r in (facts or [])
+                if isinstance(r, dict) and r.get("ticket_id") == ticket
+                and rl.validate_session(r)])
 
 
 def _run_source(root, run_log, rl):
@@ -794,7 +830,7 @@ def _evidence(root, gate, ticket):
     elif not ticket:
         val = u"%s(無當前票)" % UNRECORDED
     else:
-        st = ticket_test_state(runs or [], facts or [], ticket)
+        st = ticket_test_state(runs or [], facts or [], ticket, rl)
         n = {k: len([1 for s in st.values() if s[u"state"] == k])
              for k in (u"red", u"green", u"unknown", u"orphaned")}
         last = runs[-1] if runs else None
@@ -802,8 +838,12 @@ def _evidence(root, gate, ticket):
                                           _field(last, "result"),
                                           _field(last, "time"))
                 if last else u"最後一筆 %s" % UNRECORDED)
-        val = u"本票 red %d / green %d / run 事實未知 %d / orphaned %d;%s;最近一次 run:%s" % (
-            n[u"red"], n[u"green"], n[u"unknown"], n[u"orphaned"], tail,
+        # 票 145 Station 4b:schema 不合格的 run 不進正常語意,但**不靜默丟棄** ——
+        # 筆數留在這一行,最近一次若不合格則尾段顯示 INVALID(…)(〈十七〉裁決 3)。
+        val = (u"本票 red %d / green %d / run 事實未知 %d / orphaned %d / schema 不合格 run %d;"
+               u"%s;最近一次 run:%s") % (
+            n[u"red"], n[u"green"], n[u"unknown"], n[u"orphaned"],
+            _invalid_count(facts, rl, ticket), tail,
             _last_run_text(facts, rl, ticket))
     out.append(_line(u"test-runs", val, _run_source(root, run_log, rl)))
 
@@ -999,7 +1039,7 @@ def _derived(root, gate, stage, ticket):
     if (runs is None and not facts) or not ticket:
         vals = dict((k, UNRECORDED) for k, _l in labels)
     else:
-        st = ticket_test_state(runs or [], facts or [], ticket)
+        st = ticket_test_state(runs or [], facts or [], ticket, rl)
         for k, _l in labels:
             files = sorted(f for f, s in st.items() if s[u"state"] == k)
             if k == u"orphaned":

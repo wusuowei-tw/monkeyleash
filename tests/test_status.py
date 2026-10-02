@@ -574,7 +574,8 @@ class TestTestsUnderTicketUsesTheLatestRecordPerFile:
         redlight.record_session(
             root, run_id=u"fixture-570-571", time=u"2026-09-02T02:00:00+00:00",
             ticket_id=u"99", exit_code=0, collected=[u"tests/test_a.py::test_one"],
-            deselected=[], outcomes={u"tests/test_a.py::test_one": u"passed"})
+            deselected=[], outcomes={u"tests/test_a.py::test_one": u"passed"},
+            invocation={u"args": [u"tests"]})
 
         out = render(root)
         red = _value_of(out, u"tests red under ticket 99")
@@ -1326,7 +1327,8 @@ class TestOrphans:
                                 deselected=[], outcomes={old: u"failed", keep: u"passed"})
         redlight.record_session(root, run_id=u"odc2-2", time=u"2026-09-02T02:00:00+00:00",
                                 ticket_id=u"99", exit_code=0, collected=[new, keep],
-                                deselected=[], outcomes={new: u"passed", keep: u"passed"})
+                                deselected=[], outcomes={new: u"passed", keep: u"passed"},
+                                invocation={u"args": [u"tests"]})
         out = render(root)
         orphaned = _value_of(out, u"tests orphaned under ticket 99")
         green = _value_of(out, u"tests green under ticket 99")
