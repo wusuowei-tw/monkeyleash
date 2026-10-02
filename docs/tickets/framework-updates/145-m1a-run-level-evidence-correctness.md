@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5c 審查包已建立;待獨立審查。
+**狀態**:動工 —— Station 5c FAIL(S5c-F1 阻擋);回 Station 3d 補紅燈。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -58,6 +58,9 @@
 >
 > - 狀態(舊,第十六代):~~`動工 —— Station 4c 修正完成(固定全套 exit 0);待 Station 5c 審查。`~~
 >   —— 2026-10-02 Station 5c 審查包建立後由第 3 行取代(見〈二十六〉)。
+>
+> - 狀態(舊,第十七代):~~`動工 —— Station 5c 審查包已建立;待獨立審查。`~~
+>   —— 2026-10-02 Station 5c 獨立審查 FAIL 後由第 3 行取代(見〈二十七〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -428,15 +431,21 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5b — Review | FAIL |
 | Station 3c — Red-light(補) | PASS / ACCEPTED |
 | Station 4c — Implementation(修正) | PASS / COMPLETED（待 5c 審查） |
-| Station 5c — Review | 審查包已建立，待審 |
+| Station 5c — Review | FAIL |
+| Station 3d — Red-light(補) | NOT STARTED |
+| Station 4d — Implementation(修正) | NOT STARTED |
+| Station 5d — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5c 審查包已建立;待獨立審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5c FAIL(S5c-F1 阻擋);回 Station 3d 補紅燈(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第八代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5c 審查包已建立;待獨立審查(與票頭第 3 行一致)。~~
+> 2026-10-02 Station 5c 獨立審查 FAIL 後隨第 3 行同步更新(見〈二十七〉)。
 
 > **舊句(F-036,保留不刪,第七代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4c 修正完成(固定全套 exit 0);待 Station 5c 審查(與票頭第 3 行一致)。~~
 > 2026-10-02 Station 5c 審查包建立後隨第 3 行同步更新(見〈二十六〉)。
@@ -1333,12 +1342,59 @@ tests orphaned under ticket 145: (無)
 | bytes / 行數(工作複本,LF) | 298249 / 5623 |
 | SHA-256(工作複本) | `1212a03951779967449bd637549860fee7acf22be9de40421e652817164a3db3` |
 | staged blob ID | `d37e0538798ae763d86716542becf3430d7a73c5` |
-| S5c-0 commit | 於 Station 5c-0 回報中給出;Station 5c 結果落票時回填 |
+| S5c-0 commit | `587c1ed63a07d90dc33f3e247f4d1ebed01c91bf` |
 
 - 審查包的 A–H 段:身分與規則(所有查詢錨點一律為完整 SHA)、票 145 規格原文(〈十三〉ODC-1、〈十七〉、〈十八之一〉18-1.1、〈十九〉、〈二十一〉、〈二十三〉、〈二十五〉)、
   Station 5(F1–F4)與 Station 5b(S5b-F1–F6)的發現原文、`origin/master..TARGET` commit 清單、三份完整 diff、3c / 4c 實測證據、必答題 G1–G12、已知例外與未證明事項。
 - 〈E〉三份 diff 與全部 14 段逐字段落,都已在建包時以 `cmp` 與原始輸出 / 出處檔案逐位元組比對相同。
 - 審查包的 `git diff --cached --check` 有 39 行 trailing whitespace,全部是〈E〉內嵌 diff 的空白 context 行(單一空格),屬 diff 原樣,刻意保留。
+
+---
+
+## 二十七、Station 5c 獨立審查（FAIL）與 Station 3d 裁決（2026-10-02，Jeff）
+
+### 27.1 審查報告
+
+- 路徑 docs/audits/2026-10-02-m1a-station5c-independent-review-fail.md；raw = normalized（LF），sha256 33f8ef6006b672eab3019a426bfc4a787e90d2b92ae1530ae18a6be9e788eccc
+- 審查對象 02a5e28adf5aee11a43d5a1063504f01beb1d67f；判決 FAIL（valid independent review）；阻擋 1（S5c-F1），非阻擋 3（S5c-F2–F4）
+- 報告內的本機路徑已由審查者遮罩為 <user>。
+
+### 27.2 裁決助手外部重現（隔離環境；不是本 repo 的帳本證據；未寫入本 repo 任何檔案）
+
+- 環境：pytest 9.1.1；redlight.py、status.py、tests/conftest.py 取自 TARGET 02a5e28；testpaths = ["tests"]；未安裝第三方 pytest 外掛。
+- R1 全套（實作不存在）⇒ D，整檔紅。R2 全套（test_a 過、test_b 敗）⇒ B，coverage "true"。
+- R3 `pytest -q -o python_functions=test_b`（test_b 已修、test_a 被改壞）⇒ 只收集 test_b，passed；
+  pre_narrowing 只有 test_b；run_state A；file_coverage "true" ⇒ ticket_test_state = green。
+- 實際：完整執行該檔 ⇒ 1 failed, 1 passed。⇒ S5c-F1 在真實執行上成立。
+- 附帶觀察（裁決助手，非審查者發現，記為 S5c-X1）：`-p no:<name>` 會在 list_name_plugin() 留下該名稱（物件為 None），
+  被分類為 other ⇒ coverage "unknown"。因此〈二十三〉裁決 4（cacheprovider_blocked 視為正向事實）實際上不會生效；
+  方向為 fail-closed，不危險。同理 `-p no:unittest` 已被擋。
+
+### 27.3 裁決
+
+1. Station 5c FAIL 成立；S5c-F1 為阻擋。審查報告的反方論點（設定定義測試集合）不採納，理由：
+   M1-a 的 coverage authority 已選定「repo 所提交的 collection definition」為完整性的基準。
+   單次 invocation 透過 -o / --override-ini 等管道改變 python_functions 等 discovery 規則，等於改變本次的 execution universe，
+   卻沒有留下 deselection evidence，因此不能沿用 repo baseline 的 whole-file authority。
+   （這不是主張 -o 與 -k 是同一種機制；兩者發生在 pytest 不同層次，只是對 completeness 的效果相同。）
+   依流程回 Station 3d（規劃 + 紅燈）→ 4d（修正）→ 5d（新的獨立審查）。不推、不回滾、不改寫歷史。
+2. 修正方向（合約）：completeness 必須正向證明「本次 effective collection definition = repo 所提交的 collection definition」。
+   Station 3d-0 規劃時先查清楚，再定合約，不預設修法：
+   - pytest 9.1.1 能否告訴 producer 哪些 ini key 被 -o 覆寫；effective ini 值能否與 repo baseline 可靠比較；
+   - PYTEST_ADDOPTS 注入的覆寫能否被同一機制看到；CLI、環境、ini 的合併順序；
+   - 若只看得到最後值、看不到來源，能否仍證明「等於 repo 定義」；
+   - -c / --config-file：指向 repo 內已提交的權威設定時是否仍可接受，或一律 fail-closed（若 provenance 成本不值得，可選後者）；
+   - 其他會改變「哪些東西算測試」的輸入（python_files、python_classes、python_functions、norecursedirs、collect_ignore、
+     --rootdir、--confcutdir、--import-mode、--doctest-modules 等）逐項盤點行為與出處，分類為「會縮小」「只會擴增」「不影響」。
+   據此決定 4d 是「禁止所有覆寫管道」還是「比較 effective collection definition」。缺欄或無法判定 ⇒ 不得為 "true"。
+3. S5c-F2（三條條件沒有單獨的測試鎖住）：納入 Station 3d，以 regression-lock 補上逐條隔離測試。
+4. S5c-X1：納入 Station 3d 的合約整理。傾向把合約簡化為「任何明確的 plugin 停用（-p no:<name>）⇒ 不取得 full coverage authority」，
+   取代〈二十三〉裁決 4 的 cacheprovider_blocked 特判；正式裁定前，先由 3d-0 查清 pytest 9.1.1 對被停用 plugin 的實際表示方式。
+5. S5c-F3、S5c-F4：非阻擋，登記到 M1-a 結案後的追蹤票。
+6. 程序事件：審查者兩次被 R7 擋下，停手詢問後 Jeff 選擇只讀繼續；一次以短 SHA 查規劃 commit、一次讀到工作樹 pyproject.toml，
+   事後皆以 TARGET 完整 SHA 重讀，報告引用重讀結果。照實記錄，不影響審查效力。
+7. 結案後追蹤票清單更新為：conftest 不受 R2/R3 管的缺口；session 帳本增長；S5b-F2–F6；S5c-F3、S5c-F4；
+   測試身分 parametrize ID 帶本機 repo 路徑；上游票 139 少一空行。
 
 ---
 
