@@ -1265,6 +1265,21 @@ tests orphaned under ticket 145: (無)
 
 ---
 
+## 二十四、Station 3c 紅燈證據
+
+- 報告:`docs/audits/2026-10-02-m1a-station3c-redlight.md`。
+- S3c-1 `175da887f404fe0e1029de8bb2e438ab62f4aebb`:兩個測試檔各恰好一個檔尾 hunk(`@@ -632,0 +633,409 @@`、`@@ -1755,0 +1756,514 @@`),沒有刪除行。
+- 第一次驗收(S3c-1 上):`15 failed, 1952 passed, 3 skipped, 3 xfailed`。偏差:C3e-1 意外通過,依程序停手。
+- **3c-1b 裁決(Jeff)**:判定為 test-driver defect,不是產品碼問題。C3e-1 以同一個 conftest 模組連續驅動 R1–R3,狀態殘留使 R3 的 session 判 INVALID ⇒ 不退紅 ⇒ 因錯誤的理由通過。
+  只修這一支:R1 / R2 / R3 各自用新的 `_chain_conftest()`,加情境斷言 R1 = D、R2 = B、R3 = A 且 schema 合格;red / green 斷言不變。授權在修正後的乾淨 HEAD 上再跑一次。
+- S3c-1b `49bcde20adc276632fa5bab456e8c7a80839fc0b`:三個 hunk 都在該函式範圍內(修改前 2137–2154 / 修改後 2137–2164)。
+- 第二次驗收(S3c-1b 上):16 支 behavior-red 全部失敗,5 支 regression-lock 與其他既有測試全部通過。
+  **摘要行原文因 tool 輸出截斷而遺失**(裁決:照寫並標明)。失敗集合由 pytest 的 `lastfailed` 快取與帳本兩個獨立來源證明;status.py 為 `最近一次 run:B(exit 1;collected 1973 / deselected 0 / passed 1951 / failed 16 / skipped 3)`,red 只有 `tests/test_redlight.py`、`tests/test_status.py`。
+- 帳本 H0 → H1 → H2:test-runs 624488 → 637099 → 649789 bytes(2319 → 2365 → 2411 行),test-sessions 1873333 → 2338347 → 2803361 bytes(12 → 13 → 14 行);兩段前段 sha256 都與前一點相同 ⇒ 只追加。
+  H0 為 VS 當時記錄,H0 / H1 都與裁決助手獨立量測相同。
+
+---
+
 ## 相關
 
 - **票 139** —— 原始 finding。本票承接;其證據與未查邊界不改寫。
