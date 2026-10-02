@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 4b 修正完成(固定全套 exit 0);待 Station 5b 審查。
+**狀態**:動工 —— Station 5b 審查包已建立;待獨立審查。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -40,6 +40,9 @@
 >
 > - 狀態(舊,第十代):~~`動工 —— Station 3b(含補件)紅燈已寫(待 Jeff 驗收);Station 4b 未開始。`~~
 >   —— 2026-10-02 Station 4b 修正完成、固定全套 exit 0 後由第 3 行取代(見〈十九〉)。
+>
+> - 狀態(舊,第十一代):~~`動工 —— Station 4b 修正完成(固定全套 exit 0);待 Station 5b 審查。`~~
+>   —— 2026-10-02 Station 5b 審查包建立後由第 3 行取代(見〈二十〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -407,14 +410,18 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5 — Review | FAIL |
 | Station 3b — Red-light(補,含補件) | PASS / ACCEPTED |
 | Station 4b — Implementation(修正) | 修正完成，待審查 |
+| Station 5b — Review | 審查包已建立，待審 |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5 FAIL,回 Station 3b 補紅燈,Station 4b 未開始(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4b 修正完成，Station 5b 審查包已建立，待獨立審查(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第二代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5 FAIL,回 Station 3b 補紅燈,Station 4b 未開始(與票頭第 3 行一致)。~~
+> Station 4b 落票時第 3 行已更新而本句未同步(Station 4b 報告「尚未證明」第 4 項);2026-10-02 Station 5b-0 修正。
 
 > **舊句(F-036,保留不刪)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3 進行中,Station 4 未開始(與票頭第 3 行一致)。~~
 > 第 3 行之後數次更新(紅燈驗收、Station 4 完成)時本句未同步而與第 3 行矛盾;2026-10-02 Station 3b 落票時修正。
@@ -1047,6 +1054,27 @@ tests orphaned under ticket 145: (無)
 | **UNIT** | 固定全套 exit 0,`1946 passed, 3 skipped, 3 xfailed` |
 | **CLEAN** | 未證明 |
 | **REAL** | 留待 Jeff 端 status_all 確認(本站不宣稱) |
+
+---
+
+## 二十、Station 5b 審查包
+
+| 項 | 值 |
+|---|---|
+| 審查對象(TARGET) | `851cbd75b359a6b2a34452265e8a70992fa56996` |
+| 審查包 | `docs/audits/2026-10-02-m1a-station5b-review-package.md` |
+| bytes / 行數(工作複本,LF) | 151293 / 2971 |
+| SHA-256(工作複本) | `86a1c73429f4655fdc268c1544bcf0af054df57eb2a36e2f546f38087ba404bf` |
+| staged blob ID | `94bd4b6dced526b0433a61ba7423cf58ed792f33` |
+| S5b-0 commit | 於 Station 5b-0 回報中給出;Station 5b 結果落票時回填 |
+
+- 審查包的 A–H 段:身分與規則(審查對象一律寫成 TARGET 完整 SHA)、票 145 合約原文、前次 FAIL 原文(F1–F4)、
+  `origin/master..TARGET` commit 清單、兩份完整 diff、Station 4b 證據、必答問題 G1–G11、已知例外與未證明事項。
+- 審查包的 `git diff --cached --check` 有 31 行 trailing whitespace,全部是〈E〉內嵌 diff 的空白 context 行(單一空格),屬 diff 原樣,刻意保留。
+
+裁決(2026-10-02,Jeff):
+1. **Station 3b 刀③ 的程序違規**(`git diff --check` 有輸出時仍 commit)列為**已知例外**;不改寫歷史。
+2. **Station 4b:PASS / ACCEPTED**。
 
 ---
 
