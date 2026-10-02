@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:立案(時鐘已定 2026-10-02);未動工 —— Station 2 DONE、Station 3 NOT STARTED。
+**狀態**:動工 —— Station 3 進行中(baseline 已量,紅燈未寫);Station 4 未開始。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -13,6 +13,9 @@
 > - 時鐘(舊):~~`未定 —— 待 Jeff 裁定日期;Station 3 開工前必須裁`~~
 >
 > 2026-10-02 由第 3、4 行取代。
+>
+> - 狀態(舊,第二代):~~`立案(時鐘已定 2026-10-02);未動工 —— Station 2 DONE、Station 3 NOT STARTED。`~~
+>   —— 2026-10-02 Station 3 baseline 量測後由第 3 行取代(見〈十二〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -375,7 +378,7 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 |---|---|
 | Station 1 — Spec | PASS / CLOSED |
 | Station 2 — Ticket | DONE |
-| Station 3 — Red-light | NOT STARTED |
+| Station 3 — Red-light | IN PROGRESS(baseline 已量,紅燈未寫) |
 | Station 4 — Implementation | NOT STARTED |
 | Station 5 — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
@@ -407,6 +410,83 @@ producer 未載入時，記為「無證據 / 不可判定」；不得表示為 g
 
 Baseline 流程
 裁決落票 → 唯讀查 pipeline 應填內容 → Jeff 手動改 pipeline.json → 確認 machine reader 讀到票 145 與正確 stage → 以固定指令量 baseline → 之後 Red-light 與修後 Acceptance 必須使用同一指令口徑，除非票面明文裁定變更。
+
+---
+
+## 十二、Station 3 baseline(固定指令)
+
+**固定指令(逐字,從 repo 根目錄)**:
+
+```
+python -X utf8 -m pytest -q
+```
+
+Red-light 與修後 Acceptance 必須使用同一指令，除非票面明文裁定變更。
+
+### 12.1 結果
+
+| 項 | 值 |
+|---|---|
+| exit code | **0** |
+| 摘要行原文 | `1912 passed, 3 skipped, 3 xfailed in 146.72s (0:02:26)` |
+| 耗時 | 146.72s(pytest 自報);指令於 2026-10-02T13:25:31Z 之後啟動 |
+| Python | `Python 3.11.9` |
+| pytest | `pytest 9.1.1` |
+| 執行機器 | `<執行機器>` |
+| HEAD | `4be8eeb01ce2a695d1170576432adc7b5f6dd3b2` |
+| pipeline.json | `current_stage: tickets`、`feature: framework-updates`、`ticket_id: "145"` |
+| 判定分支 | exit code == 0 ⇒ baseline 全過 |
+
+### 12.2 `.dev/test-runs.jsonl`
+
+| 時點 | SHA-256 | bytes | lines |
+|---|---|---|---|
+| before | `d6c0da4d173388dc7d58ba30023c67620309059cd2bd1bc854faa45dc766f4ae` | 540862 | 1997 |
+| after | `460f714f02c527081d8242520021f611ad0a62c52e3ae592977ae7fc7be7684c` | 552165 | 2043 |
+
+新增 **46** 行(第 1998–2043 行),逐筆:
+
+| 計數 | 筆數 |
+|---|---|
+| `ticket_id == "145"` | 46 |
+| `ticket_id != "145"` | 0 |
+| `result == "red"` | 0 |
+| `result == "green"` | 46 |
+| 其他 / 缺欄 | 0 |
+
+⚠ 46 是**測試檔數**,不是測試數(每檔一筆;本次 1912 passed / 3 skipped / 3 xfailed 不進帳本)。
+`status.py` 同一時點的 Evidence 行原文:`全套結果:未記錄(帳本不記全套)` —— 本票〈二〉所述缺口,本次 baseline 亦適用。
+
+### 12.3 兩個 operational 檔的追蹤狀態
+
+| 檔 | `git ls-files` | `git check-ignore -v` | 判定 |
+|---|---|---|---|
+| `.dev/pipeline.json` | (無輸出) | `.gitignore:30:/.dev/*` | 未追蹤、被 ignore |
+| `.dev/test-runs.jsonl` | (無輸出) | `.gitignore:30:/.dev/*` | 未追蹤、被 ignore |
+
+⇒ baseline 新增的 46 筆紀錄**只存在本機帳本**;進版控的是本節的指紋與計數。
+
+### 12.4 與 CI 指令的差異(只列,不評價、不修改)
+
+CI(`.github/workflows/tests.yml:73-75`,步驟「跑測試」):
+
+```
+python -m pytest -q \
+  --ignore=tests/test_known_items_regression.py
+```
+
+| 項 | 本次 baseline | CI |
+|---|---|---|
+| 直譯器旗標 | `-X utf8` | 無 |
+| 排除項 | 無 | `--ignore=tests/test_known_items_regression.py` |
+| `--deselect` | 無 | 無 |
+| 環境變數 | 未設定額外變數 | workflow 無 `env:` 區塊 |
+| 作業系統 | Windows(`<執行機器>`) | `ubuntu-latest`(`tests.yml:20`) |
+| Python | 3.11.9 | `python-version: '3.11'`(`tests.yml:47`) |
+| 前置步驟 | 無 | `python -m pip install -e ".[dev]"`(`:50`)、`sh bootstrap.sh`(`:57`) |
+| 收集清單步驟 | 無 | `python -m pytest --collect-only -q --ignore=tests/test_known_items_regression.py`(`:96-98`) |
+
+本次 baseline 有收集並執行 `tests/test_known_items_regression.py`(帳本第 2019 行,green)。
 
 ---
 
