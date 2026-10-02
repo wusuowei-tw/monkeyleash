@@ -1,10 +1,19 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:**candidate。** 票已正式建立(M1-a Station 2);缺 issue-tracker 要求的日期型時鐘 ⇒ 停在 candidate,不排進任何順序。
-**時鐘**:未定 —— 待 Jeff 裁定日期;Station 3 開工前必須裁
+**狀態**:立案(時鐘已定 2026-10-02);未動工 —— Station 2 DONE、Station 3 NOT STARTED。
+**時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
 本票承接其後的工作;票 139 的現象、證據與未查邊界**不改寫**。
+
+> **舊票頭值(F-036,保留不刪)** —— 以下是 **superseded historical values,不是 current machine state**;
+> 原行分別以 `**狀態**` 與 `**時鐘**` 欄名開頭,此處只保存其值:
+>
+> - 狀態(舊):~~`**candidate。** 票已正式建立(M1-a Station 2);缺 issue-tracker 要求的日期型時鐘 ⇒ 停在 candidate,不排進任何順序。`~~
+> - 時鐘(舊):~~`未定 —— 待 Jeff 裁定日期;Station 3 開工前必須裁`~~
+>
+> 2026-10-02 由第 3、4 行取代。
+> 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
 
@@ -217,11 +226,15 @@ aggregate 的結果 —— 票 139 逐字:
   在現行架構下,I4 無法只靠改 consumer 達成。
 - I4 **不刪**。調和方法未裁。
 
+→ 已裁,見〈十一〉
+
 **ODC-2|測試被刪除 / 改名後,舊 red 如何退休**
 
 - 張力:C 節要求 X 在後續 run 中被實際執行且通過;X 若已不存在,這個條件永遠無法滿足。
 - 偵察未涵蓋此情形。下限:**無論採何種退場方式,X 的 red 不得因 X 不再出現就靜默消失;
   退場本身必須是 machine 可觀察的事實。**
+
+→ 已裁,見〈十一〉
 
 **ODC-3|producer 本身未載入時,D 與 E 的可觀察性**
 
@@ -229,6 +242,8 @@ aggregate 的結果 —— 票 139 逐字:
 - 張力:若 run-level 事實由 runner 內部(如 `conftest.py`)產生,
   讓 producer 自己沒被載入的 D 情形,在 machine 上與 E **必然相同**。
 - D / E 的區分**不刪**。下限:**這類情形不得被表示為 green**(I3),也不得被推論為 C。
+
+→ 已裁,見〈十一〉
 
 ---
 
@@ -365,9 +380,33 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5 — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = candidate(缺 issue-tracker 要求的日期型時鐘),不代表已獲准進 Station 3。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 立案、時鐘已定(2026-10-02)、未動工 —— 與票頭第 3 行一致,不代表 Station 3 已開工。
+(舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
-**待裁事項**:時鐘(日期型)—— Station 3 開工前必須裁。
+**已裁**:時鐘 2026-10-02。
+
+---
+
+## 十一、Station 3 前置裁決（2026-10-02，Jeff）
+
+ODC-1（2B 修正版）
+一個 run 只有在同時滿足下列三項時，才有資格使某 test file 內既有的 red 變為 green：
+1. 該 file 的測試集合全部被選到（沒有任何 deselected）；
+2. 先前為 red 的那些 test identity，在本次 run 中確實被執行且通過；
+3. 本次 run 沒有任何 failure。
+與既有 red 無關的其他測試在本次 run 中被 skip，不影響退紅資格。
+partial selection、deselection、zero tests、coverage 未知的 run，一律沒有退紅權。
+本規則比 I4 對單一測試 X 的最低條件更嚴格，不違反 I4。
+既有 3 條 test_status.py assertion（570 / 571 / 749）原文不改；fixture 只准補新的 run-level facts，且所補內容須在本票列出。若發現任一 assertion 語意必須改變，回裁決者單獨裁，Implementation 不得自行改。
+
+ODC-2（3A 收緊）
+test 被刪除或改名後，舊 red 不得自動變 green；沒有證據證明 identity 延續時，保留為 orphaned / absent 類可觀察狀態。改名不得自動視為原 test 的延續。M1-a 不提供人工 retirement workflow，因此此狀態可能持續存在 —— 這是已接受的 residual，不得偷偷歸綠。
+
+ODC-3（4A）
+producer 未載入時，記為「無證據 / 不可判定」；不得表示為 green，也不得推論為 C。D / E 在此路徑不可區分，作為 ODC-3 明示 residual 接受。依據：Spec ODC-3 原文「是否接受此殘餘、或改由 runner 外部產生事實，不在本 Spec 裁定」與 AC-1「ODC-3 所列殘餘情形須在 Station 2 票面明列其處置」。
+
+Baseline 流程
+裁決落票 → 唯讀查 pipeline 應填內容 → Jeff 手動改 pipeline.json → 確認 machine reader 讀到票 145 與正確 stage → 以固定指令量 baseline → 之後 Red-light 與修後 Acceptance 必須使用同一指令口徑，除非票面明文裁定變更。
 
 ---
 
