@@ -1700,3 +1700,54 @@ class TestChainRegressionLocks:
         got = _lines_of(root)
         assert u"tests/test_x.py" in got[u"green"], got
         assert u"tests/test_x.py" not in got[u"red"], got
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 票 145 Station 3b 補件 —— B11:schema 不合格的 session 必須可被觀察到
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _evidence_and_derived(out):
+    """render 輸出中 `=== Evidence ===` 與 `=== Derived ===` 兩個區塊的全文。
+
+    Repository 區塊(含 `generated` 時鐘行)不納入 —— 它兩次 render 之間本來就會變。
+    """
+    blocks = out.split(u"\n\n")
+    keep = [b for b in blocks
+            if b.startswith(u"=== Evidence ===") or b.startswith(u"=== Derived ===")]
+    return u"\n\n".join(keep)
+
+
+class TestMalformedSessionIsVisible:
+
+    def test_b11_a_malformed_session_is_neither_dropped_silently_nor_read_as_normal(
+            self, tmp_path, monkeypatch):
+        """B11(F1;〈十七〉3b 補件)。分類:behavior-red。
+
+        同一個 root 的前後比較:先只有 X 的紅(無任何 session),render 一次;
+        再追加一筆 schema 不合格的 session(`deselected` 為字串、X passed;手寫 ——
+        寫入函式寫不出這個形狀),其餘資料不動,再 render 一次。
+        ⇒ Evidence / Derived 必須與前次不同(不得靜默丟棄;表示位置與文字由 4b 決定);
+          不得顯示為正常狀態 A / B / C / F;X 所在檔仍紅、不 green、不 orphan。
+        """
+        root = _root_with_redlight(tmp_path)
+        _chain_conftest(root, monkeypatch)
+        _seed_red(["test_target"])
+        before = _evidence_and_derived(render(root))
+        _append_raw_session(root, {"kind": "session", "run_id": "b11", "time": FAR_FUTURE,
+                                   "ticket_id": "99", "exit_code": 0,
+                                   "collected": [CHAIN_X],
+                                   "deselected": "tests/test_x.py::test_y",
+                                   "outcomes": {CHAIN_X: "passed"}})
+        out = render(root)
+        after = _evidence_and_derived(out)
+        assert after != before, u"不合格的 session 被靜默丟棄:前後輸出相同\n%s" % after
+        for state in (u"A", u"B", u"C", u"F"):
+            assert u"最近一次 run:%s" % state not in after, (
+                u"不合格的 session 被當成正常狀態 %s\n%s" % (state, after))
+        red = _value_of(out, u"tests red under ticket 99")
+        green = _value_of(out, u"tests green under ticket 99")
+        orphaned = _value_of(out, u"tests orphaned under ticket 99")
+        assert u"tests/test_x.py" in red, after
+        assert u"tests/test_x.py" not in green, after
+        assert u"tests/test_x.py" not in orphaned, after

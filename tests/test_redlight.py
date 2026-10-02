@@ -575,3 +575,58 @@ class TestRunStateSchema:
         run = {"kind": "session", "run_id": "b6", "time": "2999-01-01T00:00:00+00:00",
                "ticket_id": "99", "exit_code": 0, "deselected": [], "outcomes": {}}
         assert redlight.run_state(run) != "C", run
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145 Station 3b 補件 —— B10:固定指令(無使用者位置參數)的整檔涵蓋
+#
+# 假 session 的 `config` 依本機 pytest 9.1.1 原始碼與本 repo 設定**靜態推導**:
+#   - `_pytest/config/__init__.py:1411-1438` `_decide_args()`:未給位置參數、且
+#     invocation dir == rootpath ⇒ `source = ArgsSource.TESTPATHS`,
+#     `result` = testpaths 各項經 `glob.iglob(path, recursive=True)` 展開後排序;
+#   - `pyproject.toml:71` `testpaths = ["tests"]` ⇒ `config.args == ["tests"]`;
+#   - rootdir 由 repo 根的 `pyproject.toml`(含 `[tool.pytest.ini_options]`)決定
+#     (`_pytest/config/findpaths.py:313-315`)⇒ 從 repo 根執行時 invocation dir == rootpath。
+# 這是推導,不是實際執行時觀察到的值。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _drive_with_session(c, session, selected=(), deselected=(), outcomes=None, exitstatus=0):
+    """同 `_drive_with_args`,但 session 由呼叫端建構(以便帶 `args_source`)。"""
+    def hook(name):
+        return getattr(c, name, None) or (lambda *a, **k: None)
+
+    _reset_conftest_state(c)
+    files = sorted(set(n.split("::", 1)[0] for n in list(selected) + list(deselected)))
+    for f in files:
+        hook("pytest_collectreport")(_CollectRep(f))
+    gone = [_Item(n) for n in deselected]
+    if gone:
+        hook("pytest_deselected")(gone)
+    hook("pytest_collection_finish")(session)
+    for nodeid, outcome in (outcomes or {}).items():
+        for rep in _reports_for(nodeid, outcome):
+            hook("pytest_runtest_logreport")(rep)
+    hook("pytest_sessionfinish")(session, exitstatus)
+
+
+class TestFixedCommandCoverage:
+
+    def test_b10_the_fixed_command_without_positional_args_is_full_coverage(
+            self, tmp_path, monkeypatch):
+        """B10(F3;〈十七〉3b 補件)。分類:interface-red(`redlight.file_coverage` 不存在)。
+
+        固定指令 `python -X utf8 -m pytest -q` 沒有使用者位置參數 —— pytest 以 testpaths
+        補上 `config.args == ["tests"]`、`args_source == TESTPATHS`(靜態推導,見上方註解)。
+        tests/test_x.py 被正常收集、無 deselected ⇒ full_file_coverage 必須為 "true";
+        否則固定全套永遠無法退紅。
+        """
+        c = _isolated_conftest(monkeypatch, tmp_path)
+        session = _SessionWithConfig([_Item(X_A), _Item(X_B)], ["tests"], tmp_path)
+        session.config.args_source = pytest.Config.ArgsSource.TESTPATHS
+        _drive_with_session(c, session, selected=[X_A, X_B],
+                            outcomes={X_A: "passed", X_B: "passed"}, exitstatus=0)
+        runs = redlight.load_runs(str(tmp_path))
+        assert len(runs) == 1, runs
+        got = redlight.file_coverage(runs[0], "tests/test_x.py")
+        assert got == "true", got
