@@ -383,8 +383,11 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5 — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 立案、時鐘已定(2026-10-02)、未動工 —— 與票頭第 3 行一致,不代表 Station 3 已開工。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3 進行中,Station 4 未開始(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 立案、時鐘已定(2026-10-02)、未動工 —— 與票頭第 3 行一致,不代表 Station 3 已開工。~~
+> 2026-10-02 baseline 入票時第 3 行已改為「動工」,本句未同步而與第 3 行矛盾;2026-10-02 修正。
 
 **已裁**:時鐘 2026-10-02。
 
@@ -401,6 +404,7 @@ ODC-1（2B 修正版）
 partial selection、deselection、zero tests、coverage 未知的 run，一律沒有退紅權。
 本規則比 I4 對單一測試 X 的最低條件更嚴格，不違反 I4。
 既有 3 條 test_status.py assertion（570 / 571 / 749）原文不改；fixture 只准補新的 run-level facts，且所補內容須在本票列出。若發現任一 assertion 語意必須改變，回裁決者單獨裁，Implementation 不得自行改。
+→ 第 2、3 項已於 2026-10-02 修訂，見〈十三〉
 
 ODC-2（3A 收緊）
 test 被刪除或改名後，舊 red 不得自動變 green；沒有證據證明 identity 延續時，保留為 orphaned / absent 類可觀察狀態。改名不得自動視為原 test 的延續。M1-a 不提供人工 retirement workflow，因此此狀態可能持續存在 —— 這是已接受的 residual，不得偷偷歸綠。
@@ -487,6 +491,29 @@ python -m pytest -q \
 | 收集清單步驟 | 無 | `python -m pytest --collect-only -q --ignore=tests/test_known_items_regression.py`(`:96-98`) |
 
 本次 baseline 有收集並執行 `tests/test_known_items_regression.py`(帳本第 2019 行,green)。
+
+---
+
+## 十三、Station 3 紅燈規劃裁決（2026-10-02，Jeff）
+
+觀察契約採 docs/audits/2026-10-02-m1a-station3-redlight-plan.md 一、A（A-1 ~ A-7），並經以下裁決修正：
+1. status 讀取 run 事實：(i) status 依 root 載入 redlight.py 的讀取函式；status 不另寫解析。
+2. 570 / 571 / 749 的 fixture：C —— 原 assertion 不動；舊 fixture 所需的 run-level facts，於 Station 4 在同一個 implementation commit 補上。若屆時無法只靠補 facts 恢復而須改 assertion 語意：立即停，回裁決者。Station 3 允許補新紅燈測試所需的 fixture / fake repo 基礎設施（含讓 fake repo 有 redlight.py），條件是既有測試結果不變。
+3. 身分不明的舊紅（failed_tests 缺欄、為空、或為 ["<collection error>"]）：視同該檔全部 applicable tests 都是先前紅的。
+4. ODC-1 第 3 條修訂為 file-scoped（見下）。
+5. tests/conftest.py 不受 R2 / R3 管轄之缺口：(b) M1-a 結案後另開框架票；本票先登記為 residual。
+6. redlight.py 的 R3 豁免：乙 —— 但 drain 獨立成「Red-light 經 Jeff 驗收後、Station 4 前」的 transition commit，不與紅燈 commit 混合；transition 以既有 gate 測試或唯讀方式驗證豁免已消失，不得為了測門禁而修改 redlight.py。
+
+ODC-1（修訂後全文，取代〈十一〉同條的第 2、3 項）
+一個 run 只有在同時滿足下列三項時，才有資格使某 test file 內既有的 red 變為 green：
+1. 該 file 的測試集合全部被選到（沒有任何 deselected）；
+2. 已知先前為 red 的 test identity，本次確實執行並通過；若歷史 red 無法知道是哪一條 test，則該 file 內所有 applicable tests 都必須實際執行並通過；
+3. 該 file 本次沒有任何 failure。
+其他 file 的 failure 不影響本 file 的退紅資格；與既有 red 無關的 skip 亦不影響。
+
+Enforcement residual（登記）
+- tests/conftest.py 是 M1-a 的 evidence producer，但被 NON_SOURCE_DIRS 排除，R2 / R3 無法結構性阻止它在錯誤 station 被修改；目前只靠 tracked allowlist + final staged diff 守住。M1-a 結案後另開框架票。
+- .claude/hooks/redlight.py 列在 .agents/legacy-no-redlight.txt，R3 對它整條豁免；依裁決 6 於 transition commit drain。
 
 ---
 
