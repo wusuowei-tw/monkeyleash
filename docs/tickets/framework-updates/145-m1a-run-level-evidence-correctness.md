@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3b(含補件)紅燈已寫(待 Jeff 驗收);Station 4b 未開始。
+**狀態**:動工 —— Station 4b 修正完成(固定全套 exit 0);待 Station 5b 審查。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -37,6 +37,9 @@
 >
 > - 狀態(舊,第九代):~~`動工 —— Station 3b 補件(B10、B11)進行中;Station 4b 未開始。`~~
 >   —— 2026-10-02 補件紅燈寫完並取得證據後由第 3 行取代(見〈十八之一〉)。
+>
+> - 狀態(舊,第十代):~~`動工 —— Station 3b(含補件)紅燈已寫(待 Jeff 驗收);Station 4b 未開始。`~~
+>   —— 2026-10-02 Station 4b 修正完成、固定全套 exit 0 後由第 3 行取代(見〈十九〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -402,12 +405,13 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3 — Red-light | PASS / ACCEPTED |
 | Station 4 — Implementation | 實作嘗試完成,Station 5 FAIL |
 | Station 5 — Review | FAIL |
-| Station 3b — Red-light(補) | 紅燈已寫,待驗收 |
+| Station 3b — Red-light(補,含補件) | PASS / ACCEPTED |
+| Station 4b — Implementation(修正) | 修正完成，待審查 |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
-Station 3b 補件：紅燈已寫，待驗收
+Station 3b 補件：PASS / ACCEPTED
 
 Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5 FAIL,回 Station 3b 補紅燈,Station 4b 未開始(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
@@ -932,6 +936,117 @@ tests orphaned under ticket 145: (無)
 
 **status.py**(節錄):`tests red under ticket 145: tests/test_redlight.py / tests/test_status.py`;`tests orphaned under ticket 145: (無)`;
 `最近一次 run:B(exit 1;collected 1952 / deselected 0 / passed 1929 / failed 17 / skipped 3)`。
+
+---
+
+## 十九、Station 4b 修正
+
+### 19.1 coverage 判定依據(`redlight.file_coverage(run, test_file)`)
+
+依序判定,先命中者為準:
+
+| 條件 | 結果 |
+|---|---|
+| run schema 不合格 | `unknown` |
+| 本 run 沒有收集到該檔的任何身分,或該檔有收集錯誤 | `unknown` |
+| 該檔有任何 deselected 身分(`-k` / `-m` / `--deselect` / `--lf` 等) | `false` |
+| 沒有 invocation 事實、`pyargs` 為真、或 `args` 不是非空 list | `unknown` |
+| 某個位置參數是**該檔本身或其上層目錄**(含 `.`)、且不含 `::` | `true` |
+| 位置參數只以 nodeid(含 `::`)指名該檔 | `false` |
+| 其餘(參數無法判讀 —— 如落在 root 之外 —— 或都與該檔無關) | `unknown` |
+
+**固定指令判為 `"true"`,走通用規則、無特殊分支**:pytest 未給位置參數時以 testpaths 補上 `config.args == ["tests"]`
+(〈十八之一〉推導),與「位置參數為上層目錄 `tests`」同一條規則。
+本站固定全套留下的真實 session 印證了這個推導:`"invocation": {"args": ["tests"], "args_source": "TESTPATHS", "pyargs": false}`。
+
+位置參數的正規化(`redlight._normalize_arg`):反斜線換成 `/`;相對路徑以 `invocation_params.dir`(無則 root)為基準解析,
+再轉成 **root 相對 posix 路徑**;落在 root 之外或跨磁碟 ⇒ `null`(無法判讀)。**絕對路徑與 invocation dir 不落帳。**
+
+### 19.2 D 狀態與 schema fail-closed
+
+- **`redlight.validate_session(run)`** 回傳問題清單(空 = 合格):`run_id` / `time` 為非空字串;`ticket_id`、`exit_code` 欄位存在
+  (`exit_code` 為 int 或 null);`collected` / `deselected` 為字串 list 且 `deselected ⊆ collected`;
+  `outcomes` 為 `{字串: passed | failed | skipped | other}` 且鍵 ⊆ selected;`invocation` 若存在須為 dict(`args` 為 list 或 null)。
+- **`redlight.run_state(run)`**:不合格 ⇒ `"INVALID"`(不是 A–F 任何一個);其餘照原表。
+- **`status._apply_run()`**:不合格 run **不產生任何效果**(不加紅、不退紅、不 orphan、不 green);
+  `run_state == "D"` ⇒ 整個 run **沒有退紅權、不得使任何檔成為 green**;
+  退紅 / orphan / green **只在 `file_coverage == "true"` 時進行**。
+- **不合格 run 在 status 上的表示形式**(Evidence 區塊 `test-runs` 行):
+  - 計數:`… / orphaned N / schema 不合格 run N;…`
+  - 最近一次 run 若不合格:`最近一次 run:INVALID(schema 不合格:<問題清單>)`(不從它計算任何計數)
+
+### 19.3 四個檔的改動(`git diff af839c6 --stat`)
+
+```
+ .claude/hooks/redlight.py  | 164 ++++++++++++++++++++++++++++++++++++++++++++-
+ .claude/portable/status.py | 122 +++++++++++++++++++++------------
+ tests/conftest.py          |  31 ++++++++-
+ tests/test_status.py       |   6 +-
+ 4 files changed, 277 insertions(+), 46 deletions(-)
+```
+
+- `.claude/hooks/redlight.py`(+163 / −1):新增 `_normalize_arg`、`_normalize_invocation`、`OUTCOME_VALUES`、`validate_session`、`file_coverage`;
+  `record_session` 新增 `invocation` 參數並落帳正規化後的 `invocation`;`run_state` 對不合格 run 回 `INVALID`。
+- `.claude/portable/status.py`(+81 / −41):新增 `_RL_FUNCS`、`_rl_ready`、`_invalid_count`;`_apply_run` 依 19.2 重寫並接受 `rl`;
+  `ticket_test_state(records, runs, ticket, rl=None)`(`rl` 為 None ⇒ 涵蓋一律未知);`_last_run_text` 顯示 INVALID;
+  `_evidence` / `_derived` 傳入 `rl`,`test-runs` 行加 `schema 不合格 run N`。
+- `tests/conftest.py`(+29 / −2),逐段:
+  1. `pytest_sessionfinish` 尾段:原本直接呼叫 `record_session(_ROOT, …)`,改為先組 `kwargs`(內容不變),
+     若 `record_session` 的簽名有 `invocation` 參數(`inspect.signature`)才加上 `invocation=_invocation_of(session)`,再呼叫。舊版 redlight 照舊不傳。
+  2. 新增 `_invocation_of(session)`:讀 `session.config` 的 `args`、`args_source.name`、`invocation_params.dir`、`option.pyargs`(屬性一律帶預設值);沒有 config ⇒ None。
+  3. 既有 `_outcomes` / `_run` 的蒐集邏輯與其他 hook **未動**。
+- `tests/test_status.py`(+4 / −2):見 19.4。
+
+**未修改**:`tests/test_redlight.py`(`git diff af839c6 --stat -- tests/test_redlight.py` 無輸出)、`.claude/hooks/gate.py`、`.agents/`、`pipeline.json`。
+Station 3 的 14 支與 3b 的 20 支測試的 assertion、docstring、test identity 未動;僅 19.4 的兩處授權補件。
+
+### 19.4 fixture 補件(〈十七〉裁決 5;assertion 一字未改)
+
+`git diff -U0 tests/test_status.py` 原文:
+
+```
+@@ -577 +577,2 @@ class TestTestsUnderTicketUsesTheLatestRecordPerFile:
+-            deselected=[], outcomes={u"tests/test_a.py::test_one": u"passed"})
++            deselected=[], outcomes={u"tests/test_a.py::test_one": u"passed"},
++            invocation={u"args": [u"tests"]})
+@@ -1329 +1330,2 @@ class TestOrphans:
+-                                deselected=[], outcomes={new: u"passed", keep: u"passed"})
++                                deselected=[], outcomes={new: u"passed", keep: u"passed"},
++                                invocation={u"args": [u"tests"]})
+```
+
+- 570 / 571:該測試 Station 4 補上的 run 加 `invocation={u"args": [u"tests"]}` ⇒ 該 run 對 `tests/test_a.py` 為整檔涵蓋。
+- ODC-2(`test_a_renamed_red_test_is_orphaned_not_green`):run2 加同一參數 ⇒ 整檔涵蓋 ⇒ 有 orphan 判定權。
+- 749:直接呼叫未改的 `_latest_per_file()` ⇒ 不需補。
+- 兩處改動只在 `record_session(...)` 呼叫的參數列尾端加一個參數(原行的 `)` 移到新行),**無任何 assertion 被改動**。
+
+### 19.5 證據鏈
+
+| 步驟 | 證據 |
+|---|---|
+| 前置 H0 / L0 | test-runs `b555ded4e2986f819c711c4ef16168c9df25f54cce12fd8064141e9cc7bc2ada` / 613185 / 2273;test-sessions `d97b7631d55ba0b8359803a6b2ffa9c6330de02b8363dc0c769afea6eb38e12e` / 1413031 / 11 |
+| S4b-1 commit 前未執行 pytest | commit 前與 commit 後重量兩本帳,SHA-256 / bytes / lines **皆與 H0 / L0 相同** |
+| S4b-1 commit | `333e5853bf1a1712bde2aea2d2b488299e3752f6`(`163 1` / `81 41` / `29 2` / `4 2`);pre-commit 未擋 |
+| 固定全套(只跑一次,在 `333e585` 上) | exit code **0**;`1946 passed, 3 skipped, 3 xfailed in 147.38s (0:02:27)`;**failed 0** |
+| 3b 的 17 支 / L1–L3 / Station 3 的 14 支 | **全部通過**(失敗集合為空;1946 = 1929 + 17) |
+| 帳本只追加 | test-runs after 前 613185 bytes 的 SHA-256 = H0;test-sessions after 前 1413031 bytes 的 SHA-256 = H0 |
+| 帳本 after | test-runs `73737b7d…a8a93` / 624488 / 2319(+46 = 測試檔數,全 green);test-sessions `42bdc38e…7e35` / 1873333 / 12(+1) |
+
+**status.py**(節錄):
+
+```
+test-runs: 本票 red 0 / green 46 / run 事實未知 0 / orphaned 0 / schema 不合格 run 0;最後一筆 tests/test_verify_gates.py=green @ 2026-10-02T17:05:51.724830+00:00;最近一次 run:A(exit 0;collected 1952 / deselected 0 / passed 1946 / failed 0 / skipped 3)
+tests red under ticket 145: (無)
+tests orphaned under ticket 145: (無)
+```
+
+### 19.6 測試三層
+
+| 層 | 狀態 |
+|---|---|
+| **UNIT** | 固定全套 exit 0,`1946 passed, 3 skipped, 3 xfailed` |
+| **CLEAN** | 未證明 |
+| **REAL** | 留待 Jeff 端 status_all 確認(本站不宣稱) |
 
 ---
 
