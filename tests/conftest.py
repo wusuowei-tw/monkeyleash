@@ -136,6 +136,16 @@ except Exception:
 
 _outcomes = {}
 
+# 票 145(M1-a):run 層級的事實 —— 這一次 session 收集了什麼、排除了什麼、
+# 每個身分的結果、退出碼。上面的 `_outcomes` 是逐檔的(餵 `record_run`,R3 用),
+# 這裡是逐身分的(餵 `record_session`,status 的退紅判定用)。兩份**並存**,
+# 不互相推導:逐檔那份的語意(「這個檔這次有沒有失敗」)一個字都不改。
+_run = {"selected": None, "deselected": [], "collect_errors": [], "outcomes": {}}
+
+
+def _nodeid(obj):
+    return str(getattr(obj, "nodeid", "") or "").replace("\\", "/")
+
 
 def pytest_collectreport(report):
     """收集錯誤也算紅燈。
@@ -149,6 +159,45 @@ def pytest_collectreport(report):
     f = str(getattr(report, "nodeid", "")).split("::", 1)[0].replace("\\", "/")
     if f.endswith(".py"):
         _outcomes.setdefault(f, {"failed": []})["failed"].append("<collection error>")
+    # 票 145:收集錯誤也是 run 事實(狀態 D 的來源之一)。不限 .py ——
+    # conftest 或目錄層級的收集錯誤一樣讓這次 run 不可信。
+    _run["collect_errors"].append("%s::<collection error>" % (f or "<session>"))
+
+
+def pytest_deselected(items):
+    """票 145:被 `-k` / `-m` / `--deselect` 排除的身分。
+
+    **deselect 不產生任何 report**(RECON 二.2 B2)—— 不在這裡記,
+    事後就看不出那一次的涵蓋範圍有多窄(票 139 的 645 deselected)。
+    """
+    if _redlight is None:
+        return
+    _run["deselected"].extend(_nodeid(i) for i in items)
+
+
+def pytest_collection_finish(session):
+    """票 145:deselect 之後真正要跑的身分(= selected)。"""
+    if _redlight is None:
+        return
+    _run["selected"] = [_nodeid(i) for i in getattr(session, "items", None) or []]
+
+
+def _run_outcome(report):
+    """一份 report 對「這個身分的結果」的貢獻。回 None 表示這份 report 不改變結果。
+
+    **屬性一律帶預設值讀** —— 既有測試的假 report 只有 `when` / `failed` /
+    `nodeid` / `fspath`;直接讀 `report.skipped` 會讓它們 AttributeError
+    (紅燈規劃書一、B-1 約束 4)。
+    """
+    if getattr(report, "failed", False):
+        return "failed"
+    xfail = getattr(report, "wasxfail", None) is not None
+    when = getattr(report, "when", None)
+    if getattr(report, "skipped", False):
+        return "other" if xfail else "skipped"
+    if when == "call" and getattr(report, "passed", False):
+        return "other" if xfail else "passed"
+    return None
 
 
 def pytest_runtest_logreport(report):
@@ -163,6 +212,11 @@ def pytest_runtest_logreport(report):
     rec = _outcomes.setdefault(f, {"failed": []})
     if report.failed:
         rec["failed"].append(report.nodeid.split("::", 1)[-1])
+    # 票 145:逐身分的結果。`failed` 一旦記下就不被後來的 report 蓋掉
+    # (teardown 失敗之前的 call 可能是 passed)。
+    got = _run_outcome(report)
+    if got is not None and _run["outcomes"].get(_nodeid(report)) != "failed":
+        _run["outcomes"][_nodeid(report)] = got
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -170,3 +224,17 @@ def pytest_sessionfinish(session, exitstatus):
         return
     for f, rec in _outcomes.items():
         _redlight.record_run(f, passed=not rec["failed"], failed_tests=rec["failed"])
+    # 票 145:**每個 session 恰好一筆 run 事實**,寫在逐檔紀錄**之後** ——
+    # 0 collected、全部 deselected、invocation 錯誤時上面的迴圈一筆都不寫
+    # (RECON Collapse ①),這一筆是那些情形唯一留下的痕跡。
+    # 舊版 redlight.py(下游未同步)沒有 record_session ⇒ 照舊只寫逐檔紀錄。
+    if not hasattr(_redlight, "record_session"):
+        return
+    selected = _run["selected"] if _run["selected"] is not None else list(_run["outcomes"])
+    _redlight.record_session(
+        _ROOT,
+        exit_code=exitstatus,
+        collected=list(selected) + list(_run["deselected"]) + list(_run["collect_errors"]),
+        deselected=list(_run["deselected"]),
+        outcomes=dict(_run["outcomes"]),
+    )
