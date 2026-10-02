@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3b 補件(B10、B11)進行中;Station 4b 未開始。
+**狀態**:動工 —— Station 3b(含補件)紅燈已寫(待 Jeff 驗收);Station 4b 未開始。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -34,6 +34,9 @@
 >
 > - 狀態(舊,第八代):~~`動工 —— Station 3b 紅燈已寫(待 Jeff 驗收);Station 4b 未開始。`~~
 >   —— 2026-10-02 Station 3b 補件(B10、B11)開始時由第 3 行取代(見〈十七〉末段)。
+>
+> - 狀態(舊,第九代):~~`動工 —— Station 3b 補件(B10、B11)進行中;Station 4b 未開始。`~~
+>   —— 2026-10-02 補件紅燈寫完並取得證據後由第 3 行取代(見〈十八之一〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -404,7 +407,7 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 
 Transition：redlight.py 豁免已 drain
 
-Station 3b 補件：進行中
+Station 3b 補件：紅燈已寫，待驗收
 
 Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5 FAIL,回 Station 3b 補紅燈,Station 4b 未開始(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
@@ -866,6 +869,69 @@ tests orphaned under ticket 145: (無)
 ```
 
 (節錄;全文見 `docs/audits/2026-10-02-m1a-station3b-redlight.md`。)
+
+---
+
+## 十八之一、Station 3b 補件紅燈證據
+
+### 18-1.1 pytest 無位置參數時的 `config.args`(**靜態推導,未實際執行觀察**)
+
+`python -m pip show pytest`:`Version: 9.1.1`;`Location:` 使用者層 Python 3.11 的 `site-packages`(絕對路徑不入票)。
+
+| 來源 | 行號 | 原文 / 內容 |
+|---|---|---|
+| `_pytest/config/__init__.py` | 1087–1099 | `class ArgsSource(enum.Enum)`:`ARGS`、`INVOCATION_DIR`、`TESTPATHS` |
+| 同上 | 1411–1413 | `if args:` ⇒ `source = Config.ArgsSource.ARGS`;`result = args` |
+| 同上 | 1415–1422 | `if invocation_dir == rootpath:` ⇒ `source = Config.ArgsSource.TESTPATHS`;非 pyargs 時 `result.extend(sorted(glob.iglob(path, recursive=True)))` 逐一展開 testpaths |
+| 同上 | 1435–1437 | `if not result:` ⇒ `source = Config.ArgsSource.INVOCATION_DIR`;`result = [str(invocation_dir)]` |
+| 同上 | 1624–1631 | `self.args, self.args_source = self._decide_args(args=getattr(self.option, FILE_OR_DIR), …, testpaths=self.getini("testpaths"), invocation_dir=self.invocation_params.dir, rootpath=self.rootpath, …)` |
+| `_pytest/config/findpaths.py` | 312–315 | 未指定 inifile 時,由 invocation dir 往上 `locate_config()` 找設定檔,rootdir = 找到的設定檔所在目錄 |
+| `pyproject.toml`(本 repo) | 70–72 | `[tool.pytest.ini_options]`;`testpaths = ["tests"]`;`addopts = "-ra --strict-markers"` |
+
+**推導**:固定指令從 repo 根執行、無使用者位置參數 ⇒ rootdir = repo 根 = invocation dir ⇒ 走 `TESTPATHS` 分支 ⇒
+`config.args == ["tests"]`、`config.args_source == Config.ArgsSource.TESTPATHS`。
+
+**B10 的 fake 依此建構**:`_SessionWithConfig([...], ["tests"], tmp_path)`(`rootpath` 與 `invocation_params.dir` 皆為 root),
+另設 `session.config.args_source = pytest.Config.ArgsSource.TESTPATHS`(`pytest/__init__.py:107` 公開匯出 `Config`)。
+
+### 18-1.2 commit、collect 與集合
+
+| 項 | 值 |
+|---|---|
+| 刀 A①(落票) | `8c18157b8b5ddba50557118d99d36b0bd8ba9622`(票 145 `10 1`) |
+| 刀 A②(紅燈) | `628c060f6f5fda886ff5feba6241272e76b06cc5`(`tests/test_redlight.py` `55 0`、`tests/test_status.py` `51 0`) |
+| BEFORE-COLLECT | `tests/test_redlight.py` 29 支、`tests/test_status.py` 67 支 |
+| AFTER-COLLECT | 30 支、68 支 |
+| 新增集合 | **恰為 B10、B11 兩支** |
+| 消失集合 | **空** |
+
+| 案例 | Finding | nodeid | 分類 | 實際 |
+|---|---|---|---|---|
+| B10 | F3(〈十七〉3b 補件) | `tests/test_redlight.py::TestFixedCommandCoverage::test_b10_the_fixed_command_without_positional_args_is_full_coverage` | interface-red | 失敗:`AttributeError: … has no attribute 'file_coverage'` |
+| B11 | F1(〈十七〉3b 補件) | `tests/test_status.py::TestMalformedSessionIsVisible::test_b11_a_malformed_session_is_neither_dropped_silently_nor_read_as_normal` | behavior-red | 失敗:`AssertionError: 不合格的 session 被當成正常狀態 A`(前後輸出確有不同,但不合格 session 被顯示成 `最近一次 run:A(… deselected 23 …)` —— `23` 是字串的字元數 —— 並讓 test_x.py 變 green) |
+
+### 18-1.3 固定全套(在 `628c060` 上,只跑一次)
+
+| 項 | 值 |
+|---|---|
+| exit code | **1** |
+| 摘要行 | `17 failed, 1929 passed, 3 skipped, 3 xfailed in 135.89s (0:02:15)` |
+| 實際失敗集合 | **= 3b 既有預期紅集合(15 支,見〈十八〉18.2)∪ {B10, B11},共 17 支,不多不少** |
+| L1–L3 | 皆**未失敗**(1929 passed 與 3b 時相同) |
+| 既有測試 | **0 失敗** |
+
+### 18-1.4 帳本防污染
+
+| 帳本 | before(AFTER-COLLECT 後) | after | 新增 | 前段 |
+|---|---|---|---|---|
+| `.dev/test-runs.jsonl` | 600499 bytes / 2227 行(`30a3513e…5fc17`) | 613185 / 2273(`b555ded4…2ada`) | **46** 行(= 測試檔數) | 前 600499 bytes 的 SHA-256 = before ⇒ **逐位元組不變** |
+| `.dev/test-sessions.jsonl` | 952809 / 10(`f3a48d45…89bf4`) | 1413031 / 11(`d97b7631…e12e`) | **1** 行(第 11 行,`exit_code` 1) | 前 952809 bytes 的 SHA-256 = before ⇒ **逐位元組不變** |
+
+四次 `--collect-only` 讓 session 帳本 6 → 8 → 10 行 —— **collection-only observation,非紅燈驗收證據**;test-runs 未被 collect-only 寫入。
+測試的假身分 / 假檔名 / 假 run_id(`tests/test_x.py`、`tests/test_y.py`、`b5`–`b11`)在兩本真實帳本中皆 **0** 筆。
+
+**status.py**(節錄):`tests red under ticket 145: tests/test_redlight.py / tests/test_status.py`;`tests orphaned under ticket 145: (無)`;
+`最近一次 run:B(exit 1;collected 1952 / deselected 0 / passed 1929 / failed 17 / skipped 3)`。
 
 ---
 
