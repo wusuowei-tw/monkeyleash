@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3c 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試。
+**狀態**:動工 —— Station 3c 紅燈已寫(待 Jeff 驗收);Station 4c 未開始。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -49,6 +49,9 @@
 >
 > - 狀態(舊,第十三代):~~`動工 —— Station 5b FAIL(S5b-F1 阻擋);回 Station 3c 補紅燈。`~~
 >   —— 2026-10-02 Station 3c 紅燈規劃寫完後由第 3 行取代(見〈二十二〉)。
+>
+> - 狀態(舊,第十四代):~~`動工 —— Station 3c 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試。`~~
+>   —— 2026-10-02 Station 3c 紅燈寫完後由第 3 行取代(見〈二十三〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -417,7 +420,7 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3b — Red-light(補,含補件) | PASS / ACCEPTED |
 | Station 4b — Implementation(修正) | PASS / ACCEPTED |
 | Station 5b — Review | FAIL |
-| Station 3c — Red-light(補) | NOT STARTED |
+| Station 3c — Red-light(補) | 紅燈已寫，待驗收 |
 | Station 4c — Implementation(修正) | NOT STARTED |
 | Station 5c — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
@@ -426,8 +429,11 @@ Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3c 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3c 紅燈已寫(待 Jeff 驗收);Station 4c 未開始(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第五代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3c 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試(與票頭第 3 行一致)。~~
+> 2026-10-02 Station 3c 紅燈寫完後隨第 3 行同步更新(見〈二十三〉)。
 
 > **舊句(F-036,保留不刪,第四代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5b FAIL(S5b-F1 阻擋);回 Station 3c 補紅燈(與票頭第 3 行一致)。~~
 > 2026-10-02 Station 3c 紅燈規劃寫完後隨第 3 行同步更新(見〈二十二〉)。
@@ -1163,6 +1169,99 @@ tests orphaned under ticket 145: (無)
   - B 執行事實法 —— 記下 shouldstop / shouldfail、每個 selected 身分是否都有終局 outcome,可加縮小前全集快照;selection completeness 對未知 plugin 仍須回到 provenance。
   - C A + B 合用,可再加「plugin dist 不在已知清單 ⇒ 不是 `"true"`」;規劃檔的建議是 C。
 - 另待裁:六支既有測試(預期 `"true"` / green / orphan)的 fixture 補件授權,見規劃檔 P4。
+
+---
+
+## 二十三、Station 3c 裁決與完整性事實合約（2026-10-02，Jeff）
+
+### 23.1 裁決(照錄)
+
+1. P3 採 C：selection completeness 與 execution completeness 都要有 producer 的正向事實。
+2. 裁決助手隔離環境實測（pytest 9.1.1；不是本 repo 帳本證據）：
+   (a) conftest 的 hookimpl(wrapper=True, trylast=True) pytest_make_collect_report 在 --lf 時看得到縮小前全集（4 支），session.items 只剩 1 支；
+   (b) 測試內 pytest.exit(returncode=0)：exit 0、4 支只跑 2 支、shouldstop 與 shouldfail 皆為 False；
+   (c) --sw 停下 exit 2；
+   (d) -p no:cacheprovider 時 config.option 沒有 lf、stepwise；
+   (e) --lf 真的過濾時 lfplugin-collskip 會註冊；
+   (f) 預設 config.option.maxfail 為 None；
+   (g) config.pluginmanager.list_name_plugin() 在 sessionfinish 時列出全部已註冊 plugin：
+       -p 載入、PYTEST_PLUGINS 載入、任何層級的 conftest 都看得到；
+       非頂層 conftest 定義 pytest_plugins 在 pytest 9 是收集錯誤（run 判 D）。
+       名稱為數字（id）的項目來自 _pytest 內部物件；conftest 的名稱是絕對路徑。
+3. 受支援範圍（supported execution boundary）：full_file_coverage == "true" 只在本次註冊的每一個 plugin 都屬於白名單類別時宣稱：
+   (1) builtin：定義模組為 _pytest 或 _pytest.*（模組物件看 __name__；其他物件看其類別或物件的 __module__）；
+   (2) root_conftest：root 相對路徑恰為 tests/conftest.py 的 conftest；
+   (3) known_dist：該 plugin 物件出現在 pluginmanager.list_plugin_distinfo() 的配對中，且 dist 名稱屬於已知清單 {"anyio"}。
+       只看名稱相同不算（名稱可被冒用）。
+   其他任何來源（-p、PYTEST_PLUGINS、其他 conftest、未知 dist、無法分類）⇒ kind = "other" ⇒ 不是 "true"（"unknown"）。
+   tests/conftest.py 本身是 producer，屬於受審查程式碼，視為信任邊界內；此點明文記錄，不是未知來源。
+   白名單定義在 redlight.py，變更須走票。
+4. -p no:cacheprovider：pluginmanager.is_blocked("cacheprovider") 為 True，視為 lf / stepwise 不可能作用的正向事實。
+5. 授權 4c 只在規劃檔 P4「受影響的既有測試」那六支的 fake / fixture 補上「全部關閉、白名單內」的完整性事實；
+   assertion、docstring、test identity 一律不改。
+6. anyio 擴增（P1 #20）：Station 4b 固定全套的真實 session 合格（run_state A），目前 repo 沒有觸發它的測試；列入追蹤票。
+7. 完整性事實合約（3c 依此寫測試，4c 依此實作；欄位名稱可在本刀定稿，語意不得改）：
+   session 新增欄位 completeness（dict），至少含：
+   - options：lf、last_failed_no_failures、stepwise、stepwise_skip、maxfail、collectonly、setuponly、setupplan
+     （照 config.option 原樣；屬性不存在記為 null）
+   - cacheprovider_blocked：bool
+   - shouldstop、shouldfail：bool（session 結束時的值）
+   - pre_narrowing：{測試檔: [縮小前完整 nodeid 清單]}（trylast wrapper 當下立刻複製）
+   - plugins：[{"name": 正規化名稱, "kind": "builtin" | "root_conftest" | "known_dist" | "other"}]
+     由 producer 從 list_name_plugin() 與 list_plugin_distinfo() 的原始事實分類產生；
+     路徑型名稱只能記 root 相對路徑，root 以外記 "<outside>"；帳本中不得出現任何絕對路徑。
+   file_coverage(run, f) == "true" 的新增必要條件（全部成立才行）：
+   (i)    completeness 存在且型別正確；缺欄或型別錯 ⇒ "unknown"
+   (ii)   lf 與 stepwise 都為 False，或 cacheprovider_blocked 為 True
+   (iii)  maxfail 為 None 或 0；collectonly、setuponly、setupplan 皆為 False
+   (iv)   shouldstop、shouldfail 皆為 False
+   (v)    pre_narrowing 有 f，且它的集合 == 本 run 中 f 的 collected 身分集合（selected + deselected）；不相等 ⇒ "false"
+   (vi)   f 的每一個 selected 身分都達到「執行完成」終態：
+          只承認 call phase 的 passed / failed、skip（任何 phase）、明確辨識的 xfail / xpass。
+          沒有 call、只有 setup、被中止、無法辨識、或籠統的 other ⇒ 不算執行完成 ⇒ 不是 "true"。
+          4c 須讓 outcome 能區分 xfail / xpass，不得讓 other 自動取得 completeness。
+   (vii)  plugins 每一項的 kind 都不是 "other"
+   不得以「沒有 deselected」推論完整；不得以「有一筆 report」推論已執行；不得以「名稱相同」推論 known_dist。
+8. 鏈條要求：完整性事實的每一段（raw pytest 事實 → producer 分類與記錄 → 持久化 session → file_coverage → 退紅 / green / orphan）
+   都要有測試鎖住；不得只測 consumer 收到預先分類好的資料。
+
+### 23.2 預期集合(照錄;完整 nodeid)
+
+預期紅集合(behavior-red,16 支,在 d122df4 上必須失敗):
+
+- tests/test_redlight.py::TestCompletenessCoverage::test_c3a_lf_silent_narrowing_is_not_full_coverage
+- tests/test_status.py::TestSilentNarrowingChain::test_c3a_lf_narrowing_does_not_retire_an_unidentified_red
+- tests/test_status.py::TestSilentNarrowingChain::test_c3a_lf_narrowing_does_not_make_a_clean_file_green
+- tests/test_redlight.py::TestCompletenessCoverage::test_c3b_a_session_without_completeness_facts_is_not_full_coverage
+- tests/test_redlight.py::TestCompletenessCoverage::test_c3b_a_malformed_completeness_fact_is_not_full_coverage
+- tests/test_redlight.py::TestCompletenessCoverage::test_c3c_an_exitfirst_run_is_not_full_coverage
+- tests/test_status.py::TestEarlyStopChain::test_c3c_exitfirst_does_not_orphan_a_known_red
+- tests/test_status.py::TestEarlyStopChain::test_c3c_pytest_exit_zero_partial_file_is_not_green
+- tests/test_status.py::TestLfFalseGreenChain::test_c3e_full_then_lf_does_not_produce_a_false_green
+- tests/test_redlight.py::TestCompletenessCoverage::test_c3p_an_unknown_plugin_dist_means_not_full_coverage
+- tests/test_redlight.py::TestCompletenessCoverage::test_c3p_a_plugin_loaded_by_name_means_not_full_coverage
+- tests/test_redlight.py::TestCompletenessCoverage::test_c3p_an_extra_conftest_means_not_full_coverage
+- tests/test_status.py::TestPluginProducerChain::test_c3p_producer_classifies_an_unknown_dist_plugin_as_other
+- tests/test_status.py::TestPluginProducerChain::test_c3p_producer_classifies_a_plugin_loaded_by_name_as_other
+- tests/test_status.py::TestPluginProducerChain::test_c3p_producer_classifies_an_extra_conftest_as_other_and_the_root_conftest_as_root_conftest
+- tests/test_status.py::TestPluginProducerChain::test_c3p_producer_classifies_builtin_root_conftest_and_known_dist_as_not_other
+
+預期綠集合(regression-lock,5 支,在 d122df4 上必須通過):
+
+- tests/test_status.py::TestEarlyStopChain::test_c3c_exitfirst_does_not_make_unrun_files_green
+- tests/test_status.py::TestEarlyStopChain::test_c3c_stepwise_stop_is_d_and_retires_nothing
+- tests/test_redlight.py::TestCompletenessCoverage::test_c3d_the_fixed_command_with_everything_off_is_full_coverage
+- tests/test_status.py::TestCompletenessLocks::test_c3d_the_fixed_command_full_run_still_retires_the_red
+- tests/test_status.py::TestEarlyStopChain::test_setup_only_run_is_not_green
+
+### 23.3 本刀定稿的介面細節(不是裁決原文;語意依 23.1 第 7 點)
+
+- `completeness` 的鍵名照 23.1 第 7 點原樣定稿:`options`、`cacheprovider_blocked`、`shouldstop`、`shouldfail`、`pre_narrowing`、`plugins`;
+  `options` 內的鍵名與 `config.option` 屬性同名;`plugins` 每項為 `{"name", "kind"}`,路徑型名稱記 root 相對 posix 路徑(例:`tests/sub/conftest.py`)。
+- 3c 的 driver 以 new-style 協定(`wrapper=True`,23.1 第 2 點 (a))呼叫 conftest 的 `pytest_make_collect_report`:
+  先送出完整結果,wrapper 返回後才**就地**縮小 `report.result`;假 item / collector 是 `pytest.Item` / `pytest.File` 的子類。
+  4c 的 producer 須在 wrapper 當下複製 nodeid,並以 `pytest.Item` 判斷 item(或等價方式)。
+- 明確辨識的 xfail 在 driver 中表達為:call report `outcome == "skipped"` 且帶 `wasxfail`。
 
 ---
 

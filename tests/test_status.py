@@ -1753,3 +1753,517 @@ class TestMalformedSessionIsVisible:
         assert u"tests/test_x.py" in red, after
         assert u"tests/test_x.py" not in green, after
         assert u"tests/test_x.py" not in orphaned, after
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 票 145 Station 3c 紅燈 —— 選擇 / 執行完整性與 plugin 邊界(串接;〈二十三〉)
+#
+# 合約:票 145〈二十三〉7、8。每一支都經**真實 tests/conftest.py** 的 hook(`_chain_conftest`)
+# 寫入 tmp root 的帳本,再由 status / `file_coverage` 讀回判定 —— 不直接餵分類好的資料。
+# 規劃:docs/audits/2026-10-02-m1a-station3c-redlight-plan.md P4。
+#
+# driver(`_s_drive`)的呼叫順序與 tests/test_redlight.py 的 `_c_drive` 相同:
+# 每個檔先對 conftest 的 `pytest_make_collect_report`(new-style wrapper)送出**完整**結果,
+# wrapper 返回後才**就地**縮小 `report.result`(模擬外層 `LFPluginCollWrapper`,
+# `_pytest/cacheprovider.py:282`);縮小掉的身分**不**送 `pytest_deselected`。
+# 假 item / collector 是 `pytest.Item` / `pytest.File` 的子類(`object.__new__`,不經 `from_parent`)。
+# 本段 helper 全部新寫;既有 helper(`_chain_conftest` / `_seed_red` / `_lines_of`)只呼叫、不修改。
+# ═══════════════════════════════════════════════════════════════════════════
+
+import inspect as _s_inspect
+import types as _s_types
+
+
+class _SItem(pytest.Item):
+    def runtest(self):
+        pass
+
+
+class _SFile(pytest.File):
+    def collect(self):
+        return []
+
+
+def _s_item(nodeid):
+    it = object.__new__(_SItem)
+    it._nodeid = nodeid
+    it.name = nodeid.split(u"::")[-1]
+    return it
+
+
+def _s_file(root, path):
+    f = object.__new__(_SFile)
+    f._nodeid = path
+    f.name = path.split(u"/")[-1]
+    f.path = pathlib.Path(str(root)) / path
+    return f
+
+
+class _SCollectReport:
+    def __init__(self, nodeid, result, failed=False):
+        self.nodeid = nodeid
+        self.result = list(result)
+        self.failed = failed
+        self.passed = not failed
+        self.skipped = False
+        self.outcome = "failed" if failed else "passed"
+
+
+class _SRunReport:
+    def __init__(self, nodeid, when, outcome, wasxfail=None):
+        self.nodeid = nodeid
+        self.fspath = nodeid.split(u"::", 1)[0]
+        self.when = when
+        self.outcome = outcome
+        self.passed = outcome == "passed"
+        self.failed = outcome == "failed"
+        self.skipped = outcome == "skipped"
+        if wasxfail is not None:
+            self.wasxfail = wasxfail
+
+
+def _s_reports(nodeid, kind):
+    """passed / failed:setup → call → teardown;skipped:setup(skipped)→ teardown;
+    xfail:call 為 skipped 且帶 `wasxfail`;setup_only:只有 setup(call 中 `pytest.exit()`);
+    setup_teardown:沒有 call(`--setup-only`)。"""
+    if kind in ("passed", "failed"):
+        return [_SRunReport(nodeid, "setup", "passed"),
+                _SRunReport(nodeid, "call", kind),
+                _SRunReport(nodeid, "teardown", "passed")]
+    if kind == "skipped":
+        return [_SRunReport(nodeid, "setup", "skipped"),
+                _SRunReport(nodeid, "teardown", "passed")]
+    if kind == "xfail":
+        return [_SRunReport(nodeid, "setup", "passed"),
+                _SRunReport(nodeid, "call", "skipped", wasxfail="reason"),
+                _SRunReport(nodeid, "teardown", "passed")]
+    if kind == "setup_only":
+        return [_SRunReport(nodeid, "setup", "passed")]
+    if kind == "setup_teardown":
+        return [_SRunReport(nodeid, "setup", "passed"),
+                _SRunReport(nodeid, "teardown", "passed")]
+    raise ValueError(kind)
+
+
+_S_OPTION_DEFAULTS = {
+    "pyargs": False, "lf": False, "last_failed_no_failures": "all",
+    "failedfirst": False, "newfirst": False, "stepwise": False, "stepwise_skip": False,
+    "stepwise_reset": False, "maxfail": None, "collectonly": False, "setuponly": False,
+    "setupplan": False, "setupshow": False, "keyword": "", "markexpr": "",
+    "deselect": None, "ignore": None, "ignore_glob": None,
+}
+
+
+class _CompletenessOption:
+    """`config.option`,預設「全部關閉」;`missing` 中的屬性不存在。"""
+
+    def __init__(self, missing=(), **overrides):
+        values = dict(_S_OPTION_DEFAULTS)
+        values.update(overrides)
+        for k in missing:
+            values.pop(k, None)
+        self.__dict__.update(values)
+
+
+class _SDist:
+    def __init__(self, name):
+        self.project_name = name
+        self.version = "0"
+        self.metadata = {"name": name}
+
+
+class _SFakePluginManager:
+    """`config.pluginmanager`:list_name_plugin / list_plugin_distinfo / is_blocked / get_plugin。"""
+
+    def __init__(self, name_plugins, distinfo=(), blocked=()):
+        self._name_plugins = list(name_plugins)
+        self._distinfo = list(distinfo)
+        self._blocked = set(blocked)
+
+    def list_name_plugin(self):
+        return list(self._name_plugins)
+
+    def list_plugin_distinfo(self):
+        return list(self._distinfo)
+
+    def is_blocked(self, name):
+        return name in self._blocked
+
+    def get_plugin(self, name):
+        return dict(self._name_plugins).get(name)
+
+    def has_plugin(self, name):
+        return self.get_plugin(name) is not None
+
+
+def _s_internal(module, label):
+    return type(label, (), {"__module__": module})()
+
+
+def _s_plugins(c, root, extra=(), extra_dist=()):
+    """白名單內的 plugin 集合(builtin / root_conftest / known_dist)+ `extra`。
+
+    builtin:模組 `_pytest.main`,以及數字名稱(`str(id(...))`)、類別定義在 `_pytest.config` 的物件;
+    root_conftest:`<root>/tests/conftest.py` 的絕對路徑 → producer 本身;
+    known_dist:`anyio.pytest_plugin`,在 `list_plugin_distinfo()` 中與 dist `anyio` 配對。
+    """
+    builtin_mod = _s_types.ModuleType("_pytest.main")
+    internal = _s_internal("_pytest.config", "_InternalHelper")
+    anyio_mod = _s_types.ModuleType("anyio.pytest_plugin")
+    names = [(u"main", builtin_mod),
+             (str(id(internal)), internal),
+             (os.path.join(str(root), u"tests", u"conftest.py"), c),
+             (u"anyio", anyio_mod)] + list(extra)
+    dist = [(anyio_mod, _SDist("anyio"))] + list(extra_dist)
+    return _SFakePluginManager(names, dist)
+
+
+class _SInvocationParams:
+    def __init__(self, d):
+        self.dir = d
+
+
+class _SConfig:
+    def __init__(self, root, option, pluginmanager, args=(u"tests",)):
+        self.args = list(args)
+        self.args_source = pytest.Config.ArgsSource.TESTPATHS
+        self.rootpath = pathlib.Path(str(root))
+        self.invocation_params = _SInvocationParams(pathlib.Path(str(root)))
+        self.option = option
+        self.pluginmanager = pluginmanager
+
+    def getoption(self, name, default=None, skip=False):
+        return getattr(self.option, name, default)
+
+
+class _CompletenessSession:
+    def __init__(self, items, config):
+        self.items = list(items)
+        self.testscollected = len(self.items)
+        self.config = config
+        self.shouldstop = False
+        self.shouldfail = False
+
+
+def _s_call_collect_wrapper(c, collector, report):
+    fn = getattr(c, "pytest_make_collect_report", None)
+    if fn is None:
+        return
+    gen = fn(collector)
+    if not _s_inspect.isgenerator(gen):
+        return
+    next(gen)
+    try:
+        gen.send(report)
+    except StopIteration:
+        pass
+
+
+def _s_drive(c, root, files, selected, outcomes=None, deselected=(), filtered_out=(),
+             collect_errors=(), exitstatus=0, option=None, pm=None,
+             shouldstop=False, shouldfail=False):
+    """依 pytest 9.1.1 的呼叫順序驅動真實 conftest;`files` = {檔: 縮小前完整 nodeid 清單}。"""
+    def hook(name):
+        return getattr(c, name, None) or (lambda *a, **k: None)
+
+    if pm is None:
+        pm = _s_plugins(c, root)
+    dropped = set(filtered_out)
+    for path in sorted(files):
+        report = _SCollectReport(path, [_s_item(n) for n in files[path]])
+        _s_call_collect_wrapper(c, _s_file(root, path), report)
+        report.result[:] = [x for x in report.result if x.nodeid not in dropped]
+        hook("pytest_collectreport")(report)
+    for path in collect_errors:
+        hook("pytest_collectreport")(_SCollectReport(path, [], failed=True))
+    gone = [_s_item(n) for n in deselected]
+    if gone:
+        hook("pytest_deselected")(gone)
+    session = _CompletenessSession([_s_item(n) for n in selected],
+                                   _SConfig(root, option or _CompletenessOption(), pm))
+    hook("pytest_collection_finish")(session)
+    for nodeid, kind in (outcomes or {}).items():
+        for rep in _s_reports(nodeid, kind):
+            hook("pytest_runtest_logreport")(rep)
+    session.shouldstop = shouldstop
+    session.shouldfail = shouldfail
+    hook("pytest_sessionfinish")(session, exitstatus)
+
+
+S_A = u"tests/test_x.py::test_a"
+S_B = u"tests/test_x.py::test_b"
+S_C = u"tests/test_x.py::test_c"
+S_XF = u"tests/test_x.py::test_xf"
+S_NEW = u"tests/test_x.py::test_new"
+S_KEEP = u"tests/test_x.py::test_keep"
+S_W = u"tests/test_w.py::test_w_a"
+
+
+def _s_lf_pm(c, root):
+    """`--lf` 真的過濾時的 plugin 集合:多了 `lfplugin-collwrapper` 與 `lfplugin-collskip`(皆為 builtin)。"""
+    return _s_plugins(c, root, extra=[
+        (u"lfplugin-collwrapper", _s_internal("_pytest.cacheprovider", "LFPluginCollWrapper")),
+        (u"lfplugin-collskip", _s_internal("_pytest.cacheprovider", "LFPluginCollSkipfiles"))])
+
+
+def _s_drive_lf(c, root):
+    """`--lf`:縮小前全集 [S_A, S_B],S_A 在收集期被悄悄移除,只跑 S_B 且 passed,exit 0。"""
+    _s_drive(c, root, {u"tests/test_x.py": [S_A, S_B]}, selected=[S_B],
+             outcomes={S_B: "passed"}, filtered_out=[S_A],
+             option=_CompletenessOption(lf=True), pm=_s_lf_pm(c, root), exitstatus=0)
+
+
+def _s_drive_exitfirst(c, root, x_ids):
+    """`-x`:S_W failed ⇒ `shouldfail`、exit 1;X 全收集(`x_ids`)但沒有執行。"""
+    _s_drive(c, root, {u"tests/test_w.py": [S_W], u"tests/test_x.py": list(x_ids)},
+             selected=[S_W] + list(x_ids), outcomes={S_W: "failed"},
+             option=_CompletenessOption(maxfail=1),
+             shouldfail=u"stopping after 1 failures", exitstatus=1)
+
+
+class TestSilentNarrowingChain:
+
+    def test_c3a_lf_narrowing_does_not_retire_an_unidentified_red(self, tmp_path, monkeypatch):
+        """C3a-2(〈二十三〉7 (ii)(v))。分類:behavior-red。
+
+        test_x.py 有身分不明的整檔紅;之後一次 `--lf` 只跑了 S_B(S_A 被悄悄移除)⇒ 仍紅、不 green。
+        d122df4 上失敗的原因:`.claude/hooks/redlight.py:423-426` 判 `"true"` ⇒
+        `.claude/portable/status.py:470-472` 整檔紅只看本 run 收集到的身分 ⇒ 退紅;`:475` green。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _seed_red([])
+        _s_drive_lf(c, root)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+    def test_c3a_lf_narrowing_does_not_make_a_clean_file_green(self, tmp_path, monkeypatch):
+        """C3a-3(〈二十一〉21.2 附註 2;〈二十三〉7 (ii)(v))。分類:behavior-red。
+
+        test_x.py 先前沒有紅;一次 `--lf` 只跑了 S_B ⇒ 不得 green。
+        d122df4 上失敗的原因:`.claude/hooks/redlight.py:423-426` 判 `"true"` ⇒
+        `.claude/portable/status.py:475` `green_now = True`。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _s_drive_lf(c, root)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+
+class TestEarlyStopChain:
+
+    def test_c3c_exitfirst_does_not_orphan_a_known_red(self, tmp_path, monkeypatch):
+        """C3c-2(〈二十三〉7 (iii)(iv)(vi))。分類:behavior-red。
+
+        X 有已知紅 test_old;之後一次 `-x` 在 W 停下,X 收集到 [test_new, test_keep] 但沒執行
+        ⇒ X 仍紅、不 orphan(提前停止的 run 沒有 orphan 權)。
+        d122df4 上失敗的原因:`.claude/hooks/redlight.py:423-426` 判 `"true"` ⇒
+        `.claude/portable/status.py:464-468` 把 test_old 移入 orphan。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _seed_red(["test_old"])
+        _s_drive_exitfirst(c, root, [S_NEW, S_KEEP])
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"orphaned"], got
+        assert u"tests/test_x.py" in got[u"red"], got
+
+    def test_c3c_exitfirst_does_not_make_unrun_files_green(self, tmp_path, monkeypatch):
+        """C3c-3。分類:regression-lock。
+
+        一次 `-x` 在 W 停下,X 全收集但沒有任何 outcome ⇒ X 不 green
+        (d122df4:`.claude/portable/status.py:475` 沒有 passed ⇒ 不 green)。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _s_drive_exitfirst(c, root, [S_A, S_B])
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+    def test_c3c_stepwise_stop_is_d_and_retires_nothing(self, tmp_path, monkeypatch):
+        """C3c-4。分類:regression-lock。
+
+        `--sw`:S_W failed ⇒ `shouldstop` ⇒ `Interrupted` ⇒ exit 2(`_pytest/stepwise.py:183-188`、
+        `_pytest/main.py:411-412`)。X 的已知紅 CHAIN_X 本次 passed ⇒ D 沒有退紅權:仍紅、不 green、不 orphan
+        (d122df4:`.claude/portable/status.py:456-458`)。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _seed_red(["test_target"])
+        _s_drive(c, root, {u"tests/test_w.py": [S_W], u"tests/test_x.py": [CHAIN_X, CHAIN_Y]},
+                 selected=[CHAIN_X, CHAIN_Y, S_W],
+                 outcomes={CHAIN_X: "passed", CHAIN_Y: "passed", S_W: "failed"},
+                 option=_CompletenessOption(stepwise=True),
+                 shouldstop=u"Test failed, continuing from this test next run.", exitstatus=2)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"green"], got
+        assert u"tests/test_x.py" not in got[u"orphaned"], got
+
+    def test_c3c_pytest_exit_zero_partial_file_is_not_green(self, tmp_path, monkeypatch):
+        """C3c-5(〈二十三〉2(b)、7 (vi))。分類:behavior-red。
+
+        測試內 `pytest.exit(returncode=0)`:S_A passed;S_B 只有 setup report、沒有 call;
+        S_C 沒有任何 report;exit 0;`shouldstop` / `shouldfail` 皆為 False ⇒ X 不得 green。
+        d122df4 上失敗的原因:`.claude/hooks/redlight.py:423-426` 判 `"true"` ⇒
+        `.claude/portable/status.py:475` `"passed" in results` ⇒ green。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _s_drive(c, root, {u"tests/test_x.py": [S_A, S_B, S_C]}, selected=[S_A, S_B, S_C],
+                 outcomes={S_A: "passed", S_B: "setup_only"}, exitstatus=0)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+    def test_setup_only_run_is_not_green(self, tmp_path, monkeypatch):
+        """C3x-1(規劃檔 P2(a))。分類:regression-lock。
+
+        `--setup-only`:每個身分只有 setup / teardown passed、沒有 call;exit 0 ⇒ 不 green
+        (d122df4:`tests/conftest.py:198-199` 只從 call 取 passed)。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _s_drive(c, root, {u"tests/test_x.py": [S_A, S_B]}, selected=[S_A, S_B],
+                 outcomes={S_A: "setup_teardown", S_B: "setup_teardown"},
+                 option=_CompletenessOption(setuponly=True), exitstatus=0)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+
+class TestLfFalseGreenChain:
+
+    def test_c3e_full_then_lf_does_not_produce_a_false_green(self, tmp_path, monkeypatch):
+        """C3e-1(〈二十一〉21.2 三步情境)。分類:behavior-red。
+
+        R1:test_x.py 收集錯誤(exit 2)⇒ 整檔紅。R2:全套,S_A passed、S_B failed(exit 1)⇒
+        red = {整檔, S_B}。R3:`--lf`,縮小前全集 [S_A, S_B],S_A 被悄悄移除,S_B passed(exit 0)
+        ⇒ 仍紅、不 green。
+        d122df4 上失敗的原因:R3 在 `.claude/hooks/redlight.py:423-426` 判 `"true"` ⇒
+        `.claude/portable/status.py:470-474` 退掉整檔紅與 S_B ⇒ `:475` green。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _s_drive(c, root, {}, selected=[], collect_errors=[u"tests/test_x.py"], exitstatus=2)
+        _s_drive(c, root, {u"tests/test_x.py": [S_A, S_B]}, selected=[S_A, S_B],
+                 outcomes={S_A: "passed", S_B: "failed"}, exitstatus=1)
+        _s_drive_lf(c, root)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+
+class TestCompletenessLocks:
+
+    def test_c3d_the_fixed_command_full_run_still_retires_the_red(self, tmp_path, monkeypatch):
+        """C3d-2(〈二十三〉7 全部條件成立)。分類:regression-lock。
+
+        X 的已知紅 CHAIN_X;之後一次固定全套(選項全部關閉、plugin 全在白名單、縮小前全集 = 收集結果),
+        CHAIN_X / CHAIN_Y passed,S_XF 為明確辨識的 xfail ⇒ X 退紅、在 green。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        _seed_red(["test_target"])
+        _s_drive(c, root, {u"tests/test_x.py": [CHAIN_X, CHAIN_Y, S_XF]},
+                 selected=[CHAIN_X, CHAIN_Y, S_XF],
+                 outcomes={CHAIN_X: "passed", CHAIN_Y: "passed", S_XF: "xfail"}, exitstatus=0)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"green"], got
+        assert u"tests/test_x.py" not in got[u"red"], got
+
+
+def _s_full_run_session(c, root, pm):
+    """test_x.py 全收集、全 passed、其餘完整性事實全部關閉;回傳讀回的最後一筆 session。"""
+    _s_drive(c, root, {u"tests/test_x.py": [S_A, S_B]}, selected=[S_A, S_B],
+             outcomes={S_A: "passed", S_B: "passed"}, pm=pm, exitstatus=0)
+    runs = redlight.load_runs(root)
+    assert runs, runs
+    return runs[-1]
+
+
+def _s_plugin_kinds(run):
+    """持久化 session 的 `completeness.plugins` → {正規化名稱: kind}。缺欄即失敗(不推論)。"""
+    comp = run.get("completeness")
+    assert isinstance(comp, dict), u"session 沒有 completeness:%r" % (run,)
+    plugins = comp.get("plugins")
+    assert isinstance(plugins, list), u"completeness 沒有 plugins:%r" % (comp,)
+    return dict((p.get("name"), p.get("kind")) for p in plugins)
+
+
+class TestPluginProducerChain:
+
+    def test_c3p_producer_classifies_an_unknown_dist_plugin_as_other(self, tmp_path, monkeypatch):
+        """C3p-4(〈二十三〉3 (3)、7 plugins / (vii))。分類:behavior-red。
+
+        多一個 plugin 物件(模組 `evilplug.plugin`),在 `list_plugin_distinfo()` 中配對到 dist `evil-dist`
+        ⇒ 持久化的 plugins 有一項 kind == "other",且 `file_coverage != "true"`。
+        d122df4 上失敗的原因:`tests/conftest.py:222-246` 不記 completeness ⇒ session 沒有 `completeness`。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        evil = _s_types.ModuleType("evilplug.plugin")
+        pm = _s_plugins(c, root, extra=[(u"evilplug", evil)], extra_dist=[(evil, _SDist("evil-dist"))])
+        run = _s_full_run_session(c, root, pm)
+        kinds = _s_plugin_kinds(run)
+        assert kinds.get(u"evilplug") == u"other", kinds
+        got = redlight.file_coverage(run, u"tests/test_x.py")
+        assert got != u"true", got
+
+    def test_c3p_producer_classifies_a_plugin_loaded_by_name_as_other(self, tmp_path, monkeypatch):
+        """C3p-5(〈二十三〉3、7 plugins / (vii))。分類:behavior-red。
+
+        多一個以名稱 `myplug` 註冊的模組 `myplug`(模擬 `-p myplug`),不在 `list_plugin_distinfo()`
+        ⇒ kind == "other",且 `file_coverage != "true"`。
+        d122df4 上失敗的原因:同 C3p-4。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        pm = _s_plugins(c, root, extra=[(u"myplug", _s_types.ModuleType("myplug"))])
+        run = _s_full_run_session(c, root, pm)
+        kinds = _s_plugin_kinds(run)
+        assert kinds.get(u"myplug") == u"other", kinds
+        got = redlight.file_coverage(run, u"tests/test_x.py")
+        assert got != u"true", got
+
+    def test_c3p_producer_classifies_an_extra_conftest_as_other_and_the_root_conftest_as_root_conftest(
+            self, tmp_path, monkeypatch):
+        """C3p-6(〈二十三〉3 (2)、7 plugins / (vii))。分類:behavior-red。
+
+        除 `<root>/tests/conftest.py` 外,多一個名稱為 `<root>/tests/sub/conftest.py` 絕對路徑的 conftest
+        ⇒ 前者 kind == "root_conftest"、後者 kind == "other"(名稱記 root 相對路徑),`file_coverage != "true"`;
+        持久化的 session 那一行文字不得包含 tmp root 的絕對路徑。
+        d122df4 上失敗的原因:同 C3p-4。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        sub = os.path.join(str(root), u"tests", u"sub", u"conftest.py")
+        pm = _s_plugins(c, root, extra=[(sub, _s_types.ModuleType("conftest"))])
+        run = _s_full_run_session(c, root, pm)
+        kinds = _s_plugin_kinds(run)
+        assert kinds.get(u"tests/sub/conftest.py") == u"other", kinds
+        assert kinds.get(u"tests/conftest.py") == u"root_conftest", kinds
+        got = redlight.file_coverage(run, u"tests/test_x.py")
+        assert got != u"true", got
+        with io.open(redlight.session_log(root), encoding="utf-8") as f:
+            text = f.read()
+        for form in set([str(root), str(root).replace(u"\\", u"/"), json.dumps(str(root))[1:-1]]):
+            assert form not in text, u"帳本出現絕對路徑:%s" % form
+
+    def test_c3p_producer_classifies_builtin_root_conftest_and_known_dist_as_not_other(
+            self, tmp_path, monkeypatch):
+        """C3p-7(〈二十三〉3 (1)(2)(3)、7 全部條件)。分類:behavior-red。
+
+        只有 `_pytest` 內建物件(含一個數字名稱、類別定義在 `_pytest.config` 的物件)、root `tests/conftest.py`、
+        以及在 `list_plugin_distinfo()` 中配對到 dist `anyio` 的 `anyio.pytest_plugin`
+        ⇒ 每一項 kind 都不是 "other",且 `file_coverage == "true"`。
+        d122df4 上失敗的原因:同 C3p-4(session 沒有 `completeness`)。
+        """
+        root = _root_with_redlight(tmp_path)
+        c = _chain_conftest(root, monkeypatch)
+        run = _s_full_run_session(c, root, _s_plugins(c, root))
+        kinds = _s_plugin_kinds(run)
+        assert kinds, kinds
+        assert all(k != u"other" for k in kinds.values()), kinds
+        got = redlight.file_coverage(run, u"tests/test_x.py")
+        assert got == u"true", got
