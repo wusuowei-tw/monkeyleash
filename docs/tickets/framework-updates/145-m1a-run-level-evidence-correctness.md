@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5c FAIL(S5c-F1 阻擋);回 Station 3d 補紅燈。
+**狀態**:動工 —— Station 3d 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -61,6 +61,9 @@
 >
 > - 狀態(舊,第十七代):~~`動工 —— Station 5c 審查包已建立;待獨立審查。`~~
 >   —— 2026-10-02 Station 5c 獨立審查 FAIL 後由第 3 行取代(見〈二十七〉)。
+>
+> - 狀態(舊,第十八代):~~`動工 —— Station 5c FAIL(S5c-F1 阻擋);回 Station 3d 補紅燈。`~~
+>   —— 2026-10-02 Station 3d 紅燈規劃寫完後由第 3 行取代(見〈二十八〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -432,7 +435,7 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3c — Red-light(補) | PASS / ACCEPTED |
 | Station 4c — Implementation(修正) | PASS / COMPLETED（待 5c 審查） |
 | Station 5c — Review | FAIL |
-| Station 3d — Red-light(補) | NOT STARTED |
+| Station 3d — Red-light(補) | 規劃已寫，待裁 |
 | Station 4d — Implementation(修正) | NOT STARTED |
 | Station 5d — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
@@ -441,8 +444,11 @@ Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5c FAIL(S5c-F1 阻擋);回 Station 3d 補紅燈(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3d 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第九代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5c FAIL(S5c-F1 阻擋);回 Station 3d 補紅燈(與票頭第 3 行一致)。~~
+> 2026-10-02 Station 3d 紅燈規劃寫完後隨第 3 行同步更新(見〈二十八〉)。
 
 > **舊句(F-036,保留不刪,第八代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5c 審查包已建立;待獨立審查(與票頭第 3 行一致)。~~
 > 2026-10-02 Station 5c 獨立審查 FAIL 後隨第 3 行同步更新(見〈二十七〉)。
@@ -1395,6 +1401,20 @@ tests orphaned under ticket 145: (無)
    事後皆以 TARGET 完整 SHA 重讀，報告引用重讀結果。照實記錄，不影響審查效力。
 7. 結案後追蹤票清單更新為：conftest 不受 R2/R3 管的缺口；session 帳本增長；S5b-F2–F6；S5c-F3、S5c-F4；
    測試身分 parametrize ID 帶本機 repo 路徑；上游票 139 少一空行。
+
+---
+
+## 二十八、Station 3d 紅燈規劃
+
+- 規劃檔:`docs/audits/2026-10-02-m1a-station3d-redlight-plan.md`(依〈二十七〉27.3 裁決 1–4;只讀原始碼推得,未執行 pytest)。
+- **P2(a)**:CLI、PYTEST_ADDOPTS、ini addopts 帶入的 `-o` 全部落在同一個 `config.option.override_ini`;`invocation_params.args` 不含後兩者。已提交的 `--strict-markers` 本身就會產生 `strict_markers=true` ⇒ 固定全套的 `override_ini` 不是空的。
+- **P2(b)**:`config.getini` 回傳的是工作樹設定加上 override 的有效值;執行層唯一能正向證明「設定內容 = 已提交版本」的,是「`inipath` 為 `pyproject.toml`,且其 blob 雜湊 = `HEAD:pyproject.toml`」。整棵工作樹乾淨的要求不可行(紅綠燈迴圈本來就在 commit 前跑測試)。
+- **P2(d)**:`-p no:<name>` 在 `list_name_plugin()` 留下 `(name, None)`;TARGET 把它判為 other,而且 (vii) 在 `cacheprovider_blocked` 之前判定 ⇒〈二十三〉裁決 4 的特判在得 `"true"` 的路徑上走不到(S5c-X1 成立;S5c-F3 的路徑也因此被擋)。
+- **P3 三案**(待 Jeff 裁):
+  - **A 禁止覆寫管道**:必須比對「已提交 addopts 推得的 override 清單」,照字面寫成「非空 ⇒ 不是 true」會讓固定全套永遠拿不到 true;不加雜湊就擋不住工作樹改過的 pyproject。對管道清單以外的輸入**不是 fail-closed**(殘餘)。
+  - **B 比較有效值**:對清單內的 key 有效;清單外的 key **不是 fail-closed**(殘餘)。
+  - **C(A + 設定檔雜湊)**:ini 設定那一面 fail-closed;非 ini 的 CLI 選項那一面仍是否定清單(殘餘)。
+  - 規劃建議 C,另建議以「任何 `-p no:` ⇒ 不是 true」取代 `cacheprovider_blocked` 特判。
 
 ---
 
