@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5b FAIL(S5b-F1 阻擋);回 Station 3c 補紅燈。
+**狀態**:動工 —— Station 3c 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -46,6 +46,9 @@
 >
 > - 狀態(舊,第十二代):~~`動工 —— Station 5b 審查包已建立;待獨立審查。`~~
 >   —— 2026-10-02 Station 5b 獨立審查 FAIL 後由第 3 行取代(見〈二十一〉)。
+>
+> - 狀態(舊,第十三代):~~`動工 —— Station 5b FAIL(S5b-F1 阻擋);回 Station 3c 補紅燈。`~~
+>   —— 2026-10-02 Station 3c 紅燈規劃寫完後由第 3 行取代(見〈二十二〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -423,8 +426,11 @@ Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5b FAIL(S5b-F1 阻擋);回 Station 3c 補紅燈(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3c 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第四代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5b FAIL(S5b-F1 阻擋);回 Station 3c 補紅燈(與票頭第 3 行一致)。~~
+> 2026-10-02 Station 3c 紅燈規劃寫完後隨第 3 行同步更新(見〈二十二〉)。
 
 > **舊句(F-036,保留不刪,第三代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4b 修正完成，Station 5b 審查包已建立，待獨立審查(與票頭第 3 行一致)。~~
 > 2026-10-02 Station 5b 獨立審查 FAIL 後隨第 3 行同步更新(見〈二十一〉)。
@@ -1145,6 +1151,18 @@ tests orphaned under ticket 145: (無)
    pre-commit 洩漏偵測（權威層）在 S5b-1 commit 時擋下，未進入歷史。
    處置：裁 A，repo 副本遮罩、原檔不動、不豁免偵測。
    Station 5c 審查者提示新增一條：照錄系統訊息前，先遮罩本機路徑中的使用者名稱。
+
+---
+
+## 二十二、Station 3c 紅燈規劃
+
+- 規劃檔:`docs/audits/2026-10-02-m1a-station3c-redlight-plan.md`(只規劃;未寫測試、未執行 pytest;pytest 行為全部由讀 pytest 9.1.1 / pluggy 1.6.0 原始碼推得)。
+- P2(d) 結論:對內建 `--lf`,有一個可觀察縮小前全集的時點(conftest 的 trylast `pytest_make_collect_report` wrapper,未實測);對未知第三方 plugin 沒有 ⇒ **無法由 selected / outcomes 單獨證明 selection completeness**,正向證據只能靠 provenance。
+- P3 三案(待 Jeff 裁):
+  - A 選項清單法 —— 記下會影響完整性的 pytest 選項,任一開著或缺欄 ⇒ 不是 `"true"`;擋不住 `pytest.exit(returncode=0)` 與未知 plugin。
+  - B 執行事實法 —— 記下 shouldstop / shouldfail、每個 selected 身分是否都有終局 outcome,可加縮小前全集快照;selection completeness 對未知 plugin 仍須回到 provenance。
+  - C A + B 合用,可再加「plugin dist 不在已知清單 ⇒ 不是 `"true"`」;規劃檔的建議是 C。
+- 另待裁:六支既有測試(預期 `"true"` / green / orphan)的 fixture 補件授權,見規劃檔 P4。
 
 ---
 
