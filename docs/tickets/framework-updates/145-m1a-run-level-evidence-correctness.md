@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3 紅燈已寫(待 Jeff 驗收);Station 4 未開始。
+**狀態**:動工 —— Station 3 PASS(Jeff 驗收 2026-10-02);redlight.py 豁免已 drain;待 Jeff 切 implement;Station 4 未開始。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -19,6 +19,9 @@
 >
 > - 狀態(舊,第三代):~~`動工 —— Station 3 進行中(baseline 已量,紅燈未寫);Station 4 未開始。`~~
 >   —— 2026-10-02 紅燈寫完並取得證據後由第 3 行取代(見〈十四〉)。
+>
+> - 狀態(舊,第四代):~~`動工 —— Station 3 紅燈已寫(待 Jeff 驗收);Station 4 未開始。`~~
+>   —— 2026-10-02 Jeff 驗收 Station 3、redlight.py 豁免 drain 後由第 3 行取代(見〈十五〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -381,10 +384,12 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 |---|---|
 | Station 1 — Spec | PASS / CLOSED |
 | Station 2 — Ticket | DONE |
-| Station 3 — Red-light | 紅燈已寫,待驗收 |
+| Station 3 — Red-light | PASS / ACCEPTED |
 | Station 4 — Implementation | NOT STARTED |
 | Station 5 — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
+
+Transition：redlight.py 豁免已 drain
 
 Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3 進行中,Station 4 未開始(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
@@ -566,6 +571,80 @@ Enforcement residual（登記）
 
 `tests/test_status.py` 那一筆紅燈的 `impl_hash` 為 `bdc3a089…fadf0`,即 `.claude/portable/status.py` 在本 HEAD 的內容 —— Station 4 修改 status.py 時 R3 要求的「屬於票 145、對著改動前內容發生的紅燈」由這一筆滿足。
 (`redlight.py` 仍在 R3 豁免清單;依〈十三〉裁決 6,drain 為 Station 4 前的獨立 transition commit。)
+
+---
+
+## 十五、Station 3→4 轉場
+
+### 15.1 Jeff 驗收
+
+Station 3 Red-light = **PASS / ACCEPTED**(Jeff,2026-10-02)。依〈十三〉裁決 6,本轉場只 drain `.claude/hooks/redlight.py` 的 R3 豁免並驗證;不改 redlight.py 本體、不改 tests/、不改 pipeline.json。
+
+### 15.2 drain 前提驗證(唯讀)
+
+```
+$ git ls-files --eol .claude/hooks/redlight.py
+i/lf    w/lf    attr/text eol=lf      	.claude/hooks/redlight.py
+$ sha256sum .claude/hooks/redlight.py
+0dadc80d19a7f1d11246d0fdeb2d75ca3f5c170511ec14b142fba394512f0ed7 *.claude/hooks/redlight.py
+```
+
+`.dev/test-runs.jsonl` 第 2074 行(Station 3 紅燈跑,`2026-10-02T14:08:27.690782+00:00`)的 `tests/test_redlight.py` red 紀錄:
+
+| 欄位 | 值 | 判定 |
+|---|---|---|
+| `impl_file` | `.claude/hooks/redlight.py` | 相符 |
+| `ticket_id` | `"145"` | 相符 |
+| `impl_hash` | `0dadc80d19a7f1d11246d0fdeb2d75ca3f5c170511ec14b142fba394512f0ed7` | **與 sha256sum 逐字相同**(工作樹與 index 皆 lf ⇒ sha256sum 即 `content_hash`) |
+
+排水格式依據:票 137 `:152-167`(節標題「排水紀錄格式(本票的權威定義)」在 `:152`;格式行 `# drained: <path> <YYYY-MM-DD> <ticket>` 在 `:155`;規矩表 `:158-165`;契約 `drained_from_lines()` 在 `:167`)。
+
+### 15.3 active entries 前後對照(條目行 = 非註解、非空行)
+
+| drain 前(9 筆,清單第 25–33 行) | drain 後(8 筆,清單第 29–36 行) |
+|---|---|
+| `.claude/hooks/gate.py` | `.claude/hooks/gate.py` |
+| `.claude/hooks/redlight.py` | **(移除)** |
+| `.claude/patches/apply_patches.py` | `.claude/patches/apply_patches.py` |
+| `.claude/portable/claude_md.py` | `.claude/portable/claude_md.py` |
+| `.claude/portable/g1_verify.py` | `.claude/portable/g1_verify.py` |
+| `.claude/portable/install.py` | `.claude/portable/install.py` |
+| `.claude/portable/leak_scan.py` | `.claude/portable/leak_scan.py` |
+| `.claude/portable/manifest.py` | `.claude/portable/manifest.py` |
+| `.claude/portable/verify_gates.py` | `.claude/portable/verify_gates.py` |
+
+被移除者恰為 `.claude/hooks/redlight.py`;其餘 8 筆逐字不變;`.claude/hooks/redlight.py` 不在 drain 後的 active entries;
+`# drained: .claude/hooks/redlight.py 2026-10-02 145` 存在(清單第 28 行)。
+
+### 15.4 T1 commit
+
+`b27ca301b058c60c3972eb247e2b701f4c38c3d4` —— `.agents/legacy-no-redlight.txt` 一檔,`4 1`:
+
+- 刪除條目行 `.claude/hooks/redlight.py`
+- 新增 `# drained: .claude/hooks/redlight.py 2026-10-02 145`(既有排水行的下一行)
+- 散文排水紀錄末尾追加 2026-10-02 一筆(三行)
+
+⚠ 清單第 26 行既有註解「既有 9 筆豁免條目一筆未增未減」是票 137 當時的陳述,drain 後已不精確;依本轉場「其餘行一字不改」未動。
+
+### 15.5 驗證全套(在 `b27ca30` 上,只跑一次)
+
+| 項 | 值 |
+|---|---|
+| 固定指令 | `python -X utf8 -m pytest -q` |
+| exit code | **1** |
+| 摘要行 | `14 failed, 1912 passed, 3 skipped, 3 xfailed in 141.67s (0:02:21)` |
+| 失敗集合 | **等於** Station 3 預期 Red-light 集合(〈十四〉14.2 的 14 支),不多不少 |
+| 既有測試失敗 | **0** |
+| `tests/test_gate.py::TestT137TheRealListUnderTheNewRule::test_the_real_list_is_the_generator_output_minus_drained` | **未失敗;exact PASS 未由本次固定指令直接觀察。** 佐證:`addopts = "-ra"` 會逐條列出所有非通過結果,本次 3 筆 SKIPPED 皆為 `tests\test_gate.py:451 / 459 / 473`(symlink),3 筆 XFAIL 皆為 `tests/test_g1_guard.py`,該測試不在其中 |
+
+### 15.6 帳本
+
+| 時點 | SHA-256 | bytes | lines |
+|---|---|---|---|
+| before | `05c819a047bd83bf88bfb3aba040c4d55a6e63eddd3de5a396bca03a2457d632` | 564441 | 2089 |
+| after | `6069453b9c0624ad42b898afded146bf01dd906cbd8be44f9c4fafa5655d9bd2` | 576717 | 2135 |
+
+新增 **46** 行:全部 `ticket_id == "145"`(全帳本 `"145"` 由 92 → 138);red **2**(`tests/test_redlight.py`、`tests/test_status.py`)、green **44**、其他 **0**。
 
 ---
 
