@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3 PASS(Jeff 驗收 2026-10-02);redlight.py 豁免已 drain;待 Jeff 切 implement;Station 4 未開始。
+**狀態**:動工 —— Station 4 實作完成(固定全套 exit 0);待 Station 5 審查。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -22,6 +22,9 @@
 >
 > - 狀態(舊,第四代):~~`動工 —— Station 3 紅燈已寫(待 Jeff 驗收);Station 4 未開始。`~~
 >   —— 2026-10-02 Jeff 驗收 Station 3、redlight.py 豁免 drain 後由第 3 行取代(見〈十五〉)。
+>
+> - 狀態(舊,第五代):~~`動工 —— Station 3 PASS(Jeff 驗收 2026-10-02);redlight.py 豁免已 drain;待 Jeff 切 implement;Station 4 未開始。`~~
+>   —— 2026-10-02 Station 4 實作完成、固定全套 exit 0 後由第 3 行取代(見〈十六〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -385,7 +388,7 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 1 — Spec | PASS / CLOSED |
 | Station 2 — Ticket | DONE |
 | Station 3 — Red-light | PASS / ACCEPTED |
-| Station 4 — Implementation | NOT STARTED |
+| Station 4 — Implementation | 實作完成,待審查 |
 | Station 5 — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
 
@@ -645,6 +648,108 @@ $ sha256sum .claude/hooks/redlight.py
 | after | `6069453b9c0624ad42b898afded146bf01dd906cbd8be44f9c4fafa5655d9bd2` | 576717 | 2135 |
 
 新增 **46** 行:全部 `ticket_id == "145"`(全帳本 `"145"` 由 92 → 138);red **2**(`tests/test_redlight.py`、`tests/test_status.py`)、green **44**、其他 **0**。
+
+---
+
+## 十六、Station 4 實作
+
+### 16.1 physical persistence 的決定(規劃書一、B)
+
+| 項目 | 決定 | 理由 |
+|---|---|---|
+| Q1 存哪裡 | **另一本帳 `<root>/.dev/test-sessions.jsonl`**,不寫進 `test-runs.jsonl` | `gate.redlight_missing()`(R3,權威層)逐行讀 `test-runs.jsonl`,`test_file` 命中而缺 `impl_exists` 就擋(`gate.py:2143-2144`);同檔混放會讓 R3 的解析面跟著變。既有 8 欄紀錄因此**一筆不改、不補欄位**(Backward compatibility 1、4) |
+| Q2 record type | 每筆 `{"kind": "session", "run_id", "time", "ticket_id", "exit_code", "collected", "deselected", "outcomes"}` | 規劃書一、A-3 的事實逐項落成欄位;`kind` 留給日後同帳其他類型 |
+| 落點由誰決定 | **`root` 參數**(`redlight.session_log(root)`),不由模組常數 | status 依 root 載入 redlight.py 讀取、測試以 tmp root 寫入 —— 三方對同一個 root 指向同一本帳 |
+| 寫入時機 | `pytest_sessionfinish`,**在逐檔紀錄之後**,每個 session 恰好一筆 | 0 collected、全部 deselected、invocation 錯誤時逐檔迴圈一筆都不寫(RECON Collapse ①),這一筆是唯一痕跡;寫在後面使同一時點 run 事實排在逐檔紀錄之後 |
+| 讀取失敗 | 任何一行讀不動 ⇒ `load_runs()` 整本回 `[]` | 讀到一半會讓「較晚的 run」看起來不存在;回 `[]` ⇒ 「無 run 證據 / 不可判定」⇒ 沒有紅能因此退掉 |
+| A-6 接合 | status 以 `ticket_id` + `time` 把 8 欄紀錄與 run 事實排成一條時間線;同一時點 run 事實在後 | 不需要在 8 欄紀錄加 `run_id` |
+| `.gitignore` | 不改 —— `/.dev/*` 已涵蓋新帳 | |
+
+### 16.2 四個檔的改動(`git diff f50b285 --stat`)
+
+```
+ .claude/hooks/redlight.py  | 124 +++++++++++++++++++++++
+ .claude/portable/status.py | 242 +++++++++++++++++++++++++++++++++++++++++----
+ tests/conftest.py          |  68 +++++++++++++
+ tests/test_status.py       |  12 +++
+ 4 files changed, 427 insertions(+), 19 deletions(-)
+```
+
+- **`.claude/hooks/redlight.py`**(+124 / −0):**只在檔尾追加**(既有行號不動 —— `tests/test_line_ending_parity.py` 與 `tests/test_non_source_list_parity.py` 引用 `:56` / `:77`)。新增 `SESSION_LOG_NAME`、`COLLECTION_ERROR`、`session_log(root)`、`_ticket_of(root)`、`record_session(root, ...)`、`load_runs(root)`、`run_state(run)`。`run_state` 對照表:exit code ∉ {0, 1, 5} 或有收集錯誤 ⇒ D;任一 failed ⇒ B;0 collected ⇒ C;無任何 passed ⇒ F;其餘 ⇒ A。
+- **`.claude/portable/status.py`**(+223 / −19):新增 `load_redlight(root)`(per-root 載入,與 `load_gate()` 同手法;None 不快取)、`_run_facts`、`ticket_test_state(records, runs, ticket)`、`_apply_run`、`_last_run_text`、`_run_source`。`_evidence` 的 `test-runs` 行改由 `ticket_test_state()` 計數,尾段由「全套結果:未記錄(帳本不記全套)」改為「最近一次 run:…」;`_derived` 由兩行改為四行(red / green / green (run 事實未知) / orphaned)。**`_latest_per_file()` 未動**。
+- **`tests/conftest.py`**(+68 / −0):逐段見 16.3。
+- **`tests/test_status.py`**(+12 / −0):只在 570 / 571 那一支測試補 run-level facts,見 16.4。
+
+**未修改**:`tests/test_redlight.py`(`git diff f50b285 --stat -- tests/test_redlight.py` 無輸出)、Station 3 的 14 支紅燈測試、`.claude/hooks/gate.py`、`.agents/`、`pipeline.json`。
+
+### 16.3 `tests/conftest.py` 逐段
+
+| 段 | 內容 |
+|---|---|
+| ① 模組層 `_run` | `{"selected": None, "deselected": [], "collect_errors": [], "outcomes": {}}` —— 逐身分的 run 事實;既有逐檔 `_outcomes` 並存,不互相推導 |
+| ② `_nodeid(obj)` | 取 `nodeid`,`\` 換 `/` |
+| ③ `pytest_collectreport` 追加一行 | 收集失敗時 `_run["collect_errors"]` 加 `<檔>::<collection error>`(不限 `.py`);既有寫 `_outcomes` 的兩行未動 |
+| ④ 新 hook `pytest_deselected(items)` | 記下被排除的身分(deselect 不產生任何 report) |
+| ⑤ 新 hook `pytest_collection_finish(session)` | 記下 `session.items`(= selected) |
+| ⑥ `_run_outcome(report)` | 一份 report 對身分結果的貢獻:failed ⇒ `failed`;skipped ⇒ `skipped`(xfail ⇒ `other`);call passed ⇒ `passed`(xpass ⇒ `other`);**屬性一律 `getattr` 帶預設值**(既有測試的假 report 只有四個屬性) |
+| ⑦ `pytest_runtest_logreport` 追加三行 | 逐身分寫入 `_run["outcomes"]`;`failed` 一旦記下不被後來的 report 蓋掉。既有寫 `_outcomes` 的部分未動 |
+| ⑧ `pytest_sessionfinish` 追加 | 既有逐檔迴圈之後,`record_session(_ROOT, exit_code=exitstatus, collected=selected + deselected + collect_errors, deselected=…, outcomes=…)`;舊版 redlight.py 無 `record_session` ⇒ 照舊只寫逐檔紀錄 |
+
+### 16.4 570 / 571 / 749 的 fixture 補件
+
+依〈十三〉裁決 2(C)。**斷言一字未改**(`git diff f50b285 -U0 -- tests/test_status.py` 只有一段 `@@ -565,0 +566,12 @@` 的純新增)。
+
+補在 `test_a_file_that_went_red_then_green_counts_as_green` 寫完 8 欄紀錄之後、`render(root)` 之前,逐字:
+
+```
+        # 票 145〈十三〉裁決 2(C):Station 4 補 run-level facts。
+        # 上面 test_a 的綠紀錄是 8 欄格式、沒有 run 事實 ⇒ 依 ODC-1 沒有退紅權;
+        # 補一次「test_a 全檔被選到、唯一一條實際執行且通過、該檔無 failure」的 run,
+        # 時點與那筆綠相同。紅紀錄沒有 failed_tests(身分不明)⇒ 依〈十三〉裁決 3,
+        # 該檔全部 collected 身分都要 passed —— 這個 run 滿足它。
+        # 第一行讓 fake repo 有 redlight.py:status 依 root 載入它讀 run 事實(裁決 1)。
+        shutil.copy2(str(REAL_REDLIGHT),
+                     str(pathlib.Path(root) / ".claude" / "hooks" / "redlight.py"))
+        redlight.record_session(
+            root, run_id=u"fixture-570-571", time=u"2026-09-02T02:00:00+00:00",
+            ticket_id=u"99", exit_code=0, collected=[u"tests/test_a.py::test_one"],
+            deselected=[], outcomes={u"tests/test_a.py::test_one": u"passed"})
+```
+
+**靜態預期理由**(實作前寫下,不是觀察):實作後,test_a 那筆 8 欄綠紀錄沒有 run 事實,將不再具有退紅權 ⇒ 若不補,570 / 571 會因 test_a 仍為 red 而不成立 —— 故需補 facts。
+⚠ **超出「純 run-level facts」的一項**:`shutil.copy2(...redlight.py)` 是 fake repo 基礎設施,不是 facts。理由:〈十三〉裁決 1 規定 status 依 root 載入 redlight.py 讀 run 事實,而該測試的 root 由既有 `_make_root()` 造、沒有 redlight.py —— 不補這一行,補上的 facts status 讀不到。這一行是純新增,未改任何既有行。
+
+**749 未補**:它直接呼叫 `status._latest_per_file()`,而該函式未改(16.2)—— 依靜態分析不需要。
+
+### 16.5 證據鏈
+
+| 步驟 | 證據 |
+|---|---|
+| 前置 H0 / L0 | `6069453b9c0624ad42b898afded146bf01dd906cbd8be44f9c4fafa5655d9bd2` / 576717 bytes / 2135 行 |
+| S4-1 commit 前未執行 pytest | commit 前重量帳本:SHA-256 / bytes / lines **與 H0 / L0 完全相同**;`.dev/test-sessions.jsonl` 不存在 |
+| S4-1 commit | `db0128348a877c557684573a584a38797425ae5d`(四檔 `124 0` / `223 19` / `68 0` / `12 0`);pre-commit 未擋 |
+| 固定全套(只跑一次,在 `db01283` 上) | `python -X utf8 -m pytest -q` ⇒ exit code **0**;`1926 passed, 3 skipped, 3 xfailed in 146.92s (0:02:26)`;**failed 0** |
+| 14 支紅燈 | **全部轉綠**(1926 = 1912 + 14;skipped / xfailed 維持 3 / 3,皆為 baseline 那 6 支) |
+| 帳本只追加 | after 前 576717 bytes 的 SHA-256 = `6069453b…d9bd2` = H0 ⇒ **前 L0 行逐位元組未變** |
+| 帳本 after | `a81559a44f2689eb412eb663f35c3b434f197a466bfe9b15b2b256fd3e664062` / 588020 bytes / 2181 行;新增 46 行,全部 `"145"`、全部 green |
+| run 事實帳本 | `.dev/test-sessions.jsonl` 1 行:`ticket_id` `"145"`、`exit_code` 0、`deselected` 空 |
+
+**status.py 的 Evidence 與 Derived**(節錄兩行;全文見報告):
+
+```
+test-runs: 本票 red 0 / green 46 / run 事實未知 0 / orphaned 0;最後一筆 tests/test_verify_gates.py=green @ 2026-10-02T14:51:04.809936+00:00;最近一次 run:A(exit 0;collected 1932 / deselected 0 / passed 1926 / failed 0 / skipped 3)  (source: .dev/test-runs.jsonl + .dev/test-sessions.jsonl)
+tests red under ticket 145: (無)  (source: .dev/test-runs.jsonl + .dev/test-sessions.jsonl(票 145 ODC-1))
+```
+
+`tests/test_redlight.py` 與 `tests/test_status.py` 先前的紅身分,在這次 run 中皆被選到、實際執行且通過、該檔無 failure ⇒ 依 ODC-1 退紅。
+
+### 16.6 測試三層
+
+| 層 | 狀態 |
+|---|---|
+| **UNIT** | 固定全套 exit 0,`1926 passed, 3 skipped, 3 xfailed` |
+| **CLEAN** | 未證明 |
+| **REAL** | 留待 Jeff 端 status_all 確認(本站不宣稱) |
 
 ---
 
