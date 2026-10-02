@@ -320,13 +320,23 @@ def _flag(session, name):
 
 
 def _completeness_of(session):
-    """本次 session 的完整性事實。任何一步出錯 ⇒ None(寧可多紅,不讓 pytest 失敗)。"""
+    """本次 session 的完整性事實。任何一步出錯 ⇒ None(寧可多紅,不讓 pytest 失敗)。
+
+    票 145 Station 4d(〈二十九〉2 (vii′)–(xiii))另記收集定義與版本邊界的事實:
+    `override_ini` / `inifilename` 讀 `config.option` 的**解析後**值(CLI、PYTEST_ADDOPTS、ini addopts
+    都已合併在裡面;不掃 argv);`inipath` 是 pytest 實際採用的設定檔;`config_blobs` 是
+    pyproject.toml 與本檔的工作樹 blob vs HEAD blob(git 子程序,失敗 ⇒ None);`pytest_version`
+    取自本檔 import 的 `pytest`;`blocked` 是 `list_name_plugin()` 中值為 None 的名稱(`-p no:`)。
+    路徑型事實一律轉成 root 相對路徑,不落帳絕對路徑。
+    """
     try:
         if _pre_narrowing_broken:
             return None
         cfg = session.config
         option = cfg.option
         pm = cfg.pluginmanager
+        name_plugins = pm.list_name_plugin()
+        version = getattr(pytest, "__version__", None)
         return {
             "options": dict((k, _plain(getattr(option, k, None)))
                             for k in _redlight.COMPLETENESS_OPTIONS),
@@ -334,8 +344,14 @@ def _completeness_of(session):
             "shouldstop": _flag(session, "shouldstop"),
             "shouldfail": _flag(session, "shouldfail"),
             "pre_narrowing": dict((f, list(ids)) for f, ids in _pre_narrowing.items()),
-            "plugins": _redlight.classify_plugins(_ROOT, pm.list_name_plugin(),
+            "plugins": _redlight.classify_plugins(_ROOT, name_plugins,
                                                   pm.list_plugin_distinfo()),
+            "blocked": _redlight.blocked_plugins(name_plugins),
+            "override_ini": _redlight.normalize_overrides(getattr(option, "override_ini", None), _ROOT),
+            "inifilename": _redlight.normalize_config_path(getattr(option, "inifilename", None), _ROOT),
+            "inipath": _redlight.normalize_config_path(getattr(cfg, "inipath", None), _ROOT),
+            "config_blobs": _redlight.committed_blobs(_ROOT),
+            "pytest_version": version if isinstance(version, str) else None,
         }
     except Exception:
         return None

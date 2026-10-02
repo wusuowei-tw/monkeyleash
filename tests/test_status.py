@@ -571,6 +571,10 @@ class TestTestsUnderTicketUsesTheLatestRecordPerFile:
         # 第一行讓 fake repo 有 redlight.py:status 依 root 載入它讀 run 事實(裁決 1)。
         shutil.copy2(str(REAL_REDLIGHT),
                      str(pathlib.Path(root) / ".claude" / "hooks" / "redlight.py"))
+        _t_committed(root)
+        blobs = dict((p, {u"worktree": _t_git(root, "hash-object", p).stdout.decode().strip(),
+                          u"head": _t_git(root, "rev-parse", "HEAD:" + p).stdout.decode().strip()})
+                     for p in (u"pyproject.toml", u"tests/conftest.py"))
         redlight.record_session(
             root, run_id=u"fixture-570-571", time=u"2026-09-02T02:00:00+00:00",
             ticket_id=u"99", exit_code=0, collected=[u"tests/test_a.py::test_one"],
@@ -583,7 +587,11 @@ class TestTestsUnderTicketUsesTheLatestRecordPerFile:
                 u"cacheprovider_blocked": False, u"shouldstop": False, u"shouldfail": False,
                 u"pre_narrowing": {u"tests/test_a.py": [u"tests/test_a.py::test_one"]},
                 u"plugins": [{u"name": u"main", u"kind": u"builtin"},
-                             {u"name": u"tests/conftest.py", u"kind": u"root_conftest"}]})
+                             {u"name": u"tests/conftest.py", u"kind": u"root_conftest"},
+                             {u"name": u"anyio", u"kind": u"known_dist",
+                              u"dists": [[u"anyio", u"4.15.0"]]}],
+                u"blocked": [], u"override_ini": list(_T_FIXED_OVERRIDES), u"inifilename": None,
+                u"inipath": u"pyproject.toml", u"config_blobs": blobs, u"pytest_version": u"9.1.1"})
 
         out = render(root)
         red = _value_of(out, u"tests red under ticket 99")
@@ -1333,6 +1341,10 @@ class TestOrphans:
         redlight.record_session(root, run_id=u"odc2-1", time=u"2026-09-02T01:00:00+00:00",
                                 ticket_id=u"99", exit_code=1, collected=[old, keep],
                                 deselected=[], outcomes={old: u"failed", keep: u"passed"})
+        _t_committed(root)
+        blobs = dict((p, {u"worktree": _t_git(root, "hash-object", p).stdout.decode().strip(),
+                          u"head": _t_git(root, "rev-parse", "HEAD:" + p).stdout.decode().strip()})
+                     for p in (u"pyproject.toml", u"tests/conftest.py"))
         redlight.record_session(root, run_id=u"odc2-2", time=u"2026-09-02T02:00:00+00:00",
                                 ticket_id=u"99", exit_code=0, collected=[new, keep],
                                 deselected=[], outcomes={new: u"passed", keep: u"passed"},
@@ -1347,7 +1359,12 @@ class TestOrphans:
                                     u"pre_narrowing": {u"tests/test_x.py": [new, keep]},
                                     u"plugins": [{u"name": u"main", u"kind": u"builtin"},
                                                  {u"name": u"tests/conftest.py",
-                                                  u"kind": u"root_conftest"}]})
+                                                  u"kind": u"root_conftest"},
+                                                 {u"name": u"anyio", u"kind": u"known_dist",
+                                                  u"dists": [[u"anyio", u"4.15.0"]]}],
+                                    u"blocked": [], u"override_ini": list(_T_FIXED_OVERRIDES),
+                                    u"inifilename": None, u"inipath": u"pyproject.toml",
+                                    u"config_blobs": blobs, u"pytest_version": u"9.1.1"})
         out = render(root)
         orphaned = _value_of(out, u"tests orphaned under ticket 99")
         green = _value_of(out, u"tests green under ticket 99")
@@ -1716,8 +1733,9 @@ class TestChainRegressionLocks:
         root = _root_with_redlight(tmp_path)
         c = _chain_conftest(root, monkeypatch)
         _seed_red(["test_target"])
-        _s_drive(c, root, {u"tests/test_x.py": [CHAIN_X, CHAIN_Y]}, selected=[CHAIN_X, CHAIN_Y],
-                 outcomes={CHAIN_X: "passed", CHAIN_Y: "passed"}, exitstatus=0)
+        _t_committed(root)
+        _t_drive(c, root, {u"tests/test_x.py": [CHAIN_X, CHAIN_Y]}, [CHAIN_X, CHAIN_Y],
+                 {CHAIN_X: "passed", CHAIN_Y: "passed"}, exitstatus=0)
         got = _lines_of(root)
         assert u"tests/test_x.py" in got[u"green"], got
         assert u"tests/test_x.py" not in got[u"red"], got
@@ -2194,9 +2212,10 @@ class TestCompletenessLocks:
         root = _root_with_redlight(tmp_path)
         c = _chain_conftest(root, monkeypatch)
         _seed_red(["test_target"])
-        _s_drive(c, root, {u"tests/test_x.py": [CHAIN_X, CHAIN_Y, S_XF]},
-                 selected=[CHAIN_X, CHAIN_Y, S_XF],
-                 outcomes={CHAIN_X: "passed", CHAIN_Y: "passed", S_XF: "xfail"}, exitstatus=0)
+        _t_committed(root)
+        _t_drive(c, root, {u"tests/test_x.py": [CHAIN_X, CHAIN_Y, S_XF]},
+                 [CHAIN_X, CHAIN_Y, S_XF],
+                 {CHAIN_X: "passed", CHAIN_Y: "passed", S_XF: "xfail"}, exitstatus=0)
         got = _lines_of(root)
         assert u"tests/test_x.py" in got[u"green"], got
         assert u"tests/test_x.py" not in got[u"red"], got
@@ -2290,7 +2309,10 @@ class TestPluginProducerChain:
         """
         root = _root_with_redlight(tmp_path)
         c = _chain_conftest(root, monkeypatch)
-        run = _s_full_run_session(c, root, _s_plugins(c, root))
+        _t_committed(root)
+        _t_drive(c, root, {u"tests/test_x.py": [S_A, S_B]}, [S_A, S_B],
+                 {S_A: "passed", S_B: "passed"}, exitstatus=0)
+        run = redlight.load_runs(root)[-1]
         kinds = _s_plugin_kinds(run)
         assert kinds, kinds
         assert all(k != u"other" for k in kinds.values()), kinds

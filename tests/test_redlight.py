@@ -529,9 +529,11 @@ class TestFileCoverage:
         c = _isolated_conftest(monkeypatch, tmp_path)
         _c_call_collect_wrapper(c, _c_file(tmp_path, "tests/test_x.py"),
                                 _CCollectReport("tests/test_x.py", [_c_item(X_A), _c_item(X_B)]))
+        _d_committed_root(tmp_path)
         session = _CompletenessSession([_c_item(X_A), _c_item(X_B)],
-                                       _CConfig(tmp_path, _COption(), _c_plugins(c, tmp_path),
+                                       _CConfig(tmp_path, _d_option(), _d_plugins(c, tmp_path),
                                                 args=["tests/test_x.py"]))
+        session.config.inipath = tmp_path / "pyproject.toml"
         _drive_with_session(c, session, selected=[X_A, X_B],
                             outcomes={X_A: "passed", X_B: "passed"}, exitstatus=0)
         got = redlight.file_coverage(redlight.load_runs(str(tmp_path))[0], "tests/test_x.py")
@@ -545,9 +547,11 @@ class TestFileCoverage:
         c = _isolated_conftest(monkeypatch, tmp_path)
         _c_call_collect_wrapper(c, _c_file(tmp_path, "tests/test_x.py"),
                                 _CCollectReport("tests/test_x.py", [_c_item(X_A), _c_item(X_B)]))
+        _d_committed_root(tmp_path)
         session = _CompletenessSession([_c_item(X_A), _c_item(X_B)],
-                                       _CConfig(tmp_path, _COption(), _c_plugins(c, tmp_path),
+                                       _CConfig(tmp_path, _d_option(), _d_plugins(c, tmp_path),
                                                 args=["tests"]))
+        session.config.inipath = tmp_path / "pyproject.toml"
         _drive_with_session(c, session, selected=[X_A, X_B],
                             outcomes={X_A: "passed", X_B: "passed"}, exitstatus=0)
         got = redlight.file_coverage(redlight.load_runs(str(tmp_path))[0], "tests/test_x.py")
@@ -640,8 +644,10 @@ class TestFixedCommandCoverage:
         c = _isolated_conftest(monkeypatch, tmp_path)
         session = _SessionWithConfig([_Item(X_A), _Item(X_B)], ["tests"], tmp_path)
         session.config.args_source = pytest.Config.ArgsSource.TESTPATHS
-        session.config.option = _COption()
-        session.config.pluginmanager = _c_plugins(c, tmp_path)
+        session.config.option = _d_option()
+        session.config.pluginmanager = _d_plugins(c, tmp_path)
+        session.config.inipath = tmp_path / "pyproject.toml"
+        _d_committed_root(tmp_path)
         session.shouldstop = False
         session.shouldfail = False
         _c_call_collect_wrapper(c, _c_file(tmp_path, "tests/test_x.py"),
@@ -1053,10 +1059,11 @@ class TestCompletenessCoverage:
         (call 為 skipped 且帶 `wasxfail`)⇒ `"true"`。
         """
         c = _isolated_conftest(monkeypatch, tmp_path)
-        _c_drive(c, tmp_path, {"tests/test_x.py": [X_A, X_B, X_XF]},
+        _d_committed_root(tmp_path)
+        _d_drive(c, tmp_path, {"tests/test_x.py": [X_A, X_B, X_XF]},
                  selected=[X_A, X_B, X_XF],
                  outcomes={X_A: "passed", X_B: "passed", X_XF: "xfail"},
-                 option=_COption(), pm=_c_plugins(c, tmp_path), exitstatus=0)
+                 option=_d_option(), pm=_d_plugins(c, tmp_path), exitstatus=0)
         runs = redlight.load_runs(str(tmp_path))
         assert len(runs) == 1, runs
         got = redlight.file_coverage(runs[0], "tests/test_x.py")
@@ -1476,3 +1483,50 @@ class TestCollectionDefinitionCoverage:
         _d_committed_root(tmp_path)
         got = _d_coverage(tmp_path, monkeypatch)
         assert got == "true", got
+
+    def test_d4_the_committed_addopts_override_constant_matches_pyproject(self):
+        """D4-1(票 145〈三十一〉裁決 3;〈二十九〉2 (viii) 的鎖步測試)。Station 4d 授權新增。
+
+        鎖的是「`redlight.COMMITTED_ADDOPTS_OVERRIDES` ↔ agent-gates repo **真正提交**的
+        `pyproject.toml` addopts」。來源固定為 `git show HEAD:pyproject.toml`(在 repo 根執行,唯讀);
+        不讀工作樹、不用 tmp repo、不寫死 addopts 字串 —— 用自造的設定只會驗到測試自己。
+        git 不可用或讀取失敗 ⇒ 失敗(不 skip)。
+
+        推導(pytest 9.1.1):addopts 以 shlex 切開(ini 模式下 type="args",`_pytest/config/__init__.py:1547`;
+        放到 args 最前面一起解析,`:1559-1562`),逐一對應:
+          - `OverrideIniAction` 旗標(`_pytest/main.py:76-96`;動作本體 `_pytest/config/argparsing.py:491-503`):
+            `--strict-config` → `strict_config=true`、`--strict-markers` → `strict_markers=true`、
+            `--strict` → `strict=true`;
+          - `-o` / `--override-ini KEY=VAL`(`_pytest/helpconfig.py:113-116`,append)→ `KEY=VAL`;
+          - 其他旗標不產生 override 項目。
+        依出現順序組成清單,必須恰等於常數。
+        """
+        import shlex
+        try:
+            import tomllib as _toml
+        except ImportError:                      # Python 3.10
+            import tomli as _toml
+        proc = _d_subprocess.run(["git", "-C", str(ROOT), "show", "HEAD:pyproject.toml"],
+                                 capture_output=True)
+        assert proc.returncode == 0, proc.stderr
+        cfg = _toml.loads(proc.stdout.decode("utf-8"))
+        addopts = cfg["tool"]["pytest"]["ini_options"]["addopts"]
+        tokens = shlex.split(addopts) if isinstance(addopts, str) else list(addopts)
+        flags = {"--strict-config": "strict_config=true",
+                 "--strict-markers": "strict_markers=true",
+                 "--strict": "strict=true"}
+        expected = []
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            if tok in flags:
+                expected.append(flags[tok])
+            elif tok in ("-o", "--override-ini"):
+                i += 1
+                expected.append(tokens[i])
+            elif tok.startswith("--override-ini="):
+                expected.append(tok.split("=", 1)[1])
+            elif tok.startswith("-o"):
+                expected.append(tok[2:])
+            i += 1
+        assert list(redlight.COMMITTED_ADDOPTS_OVERRIDES) == expected, (addopts, expected)

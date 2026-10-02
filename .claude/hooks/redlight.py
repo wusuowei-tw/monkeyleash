@@ -402,7 +402,7 @@ def file_coverage(run, test_file):
     | 某個位置參數是**該檔本身或其上層目錄**、且不含 `::` | true |
     | 位置參數只以 nodeid(含 `::`)指名該檔 | false |
     | 其餘(參數無法判讀、或都與該檔無關) | unknown |
-    | 位置參數涵蓋該檔之後:完整性事實(〈二十三〉7)不全部成立 | 見 `_completeness_verdict` |
+    | 位置參數涵蓋該檔之後:完整性事實(〈二十三〉7、〈二十九〉2)不全部成立 | 見 `_completeness_verdict` |
 
     **沒有為固定指令另寫分支**:pytest 未給位置參數時以 testpaths 補上
     `config.args == ["tests"]`,與「位置參數為上層目錄 tests」走同一條規則;
@@ -461,8 +461,27 @@ PLUGIN_KINDS = ("builtin", "root_conftest", "known_dist", "other")
 SUPPORTED_PLUGIN_KINDS = ("builtin", "root_conftest", "known_dist")
 BUILTIN_MODULE = "_pytest"
 ROOT_CONFTEST = "tests/conftest.py"
-KNOWN_DISTS = ("anyio",)
 OUTSIDE = "<outside>"
+
+# ── 票 145 Station 4d —— 收集定義完整性與版本邊界(〈二十九〉2 (vii′)–(xiii))
+# 以下四組是「已盤點」清單,**變更須走票**。版本邊界總表(〈二十九〉2):
+#   pytest 內建 ⇒ 鎖 pytest 版本;root producer ⇒ 鎖 tests/conftest.py 已提交 blob;
+#   repo 收集設定 ⇒ 鎖 pyproject.toml 已提交 blob;已知第三方 plugin ⇒ 鎖 dist 名稱 + 精確版本;
+#   未知 plugin ⇒ fail-closed。
+
+# (vii′) 已知第三方 plugin:(dist 名稱, 精確版本)。只看名稱不算(名稱可被冒用),版本不同也不算。
+KNOWN_DISTS = (("anyio", "4.15.0"),)
+
+# (xiii) P1 的盤點只對這些 pytest 版本成立;換版後非 ini 的 CLI 選項要重新盤點。
+KNOWN_PYTEST_VERSIONS = ("9.1.1",)
+
+# (viii) 已提交 pyproject.toml 的 addopts 帶來的 override 清單(`--strict-markers` ⇒
+# `strict_markers=true`)。由 tests/test_redlight.py 的鎖步測試對照已提交的 addopts。
+COMMITTED_ADDOPTS_OVERRIDES = ("strict_markers=true",)
+
+# (x) 唯一可接受的設定檔(root 相對路徑);(xi) 工作樹內容必須等於 HEAD blob 的檔。
+CONFIG_FILE = "pyproject.toml"
+COMMITTED_FILES = (CONFIG_FILE, ROOT_CONFTEST)
 
 # 「執行完成」的終態:call 的 passed / failed、任何 phase 的 skip、明確辨識的 xfail / xpass。
 # 籠統的 "other"(4c 之前的 xfail 記法)不算 —— 不得讓 other 自動取得 completeness。
@@ -477,6 +496,16 @@ def _dist_name(dist):
         except Exception:
             name = None
     return name.strip().lower().replace("_", "-") if isinstance(name, str) else None
+
+
+def _dist_version(dist):
+    version = getattr(dist, "version", None)
+    if not isinstance(version, str):
+        try:
+            version = dist.metadata["version"]
+        except Exception:
+            version = None
+    return version.strip() if isinstance(version, str) and version.strip() else None
 
 
 def _defining_module(plugin):
@@ -504,23 +533,24 @@ def _plugin_path_name(name, root):
 def classify_plugins(root, name_plugins, distinfo):
     """`list_name_plugin()` 與 `list_plugin_distinfo()` 的原始事實 → `[{"name", "kind"}]`。
 
-    依序判定(〈二十三〉3):
-      1. plugin **物件**出現在 distinfo 配對中 ⇒ dist 名稱在 `KNOWN_DISTS` 為 known_dist,否則 other
-         (只看名稱相同不算 —— 名稱可被冒用)
+    依序判定(〈二十三〉3,經〈二十九〉2 (vii′) 修訂):
+      1. plugin **物件**出現在 distinfo 配對中 ⇒ (dist 名稱, 精確版本) 在 `KNOWN_DISTS` 為 known_dist,
+         否則 other(只看名稱相同不算 —— 名稱可被冒用;版本缺失或不同也是 other)
       2. 名稱是絕對路徑(conftest 的註冊名稱)⇒ root 相對路徑恰為 `ROOT_CONFTEST` 為 root_conftest,否則 other
       3. 定義模組為 `_pytest` 或 `_pytest.*` ⇒ builtin
-      4. 其他 ⇒ other
+      4. 其他(含 `-p no:` 留下的 `(name, None)`)⇒ other
     帳本只記正規化名稱:路徑型一律轉 root 相對路徑(root 以外記 `<outside>`),不記絕對路徑。
+    配對到 dist 的項目另記 `dists`(`[[名稱, 版本], ...]`)。
     """
-    dists = [(p, _dist_name(d)) for p, d in (distinfo or [])]
+    dists = [(p, _dist_name(d), _dist_version(d)) for p, d in (distinfo or [])]
     out = []
     for name, plugin in name_plugins or []:
         name = str(name)
         is_path = os.path.isabs(name)
         shown = _plugin_path_name(name, root) if is_path else name
-        paired = [dn for p, dn in dists if p is plugin]
+        paired = [(dn, dv) for p, dn, dv in dists if p is plugin]
         if paired:
-            kind = "known_dist" if all(dn in KNOWN_DISTS for dn in paired) else "other"
+            kind = "known_dist" if all(pair in KNOWN_DISTS for pair in paired) else "other"
         elif is_path:
             kind = "root_conftest" if shown == ROOT_CONFTEST else "other"
         else:
@@ -528,7 +558,77 @@ def classify_plugins(root, name_plugins, distinfo):
             builtin = isinstance(mod, str) and (
                 mod == BUILTIN_MODULE or mod.startswith(BUILTIN_MODULE + "."))
             kind = "builtin" if builtin else "other"
-        out.append({"name": shown, "kind": kind})
+        entry = {"name": shown, "kind": kind}
+        if paired:
+            entry["dists"] = [[dn, dv] for dn, dv in paired]
+        out.append(entry)
+    return out
+
+
+def blocked_plugins(name_plugins):
+    """`list_name_plugin()` 中值為 None 的名稱 —— `-p no:<name>` 的 pluggy 表示方式
+    (`pluggy/_manager.py:230-233`)。〈二十九〉2 (xii)。"""
+    return [str(name) for name, plugin in (name_plugins or []) if plugin is None]
+
+
+def normalize_config_path(value, root):
+    """`inifilename` / `inipath` → 落帳形狀。None ⇒ None;絕對路徑 ⇒ root 相對 posix 路徑
+    (root 以外 `<outside>`);相對路徑 ⇒ 反斜線換成 `/`。**不落帳絕對路徑。**"""
+    if value is None:
+        return None
+    text = os.fspath(value) if isinstance(value, os.PathLike) else str(value)
+    if os.path.isabs(text):
+        return _plugin_path_name(text, root)
+    return text.replace("\\", "/")
+
+
+def normalize_overrides(values, root):
+    """`config.option.override_ini`(解析後清單)→ 落帳形狀。不是 list ⇒ None。
+    值是絕對路徑的項目(例 `-o cache_dir=…`)只把值換成 root 相對路徑或 `<outside>`,不落帳絕對路徑。"""
+    if not isinstance(values, (list, tuple)):
+        return None
+    out = []
+    for item in values:
+        key, sep, val = str(item).partition("=")
+        if sep and os.path.isabs(val):
+            val = _plugin_path_name(val, root)
+        out.append(key + sep + val)
+    return out
+
+
+def _git_lines(root, args, expected):
+    import subprocess
+    try:
+        proc = subprocess.run(["git", "-C", os.fspath(root)] + list(args),
+                              capture_output=True, timeout=30)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    lines = proc.stdout.decode("ascii", "replace").split()
+    if len(lines) != expected or not all(
+            len(x) in (40, 64) and all(c in "0123456789abcdef" for c in x) for x in lines):
+        return None
+    return lines
+
+
+def committed_blobs(root, paths=COMMITTED_FILES):
+    """`{path: {"worktree": blob, "head": blob}}` —— 工作樹檔案(`git hash-object`,依
+    .gitattributes 正規化)與 `HEAD:<path>` 的 blob。〈二十九〉2 (xi)。
+
+    git 不可用、不是 repo、檔案不存在或任何一步出錯 ⇒ 該值 None(缺欄 ⇒ 不得為 `"true"`)。
+    **不拋例外**:這是 producer 在 sessionfinish 呼叫的,不得讓 pytest 失敗。
+    """
+    paths = list(paths)
+    out = dict((p, {"worktree": None, "head": None}) for p in paths)
+    try:
+        worktree = _git_lines(root, ["hash-object"] + paths, len(paths))
+        head = _git_lines(root, ["rev-parse"] + ["HEAD:" + p for p in paths], len(paths))
+        for i, p in enumerate(paths):
+            out[p]["worktree"] = worktree[i] if worktree else None
+            out[p]["head"] = head[i] if head else None
+    except Exception:
+        pass
     return out
 
 
@@ -556,6 +656,22 @@ def _completeness_problems(comp):
             isinstance(p, dict) and isinstance(p.get("name"), str)
             and p.get("kind") in PLUGIN_KINDS for p in plugins):
         problems.append("plugins 缺欄或型別不符")
+    # 〈二十九〉2 (viii)–(xiii) 的事實。Station 4d 之前的 session 沒有這些欄位 ⇒ 不合格 ⇒ unknown。
+    for key in ("override_ini",):
+        if key not in comp or not (comp[key] is None or _is_str_list(comp[key])):
+            problems.append("%s 缺欄或型別不符" % key)
+    for key in ("inifilename", "inipath", "pytest_version"):
+        if key not in comp or not (comp[key] is None or isinstance(comp[key], str)):
+            problems.append("%s 缺欄或型別不符" % key)
+    if not _is_str_list(comp.get("blocked")):
+        problems.append("blocked 缺欄或型別不符")
+    blobs = comp.get("config_blobs")
+    if not isinstance(blobs, dict) or not all(
+            isinstance(blobs.get(p), dict)
+            and all(blobs[p].get(k) is None or isinstance(blobs[p].get(k), str)
+                    for k in ("worktree", "head"))
+            for p in COMMITTED_FILES):
+        problems.append("config_blobs 缺欄或型別不符")
     return problems
 
 
@@ -563,8 +679,15 @@ def _completeness_verdict(run, tf, idents):
     """位置參數已涵蓋 `tf` 之後,依〈二十三〉7 (i)–(vii) 判 `"true"` / `"false"` / `"unknown"`。
 
     - (i) 缺欄 / 型別錯 ⇒ unknown
-    - (vii) 有 plugin 不在受支援範圍 ⇒ unknown(在支援邊界之外,不知道)
-    - (ii) `lf` / `stepwise` 生效(除非 cacheprovider 被封鎖)⇒ false(縮小機制作用中)
+    - (vii)(vii′) 有 plugin 不在受支援範圍(含版本不在清單的 dist)⇒ unknown(在支援邊界之外,不知道)
+    - (xii) 有任何 `-p no:<name>` ⇒ unknown
+    - (xiii) pytest 版本不在 `KNOWN_PYTEST_VERSIONS` ⇒ unknown
+    - (viii) `override_ini` 不恰等於 `COMMITTED_ADDOPTS_OVERRIDES` ⇒ unknown(本次的收集定義被覆寫)
+    - (ix) 有 `-c` / `--config-file` ⇒ unknown(即使指向已提交的權威檔)
+    - (x) 實際採用的設定檔不是 `CONFIG_FILE` ⇒ unknown
+    - (xi) `COMMITTED_FILES` 任一檔的工作樹 blob ≠ HEAD blob,或取不到 ⇒ unknown
+    - (ii) `lf` / `stepwise` / `stepwise_skip` 不是 False ⇒ false(縮小機制作用中)。
+      `cacheprovider_blocked` 只是紀錄,不再有判定權(〈二十九〉2 (xii) 取代〈二十三〉裁決 4)
     - (iii) maxfail / collectonly / setuponly / setupplan ⇒ unknown
     - (iv) shouldstop / shouldfail ⇒ unknown
     - (v) 縮小前全集 != 本 run 該檔的 collected ⇒ false
@@ -575,11 +698,24 @@ def _completeness_verdict(run, tf, idents):
         return "unknown"
     if any(p["kind"] not in SUPPORTED_PLUGIN_KINDS for p in comp["plugins"]):
         return "unknown"
+    if comp["blocked"]:
+        return "unknown"
+    if comp["pytest_version"] not in KNOWN_PYTEST_VERSIONS:
+        return "unknown"
+    if comp["override_ini"] != list(COMMITTED_ADDOPTS_OVERRIDES):
+        return "unknown"
+    if comp["inifilename"] is not None:
+        return "unknown"
+    if comp["inipath"] != CONFIG_FILE:
+        return "unknown"
+    blobs = comp["config_blobs"]
+    if not all(blobs[p]["worktree"] and blobs[p]["worktree"] == blobs[p]["head"]
+               for p in COMMITTED_FILES):
+        return "unknown"
     options = comp["options"]
-    if comp["cacheprovider_blocked"] is not True:
-        if not (options["lf"] is False and options["stepwise"] is False
-                and options["stepwise_skip"] is False):
-            return "false"
+    if not (options["lf"] is False and options["stepwise"] is False
+            and options["stepwise_skip"] is False):
+        return "false"
     maxfail = options["maxfail"]
     if not (maxfail is None or (type(maxfail) is int and maxfail == 0)):
         return "unknown"
