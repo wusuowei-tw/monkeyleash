@@ -2140,15 +2140,25 @@ class TestLfFalseGreenChain:
         R1:test_x.py 收集錯誤(exit 2)⇒ 整檔紅。R2:全套,S_A passed、S_B failed(exit 1)⇒
         red = {整檔, S_B}。R3:`--lf`,縮小前全集 [S_A, S_B],S_A 被悄悄移除,S_B passed(exit 0)
         ⇒ 仍紅、不 green。
+        每次執行各自載入新的 conftest,模擬獨立的 pytest 程序(3c-1b 修正)。
+        情境斷言:R1 的 session 判 D、R2 判 B、R3 判 A 且 schema 合格。
         d122df4 上失敗的原因:R3 在 `.claude/hooks/redlight.py:423-426` 判 `"true"` ⇒
         `.claude/portable/status.py:470-474` 退掉整檔紅與 S_B ⇒ `:475` green。
         """
         root = _root_with_redlight(tmp_path)
-        c = _chain_conftest(root, monkeypatch)
-        _s_drive(c, root, {}, selected=[], collect_errors=[u"tests/test_x.py"], exitstatus=2)
-        _s_drive(c, root, {u"tests/test_x.py": [S_A, S_B]}, selected=[S_A, S_B],
+        c1 = _chain_conftest(root, monkeypatch)
+        _s_drive(c1, root, {}, selected=[], collect_errors=[u"tests/test_x.py"], exitstatus=2)
+        c2 = _chain_conftest(root, monkeypatch)
+        _s_drive(c2, root, {u"tests/test_x.py": [S_A, S_B]}, selected=[S_A, S_B],
                  outcomes={S_A: "passed", S_B: "failed"}, exitstatus=1)
-        _s_drive_lf(c, root)
+        c3 = _chain_conftest(root, monkeypatch)
+        _s_drive_lf(c3, root)
+        runs = redlight.load_runs(root)
+        assert len(runs) == 3, runs
+        assert redlight.run_state(runs[0]) == u"D", runs[0]
+        assert redlight.run_state(runs[1]) == u"B", runs[1]
+        assert redlight.validate_session(runs[2]) == [], runs[2]
+        assert redlight.run_state(runs[2]) == u"A", runs[2]
         got = _lines_of(root)
         assert u"tests/test_x.py" in got[u"red"], got
         assert u"tests/test_x.py" not in got[u"green"], got
