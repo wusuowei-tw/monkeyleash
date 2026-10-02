@@ -2296,3 +2296,248 @@ class TestPluginProducerChain:
         assert all(k != u"other" for k in kinds.values()), kinds
         got = redlight.file_coverage(run, u"tests/test_x.py")
         assert got == u"true", got
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 票 145 Station 3d 紅燈 —— 收集定義完整性的串接(producer → 持久化 run 事實 → status)
+#
+# 合約:票 145〈二十九〉2、5。規劃:docs/audits/2026-10-02-m1a-station3d-redlight-plan.md P4。
+# 下文 `<TARGET>` = 02a5e28adf5aee11a43d5a1063504f01beb1d67f(與 9d1446a 之間程式碼相同)。
+#
+# 每一次模擬執行都經**真實 tests/conftest.py**(`_chain_conftest` 每次載入全新模組,沿用 3c-1b)寫入
+# tmp root 的帳本,再由 status 讀回判定。tmp root 是**真的 git repo**,已提交 `pyproject.toml` 與
+# `tests/conftest.py`(真檔內容)。pytest 層級的假物件與 tests/test_redlight.py 的 3d 段同形:
+# `override_ini` 為解析後清單(固定全套 = `["strict_markers=true"]`)、`invocation_params.args` 只有 argv、
+# `inipath` / `getini()` 一致、`list_name_plugin()` 照 pluggy 表示方式、dist 帶名稱與版本。
+# `-o python_functions=test_b` 的情境:test_a 從一開始就不在 collect report 裡。
+# 本段 helper 全部新寫;既有 helper(`_root_with_redlight` / `_chain_conftest` / `_seed_red` / `_lines_of` /
+# `_CompletenessOption` / `_CompletenessSession` / `_SCollectReport` / `_s_item` / `_s_file` /
+# `_s_call_collect_wrapper` / `_s_reports` / `_s_internal`)只呼叫、不修改。
+# ═══════════════════════════════════════════════════════════════════════════
+
+_T_COMMITTED_PYPROJECT = (
+    u'[tool.pytest.ini_options]\n'
+    u'testpaths = ["tests"]\n'
+    u'addopts = "-ra --strict-markers"\n')
+
+_T_BASELINE_INI = {
+    "testpaths": ["tests"],
+    "addopts": ["-ra", "--strict-markers"],
+    "python_files": ["test_*.py", "*_test.py"],
+    "python_classes": ["Test"],
+    "python_functions": ["test"],
+    "norecursedirs": ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}"],
+    "collect_imported_tests": True,
+}
+
+_T_FIXED_OVERRIDES = [u"strict_markers=true"]
+
+
+def _t_git(root, *args):
+    return subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True)
+
+
+def _t_committed(root):
+    """把 `root` 變成真的 git repo,提交 baseline `pyproject.toml` 與 root conftest(真檔內容)。"""
+    with io.open(str(pathlib.Path(root) / "pyproject.toml"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(_T_COMMITTED_PYPROJECT)
+    conftest = pathlib.Path(root) / "tests" / "conftest.py"
+    conftest.parent.mkdir(parents=True, exist_ok=True)
+    conftest.write_bytes((ROOT / "tests" / "conftest.py").read_bytes())
+    _t_git(root, "init", "-q")
+    _t_git(root, "config", "user.email", "t@example.invalid")
+    _t_git(root, "config", "user.name", "t")
+    _t_git(root, "add", "pyproject.toml", "tests/conftest.py")
+    _t_git(root, "commit", "-q", "-m", "baseline")
+    return root
+
+
+class _TDist:
+    def __init__(self, name, version):
+        self.project_name = name
+        self.version = version
+        self.metadata = {"name": name, "version": version}
+
+
+class _TPluginManager:
+    """`list_name_plugin()` 照 pluggy 實際表示方式(可含 `(name, None)`);`is_blocked()` 由同一份資料推出。"""
+
+    def __init__(self, name_plugins, distinfo=()):
+        self._name_plugins = list(name_plugins)
+        self._distinfo = list(distinfo)
+
+    def list_name_plugin(self):
+        return list(self._name_plugins)
+
+    def list_plugin_distinfo(self):
+        return list(self._distinfo)
+
+    def is_blocked(self, name):
+        return any(n == name and p is None for n, p in self._name_plugins)
+
+    def get_plugin(self, name):
+        return dict(self._name_plugins).get(name)
+
+    def has_plugin(self, name):
+        return self.get_plugin(name) is not None
+
+
+def _t_plugins(c, root, anyio_version="4.15.0"):
+    builtin_mod = _s_types.ModuleType("_pytest.main")
+    internal = _s_internal("_pytest.config", "_InternalHelper")
+    anyio_mod = _s_types.ModuleType("anyio.pytest_plugin")
+    names = [(u"main", builtin_mod),
+             (str(id(internal)), internal),
+             (os.path.join(str(root), u"tests", u"conftest.py"), c),
+             (u"anyio", anyio_mod)]
+    return _TPluginManager(names, [(anyio_mod, _TDist("anyio", anyio_version))])
+
+
+class _TInvocationParams:
+    def __init__(self, args, d):
+        self.args = tuple(args)
+        self.plugins = None
+        self.dir = d
+
+
+class _TConfig:
+    def __init__(self, root, option, pluginmanager, argv=(u"-q",), inipath=u"pyproject.toml", ini=None):
+        self.args = [u"tests"]
+        self.args_source = pytest.Config.ArgsSource.TESTPATHS
+        self.rootpath = pathlib.Path(str(root))
+        self.invocation_params = _TInvocationParams(argv, self.rootpath)
+        self.option = option
+        self.pluginmanager = pluginmanager
+        self.inipath = self.rootpath / inipath
+        self._ini = dict(_T_BASELINE_INI)
+        self._ini.update(ini or {})
+
+    def getini(self, name):
+        if name not in self._ini:
+            raise ValueError("unknown configuration value: %r" % (name,))
+        value = self._ini[name]
+        return list(value) if isinstance(value, list) else value
+
+    def getoption(self, name, default=None, skip=False):
+        return getattr(self.option, name, default)
+
+
+def _t_option(**overrides):
+    values = {"override_ini": list(_T_FIXED_OVERRIDES), "inifilename": None}
+    values.update(overrides)
+    return _CompletenessOption(**values)
+
+
+def _t_drive(c, root, files, selected, outcomes, collect_errors=(), exitstatus=0,
+             option=None, argv=(u"-q",), ini=None):
+    """依 pytest 9.1.1 的呼叫順序驅動真實 conftest(同 `_s_drive`),session 帶 `_TConfig`。
+    `files` 的清單就是 collect report 的內容 —— 在 `collect()` 之內被縮掉的身分不在裡面。"""
+    def hook(name):
+        return getattr(c, name, None) or (lambda *a, **k: None)
+
+    for path in sorted(files):
+        report = _SCollectReport(path, [_s_item(n) for n in files[path]])
+        _s_call_collect_wrapper(c, _s_file(root, path), report)
+        hook("pytest_collectreport")(report)
+    for path in collect_errors:
+        hook("pytest_collectreport")(_SCollectReport(path, [], failed=True))
+    config = _TConfig(root, option if option is not None else _t_option(), _t_plugins(c, root),
+                      argv=argv, ini=ini)
+    session = _CompletenessSession([_s_item(n) for n in selected], config)
+    hook("pytest_collection_finish")(session)
+    for nodeid, kind in outcomes.items():
+        for rep in _s_reports(nodeid, kind):
+            hook("pytest_runtest_logreport")(rep)
+    hook("pytest_sessionfinish")(session, exitstatus)
+
+
+def _t_drive_override(c, root):
+    """`python -X utf8 -m pytest -q -o python_functions=test_b`:test_a 在 `collect()` 之內就不被收集;
+    只跑 S_B、passed、exit 0;其餘事實同固定全套。"""
+    _t_drive(c, root, {u"tests/test_x.py": [S_B]}, [S_B], {S_B: "passed"},
+             option=_t_option(override_ini=_T_FIXED_OVERRIDES + [u"python_functions=test_b"]),
+             argv=(u"-q", u"-o", u"python_functions=test_b"),
+             ini={"python_functions": [u"test_b"]}, exitstatus=0)
+
+
+class TestOverrideIniChain:
+
+    def test_d3a_full_then_override_ini_does_not_produce_a_false_green(self, tmp_path, monkeypatch):
+        """D3a-2(S5c-F1 三步情境;〈二十七〉27.2;〈二十九〉2 (viii))。分類:behavior-red。
+
+        R1:test_x.py 收集錯誤(exit 2)⇒ 整檔紅。R2:全套,S_A passed、S_B failed(exit 1)。
+        R3:`-o python_functions=test_b`,test_a 從一開始就不在 collect report 裡,S_B passed(exit 0)
+        ⇒ 仍紅、不 green。每次執行各自載入新的 conftest。
+        情境斷言:R1 的 session 判 D、R2 判 B、R3 schema 合格且判 A。
+        9d1446a 上失敗的原因:R3 在 `<TARGET>:.claude/hooks/redlight.py:590-592, 597` 判 `"true"` ⇒
+        `<TARGET>:.claude/portable/status.py:470-474` 退掉整檔紅與 S_B ⇒ `:475` green。
+        """
+        root = _root_with_redlight(tmp_path)
+        _t_committed(root)
+        c1 = _chain_conftest(root, monkeypatch)
+        _t_drive(c1, root, {}, [], {}, collect_errors=[u"tests/test_x.py"], exitstatus=2)
+        c2 = _chain_conftest(root, monkeypatch)
+        _t_drive(c2, root, {u"tests/test_x.py": [S_A, S_B]}, [S_A, S_B],
+                 {S_A: "passed", S_B: "failed"}, exitstatus=1)
+        c3 = _chain_conftest(root, monkeypatch)
+        _t_drive_override(c3, root)
+        runs = redlight.load_runs(root)
+        assert len(runs) == 3, runs
+        assert redlight.run_state(runs[0]) == u"D", runs[0]
+        assert redlight.run_state(runs[1]) == u"B", runs[1]
+        assert redlight.validate_session(runs[2]) == [], runs[2]
+        assert redlight.run_state(runs[2]) == u"A", runs[2]
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+    def test_d3a_override_ini_does_not_orphan_a_known_red(self, tmp_path, monkeypatch):
+        """D3a-3(〈二十九〉2 (viii);ODC-2 的 orphan 判定權)。分類:behavior-red。
+
+        已知紅 test_a;之後一次 `-o python_functions=test_b` 只收集到 S_B 且 passed
+        ⇒ test_a 不得被移到 orphan,仍紅。
+        9d1446a 上失敗的原因:`<TARGET>:.claude/hooks/redlight.py:597` 判 `"true"` ⇒
+        `<TARGET>:.claude/portable/status.py:464-468` 把 test_a 移入 orphan。
+        """
+        root = _root_with_redlight(tmp_path)
+        _t_committed(root)
+        c = _chain_conftest(root, monkeypatch)
+        _seed_red(["test_a"])
+        _t_drive_override(c, root)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"orphaned"], got
+        assert u"tests/test_x.py" in got[u"red"], got
+
+    def test_d3a_override_ini_does_not_make_a_clean_file_green(self, tmp_path, monkeypatch):
+        """D3a-4(〈二十一〉21.2 附註 2 的同型;〈二十九〉2 (viii))。分類:behavior-red。
+
+        test_x.py 先前沒有紅;一次 `-o python_functions=test_b` 只跑了 S_B ⇒ 不得 green。
+        9d1446a 上失敗的原因:`<TARGET>:.claude/hooks/redlight.py:597` 判 `"true"` ⇒
+        `<TARGET>:.claude/portable/status.py:475` `green_now = True`。
+        """
+        root = _root_with_redlight(tmp_path)
+        _t_committed(root)
+        c = _chain_conftest(root, monkeypatch)
+        _t_drive_override(c, root)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+
+class TestCollectionDefinitionLocks:
+
+    def test_d3d_the_fixed_command_full_run_still_retires_the_red(self, tmp_path, monkeypatch):
+        """D3d-2(〈二十九〉2 全部條件成立)。分類:regression-lock。
+
+        X 的已知紅 CHAIN_X;之後一次固定全套(`override_ini == ["strict_markers=true"]`、沒有 `-c`、
+        `inipath` 為 `pyproject.toml`、設定檔與 conftest = 已提交 blob、沒有 `(name, None)`、
+        pytest 9.1.1、anyio 4.15.0;全收集、全 passed)⇒ X 退紅、在 green。
+        """
+        root = _root_with_redlight(tmp_path)
+        _t_committed(root)
+        c = _chain_conftest(root, monkeypatch)
+        _seed_red(["test_target"])
+        _t_drive(c, root, {u"tests/test_x.py": [CHAIN_X, CHAIN_Y]}, [CHAIN_X, CHAIN_Y],
+                 {CHAIN_X: "passed", CHAIN_Y: "passed"}, exitstatus=0)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"green"], got
+        assert u"tests/test_x.py" not in got[u"red"], got

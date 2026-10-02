@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3d 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試。
+**狀態**:動工 —— Station 3d 紅燈已寫(待 Jeff 驗收);Station 4d 未開始。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -64,6 +64,9 @@
 >
 > - 狀態(舊,第十八代):~~`動工 —— Station 5c FAIL(S5c-F1 阻擋);回 Station 3d 補紅燈。`~~
 >   —— 2026-10-02 Station 3d 紅燈規劃寫完後由第 3 行取代(見〈二十八〉)。
+>
+> - 狀態(舊,第十九代):~~`動工 —— Station 3d 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試。`~~
+>   —— 2026-10-02 Station 3d 紅燈寫完後由第 3 行取代(見〈二十九〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -435,7 +438,7 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3c — Red-light(補) | PASS / ACCEPTED |
 | Station 4c — Implementation(修正) | PASS / COMPLETED（待 5c 審查） |
 | Station 5c — Review | FAIL |
-| Station 3d — Red-light(補) | 規劃已寫，待裁 |
+| Station 3d — Red-light(補) | 紅燈已寫，待驗收 |
 | Station 4d — Implementation(修正) | NOT STARTED |
 | Station 5d — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
@@ -444,8 +447,11 @@ Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3d 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3d 紅燈已寫(待 Jeff 驗收);Station 4d 未開始(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第十代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3d 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試(與票頭第 3 行一致)。~~
+> 2026-10-02 Station 3d 紅燈寫完後隨第 3 行同步更新(見〈二十九〉)。
 
 > **舊句(F-036,保留不刪,第九代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5c FAIL(S5c-F1 阻擋);回 Station 3d 補紅燈(與票頭第 3 行一致)。~~
 > 2026-10-02 Station 3d 紅燈規劃寫完後隨第 3 行同步更新(見〈二十八〉)。
@@ -1415,6 +1421,92 @@ tests orphaned under ticket 145: (無)
   - **B 比較有效值**:對清單內的 key 有效;清單外的 key **不是 fail-closed**(殘餘)。
   - **C(A + 設定檔雜湊)**:ini 設定那一面 fail-closed;非 ini 的 CLI 選項那一面仍是否定清單(殘餘)。
   - 規劃建議 C,另建議以「任何 `-p no:` ⇒ 不是 true」取代 `cacheprovider_blocked` 特判。
+
+---
+
+## 二十九、Station 3d 裁決與收集定義合約（2026-10-02，Jeff）
+
+### 29.1 裁決(照錄)
+
+1. 裁決助手在隔離環境以 pytest 9.1.1 實測（不是本 repo 帳本證據），規劃檔 P2 的五項推論全部成立：
+   (a) 固定全套（pyproject addopts = "-ra --strict-markers"）的 config.option.override_ini == ["strict_markers=true"]；
+   (b) CLI 的 -o 與 PYTEST_ADDOPTS 帶入的 -o 都附加到 config.option.override_ini；
+   (c) config.invocation_params.args 不含 PYTEST_ADDOPTS 的內容；
+   (d) -p no:cacheprovider 時 list_name_plugin() 出現 cacheprovider、pytest_cacheprovider、stepwise、pytest_stepwise 四筆值為 None 的項目；
+   (e) repo 根多一份 pytest.ini 時，沒有任何 -o，config.inipath 改指向 pytest.ini，python_functions 跟著改變。
+2. P3 採 C（管道檢查 + 設定檔雜湊比對）。full_file_coverage == "true" 的新增必要條件（全部成立才行）：
+   (vii′)  修訂〈二十三〉3 (3)：known_dist 改為「plugin 物件出現在 list_plugin_distinfo() 的配對中，且 (dist 名稱, 精確版本) 屬於已盤點清單」。
+           已盤點清單以常數定義在 redlight.py，目前為 {("anyio", "4.15.0")}；變更須走票。
+           版本缺失、讀不到、或名稱相同但版本不同 ⇒ kind = "other" ⇒ 不得為 "true"。
+   (viii)  config.option.override_ini 恰等於「已提交 addopts 帶來的 override 清單」；
+           該清單以常數定義在 redlight.py（目前為 ["strict_markers=true"]），並由一支鎖步測試對照已提交的 pyproject.toml addopts；變更須走票。
+   (ix)    config.option.inifilename 為 None（-c / --config-file 一律 fail-closed，即使指向已提交的權威檔）。
+   (x)     config.inipath 的 root 相對路徑 == "pyproject.toml"。
+   (xi)    pyproject.toml 工作樹內容（套用 .gitattributes 的 eol 正規化）的 blob 雜湊 == HEAD:pyproject.toml 的 blob；
+           tests/conftest.py 同樣比對（root conftest 是 producer 本身，工作樹被改即不給 "true"）。
+           git 不可用、出錯或任何一項取不到 ⇒ 缺欄 ⇒ 不得為 "true"。
+   (xii)   list_name_plugin() 中沒有任何值為 None 的項目（任何 -p no:<name> ⇒ 不得為 "true"）。
+           取代〈二十三〉裁決 4：cacheprovider_blocked 不再具有任何判定權（欄位可保留為紀錄）。
+   (xiii)  pytest 版本屬於已盤點清單，目前為 {"9.1.1"}，以常數定義在 redlight.py；版本不在清單 ⇒ 不得為 "true"。
+           理由：P1 的盤點只對 pytest 9.1.1 成立；非 ini 的 CLI 選項是否會做檔內縮小，換版後必須重新盤點。
+           這把「未知或不可觀察的 discovery 輸入」的預設權限定為 fail-closed。升級 pytest 須走票重做盤點。
+   版本邊界總表：pytest 內建 ⇒ 鎖 pytest 版本；root producer ⇒ 鎖 tests/conftest.py 已提交 blob；
+   repo 收集設定 ⇒ 鎖 pyproject.toml 已提交 blob；已知第三方 plugin ⇒ 鎖 dist 名稱 + 精確版本；未知 plugin ⇒ fail-closed。
+   producer 讀 config.option.* 的解析後值，不得掃 argv 字串。
+   隱私：新落帳的事實不得含絕對路徑；inipath 記 root 相對路徑；override_ini 只記解析後清單，若含路徑值須依〈十九〉規則正規化或只記 key。
+3. 已知殘餘（照實記錄）：
+   - TOCTOU：執行中途改設定再改回，雜湊比對看不到。
+   - 雜湊比對以 HEAD 為準：已 stage 未 commit 的設定改動也判不等（fail-closed）；只改註解也判不等（fail-closed 的代價）。
+   - 改了 pyproject.toml 或 tests/conftest.py 而尚未提交的期間，沒有任何 run 能退紅。
+   - 升級 pytest 或 anyio 後，在走票更新清單之前，沒有任何 run 能退紅。
+   - known plugin contract 鎖 anyio 4.15.0、pytest 版本清單為 9.1.1，但目前 dependency resolution 是否結構性鎖定這兩個版本
+     尚未保證（證據：`02a5e28adf5aee11a43d5a1063504f01beb1d67f:pyproject.toml:34` 為 `"pytest>=8.0,<10"`(範圍,非精確);
+     anyio 在 pyproject.toml 中完全沒有宣告(間接相依);
+     `02a5e28adf5aee11a43d5a1063504f01beb1d67f:.github/workflows/tests.yml:50` 以 `python -m pip install -e ".[dev]"` 在執行當下解析;
+     TARGET 樹中沒有 requirements*.txt、*.lock、constraints*.txt);CI 或新環境若取得其他版本，coverage 會 fail-closed（不會假綠，但無法退紅）。
+     4d / 5d 前須決定是否另行 pin。(本條依 3d-1 補充裁決,由第 0 步只讀查證的結果填入。)
+4. 授權 4d 只在規劃檔 P4「4d 後會受新合約影響的既有測試」那 9 支的 fake / fixture 補上「已提交設定、沒有額外 override、沒有 -c、
+   沒有 -p no:、pytest 9.1.1、anyio 4.15.0」的事實（含在 tmp root 建 git repo 並提交 pyproject.toml 與 tests/conftest.py）；
+   assertion、docstring、test identity 一律不改。C3p-6 的隱私斷言不屬可授權修改範圍。
+5. 鏈條要求（延續〈二十三〉8 與 3c 的教訓）：本輪所有 behavior-red 情境，都必須經由真實的 tests/conftest.py producer 產生事實，
+   再到 file_coverage / status；不得直接把預先做好的 completeness dict 餵給 consumer。
+   涉及設定檔內容雜湊的情境，必須在 tmp root 建立真的 git repo 並提交檔案；不得以假雜湊值代替。
+   fake pluginmanager 的 list_name_plugin() 必須照 pluggy 實際表示方式包含 (name, None) 項目，且與 is_blocked() 一致；
+   list_plugin_distinfo() 的 dist 物件必須帶名稱與版本。
+   每次模擬執行用全新的 conftest（沿用 3c-1b）。
+
+### 29.2 預期集合(完整 nodeid)
+
+預期紅集合(behavior-red,13 支,在 9d1446a 上必須失敗):
+
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3a_an_override_ini_narrowing_is_not_full_coverage
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3b_an_override_from_pytest_addopts_is_not_full_coverage
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3c_a_config_file_option_is_not_full_coverage
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3c_a_config_file_option_naming_the_committed_config
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3w_an_unexpected_config_file_is_not_full_coverage
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3w_an_uncommitted_config_change_is_not_full_coverage
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3w_a_non_collection_edit_to_the_config_file
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3w_an_uncommitted_root_conftest_change_is_not_full_coverage
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3v_an_unrecognized_pytest_version_is_not_full_coverage
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3v_a_known_plugin_with_unrecognized_version_is_not_full_coverage
+- tests/test_status.py::TestOverrideIniChain::test_d3a_full_then_override_ini_does_not_produce_a_false_green
+- tests/test_status.py::TestOverrideIniChain::test_d3a_override_ini_does_not_orphan_a_known_red
+- tests/test_status.py::TestOverrideIniChain::test_d3a_override_ini_does_not_make_a_clean_file_green
+
+預期綠集合(regression-lock,6 支,在 9d1446a 上必須通過):
+
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3i_lf_alone_is_not_full_coverage
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3i_maxfail_alone_is_not_full_coverage
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3i_shouldfail_alone_is_not_full_coverage
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3x_a_blocked_plugin_is_not_full_coverage
+- tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d3d_the_fixed_command_with_the_committed_config_is_full_coverage
+- tests/test_status.py::TestCollectionDefinitionLocks::test_d3d_the_fixed_command_full_run_still_retires_the_red
+
+### 29.3 本刀定稿的介面細節(不是裁決原文;語意依 29.1 第 2 點)
+
+- pytest 版本事實取自 conftest 所 import 的 `pytest` 模組的 `__version__`(D3v-1 以 monkeypatch 改它)。
+- 設定檔雜湊以 producer 的 `_ROOT` 為 repo 根(測試中為 tmp root,tmp root 是真的 git repo)。
+- 被 `collect()` 之內縮掉的身分,在 driver 中表達為「從一開始就不在 collect report 裡」(不經收集後移除)。
 
 ---
 

@@ -1061,3 +1061,418 @@ class TestCompletenessCoverage:
         assert len(runs) == 1, runs
         got = redlight.file_coverage(runs[0], "tests/test_x.py")
         assert got == "true", got
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145 Station 3d 紅燈 —— 收集定義完整性與版本邊界(〈二十九〉)
+#
+# 合約:票 145〈二十九〉2 (vii′)–(xiii)。規劃:docs/audits/2026-10-02-m1a-station3d-redlight-plan.md P4。
+# 下文 `<TARGET>` = 02a5e28adf5aee11a43d5a1063504f01beb1d67f(與 9d1446a 之間程式碼相同)。
+#
+# **每一支都經真實 tests/conftest.py 的 producer**(`_isolated_conftest` 每次載入全新模組,沿用 3c-1b),
+# 再由 `redlight.file_coverage` 判定 —— 不直接餵預先做好的 completeness(〈二十九〉5)。
+# **pytest 層級的假物件照 pytest 9.1.1 的實際形狀**(規劃檔 P2;〈二十九〉1 實測):
+#   - `config.option.override_ini` 是解析後的合併清單(CLI、PYTEST_ADDOPTS、ini addopts 都附加在這裡);
+#     固定全套因已提交的 `--strict-markers` 而為 `["strict_markers=true"]`;
+#   - `config.invocation_params.args` 只有 CLI 的 argv(不含 PYTEST_ADDOPTS);
+#   - `config.inipath` 是實際採用的設定檔;`config.getini()` 回傳與它一致的有效值;
+#   - `list_name_plugin()` 照 pluggy 的表示方式含 `(name, None)`(`-p no:`),`is_blocked()` 由同一份資料推出;
+#   - `list_plugin_distinfo()` 的 dist 物件帶名稱與版本。
+# **在 `collect()` 之內就被縮掉的身分(例:`-o python_functions=test_b` 的 test_a)從一開始就不在
+# collect report 裡** —— driver 直接以縮小後的清單送出,不經「收集後移除」。
+# **設定檔雜湊的情境用真的 git repo**:tmp root 先 `git init`,提交 `pyproject.toml` 與
+# `tests/conftest.py`(真檔內容),再依情境改工作樹 —— 不以假雜湊值代替。
+# 本段 helper 全部新寫;既有 helper(`_isolated_conftest` / `_COption` / `_c_item` / `_c_file` /
+# `_c_internal` / `_CCollectReport` / `_c_call_collect_wrapper` / `_c_reports` / `_CompletenessSession`)
+# 只呼叫、不修改。
+#
+# 本刀定稿的介面細節(語意依〈二十九〉2):pytest 版本取 conftest 所 import 的 `pytest` 模組的
+# `__version__`;設定檔雜湊以 producer 的 `_ROOT` 為 repo 根(測試中為 tmp root)。
+# ─────────────────────────────────────────────────────────────────────────────
+
+import subprocess as _d_subprocess
+
+_D_COMMITTED_PYPROJECT = (
+    u'[tool.pytest.ini_options]\n'
+    u'testpaths = ["tests"]\n'
+    u'addopts = "-ra --strict-markers"\n')
+
+# 已提交設定之下的有效值(規劃檔 P2(b);未設定的 key 取 pytest 9.1.1 預設)。
+_D_BASELINE_INI = {
+    "testpaths": ["tests"],
+    "addopts": ["-ra", "--strict-markers"],
+    "python_files": ["test_*.py", "*_test.py"],
+    "python_classes": ["Test"],
+    "python_functions": ["test"],
+    "norecursedirs": ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}"],
+    "collect_imported_tests": True,
+}
+
+_D_FIXED_OVERRIDES = ["strict_markers=true"]
+
+# `-p no:cacheprovider`:這些選項由 cacheprovider / stepwise 的 pytest_addoption 加入,停用後不存在;
+# 停用的名稱(`_pytest/config/__init__.py:850-857`)。
+_D_CACHEPROVIDER_OPTIONS = ("lf", "last_failed_no_failures", "failedfirst", "newfirst",
+                            "stepwise", "stepwise_skip", "stepwise_reset")
+_D_CACHEPROVIDER_BLOCKED = ("cacheprovider", "pytest_cacheprovider", "stepwise", "pytest_stepwise")
+
+_D_FULL = {"tests/test_x.py": [X_A, X_B]}
+_D_ONLY_B = {"tests/test_x.py": [X_B]}
+
+
+def _d_write(root, rel, text):
+    p = pathlib.Path(str(root)) / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with io.open(str(p), "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
+def _d_git(root, *args):
+    return _d_subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True)
+
+
+def _d_committed_root(root):
+    """在 `root` 建真的 git repo,提交 baseline `pyproject.toml` 與 root conftest(真檔內容)。"""
+    _d_write(root, "pyproject.toml", _D_COMMITTED_PYPROJECT)
+    conftest = pathlib.Path(str(root)) / "tests" / "conftest.py"
+    conftest.parent.mkdir(parents=True, exist_ok=True)
+    conftest.write_bytes((ROOT / "tests" / "conftest.py").read_bytes())
+    _d_git(root, "init", "-q")
+    _d_git(root, "config", "user.email", "t@example.invalid")
+    _d_git(root, "config", "user.name", "t")
+    _d_git(root, "add", "pyproject.toml", "tests/conftest.py")
+    _d_git(root, "commit", "-q", "-m", "baseline")
+    return root
+
+
+class _DDist:
+    """`list_plugin_distinfo()` 的 dist:帶名稱與版本(pluggy DistFacade 的讀取點)。"""
+
+    def __init__(self, name, version):
+        self.project_name = name
+        self.version = version
+        self.metadata = {"name": name, "version": version}
+
+
+class _DPluginManager:
+    """`config.pluginmanager`。`list_name_plugin()` 照 pluggy 實際表示方式含 `(name, None)`
+    (`pluggy/_manager.py:230-233, 427-429`);`is_blocked()` 由同一份資料推出,兩者必然一致。"""
+
+    def __init__(self, name_plugins, distinfo=()):
+        self._name_plugins = list(name_plugins)
+        self._distinfo = list(distinfo)
+
+    def list_name_plugin(self):
+        return list(self._name_plugins)
+
+    def list_plugin_distinfo(self):
+        return list(self._distinfo)
+
+    def is_blocked(self, name):
+        return any(n == name and p is None for n, p in self._name_plugins)
+
+    def get_plugin(self, name):
+        return dict(self._name_plugins).get(name)
+
+    def has_plugin(self, name):
+        return self.get_plugin(name) is not None
+
+
+def _d_plugins(c, root, blocked=(), anyio_version="4.15.0"):
+    """固定全套的 plugin 集合(`_pytest` 內建、root conftest、anyio)+ `blocked` 的 `(name, None)`。"""
+    builtin_mod = _c_types.ModuleType("_pytest.main")
+    internal = _c_internal("_pytest.config", "_InternalHelper")
+    anyio_mod = _c_types.ModuleType("anyio.pytest_plugin")
+    names = [("main", builtin_mod),
+             (str(id(internal)), internal),
+             (_c_os.path.join(str(root), "tests", "conftest.py"), c),
+             ("anyio", anyio_mod)]
+    names += [(n, None) for n in blocked]
+    return _DPluginManager(names, [(anyio_mod, _DDist("anyio", anyio_version))])
+
+
+class _DInvocationParams:
+    def __init__(self, args, d):
+        self.args = tuple(args)
+        self.plugins = None
+        self.dir = d
+
+
+class _DConfig:
+    """`config`:args / args_source / rootpath / invocation_params / option / pluginmanager /
+    inipath / getini —— 彼此一致(同一個 pytest 世界)。"""
+
+    def __init__(self, root, option, pluginmanager, argv=("-q",), inipath="pyproject.toml", ini=None):
+        self.args = ["tests"]
+        self.args_source = pytest.Config.ArgsSource.TESTPATHS
+        self.rootpath = pathlib.Path(str(root))
+        self.invocation_params = _DInvocationParams(argv, self.rootpath)
+        self.option = option
+        self.pluginmanager = pluginmanager
+        self.inipath = self.rootpath / inipath
+        self._ini = dict(_D_BASELINE_INI)
+        self._ini.update(ini or {})
+
+    def getini(self, name):
+        if name not in self._ini:
+            raise ValueError("unknown configuration value: %r" % (name,))
+        value = self._ini[name]
+        return list(value) if isinstance(value, list) else value
+
+    def getoption(self, name, default=None, skip=False):
+        return getattr(self.option, name, default)
+
+
+def _d_option(missing=(), **overrides):
+    """固定全套的 `config.option`:3c 的「全部關閉」+ `override_ini == ["strict_markers=true"]`、
+    `inifilename is None`(沒有 `-c`)。"""
+    values = {"override_ini": list(_D_FIXED_OVERRIDES), "inifilename": None}
+    values.update(overrides)
+    return _COption(missing=missing, **values)
+
+
+def _d_drive(c, root, files, selected, outcomes, option=None, pm=None, argv=("-q",),
+             inipath="pyproject.toml", ini=None, shouldstop=False, shouldfail=False, exitstatus=0):
+    """依 pytest 9.1.1 的呼叫順序驅動真實 conftest(同 `_c_drive`),session 帶 `_DConfig`。
+
+    `files`:{測試檔: collect report 裡的完整 nodeid 清單} —— 在 `collect()` 之內就被縮掉的身分不在清單裡。
+    """
+    def hook(name):
+        return getattr(c, name, None) or (lambda *a, **k: None)
+
+    for path in sorted(files):
+        report = _CCollectReport(path, [_c_item(n) for n in files[path]])
+        _c_call_collect_wrapper(c, _c_file(root, path), report)
+        hook("pytest_collectreport")(report)
+    config = _DConfig(root, option if option is not None else _d_option(),
+                      pm if pm is not None else _d_plugins(c, root),
+                      argv=argv, inipath=inipath, ini=ini)
+    session = _CompletenessSession([_c_item(n) for n in selected], config)
+    hook("pytest_collection_finish")(session)
+    for nodeid, kind in outcomes.items():
+        for rep in _c_reports(nodeid, kind):
+            hook("pytest_runtest_logreport")(rep)
+    session.shouldstop = shouldstop
+    session.shouldfail = shouldfail
+    hook("pytest_sessionfinish")(session, exitstatus)
+
+
+def _d_coverage(tmp_path, monkeypatch, files=None, blocked=(), anyio_version="4.15.0", **kw):
+    """一次模擬執行(全新 conftest;`files` 的身分全部 passed、exit 0);回傳**最後一筆** session 對
+    `tests/test_x.py` 的 `file_coverage`。`kw` 交給 `_d_drive`(option / argv / inipath / ini / shouldfail…)。"""
+    files = files if files is not None else _D_FULL
+    selected = [n for ids in files.values() for n in ids]
+    c = _isolated_conftest(monkeypatch, tmp_path)
+    pm = _d_plugins(c, tmp_path, blocked=blocked, anyio_version=anyio_version)
+    _d_drive(c, tmp_path, files, selected, dict((n, "passed") for n in selected), pm=pm, **kw)
+    runs = redlight.load_runs(str(tmp_path))
+    assert runs, runs
+    return redlight.file_coverage(runs[-1], "tests/test_x.py")
+
+
+class TestCollectionDefinitionCoverage:
+
+    def test_d3a_an_override_ini_narrowing_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """D3a-1(〈二十九〉2 (viii);S5c-F1)。分類:behavior-red。
+
+        CLI `python -X utf8 -m pytest -q -o python_functions=test_b`:test_a 在 `Module.collect()` 之內
+        就不被收集 ⇒ 縮小前快照與 collected 都只有 X_B;`override_ini` 多一筆 `python_functions=test_b`。
+        其他條件(已提交設定、沒有 `-c`、沒有 `-p no:`、pytest 9.1.1、anyio 4.15.0)全部成立 ⇒ 不得為 `"true"`。
+        9d1446a 上失敗的原因:`<TARGET>:tests/conftest.py:322-341` 不記任何 override 事實;
+        `<TARGET>:.claude/hooks/redlight.py:590-592` {X_B} == {X_B} ⇒ `:597` 回 `"true"`。
+        """
+        _d_committed_root(tmp_path)
+        got = _d_coverage(tmp_path, monkeypatch, files=_D_ONLY_B,
+                          option=_d_option(override_ini=_D_FIXED_OVERRIDES + ["python_functions=test_b"]),
+                          argv=("-q", "-o", "python_functions=test_b"),
+                          ini={"python_functions": ["test_b"]})
+        assert got != "true", got
+
+    def test_d3b_an_override_from_pytest_addopts_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """D3b-1(〈二十九〉2 (viii)、「不得掃 argv」;〈二十九〉1 (b)(c))。分類:behavior-red。
+
+        `PYTEST_ADDOPTS="-o python_functions=test_b"`:override 只出現在解析後的 `config.option.override_ini`,
+        `invocation_params.args == ("-q",)` 裡**沒有** `-o` ⇒ 掃 argv 的實作會漏;不得為 `"true"`。
+        9d1446a 上失敗的原因:同 D3a-1(`<TARGET>:tests/conftest.py:322-341`;
+        `<TARGET>:.claude/hooks/redlight.py:590-592, 597`)。
+        """
+        _d_committed_root(tmp_path)
+        got = _d_coverage(tmp_path, monkeypatch, files=_D_ONLY_B,
+                          option=_d_option(override_ini=_D_FIXED_OVERRIDES + ["python_functions=test_b"]),
+                          argv=("-q",),
+                          ini={"python_functions": ["test_b"]})
+        assert got != "true", got
+
+    def test_d3c_a_config_file_option_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """D3c-1(〈二十九〉2 (ix)(x))。分類:behavior-red。
+
+        `-c alt.toml`(未追蹤,內容 = 已提交設定 + `python_functions = ["test_b"]`):
+        `inifilename == "alt.toml"`、`inipath` 指向它;沒有額外 `-o` ⇒ 不得為 `"true"`。
+        9d1446a 上失敗的原因:`<TARGET>:tests/conftest.py:322-341` 不記 `inifilename` / `inipath`;
+        `<TARGET>:.claude/hooks/redlight.py:590-592, 597`。
+        """
+        _d_committed_root(tmp_path)
+        _d_write(tmp_path, "alt.toml", _D_COMMITTED_PYPROJECT + u'python_functions = ["test_b"]\n')
+        got = _d_coverage(tmp_path, monkeypatch, files=_D_ONLY_B,
+                          option=_d_option(inifilename="alt.toml"),
+                          argv=("-q", "-c", "alt.toml"), inipath="alt.toml",
+                          ini={"python_functions": ["test_b"]})
+        assert got != "true", got
+
+    def test_d3c_a_config_file_option_naming_the_committed_config(self, tmp_path, monkeypatch):
+        """D3c-2(〈二十九〉2 (ix):`-c` 一律 fail-closed,即使指向已提交的權威檔)。分類:behavior-red。
+
+        `-c pyproject.toml`(就是已提交、工作樹未改的那一份;有效值 = baseline;全收集、全 passed)
+        ⇒ 仍不得為 `"true"`。
+        9d1446a 上失敗的原因:`<TARGET>:tests/conftest.py:322-341` 不記 `inifilename`;
+        `<TARGET>:.claude/hooks/redlight.py:597` 回 `"true"`。
+        """
+        _d_committed_root(tmp_path)
+        got = _d_coverage(tmp_path, monkeypatch,
+                          option=_d_option(inifilename="pyproject.toml"),
+                          argv=("-q", "-c", "pyproject.toml"))
+        assert got != "true", got
+
+    def test_d3w_an_unexpected_config_file_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """D3w-1(〈二十九〉2 (x);〈二十九〉1 (e))。分類:behavior-red。
+
+        repo 根多一份未追蹤的 `pytest.ini`(`python_functions = test_b`):沒有任何 `-o`、沒有 `-c`,
+        `inipath` 改指向 `pytest.ini`,test_a 不被收集 ⇒ 不得為 `"true"`。
+        9d1446a 上失敗的原因:`<TARGET>:tests/conftest.py:322-341` 不記 `inipath`;
+        `<TARGET>:.claude/hooks/redlight.py:590-592, 597`。
+        """
+        _d_committed_root(tmp_path)
+        _d_write(tmp_path, "pytest.ini",
+                 u"[pytest]\ntestpaths = tests\naddopts = -ra --strict-markers\npython_functions = test_b\n")
+        got = _d_coverage(tmp_path, monkeypatch, files=_D_ONLY_B,
+                          inipath="pytest.ini", ini={"python_functions": ["test_b"]})
+        assert got != "true", got
+
+    def test_d3w_an_uncommitted_config_change_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """D3w-2(〈二十九〉2 (xi))。分類:behavior-red。
+
+        tmp git repo 已提交 baseline `pyproject.toml`;工作樹再加上 `python_functions = ["test_b"]`
+        (`inipath` 不變、沒有 `-o`)⇒ test_a 不被收集 ⇒ 不得為 `"true"`。
+        9d1446a 上失敗的原因:`<TARGET>:tests/conftest.py:322-341` 沒有設定檔內容的事實;
+        `<TARGET>:.claude/hooks/redlight.py:590-592, 597`。
+        """
+        _d_committed_root(tmp_path)
+        _d_write(tmp_path, "pyproject.toml", _D_COMMITTED_PYPROJECT + u'python_functions = ["test_b"]\n')
+        got = _d_coverage(tmp_path, monkeypatch, files=_D_ONLY_B,
+                          ini={"python_functions": ["test_b"]})
+        assert got != "true", got
+
+    def test_d3w_a_non_collection_edit_to_the_config_file(self, tmp_path, monkeypatch):
+        """D3w-3(〈二十九〉2 (xi);〈二十九〉3「只改註解也判不等」)。分類:behavior-red。
+
+        工作樹的 `pyproject.toml` 只多一行註解(有效值全部 = baseline;全收集、全 passed)
+        ⇒ blob 雜湊 ≠ HEAD ⇒ 不得為 `"true"`(fail-closed 的代價,裁決明定)。
+        9d1446a 上失敗的原因:`<TARGET>:tests/conftest.py:322-341` 沒有設定檔內容的事實;
+        `<TARGET>:.claude/hooks/redlight.py:597` 回 `"true"`。
+        """
+        _d_committed_root(tmp_path)
+        _d_write(tmp_path, "pyproject.toml", u"# 只改註解\n" + _D_COMMITTED_PYPROJECT)
+        got = _d_coverage(tmp_path, monkeypatch)
+        assert got != "true", got
+
+    def test_d3w_an_uncommitted_root_conftest_change_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """D3w-4(〈二十九〉2 (xi):root conftest 是 producer 本身)。分類:behavior-red。
+
+        tmp git repo 已提交 `tests/conftest.py`;工作樹再改它(多一行)⇒ blob 雜湊 ≠ HEAD ⇒ 不得為 `"true"`。
+        9d1446a 上失敗的原因:`<TARGET>:tests/conftest.py:322-341` 沒有 conftest 內容的事實;
+        `<TARGET>:.claude/hooks/redlight.py:597` 回 `"true"`。
+        """
+        _d_committed_root(tmp_path)
+        conftest = tmp_path / "tests" / "conftest.py"
+        conftest.write_bytes(conftest.read_bytes() + b"\n# working tree edit\n")
+        got = _d_coverage(tmp_path, monkeypatch)
+        assert got != "true", got
+
+    def test_d3v_an_unrecognized_pytest_version_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """D3v-1(〈二十九〉2 (xiii))。分類:behavior-red。
+
+        其他條件全部成立,pytest 版本事實(conftest 所 import 的 `pytest.__version__`)為 `"9.2.0"`
+        ⇒ 不在已盤點清單 {"9.1.1"} ⇒ 不得為 `"true"`。
+        9d1446a 上失敗的原因:`<TARGET>:tests/conftest.py:322-341` 不記 pytest 版本;
+        `<TARGET>:.claude/hooks/redlight.py:597` 回 `"true"`。
+        """
+        _d_committed_root(tmp_path)
+        monkeypatch.setattr(pytest, "__version__", "9.2.0")
+        got = _d_coverage(tmp_path, monkeypatch)
+        assert got != "true", got
+
+    def test_d3v_a_known_plugin_with_unrecognized_version_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """D3v-2(〈二十九〉2 (vii′))。分類:behavior-red。
+
+        其他條件全部成立;`list_plugin_distinfo()` 中 `anyio.pytest_plugin` 物件配對到名稱 `anyio`、
+        版本 `9.9.9` 的 dist ⇒ (名稱, 版本) 不在已盤點清單 {("anyio", "4.15.0")} ⇒ kind = other ⇒ 不得為 `"true"`。
+        9d1446a 上失敗的原因:`<TARGET>:.claude/hooks/redlight.py:521-523` 只比 dist 名稱 ⇒ known_dist;
+        `:597` 回 `"true"`。
+        """
+        _d_committed_root(tmp_path)
+        got = _d_coverage(tmp_path, monkeypatch, anyio_version="9.9.9")
+        assert got != "true", got
+
+    def test_d3i_lf_alone_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """D3i-1(S5c-F2;〈二十三〉7 (ii) 單獨鎖住)。分類:regression-lock。
+
+        對照組:固定全套事實 ⇒ `"true"`。破壞組:只把 `lf` 設為 True(快照 = collected、
+        每個身分都 passed、exit 0、其他條件不變)⇒ 不得為 `"true"`。兩次執行各用全新 conftest。
+        """
+        _d_committed_root(tmp_path)
+        control = _d_coverage(tmp_path, monkeypatch)
+        broken = _d_coverage(tmp_path, monkeypatch, option=_d_option(lf=True))
+        assert control == "true", control
+        assert broken != "true", broken
+
+    def test_d3i_maxfail_alone_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """D3i-2(S5c-F2;〈二十三〉7 (iii) 的 maxfail 單獨鎖住)。分類:regression-lock。
+
+        對照組:固定全套事實 ⇒ `"true"`。破壞組:只把 `maxfail` 設為 1(shouldfail 為 False、
+        每個身分都 passed、其他條件不變)⇒ 不得為 `"true"`。
+        """
+        _d_committed_root(tmp_path)
+        control = _d_coverage(tmp_path, monkeypatch)
+        broken = _d_coverage(tmp_path, monkeypatch, option=_d_option(maxfail=1))
+        assert control == "true", control
+        assert broken != "true", broken
+
+    def test_d3i_shouldfail_alone_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """D3i-3(S5c-F2;〈二十三〉7 (iv) 單獨鎖住)。分類:regression-lock。
+
+        對照組:固定全套事實 ⇒ `"true"`。破壞組:只讓 session 結束時 `shouldfail` 為 True
+        (maxfail 為 None、每個身分都 passed、其他條件不變)⇒ 不得為 `"true"`。
+        """
+        _d_committed_root(tmp_path)
+        control = _d_coverage(tmp_path, monkeypatch)
+        broken = _d_coverage(tmp_path, monkeypatch, shouldfail=True)
+        assert control == "true", control
+        assert broken != "true", broken
+
+    def test_d3x_a_blocked_plugin_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """D3x-1(S5c-X1;〈二十九〉2 (xii))。分類:regression-lock。
+
+        `-p no:cacheprovider`:`list_name_plugin()` 含 cacheprovider / pytest_cacheprovider / stepwise /
+        pytest_stepwise 四筆 `None`(〈二十九〉1 (d)),`is_blocked` 一致,`config.option` 沒有 lf / stepwise
+        等屬性;其他條件全部成立 ⇒ 不得為 `"true"`。
+        9d1446a 上已通過:`<TARGET>:.claude/hooks/redlight.py:489, 526-530` 把 `(name, None)` 判為 other
+        ⇒ `:576-577` 回 `unknown`。
+        """
+        _d_committed_root(tmp_path)
+        got = _d_coverage(tmp_path, monkeypatch, blocked=_D_CACHEPROVIDER_BLOCKED,
+                          option=_d_option(missing=_D_CACHEPROVIDER_OPTIONS),
+                          argv=("-q", "-p", "no:cacheprovider"))
+        assert got != "true", got
+
+    def test_d3d_the_fixed_command_with_the_committed_config_is_full_coverage(self, tmp_path, monkeypatch):
+        """D3d-1(〈二十九〉2 全部條件成立)。分類:regression-lock。
+
+        固定全套 `python -X utf8 -m pytest -q`:`override_ini == ["strict_markers=true"]`(已提交的
+        `--strict-markers` 帶來的,**不是空的**)、`inifilename is None`、`inipath` 為 `pyproject.toml`、
+        工作樹的 `pyproject.toml` 與 `tests/conftest.py` = 已提交 blob、沒有 `(name, None)`、
+        pytest 9.1.1、anyio 4.15.0;全收集、全 passed ⇒ `"true"`。
+        專門擋「override_ini 非空 ⇒ 不是 true」那種照字面的實作。
+        """
+        _d_committed_root(tmp_path)
+        got = _d_coverage(tmp_path, monkeypatch)
+        assert got == "true", got
