@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 4c 修正完成(固定全套 exit 0);待 Station 5c 審查。
+**狀態**:動工 —— Station 5c 審查包已建立;待獨立審查。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -55,6 +55,9 @@
 >
 > - 狀態(舊,第十五代):~~`動工 —— Station 3c 紅燈已寫(待 Jeff 驗收);Station 4c 未開始。`~~
 >   —— 2026-10-02 Station 4c 修正完成、固定全套 exit 0 後由第 3 行取代(見〈二十五〉)。
+>
+> - 狀態(舊,第十六代):~~`動工 —— Station 4c 修正完成(固定全套 exit 0);待 Station 5c 審查。`~~
+>   —— 2026-10-02 Station 5c 審查包建立後由第 3 行取代(見〈二十六〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -425,15 +428,18 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5b — Review | FAIL |
 | Station 3c — Red-light(補) | PASS / ACCEPTED |
 | Station 4c — Implementation(修正) | PASS / COMPLETED（待 5c 審查） |
-| Station 5c — Review | NOT STARTED |
+| Station 5c — Review | 審查包已建立，待審 |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4c 修正完成(固定全套 exit 0);待 Station 5c 審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5c 審查包已建立;待獨立審查(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第七代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4c 修正完成(固定全套 exit 0);待 Station 5c 審查(與票頭第 3 行一致)。~~
+> 2026-10-02 Station 5c 審查包建立後隨第 3 行同步更新(見〈二十六〉)。
 
 > **舊句(F-036,保留不刪,第六代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3c 紅燈已寫(待 Jeff 驗收);Station 4c 未開始(與票頭第 3 行一致)。~~
 > 2026-10-02 Station 4c 修正完成後隨第 3 行同步更新(見〈二十五〉)。
@@ -1313,6 +1319,26 @@ tests orphaned under ticket 145: (無)
 3. 裁決助手獨立核對：帳本 H2 前段雜湊相符（36bf61df… / 0ef187e0…）；真實 session 的 46 檔 file_coverage 全為 "true"；
    plugins 43 項（builtin 41、known_dist 1、root_conftest 1），無 other。
 4. Station 4c implementation = PASS / COMPLETED，待 Station 5c 獨立審查。四項完成判定：(a)(b)(c)(d) 皆成立。
+
+---
+
+## 二十六、Station 5c 審查包
+
+| 項 | 值 |
+|---|---|
+| 審查對象(Implementation TARGET) | `02a5e28adf5aee11a43d5a1063504f01beb1d67f` |
+| S4c-2 docs commit | `a88b7f9664189f9b3f3124aa39eb3a95eaca51b1` |
+| S3c-1b | `49bcde20adc276632fa5bab456e8c7a80839fc0b` |
+| 審查包 | `docs/audits/2026-10-02-m1a-station5c-review-package.md` |
+| bytes / 行數(工作複本,LF) | 298249 / 5623 |
+| SHA-256(工作複本) | `1212a03951779967449bd637549860fee7acf22be9de40421e652817164a3db3` |
+| staged blob ID | `d37e0538798ae763d86716542becf3430d7a73c5` |
+| S5c-0 commit | 於 Station 5c-0 回報中給出;Station 5c 結果落票時回填 |
+
+- 審查包的 A–H 段:身分與規則(所有查詢錨點一律為完整 SHA)、票 145 規格原文(〈十三〉ODC-1、〈十七〉、〈十八之一〉18-1.1、〈十九〉、〈二十一〉、〈二十三〉、〈二十五〉)、
+  Station 5(F1–F4)與 Station 5b(S5b-F1–F6)的發現原文、`origin/master..TARGET` commit 清單、三份完整 diff、3c / 4c 實測證據、必答題 G1–G12、已知例外與未證明事項。
+- 〈E〉三份 diff 與全部 14 段逐字段落,都已在建包時以 `cmp` 與原始輸出 / 出處檔案逐位元組比對相同。
+- 審查包的 `git diff --cached --check` 有 39 行 trailing whitespace,全部是〈E〉內嵌 diff 的空白 context 行(單一空格),屬 diff 原樣,刻意保留。
 
 ---
 
