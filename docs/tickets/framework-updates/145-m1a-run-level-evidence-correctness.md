@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3d 紅燈已寫(待 Jeff 驗收);Station 4d 未開始。
+**狀態**:動工 —— Station 4d 修正完成(固定全套 exit 0);待 Station 5d 審查。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -67,6 +67,9 @@
 >
 > - 狀態(舊,第十九代):~~`動工 —— Station 3d 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試。`~~
 >   —— 2026-10-02 Station 3d 紅燈寫完後由第 3 行取代(見〈二十九〉)。
+>
+> - 狀態(舊,第二十代):~~`動工 —— Station 3d 紅燈已寫(待 Jeff 驗收);Station 4d 未開始。`~~
+>   —— 2026-10-02 Station 4d 修正完成、固定全套 exit 0 後由第 3 行取代(見〈三十一〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -438,8 +441,8 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3c — Red-light(補) | PASS / ACCEPTED |
 | Station 4c — Implementation(修正) | PASS / COMPLETED（待 5c 審查） |
 | Station 5c — Review | FAIL |
-| Station 3d — Red-light(補) | 紅燈已寫，待驗收 |
-| Station 4d — Implementation(修正) | NOT STARTED |
+| Station 3d — Red-light(補) | PASS / ACCEPTED |
+| Station 4d — Implementation(修正) | 修正完成，待審查 |
 | Station 5d — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
 
@@ -447,8 +450,11 @@ Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3d 紅燈已寫(待 Jeff 驗收);Station 4d 未開始(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4d 修正完成(固定全套 exit 0);待 Station 5d 審查(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第十一代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3d 紅燈已寫(待 Jeff 驗收);Station 4d 未開始(與票頭第 3 行一致)。~~
+> 2026-10-02 Station 4d 修正完成後隨第 3 行同步更新(見〈三十一〉)。
 
 > **舊句(F-036,保留不刪,第十代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3d 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試(與票頭第 3 行一致)。~~
 > 2026-10-02 Station 3d 紅燈寫完後隨第 3 行同步更新(見〈二十九〉)。
@@ -1518,6 +1524,38 @@ tests orphaned under ticket 145: (無)
 - 帳本 H3 → H4 只追加:test-runs 661092 → 673590 bytes(2457 → 2503 行,+46)、test-sessions 3494564 → 4192482 bytes(15 → 16 行,+1);兩本前段 sha256 等於 H3(`352e7d26…` / `b48ee090…`)。
 - status:red 只有 tests/test_redlight.py、tests/test_status.py;最近一次 run 為 B(collected 1992)。
 - 版本固定查證:pytest 只有範圍(`pyproject.toml:34`),anyio 沒有宣告,CI 在執行當下解析(`.github/workflows/tests.yml:50`)⇒ 已記入〈二十九〉第 3 點的已知殘餘。
+
+---
+
+## 三十一、Station 4d 修正與裁決
+
+裁決(2026-10-02,Jeff;照錄):
+
+1. Station 3d 紅燈 = PASS / ACCEPTED（以 Jeff 切換 pipeline 為驗收）。
+2. pytest / anyio 版本不在本票 pin：agent-gates 為公開 repo，修改 dependency 會影響所有安裝者；anyio 為間接相依，精確 pin 易與上游衝突。
+   維持 fail-closed（換環境只會無法退紅，不會假綠），列入 M1-a 結案後追蹤票（supply / dependency policy）。
+3. 例外授權：〈二十九〉2 (viii) 要求的「override 常數 vs 已提交 pyproject.toml addopts」鎖步測試，在 3d 時常數尚不存在而無法撰寫；
+   授權 4d 新增恰好這一支（接在 tests/test_redlight.py 檔尾），名稱：
+   tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d4_the_committed_addopts_override_constant_matches_pyproject
+   規格（不得變更）：
+   - 讀取來源固定為 agent-gates repo 的已提交版本：以 git show HEAD:pyproject.toml（在 repo 根執行，唯讀）取得內容；
+     不得讀工作樹檔案，不得以測試自造的 tmp repo 或寫死的 addopts 字串代替。
+     理由：這支測試要鎖的是「redlight.py 常數 ↔ repo 真正提交的設定」；用自造設定只會驗到測試自己，失去鎖步作用。
+   - 從該內容的 [tool.pytest.ini_options] addopts 推導應有的 override 清單，與 redlight.py 的常數比較。
+     推導方式須在報告中說明（例如明列 addopts 旗標 → override 項目的對應），並附 pytest 9.1.1 出處。
+   - git 不可用或讀取失敗 ⇒ 測試失敗（不得 skip、不得靜默通過）。
+   - 唯讀：不得寫入任何檔案、不得改動 repo 狀態。
+
+- 報告:`docs/audits/2026-10-02-m1a-station4d-fix.md`。
+- S4d-1 `889fbd8f666ea522ff6af172979a8d020e50b86b`;固定全套(只跑一次)`1987 passed, 3 skipped, 3 xfailed in 149.54s (0:02:29)`,exit 0(collected 1993 = 1992 + 1 支鎖步測試)。
+- 四項完成判定:
+  - (a) 固定全套 exit 0、failed 0 —— **成立**。
+  - (b) 3d 的 13 支全部轉綠 —— **成立**(失敗清單為空;status red (無))。
+  - (c) 真實 session(`.dev/test-sessions.jsonl` 第 17 行)新事實全部合格 —— **成立**:
+    `override_ini == ["strict_markers=true"]`、`inifilename` null、`inipath` "pyproject.toml"、
+    pyproject.toml / tests/conftest.py 的 worktree blob = head blob、`pytest_version` "9.1.1"、
+    anyio 4.15.0 為 known_dist、None 項目 0、other 0;producer 自行產生的欄位無絕對路徑;全帳本本機使用者名稱 0 筆。
+  - (d) 帳本 H4 → H5 只追加 —— **成立**(兩本前段 sha256 = H4)。
 
 ---
 
