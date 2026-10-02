@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5 FAIL;回 Station 3b(補紅燈);Station 4b 未開始。
+**狀態**:動工 —— Station 3b 紅燈已寫(待 Jeff 驗收);Station 4b 未開始。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -28,6 +28,9 @@
 >
 > - 狀態(舊,第六代):~~`動工 —— Station 4 實作完成(固定全套 exit 0);待 Station 5 審查。`~~
 >   —— 2026-10-02 Station 5 獨立審查 FAIL 後由第 3 行取代(見〈十七〉)。
+>
+> - 狀態(舊,第七代):~~`動工 —— Station 5 FAIL;回 Station 3b(補紅燈);Station 4b 未開始。`~~
+>   —— 2026-10-02 Station 3b 紅燈寫完並取得證據後由第 3 行取代(見〈十八〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -393,7 +396,7 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3 — Red-light | PASS / ACCEPTED |
 | Station 4 — Implementation | 實作嘗試完成,Station 5 FAIL |
 | Station 5 — Review | FAIL |
-| Station 3b — Red-light(補) | 進行中 |
+| Station 3b — Red-light(補) | 紅燈已寫,待驗收 |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
@@ -787,6 +790,73 @@ Invariant（新增）：Absence is not coverage —— 一個 test identity 沒�
 6. 3b 新增測試分兩類：behavior-red（現行實作必須失敗）與 regression-lock（現行已正確，必須通過）；驗收以預先標定的 exact nodeid 集合為準，不以數量為準。
 7. 證據原則：任何 pytest（含 --collect-only）只能在乾淨、已 commit 的 HEAD 上執行。
 8. Debt（不擋 M1-a）：.dev/test-sessions.jsonl 每次全套約增長 450 KB，reader 為全檔讀取；M1-a 結案時另開票（rotation / index / compaction），本票不得順手最佳化。
+
+---
+
+## 十八、Station 3b 紅燈證據
+
+### 18.1 commit 與執行
+
+| 項 | 值 |
+|---|---|
+| 刀①(落票 + 審查存檔) | `280a551c64d088ad7960933b9761b656ffcb373b` |
+| 刀②(紅燈 commit) | `a9d885a654d2f5e4846262f247a5974f4e174adc`(`tests/test_redlight.py` `162 0`、`tests/test_status.py` `331 0`) |
+| 固定指令 | `python -X utf8 -m pytest -q`(〈十二〉),在 `a9d885a` 上只跑一次 |
+| exit code | **1** |
+| 摘要行 | `15 failed, 1929 passed, 3 skipped, 3 xfailed in 150.16s (0:02:30)` |
+| 既有測試 | **0 失敗**(1929 = Station 4 的 1926 + L1–L3 三支) |
+
+### 18.2 案例 → nodeid → 分類
+
+消失集合(修改前收集有、修改後沒有)= **空**。新增 18 支,每個案例恰一支。
+
+| 案例 | Finding | nodeid | 分類 | 實際 |
+|---|---|---|---|---|
+| B1a | F3 | `tests/test_redlight.py::TestFileCoverage::test_b1a_a_nodeid_argument_is_not_full_coverage` | interface-red | 失敗:`AttributeError … 'file_coverage'` |
+| B1b | F3 | `tests/test_redlight.py::TestFileCoverage::test_b1b_a_backslash_nodeid_argument_is_not_full_coverage` | interface-red | 同上 |
+| B1c | F3 | `tests/test_redlight.py::TestFileCoverage::test_b1c_a_file_argument_without_deselection_is_full_coverage` | interface-red | 同上 |
+| B1d | F3 | `tests/test_redlight.py::TestFileCoverage::test_b1d_a_parent_directory_argument_is_full_coverage` | interface-red | 同上 |
+| B1e | F3 | `tests/test_redlight.py::TestFileCoverage::test_b1e_a_file_argument_with_deselection_is_not_full_coverage` | interface-red | 同上 |
+| B1f | F3 | `tests/test_redlight.py::TestFileCoverage::test_b1f_no_config_means_unknown` | interface-red | 同上 |
+| B1g | F3 | `tests/test_redlight.py::TestFileCoverage::test_b1g_an_argument_outside_the_root_means_unknown` | interface-red | 同上 |
+| B6 | F1 | `tests/test_redlight.py::TestRunStateSchema::test_b6_a_session_without_collected_is_not_state_c` | behavior-red | 失敗:`AssertionError`(判成 C) |
+| B2 | F3 | `tests/test_status.py::TestCoverageChain::test_b2_a_nodeid_run_does_not_retire_an_unidentified_red` | behavior-red | 失敗:`AssertionError`,`green: tests/test_x.py` |
+| B3 | F3 | `tests/test_status.py::TestCoverageChain::test_b3_a_nodeid_run_does_not_orphan_a_known_red` | behavior-red | 失敗:`AssertionError`,`orphaned: tests/test_x.py(…::test_b)` |
+| B4 | F2 | `tests/test_status.py::TestDStateRetiresNothing::test_b4_a_d_run_with_a_collection_error_elsewhere_retires_nothing` | behavior-red | 失敗:`AssertionError`,`green: tests/test_x.py` |
+| B5 | F1 | `tests/test_status.py::TestSessionSchemaFailClosed::test_b5_a_session_without_deselected_retires_nothing` | behavior-red | 失敗:`AssertionError`,`green: tests/test_x.py` |
+| B7 | F1 | `tests/test_status.py::TestSessionSchemaFailClosed::test_b7_an_outcome_outside_collected_retires_nothing` | behavior-red | 失敗:`AssertionError`,`green: tests/test_x.py` |
+| B9 | F1 | `tests/test_status.py::TestSessionSchemaFailClosed::test_b9_a_string_deselected_retires_nothing_and_orphans_nothing` | behavior-red | 失敗:`AssertionError`,`green: tests/test_x.py` |
+| B8 | Absence is not coverage | `tests/test_status.py::TestAbsenceIsNotCoverage::test_b8_a_run_without_coverage_facts_does_not_orphan` | behavior-red | 失敗:`AssertionError`,`orphaned: tests/test_x.py(…::test_old)` |
+| L1 | F4(RL-6 串接) | `tests/test_status.py::TestChainRegressionLocks::test_l1_three_skipped_645_deselected_keeps_the_red` | regression-lock | **通過** |
+| L2 | F4(RL-4 串接) | `tests/test_status.py::TestChainRegressionLocks::test_l2_an_interrupted_run_keeps_the_red` | regression-lock | **通過** |
+| L3 | F4(正向對照) | `tests/test_status.py::TestChainRegressionLocks::test_l3_a_full_directory_run_retires_the_red` | regression-lock | **通過** |
+
+**預期紅集合**(B1a–B1g、B6、B2–B5、B7–B9,共 15 個 nodeid)**= 實際失敗集合**,不多不少;
+**預期綠集合**(L1–L3)全部不在失敗集合。
+
+### 18.3 collect-only 與帳本
+
+| 時點 | test-runs(bytes / lines) | test-sessions(bytes / lines) | 說明 |
+|---|---|---|---|
+| BEFORE-COLLECT 之前 | 588020 / 2181 | 455876 / 1 | |
+| BEFORE-COLLECT 之後 | 588020 / 2181 | 463757 / 3 | **collection-only observation,非紅燈驗收證據**(兩次 `--collect-only` 各寫一筆 session) |
+| AFTER-COLLECT 之後(= 全套 before) | 588020 / 2181(`a81559a4…4062`) | 473458 / 5(`e2b0e460…8dff2`) | **collection-only observation,非紅燈驗收證據** |
+| 全套 after | 600499 / 2227(`30a3513e…5fc17`) | 933154 / 6(`bacf0033…f334d`) | |
+
+**防污染**:
+- test-runs 新增 **46** 行(= 本次測試檔數);after 前 588020 bytes 的 SHA-256 = `a81559a4…4062`(before)⇒ 前段逐位元組不變。
+- test-sessions 新增恰 **1** 行(第 6 行,`exit_code` 1,本次全套);after 前 473458 bytes 的 SHA-256 = `e2b0e460…8dff2`(before)⇒ 前段逐位元組不變。
+- 測試造的假身分與假檔名(`tests/test_x.py`、`tests/test_y.py`、`tests/test_thing.py`、`tests/test_broken.py`、`run_id` b5 / b6 / b7 / b8 / b9)在兩本真實帳本中皆 **0** 筆。
+
+### 18.4 status.py(本次全套後)
+
+```
+test-runs: 本票 red 2 / green 44 / run 事實未知 0 / orphaned 0;…;最近一次 run:B(exit 1;collected 1950 / deselected 0 / passed 1929 / failed 15 / skipped 3)
+tests red under ticket 145: tests/test_redlight.py / tests/test_status.py
+tests orphaned under ticket 145: (無)
+```
+
+(節錄;全文見 `docs/audits/2026-10-02-m1a-station3b-redlight.md`。)
 
 ---
 
