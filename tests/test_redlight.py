@@ -226,3 +226,190 @@ class TestTheRecorderCannotKillTheRunner:
         c.pytest_runtest_logreport(r)
         assert c._outcomes.get("tests/test_thing.py", {}).get("failed"), \
             "setup 失敗沒被記成紅燈"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145(M1-a)Station 3 紅燈 —— run 事實(producer 側)
+#
+# 觀察契約:docs/audits/2026-10-02-m1a-station3-redlight-plan.md 一、A,
+# 經票 145〈十三〉裁決修正。
+#
+# **新介面(`load_runs` / `run_state`)只在測試函式內部取用**,不在模組層 ——
+# 它們不存在時只有這幾支失敗,不會讓整個檔收集錯誤、拖垮上面既有的測試。
+#
+# **隔離**:conftest 模組載入時會自己載一份 redlight.py,而那一份的 RUN_LOG
+# 指向真實帳本(`tests/conftest.py:129-133`)。驅動前一律把 conftest 的
+# `_redlight` 換成本檔這一份、並把路徑指到 tmp —— 少一個,假紀錄就會寫進真實帳本。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _Item:
+    def __init__(self, nodeid):
+        self.nodeid = nodeid
+
+
+class _CollectRep:
+    def __init__(self, nodeid, failed=False):
+        self.nodeid = nodeid
+        self.failed = failed
+        self.passed = not failed
+        self.outcome = "failed" if failed else "passed"
+
+
+class _RunRep:
+    def __init__(self, nodeid, when, outcome):
+        self.nodeid = nodeid
+        self.fspath = nodeid.split("::", 1)[0]
+        self.when = when
+        self.outcome = outcome
+        self.passed = outcome == "passed"
+        self.failed = outcome == "failed"
+        self.skipped = outcome == "skipped"
+
+
+def _reports_for(nodeid, outcome):
+    """一條測試在 pytest 裡實際產生的 report 序列。
+
+    passed / failed:setup → call → teardown;skipped:setup(skipped)→ teardown,
+    **沒有 call**(skip 在 setup 階段就決定了)。
+    """
+    if outcome == "skipped":
+        return [_RunRep(nodeid, "setup", "skipped"),
+                _RunRep(nodeid, "teardown", "passed")]
+    return [_RunRep(nodeid, "setup", "passed"),
+            _RunRep(nodeid, "call", outcome),
+            _RunRep(nodeid, "teardown", "passed")]
+
+
+class _Session:
+    def __init__(self, items):
+        self.items = list(items)
+        self.testscollected = len(self.items)
+
+
+def _isolated_conftest(monkeypatch, tmp_path):
+    c = TestTheRecorderCannotKillTheRunner._conftest()
+    monkeypatch.setattr(redlight, "ROOT", str(tmp_path))
+    monkeypatch.setattr(redlight, "RUN_LOG",
+                        str(tmp_path / ".dev" / "test-runs.jsonl"))
+    monkeypatch.setattr(redlight, "PIPELINE",
+                        str(tmp_path / ".dev" / "pipeline.json"))
+    monkeypatch.setattr(c, "_redlight", redlight)
+    monkeypatch.setattr(c, "_ROOT", tmp_path)
+    c._outcomes.clear()
+    return c
+
+
+def _drive_session(c, collect_files=(), collect_errors=(), selected=(),
+                   deselected=(), outcomes=None, exitstatus=0):
+    """依 pytest 的實際呼叫順序,對 conftest 呼叫**標準 hook 名稱**。
+
+    conftest 沒實作的 hook 以 no-op 跳過 —— 測試不依賴 producer 用了哪幾個 hook
+    (那是 Station 4 的實體決定)。
+    """
+    def hook(name):
+        return getattr(c, name, None) or (lambda *a, **k: None)
+
+    for f in collect_files:
+        hook("pytest_collectreport")(_CollectRep(f))
+    for f in collect_errors:
+        hook("pytest_collectreport")(_CollectRep(f, failed=True))
+    items = [_Item(n) for n in selected]
+    gone = [_Item(n) for n in deselected]
+    if gone:
+        hook("pytest_deselected")(gone)
+    session = _Session(items)
+    hook("pytest_collection_finish")(session)
+    for nodeid, outcome in (outcomes or {}).items():
+        for rep in _reports_for(nodeid, outcome):
+            hook("pytest_runtest_logreport")(rep)
+    hook("pytest_sessionfinish")(session, exitstatus)
+
+
+class TestRunFacts:
+
+    def test_a_full_pass_is_state_a_with_coverage_visible(self, tmp_path, monkeypatch):
+        """RL-1 Full pass。現行 HEAD:**介面紅**(`redlight.load_runs` 不存在)。"""
+        c = _isolated_conftest(monkeypatch, tmp_path)
+        ids = ["tests/test_thing.py::test_a", "tests/test_thing.py::test_b"]
+        _drive_session(c, collect_files=["tests/test_thing.py"], selected=ids,
+                       outcomes={ids[0]: "passed", ids[1]: "passed"}, exitstatus=0)
+        runs = redlight.load_runs(str(tmp_path))
+        assert len(runs) == 1, runs
+        assert redlight.run_state(runs[0]) == "A", runs[0]
+        assert sorted(runs[0]["collected"]) == sorted(ids), runs[0]
+        assert list(runs[0]["deselected"]) == [], runs[0]
+
+    def test_one_failure_is_state_b_and_names_the_test(self, tmp_path, monkeypatch):
+        """RL-2 One failure。現行 HEAD:**介面紅**(`redlight.load_runs` 不存在)。"""
+        c = _isolated_conftest(monkeypatch, tmp_path)
+        ids = ["tests/test_thing.py::test_a", "tests/test_thing.py::test_b"]
+        _drive_session(c, collect_files=["tests/test_thing.py"], selected=ids,
+                       outcomes={ids[0]: "passed", ids[1]: "failed"}, exitstatus=1)
+        runs = redlight.load_runs(str(tmp_path))
+        assert len(runs) == 1, runs
+        assert redlight.run_state(runs[0]) == "B", runs[0]
+        assert runs[0]["outcomes"][ids[1]] == "failed", runs[0]
+
+    def test_zero_collected_is_state_c_and_the_run_is_visible(self, tmp_path, monkeypatch):
+        """RL-3 Zero tests collected。現行 HEAD:**介面紅**(`redlight.load_runs` 不存在)。
+
+        底層行為缺口:HEAD 對此情形一筆都不寫(`conftest.py:171-172` 迴圈 0 次),
+        與「根本沒跑」不可分 —— 修後必須留下一筆 run 事實。
+        """
+        c = _isolated_conftest(monkeypatch, tmp_path)
+        _drive_session(c, exitstatus=5)
+        runs = redlight.load_runs(str(tmp_path))
+        assert len(runs) == 1, u"0 collected 的 run 沒有留下事實,與 E 不可分:%r" % runs
+        assert redlight.run_state(runs[0]) == "C", runs[0]
+
+    def test_a_collection_error_is_state_d(self, tmp_path, monkeypatch):
+        """RL-4(a) Collection failure。現行 HEAD:**介面紅**(`redlight.load_runs` 不存在)。"""
+        c = _isolated_conftest(monkeypatch, tmp_path)
+        _drive_session(c, collect_errors=["tests/test_broken.py"], exitstatus=2)
+        runs = redlight.load_runs(str(tmp_path))
+        assert len(runs) == 1, runs
+        assert redlight.run_state(runs[0]) == "D", runs[0]
+
+    def test_a_usage_error_is_state_d_not_green(self, tmp_path, monkeypatch):
+        """RL-4(b) Runner invocation error。現行 HEAD:**介面紅**(`redlight.load_runs` 不存在)。
+
+        producer 本身沒被載入的子情形不在這裡 —— 那是 ODC-3(見 tests/test_status.py)。
+        """
+        c = _isolated_conftest(monkeypatch, tmp_path)
+        _drive_session(c, exitstatus=4)
+        runs = redlight.load_runs(str(tmp_path))
+        assert len(runs) == 1, runs
+        assert redlight.run_state(runs[0]) == "D", runs[0]
+
+    def test_an_interrupted_run_is_state_d_even_with_passes(self, tmp_path, monkeypatch):
+        """RL-4(c) 執行被中斷。現行 HEAD:**介面紅**(`redlight.load_runs` 不存在)。
+
+        中斷前已有一條通過 —— 那不得讓這個 run 變成 A。
+        """
+        c = _isolated_conftest(monkeypatch, tmp_path)
+        ids = ["tests/test_thing.py::test_a", "tests/test_thing.py::test_b"]
+        _drive_session(c, collect_files=["tests/test_thing.py"], selected=ids,
+                       outcomes={ids[0]: "passed"}, exitstatus=2)
+        runs = redlight.load_runs(str(tmp_path))
+        assert len(runs) == 1, runs
+        assert redlight.run_state(runs[0]) == "D", runs[0]
+
+    def test_three_skipped_645_deselected_is_state_f_with_counts(self, tmp_path, monkeypatch):
+        """RL-6' 票 139 現場重現(producer 側)。現行 HEAD:**介面紅**(`redlight.load_runs` 不存在)。
+
+        `-k "symlink"` 的形狀:選到 3 條、全部 skip,645 條 deselected,0 passed、0 failed。
+        """
+        c = _isolated_conftest(monkeypatch, tmp_path)
+        chosen = ["tests/test_gate.py::test_symlink_%d" % i for i in range(3)]
+        gone = ["tests/test_gate.py::test_other_%d" % i for i in range(645)]
+        _drive_session(c, collect_files=["tests/test_gate.py"], selected=chosen,
+                       deselected=gone,
+                       outcomes={n: "skipped" for n in chosen}, exitstatus=0)
+        runs = redlight.load_runs(str(tmp_path))
+        assert len(runs) == 1, runs
+        run = runs[0]
+        assert redlight.run_state(run) == "F", run
+        assert len(run["deselected"]) == 645, len(run["deselected"])
+        assert [v for v in run["outcomes"].values()].count("skipped") == 3, run["outcomes"]
+        assert "passed" not in run["outcomes"].values(), run["outcomes"]

@@ -1119,3 +1119,241 @@ class TestReportLineSaysHowStaleTheReportIs:
         val = status._report_value(str(root))
         assert u"回報後 0 筆" in val, val
         assert u"樹共" not in val, u"仍在印樹的總數:%r" % val
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 票 145(M1-a)Station 3 紅燈 —— status 依 run 事實判定紅綠
+#
+# 觀察契約:docs/audits/2026-10-02-m1a-station3-redlight-plan.md 一、A,
+# 經票 145〈十三〉裁決修正(status 依 root 載入 redlight.py 的讀取函式;
+# ODC-1 第 2、3 項 file-scoped)。
+#
+# **新介面(`record_session` / `load_runs` / `ticket_test_state`)只在測試函式內部取用**
+# —— 它們不存在時只有這幾支失敗,不會讓整個檔收集錯誤。
+#
+# **既有的 `_make_root()` 一字不改**;要 redlight.py 的 fake repo 走下面的
+# `_root_with_redlight()`(〈十三〉裁決 2 允許的 fake repo 基礎設施)。
+# ═══════════════════════════════════════════════════════════════════════════
+
+REAL_REDLIGHT = ROOT / ".claude" / "hooks" / "redlight.py"
+
+
+def _load_redlight():
+    """載入 repo 的 redlight.py(既有模組;新函式在測試內才取用)。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "redlight_for_status_test", str(REAL_REDLIGHT))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+redlight = _load_redlight()
+
+
+def _root_with_redlight(base, **kw):
+    """`_make_root()` 造出的最小 repo,再放一份 redlight.py 真檔複本。"""
+    root = _make_root(base, **kw)
+    shutil.copy2(str(REAL_REDLIGHT),
+                 str(pathlib.Path(root) / ".claude" / "hooks" / "redlight.py"))
+    return root
+
+
+def _write_raw_lines(root, lines):
+    """歷史原始紀錄**逐字**寫入 —— 不經 json 往返,一個位元組都不動。"""
+    with io.open(str(pathlib.Path(root) / ".dev" / "test-runs.jsonl"),
+                 "w", encoding="utf-8", newline="\n") as f:
+        for ln in lines:
+            f.write(ln + u"\n")
+
+
+def _rows_of(root):
+    p = pathlib.Path(root) / ".dev" / "test-runs.jsonl"
+    if not p.exists():
+        return []
+    return [json.loads(l) for l in io.open(str(p), encoding="utf-8") if l.strip()]
+
+
+# `.dev/test-runs.jsonl` 第 940 行與第 970 行原文(後者 = 票 139 `:39`)。
+LEDGER_940 = (u'{"test_file": "tests/test_gate.py", "time": "2026-09-13T07:28:31.037700+00:00", '
+              u'"result": "red", "failed_tests": ["TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce"], '
+              u'"impl_file": ".claude/hooks/gate.py", "impl_exists": true, '
+              u'"impl_hash": "2215f109bb73277248f78a6110a90bf51ec8a5f215251cf6089b86ebbe215170", '
+              u'"ticket_id": "133"}')
+LEDGER_970 = (u'{"test_file": "tests/test_gate.py", "time": "2026-09-13T12:26:18.644697+00:00", '
+              u'"result": "green", "failed_tests": [], '
+              u'"impl_file": ".claude/hooks/gate.py", "impl_exists": true, '
+              u'"impl_hash": "446b2ef6f49fa0608d347d9969b49a0f3fa682d11cfe47b622feaa80cdbb7dc2", '
+              u'"ticket_id": "133"}')
+
+# `.dev/test-runs.jsonl` 第 2036 行原文(Station 3 baseline 寫入)。
+LEDGER_2036 = (u'{"test_file": "tests/test_status.py", "time": "2026-10-02T13:27:56.450055+00:00", '
+               u'"result": "green", "failed_tests": [], '
+               u'"impl_file": ".claude/portable/status.py", "impl_exists": true, '
+               u'"impl_hash": "bdc3a089a33d179dc72eb937401520c5ec257ba11037fb42083420a9560fadf0", '
+               u'"ticket_id": "145"}')
+
+NO_RUN = u"最近一次 run:無 run 證據 / 不可判定"
+
+
+@pytest.fixture
+def redlight_guard(tmp_path, monkeypatch):
+    """本檔那一份 redlight 的路徑一律指到 tmp 的**另一個**位置。
+
+    `record_session(root, ...)` 應該寫到 `root`;若實作忽略 `root` 而寫到模組常數,
+    這裡讓它落在 guard 目錄 —— 測試會因為 status 讀不到而紅(出聲),
+    **而不是把假紀錄寫進真實帳本**。
+    """
+    guard = tmp_path / u"guard"
+    monkeypatch.setattr(redlight, "ROOT", str(guard))
+    monkeypatch.setattr(redlight, "RUN_LOG", str(guard / ".dev" / "test-runs.jsonl"))
+    monkeypatch.setattr(redlight, "PIPELINE", str(guard / ".dev" / "pipeline.json"))
+    return guard
+
+
+class TestTicket139:
+
+    def test_a_narrow_all_skip_record_does_not_retire_the_earlier_red(self, tmp_path):
+        """RL-6 票 139 歷史重現。現行 HEAD:**行為紅**。
+
+        帳本只有兩筆、逐字取自真實帳本(第 940 行 red、第 970 行 = 票 139 `:39` green),
+        沒有任何 synthetic 欄位。第 970 行沒有 run 事實 ⇒ coverage 未知 ⇒ 無退紅權
+        (〈十一〉/〈十三〉ODC-1)⇒ 第 940 行那條紅不得因為「每檔最新一筆」而消失。
+        現行 HEAD 取最新一筆 ⇒ 判成 green —— 那就是票 139 的 false green。
+        """
+        root = _root_with_redlight(tmp_path, ticket=u"133")
+        _write_raw_lines(root, [LEDGER_940, LEDGER_970])
+        out = render(root)
+        red = _value_of(out, u"tests red under ticket 133")
+        green = _value_of(out, u"tests green under ticket 133")
+        assert u"tests/test_gate.py" not in green, (
+            u"窄選、全部 skip 的那一筆把較早的紅蓋成綠了(票 139)\nred=%s\ngreen=%s"
+            % (red, green))
+        assert u"tests/test_gate.py" in red, red
+
+
+class TestNarrowSelection:
+
+    def test_a_later_green_without_run_facts_does_not_retire_x(self, tmp_path, monkeypatch):
+        """RL-6b(舊寫入版)。現行 HEAD:**行為紅**。
+
+        只用既有的 `redlight.record_run()` 寫:X 紅 → 同檔綠。那筆綠沒有 run 事實,
+        看不出它有沒有選到 X ⇒ 不得退紅。現行 HEAD 取最新一筆 ⇒ 判成 green。
+        """
+        root = _root_with_redlight(tmp_path)
+        monkeypatch.setattr(redlight, "ROOT", root)
+        monkeypatch.setattr(redlight, "RUN_LOG",
+                            str(pathlib.Path(root) / ".dev" / "test-runs.jsonl"))
+        monkeypatch.setattr(redlight, "PIPELINE",
+                            str(pathlib.Path(root) / ".dev" / "pipeline.json"))
+        redlight.record_run("tests/test_x.py", passed=False, failed_tests=["test_target"])
+        redlight.record_run("tests/test_x.py", passed=True, failed_tests=[])
+        out = render(root)
+        red = _value_of(out, u"tests red under ticket 99")
+        green = _value_of(out, u"tests green under ticket 99")
+        assert u"tests/test_x.py" not in green, (
+            u"沒有 run 事實的綠把較早的紅蓋掉了\nred=%s\ngreen=%s" % (red, green))
+        assert u"tests/test_x.py" in red, red
+
+    def test_a_narrow_run_that_did_not_select_x_does_not_retire_x(self, tmp_path, redlight_guard):
+        """RL-6b(run 事實版)。現行 HEAD:**介面紅**(`redlight.record_session` 不存在)。
+
+        run1:X 失敗。run2:同檔窄選,選到的 Y 通過,**X 在 deselected** ⇒
+        ODC-1 第 1 項不成立 ⇒ X 不退紅;run2 的 deselected 數事後可見(I7)。
+        """
+        root = _root_with_redlight(tmp_path)
+        x = u"tests/test_x.py::test_target"
+        y = u"tests/test_x.py::test_other"
+        redlight.record_session(root, run_id=u"rl6b-1", time=u"2026-09-02T01:00:00+00:00",
+                                ticket_id=u"99", exit_code=1, collected=[x, y],
+                                deselected=[], outcomes={x: u"failed", y: u"passed"})
+        redlight.record_session(root, run_id=u"rl6b-2", time=u"2026-09-02T02:00:00+00:00",
+                                ticket_id=u"99", exit_code=0, collected=[x, y],
+                                deselected=[x], outcomes={y: u"passed"})
+        out = render(root)
+        red = _value_of(out, u"tests red under ticket 99")
+        assert u"tests/test_x.py" in red, red
+        state = status.ticket_test_state(_rows_of(root), redlight.load_runs(root), u"99")
+        assert x in state[u"tests/test_x.py"][u"unresolved"], state
+        assert u"deselected 1" in _value_of(out, u"test-runs"), _value_of(out, u"test-runs")
+
+
+class TestHistoricalRecords:
+
+    def test_old_green_rows_are_shown_as_run_unknown_not_green(self, tmp_path):
+        """RL-7 Historical evidence。現行 HEAD:**行為紅**(依 I5 判讀)。
+
+        帳本第 2036 行原文 —— 一筆**真實**、來自一次確實全套通過的執行的 green;
+        而帳本仍證明不了這件事。舊格式紀錄缺 run 事實 ⇒ 只能是「run 事實未知」,
+        不得印在 green(Backward compatibility 2:不得推論 full pass)。
+        """
+        root = _root_with_redlight(tmp_path, ticket=u"145")
+        _write_raw_lines(root, [LEDGER_2036])
+        out = render(root)
+        green = _value_of(out, u"tests green under ticket 145")
+        assert u"tests/test_status.py" not in green, (
+            u"沒有 run 事實的舊紀錄被印成 green:%s" % green)
+        unknown = _value_of(out, u"tests green (run 事實未知) under ticket 145")
+        assert unknown is not None and u"tests/test_status.py" in unknown, out
+
+
+class TestOrphans:
+
+    def test_a_renamed_red_test_is_orphaned_not_green(self, tmp_path, redlight_guard):
+        """ODC-2 被刪除 / 改名的紅。現行 HEAD:**介面紅**(`redlight.record_session` 不存在)。
+
+        run1:test_old 失敗。run2:同檔全選、全部通過,但收集不到 test_old(改名成 test_new)
+        ⇒ 改名不視為延續 ⇒ 舊紅不得自動變綠,保留為可觀察的 orphaned。
+        """
+        root = _root_with_redlight(tmp_path)
+        old = u"tests/test_x.py::test_old"
+        new = u"tests/test_x.py::test_new"
+        keep = u"tests/test_x.py::test_keep"
+        redlight.record_session(root, run_id=u"odc2-1", time=u"2026-09-02T01:00:00+00:00",
+                                ticket_id=u"99", exit_code=1, collected=[old, keep],
+                                deselected=[], outcomes={old: u"failed", keep: u"passed"})
+        redlight.record_session(root, run_id=u"odc2-2", time=u"2026-09-02T02:00:00+00:00",
+                                ticket_id=u"99", exit_code=0, collected=[new, keep],
+                                deselected=[], outcomes={new: u"passed", keep: u"passed"})
+        out = render(root)
+        orphaned = _value_of(out, u"tests orphaned under ticket 99")
+        green = _value_of(out, u"tests green under ticket 99")
+        assert orphaned is not None and u"tests/test_x.py" in orphaned, out
+        assert u"test_old" in orphaned, orphaned
+        assert u"tests/test_x.py" not in green, green
+
+
+class TestRunEvidence:
+
+    def test_no_run_at_all_is_not_zero_tests_and_not_a_pass(self, tmp_path, redlight_guard):
+        """RL-5 No invocation。現行 HEAD:**介面紅**(`redlight.record_session` 不存在)。
+
+        兩個 root:B 有一次 0 collected 的 run(狀態 C),A 完全沒有 run 事實(E)。
+        兩者在輸出上必須分得開,且 A 不得被推論成任何 run 事實。
+        """
+        root_b = _root_with_redlight(tmp_path / u"b")
+        redlight.record_session(root_b, run_id=u"rl5-c", time=u"2026-09-02T01:00:00+00:00",
+                                ticket_id=u"99", exit_code=5, collected=[],
+                                deselected=[], outcomes={})
+        root_a = _root_with_redlight(tmp_path / u"a", with_runs=True)
+        assert redlight.load_runs(root_a) == [], u"沒有 run 卻讀出了 run 事實"
+        val_a = _value_of(render(root_a), u"test-runs")
+        val_b = _value_of(render(root_b), u"test-runs")
+        assert NO_RUN in val_a, val_a
+        assert u"最近一次 run:C" in val_b, val_b
+        assert val_a != val_b
+
+    def test_no_producer_means_undecidable_not_green_not_c(self, tmp_path, redlight_guard):
+        """ODC-3 producer 未載入。現行 HEAD:**介面紅**(`redlight.load_runs` 不存在)。
+
+        帳本有舊格式紀錄、沒有任何 run 事實(producer 沒被載入時就是這樣)⇒
+        記為「無證據 / 不可判定」;不得表示為 green,也不得推論為 C。
+        """
+        root = _root_with_redlight(tmp_path, ticket=u"145")
+        _write_raw_lines(root, [LEDGER_2036])
+        assert redlight.load_runs(root) == [], u"沒有 run 卻讀出了 run 事實"
+        out = render(root)
+        val = _value_of(out, u"test-runs")
+        assert NO_RUN in val, val
+        assert u"最近一次 run:C" not in val, val
+        assert u"tests/test_status.py" not in _value_of(out, u"tests green under ticket 145")
