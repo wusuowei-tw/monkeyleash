@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 4 實作完成(固定全套 exit 0);待 Station 5 審查。
+**狀態**:動工 —— Station 5 FAIL;回 Station 3b(補紅燈);Station 4b 未開始。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -25,6 +25,9 @@
 >
 > - 狀態(舊,第五代):~~`動工 —— Station 3 PASS(Jeff 驗收 2026-10-02);redlight.py 豁免已 drain;待 Jeff 切 implement;Station 4 未開始。`~~
 >   —— 2026-10-02 Station 4 實作完成、固定全套 exit 0 後由第 3 行取代(見〈十六〉)。
+>
+> - 狀態(舊,第六代):~~`動工 —— Station 4 實作完成(固定全套 exit 0);待 Station 5 審查。`~~
+>   —— 2026-10-02 Station 5 獨立審查 FAIL 後由第 3 行取代(見〈十七〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -388,14 +391,18 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 1 — Spec | PASS / CLOSED |
 | Station 2 — Ticket | DONE |
 | Station 3 — Red-light | PASS / ACCEPTED |
-| Station 4 — Implementation | 實作完成,待審查 |
-| Station 5 — Review | NOT STARTED |
+| Station 4 — Implementation | 實作嘗試完成,Station 5 FAIL |
+| Station 5 — Review | FAIL |
+| Station 3b — Red-light(補) | 進行中 |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3 進行中,Station 4 未開始(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5 FAIL,回 Station 3b 補紅燈,Station 4b 未開始(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3 進行中,Station 4 未開始(與票頭第 3 行一致)。~~
+> 第 3 行之後數次更新(紅燈驗收、Station 4 完成)時本句未同步而與第 3 行矛盾;2026-10-02 Station 3b 落票時修正。
 
 > **舊句(F-036,保留不刪)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 立案、時鐘已定(2026-10-02)、未動工 —— 與票頭第 3 行一致,不代表 Station 3 已開工。~~
 > 2026-10-02 baseline 入票時第 3 行已改為「動工」,本句未同步而與第 3 行矛盾;2026-10-02 修正。
@@ -750,6 +757,36 @@ tests red under ticket 145: (無)  (source: .dev/test-runs.jsonl + .dev/test-ses
 | **UNIT** | 固定全套 exit 0,`1926 passed, 3 skipped, 3 xfailed` |
 | **CLEAN** | 未證明 |
 | **REAL** | 留待 Jeff 端 status_all 確認(本站不宣稱) |
+
+---
+
+## 十七、Station 5 獨立審查（FAIL）與 Station 3b 裁決（2026-10-02，Jeff）
+
+Station 5 結果：FAIL（獨立、無記憶審查者）。審查包與審查結果原文存於 docs/audits/2026-10-02-m1a-station5-review-package.md 與 docs/audits/2026-10-02-m1a-station5-independent-review-fail.md。Station 4 實作保留，作為 3b 紅燈要打紅的 baseline，不回滾。
+
+審查檔保存模型：.scratch/m1a-s5-review/ 保留原始審查證據（未修改）；docs/audits/ 為 repo-normalized archival copy。
+- 審查包：原始與 repo copy 的 SHA-256 皆為 892db3f7b8a59884dba01590becff2406fa089e841b0bec40e6479e8c3bab165。
+- 審查結果（FAIL）：原始檔為 CRLF、無檔尾換行，SHA-256 99f617c8a273db431b7691b3cd48090f9e061959c69d2dd2e3f575e1853ea7a0；repo copy 依 text normalization 保存為 LF 並補檔尾換行，SHA-256 b9b559f6124e0f2fb6b6ae554b45bdef14dda341ae86e8043664f3dfd477ca3f。文字內容未改，差異僅限 CRLF→LF 與檔尾換行。
+- 依 .gitattributes 的 * text=auto，進版控的 blob 本即為 LF；不以「進 Git 後與原始位元組相同」作為要求。
+- 審查包含 7 處 trailing whitespace（第 652、653、850、884、888、920、946 行），為內嵌 unified diff 的空白 context 行，屬原始審查證據，刻意保留未修改；本 commit 的 git diff --check 以此 7 筆為已知例外。
+
+確認的缺陷：
+- F1：session 缺必要欄位（如 deselected、collected）或欄位型別不符時，被當成空集合或錯誤型別並進入正常判定，可退紅、可誤判 C。
+- F2：run_state 判為 D 的 run（例：exit 1 + 他檔收集錯誤），其他檔仍可退紅並產生 green。
+- F3：「沒有 deselected」被當成「整檔被選到」；以 nodeid 指名執行（如 pytest tests/test_x.py::test_a）時，未收集的身分不產生 deselected ⇒ 身分不明的舊紅被錯誤退紅；已知紅身分被錯誤判為 orphaned。
+- F4：紅燈測試分別驗 producer 與 consumer，沒有串接驗證，F1–F3 因此漏網。
+
+Invariant（新增）：Absence is not coverage —— 一個 test identity 沒出現在某 run 中，不得僅因此推論它已刪除、改名、不存在或已被完整涵蓋。
+
+裁決：
+1. Coverage authority（F3）：每個 run、每個 test file 有一個 machine-readable 事實 full_file_coverage ∈ {true, false, unknown}。只有 producer 能正向證明該次對該檔為整檔涵蓋時才為 true（例：該檔或其上層目錄以不含 :: 的位置參數進入收集、該檔沒有任何 deselected、沒有其他使涵蓋範圍未知的情形）；nodeid 指名等明確窄選為 false；其餘一律 unknown。只有 true 才有 ODC-1 退紅權與 ODC-2 orphan 判定權；false / unknown 兩者皆無。不知道，就不是完整。
+2. D 狀態（F2）：run_state(run) == D 時，整個 run 沒有任何退紅權，也不得使任何檔成為 green。
+3. Schema fail-closed（F1）：session 缺必要欄位、型別不符、或 outcome 身分不屬於本次 selected 時，該 run 不得進入正常語意；不得以「缺欄 ⇒ 空集合」或「錯型別照常迭代」處理；不得產生退紅、orphan 或 green；須可被觀察到。
+4. 串接驗證（F4）：須有 producer → 持久化 run 事實 → status 的串接測試。
+5. 4b 測試補件授權：Station 3 原 14 支測試與 570 / 571 / 749 的 assertion、預期語意、test identity 一律不改；4b 只授權在 ODC-2 孤兒測試（test_a_renamed_red_test_is_orphaned_not_green）與 570 / 571 / 749 的 fixture 補上 full_file_coverage = true 的事實。若只補事實仍無法維持原 assertion：立即停手回裁。
+6. 3b 新增測試分兩類：behavior-red（現行實作必須失敗）與 regression-lock（現行已正確，必須通過）；驗收以預先標定的 exact nodeid 集合為準，不以數量為準。
+7. 證據原則：任何 pytest（含 --collect-only）只能在乾淨、已 commit 的 HEAD 上執行。
+8. Debt（不擋 M1-a）：.dev/test-sessions.jsonl 每次全套約增長 450 KB，reader 為全檔讀取；M1-a 結案時另開票（rotation / index / compaction），本票不得順手最佳化。
 
 ---
 
