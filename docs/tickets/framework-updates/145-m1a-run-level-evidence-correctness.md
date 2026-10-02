@@ -1,0 +1,378 @@
+# 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
+
+**狀態**:**candidate。** 票已正式建立(M1-a Station 2);缺 issue-tracker 要求的日期型時鐘 ⇒ 停在 candidate,不排進任何順序。
+**時鐘**:未定 —— 待 Jeff 裁定日期;Station 3 開工前必須裁
+**立案**:2026-10-02(寫入當下的事實時間)。
+**性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
+本票承接其後的工作;票 139 的現象、證據與未查邊界**不改寫**。
+
+---
+
+## 一、來源
+
+| 來源 | 性質 |
+|---|---|
+| **票 139**(`139-a-narrow-test-selection-overwrites-the-full-suite-result.md`) | 原始 finding / evidence source。**本票不改寫其證據。** |
+| `M1-A-RUN-EVIDENCE-SPEC.md` | M1-a 最小規格(Station 1)。**該檔不進版控;本票已摘錄本工作所需 REQUIREMENT。** |
+| `RECON-NONPYTHON-SIX-STATION-M1.md` | 偵察報告,狀態 CLOSED FOR IMPLEMENTATION PLANNING。**該檔不進版控;本票已摘錄本工作所需 REQUIREMENT。** |
+
+**讀本票不需要上面兩份 repo 外文件** —— 要求、禁止事項與驗收條件全部摘錄在下方。
+
+---
+
+## 二、問題
+
+### 2.1 現行證據紀錄的主體
+
+`.dev/test-runs.jsonl` 每一筆的主體是 **(一個測試檔 × 一次結果)**,
+8 個欄位:`test_file, time, result, failed_tests, impl_file, impl_exists, impl_hash, ticket_id`。
+`result` 值域只有 `green` / `red`。
+
+### 2.2 為何它無法完整表示「一次 test run」
+
+**缺的不是 `result` 的第三個值,而是「run 這個實體」。** 帳本裡沒有任何一筆代表「一次執行」,
+因此記不下:這次執行有沒有發生、涵蓋了什麼(選擇範圍、collected / skipped / deselected 數)、
+退出碼、由哪個 runner 產生。三條獨立證據:
+
+1. `status.py:608` 的格式字串自己寫著 `全套結果:%s(帳本不記全套)`,該 `%s` 永遠填 `UNRECORDED`。
+2. 票 139 列出的那一筆紀錄 8 個欄位中,沒有 skipped、沒有 deselected、沒有任何選擇範圍欄位。
+3. `tests/conftest.py:168` 的 `pytest_sessionfinish(session, exitstatus)` 收到 `exitstatus`,
+   函式本體(`:169-172`)從未引用它。
+
+### 2.3 collapse 發生的位置
+
+| Collapse | 位置 | 混在一起的狀態 |
+|---|---|---|
+| ① | `tests/conftest.py:171-172`(`_outcomes` 為空時迴圈跑 0 次,不寫任何紀錄;`exitstatus` 丟棄) | 0 collected、全部 deselected、runner 錯誤未形成 outcomes、根本沒跑 —— 全部「帳本無變化」 |
+| ② | `gate.py:2166` | 同上四者走同一條「沒有任何執行紀錄」訊息 |
+| ③ | `status.py:595-602` | 同上四者都是 `red 0 / green 0`(或 `未記錄`) |
+| ④ | `tests/conftest.py` 的 `setdefault`(無條件建鍵;本輪重核在 `:163`,見〈六〉)+ `:172`(`passed=not rec["failed"]`) | **「全部 skip、零失敗」與「全部通過」寫出逐字相同的 `result="green"`、`failed_tests=[]`** |
+
+`passed=not rec["failed"]` 的真正語意是「這次沒有任何失敗」,不是「這次有測試通過」。
+
+aggregate 層:`status.py` 的 `_latest_per_file`(`:312-334`)取**每檔最新一筆**。
+一次窄選擇 run 寫出的新紀錄會成為該檔的「最新一筆」 —— 這是票 139 那次遮蔽的發生位置。
+
+### 2.4 票 139 已證明的 false-green aggregate(逐字引用原案)
+
+全套執行仍有 1 failed —— 票 139 逐字:
+
+> 它在 2026-09-13 的全套執行裡仍是紅的(`1 failed, 1823 passed, 3 skipped, 3 xfailed`)。
+
+同檔以 `-k "symlink"` 窄選 —— 票 139 逐字:
+
+```
+$ python -X utf8 -m pytest tests/test_gate.py -k "symlink" -q --no-header
+sss                                                                      [100%]
+SKIPPED [1] tests\test_gate.py:451: 此環境無法建立 symlink
+SKIPPED [1] tests\test_gate.py:459: 此環境無法建立 symlink
+SKIPPED [1] tests\test_gate.py:473: 此環境無法建立 symlink
+3 skipped, 645 deselected in 5.48s
+```
+
+> ⇒ **`3 skipped, 645 deselected`、零失敗 ⇒ 記成 `green`,`failed_tests: []`。**
+> 同一天稍早的全套執行(`1 failed`)被這一筆蓋過。
+
+該筆紀錄 8 個欄位中無任何 skipped / deselected / 選擇範圍欄位 —— 票 139 逐字:
+
+> ⇒ **沒有 `skipped`、沒有 `deselected`、沒有任何「這次選了哪些測試」的欄位。**
+
+aggregate 的結果 —— 票 139 逐字:
+
+> **儀表板顯示 `red 0 / green 45`,而票 137 那條紅仍然存在。**
+
+### 2.5 ⚠ 未證明(票 139 的證據邊界,本票照抄,不擴張)
+
+票 139 逐字:
+
+> **只記錄量到的東西,沒有做診斷、沒有提修法。**
+> 沒寫的就是沒查:呈現層與寫入層各自的職責、是否還有別的檔受影響、
+> 歷史上發生過幾次 —— 四件全部未查。
+
+| 項目 | 狀態 |
+|---|---|
+| 呈現層的職責 | **未證明** |
+| 寫入層的職責 | **未證明** |
+| 是否還有其他測試檔受同樣影響 | **未證明** |
+| 歷史上發生過幾次 | **未證明** |
+
+**本票成立不改變上表任何一格。**
+
+### 2.6 本票的成立理由
+
+**upstream 現存 run-evidence correctness gap。** 直接觀測的實例是票 139 那一次,
+語料為本 repo 自己的 `tests/test_gate.py`(純 Python);Collapse ④ 位於 pytest 專屬的 producer,
+與副檔名無關。共用此版本 evidence / status 機制的 repo 均暴露於此 failure mode ——
+**但不得寫成其他 repo 都已實際發生假綠**(未查證)。
+
+**範圍**:只處理本 repo 的 evidence 是否如實表達一次 test run。不擴大成一般測試平台問題。
+
+---
+
+## 三、REQUIREMENT
+
+### A. Machine states
+
+| 狀態 | 定義 | 成功語意 |
+|---|---|---|
+| **A** | runner 已執行;至少一項適用測試**實際通過**;無失敗 | 是(僅就**該次涵蓋範圍**而言) |
+| **B** | runner 已執行;至少一項失敗 | 否 |
+| **C** | runner 已執行;**0 項**適用測試被收集 | 否 |
+| **F** | runner 已執行;**有**收集到測試,但沒有任何一項實際通過或失敗(全部 skipped、全部 deselected、或兩者混合) | 否 |
+| **D** | runner invocation 錯誤 / collection failure / **執行被中斷** | 否 |
+| **E** | 本次根本沒有執行 runner | 否(且不是「一次 run」) |
+
+- **「實際通過」**指該測試的本體有被執行且結果為通過;skipped 與 deselected **都不算**。
+- **F 不得與 A 同義。** 票 139 原案(`3 skipped, 645 deselected`、0 passed、0 failed)屬 F。
+- **F 與 C 分開,不合併。** 理由:I7 要求涵蓋範圍可觀察,F 與 C 的涵蓋範圍本來就是不同事實;
+  票 139 把「645 deselected / 3 skipped 沒有進紀錄」列為兩件事之一;
+  現行實作把兩者落在不同的 collapse(全 skip → ④ 寫成 green;0 collected / 全 deselect → ① 不寫)。
+- **A 不等於「完整測試通過」。** 一次 `-k` 窄選、全部實際通過的 run 是 A,但不是全套通過;
+  「是否涵蓋全套」是 I7 的涵蓋範圍事實,不是 A–F 的一個值。
+- **本票不要求**:xfail / xpass 的歸類(偵察未量測現行 producer 如何記錄它們;
+  在後續裁定前不宣稱它們屬於 A–F 任一);D 內部再細分;A 內部再細分;
+  runner unsupported / unavailable 單獨成態(歸入 E)。
+- **不預先指定**:新增 `result` 第三值、新增某個 JSON 欄位、另開檔案。
+  **本票定義 semantics,implementation 決定 storage representation。**
+  (偵察已記:必須新增一個現在不存在的 run-level 事實;既有 8 欄不必改;落點不裁。)
+
+### B. Invariants
+
+- **I1.** 「沒有 failure record」不得自動等價於「本次完整測試通過」。
+- **I2.** 0 applicable tests(C)、全部 skipped、全部 deselected(F)不得與 full pass 具有相同 machine meaning。
+- **I3.** runner error / collection failure / **中斷**(D)不得被表示為 green。
+- **I4.** 一次 partial-selection run 不得使較早仍未被**有效解決**的 red 僅因 aggregate overwrite 而消失。
+- **I5.** status aggregate 的 green / red 必須可追溯到足以證明其語意的 evidence。
+- **I6.** 舊的 per-test green / red evidence 若仍保留,不得被新的 run-level semantics 錯誤解讀為完整 run 結果。
+- **I7.** 一次 run 的涵蓋範圍 —— 選了哪些、跳過幾條、未選幾條 —— 必須是 machine 事後可觀察的事實。只定此語意,不指定欄位或格式。
+
+### C. I4 前提 —— 「一條 red 何時算被有效解決」
+
+測試 X 的一條 red,**只有在**較晚的某一次 run **同時**滿足下列三項時,才算被有效解決:
+
+1. 該 run **選到了 X**(X 在該次的選擇範圍內);
+2. X 在該 run 中**被實際執行**(不是 skipped、不是 deselected);
+3. X 在該 run 中的結果為**通過**。
+
+下列情形**都不能**解決 X 的 red:
+
+- 一次**沒有選到 X** 的 run(無論它選到的其他測試結果如何,含全部實際通過);
+- 一次選到 X 但 **X 被 skip** 的 run;
+- 一次處於 **C / D / E / F** 狀態的 run;
+- 該測試檔「最新一筆」紀錄為 green 這件事本身,當那一筆**不帶**上列 1–3 的證據時。
+
+「X 的身分」以什麼為鍵不在本票裁定(見〈七〉Q7)。X 被刪除或改名後的退場:見 ODC-2。
+
+### D. Backward compatibility
+
+帳本已有歷史紀錄(偵察量測時 1997 筆,全部 8 欄、全部 `.py` 測試檔;以該次量測為底)。
+
+1. **歷史紀錄不得被重新宣稱含有當時沒有記錄的 run-level facts。**
+2. 舊紀錄缺少新 run-level fact 時,machine **不得憑空推論** full pass、zero tests、runner error、full-suite execution —— 四者任一皆不得。缺少即為「未知」,並且**可被看出是未知**。
+3. **Migration**:只定 acceptance expectation —— 遷移後(若有遷移),1、2 仍須成立,且 AC-6 成立。要不要遷移、怎麼遷移,不在本票的 REQUIREMENT 內。
+4. **不得竄改歷史 evidence** 來讓新模型看起來完整(含:不得改寫舊紀錄的 8 欄、不得為舊紀錄補寫推測出來的涵蓋範圍)。
+
+### E. Acceptance criteria —— 下列全部成立才能 PASS
+
+| AC | 條件 |
+|---|---|
+| **AC-1** | A / B / C / D / E / F 各 run state 在 machine semantics 上可區分;**F 與 C 分開**。ODC-3 所列殘餘情形須有明列的處置 |
+| **AC-2** | zero tests / 全部 skipped / 全部 deselected **不能**產生與 full pass 相同的成功語意 |
+| **AC-3** | runner error / collection error / 中斷 **不能**產生 green |
+| **AC-4** | partial selection 不得以缺乏完整 run 證據的方式遮蔽仍有效的 earlier red —— **依 C 節的解決條件判斷** |
+| **AC-5** | status consumer 不得把「缺 run-level evidence」默認成 successful full run |
+| **AC-6** | 現有 per-test evidence 的歷史 provenance 保留(含 D 節 1–4) |
+| **AC-7** | 至少有對應的 red-light tests 能在修正前失敗、修正後通過;**RL-6 必須是 red-light cases 之一** |
+| **AC-8** | 現有 upstream regression suite 不得因 M1-a 被無關破壞(與 M1-a 相關的語意改動見 ODC-1 與〈五〉) |
+
+### F. Red-light cases(本票只定案例,不建立 test)
+
+「successful run」指具有 A 的成功語意;「green aggregate」指 status aggregate 把該檔 / 該測試計為綠。
+
+| 案例 | precondition | action | expected machine-observable result | forbidden result |
+|---|---|---|---|---|
+| **RL-1** Full pass | 有適用測試 | 執行 runner,至少一項實際通過、無失敗 | state 明確為 A(successful run);涵蓋範圍可觀察(I7) | 被記成 C / D / E / F;涵蓋範圍不可觀察 |
+| **RL-2** One failure | 有適用測試,至少一項會失敗 | 執行 runner | state 為 B;失敗的測試可被識別 | green aggregate;與 A 同義 |
+| **RL-3** Zero tests collected | 選擇條件使 0 項適用測試被收集 | 執行 runner | state 為 C,且**可觀察到**這次 run 發生過 | 與 A 同義;與 E 同義(「帳本無變化」);green aggregate |
+| **RL-4** Collection / runner error / 中斷 | 三子案各一:(a) 收集失敗、(b) runner invocation 錯誤、(c) 執行被中斷 | 執行 runner | state 為 D;不產生 green(子案 (b) 中 producer 自己未載入者見 ODC-3,至少須不為 green) | green;與 A 同義 |
+| **RL-5** No invocation | 本次未執行 runner | 無(只檢查 machine state) | E;與 C、A 可區分 | 與 RL-3(C)混同;與 RL-1(A)混同;被推論出任何 run 事實 |
+| **RL-6** 票 139 原案重現 | 同一測試檔的全套 run 有 **1 failed**(該失敗測試記為 X) | 同檔以 `-k` 窄選,得 **N skipped、M deselected、0 passed、0 failed**(N ≥ 1,M ≥ 1) | 該窄選 run 的 state 為 **F**;N 與 M 事後可觀察(I7);X 的 red 在 aggregate 中**仍存在** | 記成與 RL-1 同義的 green;前置那條 red 在 aggregate 中消失;N / M 事後不可觀察 |
+| **RL-6b** Partial selection 全綠但未涵蓋 earlier red | 某條測試 X 為 red(未依 C 節解決) | 同檔窄選,選到的測試全部實際通過,但**未選到 X** | 該 run 的 state 為 A(僅就其涵蓋範圍);X 的 red **仍存在**;「未選到 X」事後可觀察 | 無證據地消除 X 的 red;該 run 被解讀為全套通過 |
+| **RL-7** Historical evidence | 帳本中有舊格式紀錄(僅 8 欄,缺 run-level fact),其中至少一筆 `result="green"` | status consumer 讀取該帳本 | 該紀錄的 run-level 事實為「未知」且可被看出是未知;舊紀錄內容原樣保留 | 被 retroactively 解讀成 full pass、zero tests、runner error 或 full-suite execution;舊紀錄被改寫或補寫 |
+
+案例總數:8(RL-1 ~ RL-7,加 RL-6b)。
+
+---
+
+## 四、OPEN DESIGN CONSTRAINT
+
+> **Station 3 實際開始前,ODC 必須有可執行裁決;不得讓 Implementation 自己偷偷選答案。**
+
+**ODC-1|I4 與現行 latest-per-file / red→green 假設的衝突**
+
+- 證據:`status.py` `_latest_per_file`(`:312-334`)以**每檔最新一筆**決定該檔紅綠;
+  `tests/test_status.py` 有斷言「紅轉綠算綠」(逐條見〈五〉)。
+- 張力:I4 的解決條件是**測試層級**(X 是否被選到、被執行、通過);
+  現行 aggregate 的選擇規則是**檔案層級的最新一筆**,且帳本沒有涵蓋範圍可供判斷。
+  在現行架構下,I4 無法只靠改 consumer 達成。
+- I4 **不刪**。調和方法未裁。
+
+**ODC-2|測試被刪除 / 改名後,舊 red 如何退休**
+
+- 張力:C 節要求 X 在後續 run 中被實際執行且通過;X 若已不存在,這個條件永遠無法滿足。
+- 偵察未涵蓋此情形。下限:**無論採何種退場方式,X 的 red 不得因 X 不再出現就靜默消失;
+  退場本身必須是 machine 可觀察的事實。**
+
+**ODC-3|producer 本身未載入時,D 與 E 的可觀察性**
+
+- 證據:偵察記錄「若 rootdir 不對,conftest 可能**連載入都沒有**」⇒ 帳本無變化。
+- 張力:若 run-level 事實由 runner 內部(如 `conftest.py`)產生,
+  讓 producer 自己沒被載入的 D 情形,在 machine 上與 E **必然相同**。
+- D / E 的區分**不刪**。下限:**這類情形不得被表示為 green**(I3),也不得被推論為 C。
+
+---
+
+## 五、既有安全網保護條款
+
+現有 test_status.py 中與 red→green 語意相關的既有 assertion,不得由 Implementation 自行刪除、弱化或改寫預期來使新實作通過。若確實需要改變其語意,必須先列出 exact assertion、原語意、新語意、與 M1-a Spec 的衝突點,交由裁決者明確批准後才能修改。
+
+### 5.1 現有符合「red → green」語意的 assertion(立案時 HEAD `8ff4c6e`,唯讀查得,未執行測試)
+
+| nodeid | 檔案 | 行號 | assertion 原文 | 現行語意 |
+|---|---|---|---|---|
+| `tests/test_status.py::TestTestsUnderTicketUsesTheLatestRecordPerFile::test_a_file_that_went_red_then_green_counts_as_green` | `tests/test_status.py` | 570 | `assert u"tests/test_a.py" not in red, red` | 同一檔先 red 後 green ⇒ 最新一筆為 green 時,該檔**不在**紅名單 |
+| 同上 | `tests/test_status.py` | 571 | `assert u"tests/test_a.py" in green, green` | 同一檔先 red 後 green ⇒ 該檔被計入綠名單 |
+| `tests/test_status.py::TestLatestPerFileIsFailClosedWithoutTicket::test_with_ticket_still_filters` | `tests/test_status.py` | 749 | `assert got["tests/test_a.py"]["result"] == "green", got["tests/test_a.py"]` | 以 `TICKET_100_RUNS`(test_a 紅轉綠)為資料,`_latest_per_file` 回傳 test_a 的最新一筆為 green |
+
+**共 3 條 assertion,分屬 2 個 nodeid。**
+
+查詢方式與原始輸出:
+
+```
+$ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tests/test_status.py
+262:#          每檔最新一筆)+ `--all` + Sync Health
+519:    def test_latest_existing_month_names_the_file_and_the_last_record(self, tmp_path):
+524:    def test_latest_existing_month_changes_when_the_file_goes_away(self, tmp_path):
+546:    def test_a_file_that_went_red_then_green_counts_as_green(self, tmp_path):
+548:        「這張票底下還有什麼是紅的」問的是**每個檔的最新一筆**,不是有沒有紅過。
+688:# 甲-2 用的固定資料:兩張票、三個檔,其中 test_a 紅轉綠。
+713:    `_latest_per_file` 的過濾寫成 `if ticket and ...`,票號 falsy 時整個
+728:        # 「未記錄;本票 red 0 / green 0」的實作會過關 —— 而那仍然是個謊。
+741:        assert status._latest_per_file(TICKET_100_RUNS, None) == {}
+748:        got = status._latest_per_file(TICKET_100_RUNS, u"99")
+993:    def test_the_line_names_the_latest_file(self, tmp_path):
+1003:        """與 `latest_report` 同一條(裁五「三種空同 ④」)。
+```
+
+⚠ 本查詢**不直接命中** 570 / 571 / 749 三行(斷言本體不含查詢字串);
+三條是由命中的 546 與 748 **讀檔往下**找到的。
+
+逐一讀檔後的排除理由:519 / 524 / 993 / 1003 為不同物件(intercepts 月檔、`latest_report`);
+262 / 548 / 688 / 713 / 728 為註解或 docstring;741 / 748 不含紅轉綠語意
+(741 斷言無票回空 dict;748 斷言篩出的檔名集合);
+572(`assert u"tests/test_b.py" in red, red`)屬同一測試但不是紅轉綠斷言。
+
+---
+
+## 六、行號重核(以立案時 HEAD `8ff4c6e` 為底)
+
+上方引用的原始碼行號源自偵察報告;本票立案時逐一重核如下。
+
+| Spec 所寫行號 | 當下 HEAD 行號 | 是否相符 | 當下原文 |
+|---|---|---|---|
+| `tests/conftest.py:158`(`setdefault` 無條件) | `:163` | **STALE LINE REFERENCE** | `    rec = _outcomes.setdefault(f, {"failed": []})`(`:158` 當下為 `        return`) |
+| `tests/conftest.py:168` | `:168` | 相符 | `def pytest_sessionfinish(session, exitstatus):` |
+| `tests/conftest.py:169-172` | `:169-172` | 相符 | `    if _redlight is None:` / `        return` / `    for f, rec in _outcomes.items():` / `        _redlight.record_run(f, passed=not rec["failed"], failed_tests=rec["failed"])` |
+| `tests/conftest.py:171-172` | `:171-172` | 相符 | `    for f, rec in _outcomes.items():` / `        _redlight.record_run(f, passed=not rec["failed"], failed_tests=rec["failed"])` |
+| `tests/conftest.py:172` | `:172` | 相符 | `        _redlight.record_run(f, passed=not rec["failed"], failed_tests=rec["failed"])` |
+| `.claude/portable/status.py:312-334` | `:312-334` | 相符 | `:312` `def _latest_per_file(runs, ticket):` …… `:334` `    return out` |
+| `.claude/portable/status.py:595-602` | `:595-602` | 相符 | `:595` `    if runs is None:` …… `:601` `        red = len([r for r in latest.values() if r.get("result") == "red"])` / `:602` `        green = len([r for r in latest.values() if r.get("result") == "green"])` |
+| `.claude/portable/status.py:608` | `:608` | 相符 | `        val = u"本票(每檔最新一筆)red %d / green %d;%s;全套結果:%s(帳本不記全套)" % (` |
+| `.claude/hooks/gate.py:2166` | `:2166` | 相符 | `    return ("%s 沒有任何執行紀錄 —— 無法證明它曾經紅過。" % want)` |
+
+**相符 8 處,STALE 1 處。** 只記錄,不改 Spec、不改原始碼。
+
+---
+
+## 七、Open design questions
+
+全部是 DESIGN OPTION 層的問題;任何答案都必須滿足〈三〉的 REQUIREMENT。**沒有任何一個候選答案是 requirement。**
+
+| # | 問題 | 狀態 |
+|---|---|---|
+| Q1 | run-level fact 放同一帳本,或獨立帳本? | 未裁 |
+| Q2 | 是否新增 record type? | 未裁 |
+| Q3 | per-test 與 per-run 如何關聯? | 未裁 |
+| Q4 | aggregate 如何選 current authoritative run?(與 ODC-1 相關) | 未裁 |
+| Q5 | historical records 如何呈現「未知」? | 未裁 |
+| Q6 | Station 2 是升級票 139,或另開新票? | **已裁:NEW TICKET(本票 145)** |
+| Q7 | I4 所稱「測試 X 的身分」以什麼為鍵? | 未裁 |
+
+---
+
+## 八、Out of scope
+
+本票**不處理**:
+
+- 票 137 那條紅本身(`TestLegacyNoRedlightList`)及票 137 的其他問題
+- 票 93 的 CI `--deselect` 及票 93 的其他問題
+- `.kt` / `.dart` 的 R3 / R8 fail-open(non-Python R3/R8)
+- non-Python adapter
+- Kotlin / Gradle
+- Flutter / Dart
+- Android
+- `tests/test_<base>.py` mapping
+- `impl_file` consumer
+- `install.py` / G-08
+- hook / project-root
+- legacy-no-redlight
+- nested `app/build` exclusion(nested build exclusion)
+- CI 擴充(CI expansion)
+- product-security
+- Supply-chain Gate
+- App implementation
+- xfail / xpass 的狀態歸類
+
+上述屬 M1-b、既有票或後續 milestone。**不得以「順手可以修」納入。**
+**M1-b 另立 Spec / Ticket,不得與本票共票。**
+
+---
+
+## 九、測試三層
+
+本票未來會動到 run evidence producer 與 status consumer / aggregation semantics。
+
+| 層 | 狀態 |
+|---|---|
+| **UNIT** | 未證明 |
+| **CLEAN** | 未證明 |
+| **REAL** | 未證明 |
+
+> Full baseline 尚未量測。
+> 依 Station 2 裁決,baseline 排至 Station 3 開始前,
+> 避免在純 ticket 階段寫入新的 test-run evidence。
+
+---
+
+## 十、六站狀態
+
+| 站 | 狀態 |
+|---|---|
+| Station 1 — Spec | PASS / CLOSED |
+| Station 2 — Ticket | DONE |
+| Station 3 — Red-light | NOT STARTED |
+| Station 4 — Implementation | NOT STARTED |
+| Station 5 — Review | NOT STARTED |
+| Station 6 — Acceptance | NOT STARTED |
+
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = candidate(缺 issue-tracker 要求的日期型時鐘),不代表已獲准進 Station 3。
+
+**待裁事項**:時鐘(日期型)—— Station 3 開工前必須裁。
+
+---
+
+## 相關
+
+- **票 139** —— 原始 finding。本票承接;其證據與未查邊界不改寫。
+- **票 137** —— 被票 139 那次窄選遮蔽的那條紅。**本票不處理它。**
+- **票 93** —— CI 的 `--deselect`。**本票不處理它。**
