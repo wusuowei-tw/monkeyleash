@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3f 紅燈已寫(待 Jeff 驗收);Station 4f 未開始。
+**狀態**:動工 —— Station 4f 實作已提交;待固定全套驗收。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -103,6 +103,9 @@
 >
 > - 狀態(舊,第三十一代):~~`動工 —— Station 3f 紅燈已提交;待固定全套驗證。`~~
 >   —— 2026-10-03 Station 3f 固定全套驗證成立後由第 3 行取代(見〈四十二〉)。
+>
+> - 狀態(舊,第三十二代):~~`動工 —— Station 3f 紅燈已寫(待 Jeff 驗收);Station 4f 未開始。`~~
+>   —— 2026-10-03 Station 4f 實作提交後由第 3 行取代(見〈四十三〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -480,15 +483,22 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3e — Red-light(補) | PASS / ACCEPTED |
 | Station 4e — Implementation(修正) | PASS / COMPLETED（待 5e 審查） |
 | Station 5e — Review | FAIL(依 Jeff 裁決;審查者原判 PASS) |
-| Station 3f — Red-light(補) | 紅燈已寫,待 Jeff 驗收 |
+| Station 3f — Red-light(補) | PASS / ACCEPTED |
+| Station 4f — Implementation(修正) | 實作已提交，待驗收 |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3f 紅燈已寫(待 Jeff 驗收);Station 4f 未開始(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4f 實作已提交;待固定全套驗收(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第二十三代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3f 紅燈已寫(待 Jeff 驗收);Station 4f 未開始(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 4f 實作提交後隨第 3 行同步更新(見〈四十三〉)。
+>
+> **〈十〉表格舊值(F-036)**:Station 3f 列 ~~`紅燈已寫,待 Jeff 驗收`~~ → `PASS / ACCEPTED`(2026-10-03,S4f-1;依 Jeff 的 3f 裁決)。
+> Station 4f 列為新增列,沒有舊值(2026-10-03,S4f-1)。
 
 > **舊句(F-036,保留不刪,第二十二代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3f 紅燈已提交;待固定全套驗證(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 3f 固定全套驗證成立後隨第 3 行同步更新(見〈四十二〉)。
@@ -2074,6 +2084,52 @@ POSIX 上 failed 預期為 14。
   test-sessions 7030070 bytes / 20 行 / `4ceb819ea08f78e3c9aa5849bf89e3ab2a54ca42619427fb0dfeab36e4f576fc`。
 - status:red 只有 `tests/test_redlight.py`、`tests/test_status.py`;最近一次 run B(collected 2057)。
 - R13 在本機 Windows 為綠、POSIX 為紅(未實測)。
+- commit(回填):S3f-1 `229b5e762f087193e138c7c8d0f0d0b0f3e5cbb5`;S3f-2(證據)`2f6743fff2f13170b27c52c3390a69cc361dfe26`。
+
+---
+
+## 四十三、Station 4f 修正
+
+裁決(2026-10-03,Jeff;照錄):Station 3f 紅燈 = PASS / ACCEPTED(以 Jeff 切換 pipeline 為 implement 為驗收)。
+
+裁決助手外部驗證(**隔離環境;非本 repo 帳本證據**;來源:Jeff 的 Station 4f 指令,照錄):
+
+- Linux + Python 3.11 + pytest 9.1.1,以 S3F1 229b5e762f087193e138c7c8d0f0d0b0f3e5cbb5 的 redlight.py / conftest.py / 兩個測試檔:
+  3f 的 36 支為 14 failed / 22 passed —— 即 41.3 的 13 支 behavior-red 加 R13
+  (tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_a_backslash_escape_override_never_persists_a_path);
+  R13 的失敗為持久化行含 "cache_dir=a\\..\\..\\..\\e3p-user\\c"。其餘 test_redlight + test_status(Sync 類除外)皆通過。
+- 帳本第 20 行 failed 集合恰為 41.3 的 13 支;intercepts 的 2 筆新增為 5e-0 的 mkdir(14:14:26Z)與 5e 審查的 python -c(18:48:00Z),不屬 3f-1。
+
+跨平台驗收(Jeff 裁定):
+- R9–R13 必須在 Windows 語意與 POSIX 語意都轉綠;R13 在真實 POSIX producer 上必須綠。
+- 本機只驗 Windows。4f 分三段:
+  1. S4F1 實作;
+  2. S4F2 本機 Windows 驗收;
+  3. 裁決助手 POSIX 外部驗證通過後,S4F3(docs-only)升級為 PASS / COMPLETED。
+
+### 43.1 實作內容(S4F1)
+
+**`.claude/hooks/redlight.py`**:
+- (xix)(〈三十九〉39.3 第 3 點):
+  - `COMPLETENESS_OPTIONS` 加 `"usepdb"`。
+  - `_completeness_problems`:`options.usepdb` 須為 bool(缺欄、None、字串、int ⇒ problems ⇒ unknown)。
+  - `_completeness_verdict`:`usepdb is not False` ⇒ unknown;docstring 補 (xix)。
+  - 唯一 `"true"` 出口不變;不加 `usepdb_cls`(〈四十一〉41.1 第 1 點)。
+- S5e-F2(乙;〈四十一〉41.1 第 3 點):`normalize_overrides` 的非絕對 value 以 **root** 為基準判越界(`_root_relative(val, root)`)。key 原樣;絕對路徑分支不變。(1) 類(`inifilename`、`invocation.args`)維持以 `invocation_params.dir` 解析。
+- S5e-F3:`_root_relative` 先以原字串判「他平台絕對」(順序不變),之後把 `\` 換成 `/` 再 join / normpath;relpath 之後的處理不變。
+- S5e-F4:`_IDENTIFIER` 改為 `[A-Za-z0-9_.\-]+`,以 `fullmatch` 整串比對。
+
+**`tests/conftest.py`**:未改(F2 在 redlight 端以 root 為基準;producer 仍傳 `inv_dir`,只有絕對路徑分支會用到它,而絕對路徑的結果與 base 無關)。
+
+**授權補件(〈四十一〉41.1 第 6 點,照規劃檔 7.4)**:
+- `_C_OPTION_DEFAULTS`、`_S_OPTION_DEFAULTS` 各只新增 `"usepdb": False`。
+- 2 支直接寫 completeness dict 的測試在 `options` 補 `u"usepdb": False`。
+
+**未改**:`.claude/portable/status.py`。
+
+### 43.2 驗收結果
+
+(待 S4F2。)
 
 ---
 

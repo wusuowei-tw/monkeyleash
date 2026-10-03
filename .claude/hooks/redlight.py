@@ -462,7 +462,9 @@ def file_coverage(run, test_file):
 COMPLETENESS_OPTIONS = ("lf", "last_failed_no_failures", "stepwise", "stepwise_skip",
                         "maxfail", "collectonly", "setuponly", "setupplan",
                         # 票 145 Station 4e(〈三十五〉3 (xv)–(xvii)):pass 有效性的 pytest 層事實
-                        "runxfail", "pythonwarnings", "trace")
+                        "runxfail", "pythonwarnings", "trace",
+                        # 票 145 Station 4f(〈三十九〉39.3 第 3 點 (xix)):`--pdb`
+                        "usepdb")
 
 PLUGIN_KINDS = ("builtin", "root_conftest", "known_dist", "other")
 SUPPORTED_PLUGIN_KINDS = ("builtin", "root_conftest", "known_dist")
@@ -533,11 +535,11 @@ def _defining_module(plugin):
 # 依**欄位類別**套規則,不依特定字串:
 #   (1) 類(inipath、inifilename、invocation.args、conftest 註冊的路徑名)⇒ root 相對 posix 路徑或 `<outside>`;
 #   名稱欄位(plugins[].name、blocked[])⇒ 路徑名依 (1);模組 / entry-point 名稱(含數字 id)原樣;其他 `<non-identifier>`;
-#   (2) 類(override_ini)⇒ key 原樣;value 只在是絕對路徑、或解析後越出 root 時正規化。
+#   (2) 類(override_ini)⇒ key 原樣;value 只在是絕對路徑、或以 root 為基準解析後越出 root 時正規化(4f,S5e-F2)。
 # **絕對路徑的判定與平台無關**:只用 `os.path.isabs` 的話,POSIX 上認不出 `C:\…`,同一個輸入在兩種平台落帳不同。
 
 _DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
-_IDENTIFIER = re.compile(r"^[A-Za-z0-9_.\-]+$")
+_IDENTIFIER = re.compile(r"[A-Za-z0-9_.\-]+")         # 以 fullmatch 整串比對(S5e-F4:`$` 會放過結尾換行)
 
 
 def _is_abs_path(text):
@@ -552,11 +554,14 @@ def _root_relative(value, root, base=None):
     相對路徑先以 `base`(producer 給的 `invocation_params.dir`;沒有就用 root)解析。
     本機意義下的絕對 / 相對用 `os.path`(Windows 上大小寫不敏感,與 pytest 給的路徑一致);
     只有「他平台才算絕對」的值(例:POSIX 上的 `C:\\…`)直接記 `<outside>` —— 它不可能在本機 root 之內。
+    「他平台絕對」以**原字串**判定;之後才把 `\\` 換成 `/` 再 join / normpath(S5e-F3:否則 POSIX 的
+    `posixpath.normpath` 看不到以反斜線分隔的 `..`,越界的值不會被認出)。
     """
     text = os.fspath(value) if isinstance(value, os.PathLike) else str(value)
     host_abs = os.path.isabs(text)
     if _is_abs_path(text) and not host_abs:
         return OUTSIDE
+    text = text.replace("\\", "/")
     start = os.fspath(base) if base is not None else os.fspath(root)
     full = text if host_abs else os.path.join(start, text)
     try:
@@ -579,7 +584,7 @@ def _plugin_name(name, root):
     其他(例:`-p no:<路徑>` 留下的 `pytest_<路徑>`)⇒ `<non-identifier>`。"""
     if _is_abs_path(name):
         return _root_relative(name, root)
-    if _IDENTIFIER.match(name):
+    if _IDENTIFIER.fullmatch(name):
         return name
     return NON_IDENTIFIER
 
@@ -641,9 +646,13 @@ def normalize_config_path(value, root, base=None):
 def normalize_overrides(values, root, base=None):
     """`config.option.override_ini`(解析後清單)→ 落帳形狀(〈三十五〉4 的 (2) 類)。不是 list ⇒ None。
 
-    key 一律原樣;value 只在是絕對路徑(平台無關判定)、或以 `base` 解析後越出 root 時,
+    key 一律原樣;value 只在是絕對路徑(平台無關判定)、或以 **root** 為基準解析後越出 root 時,
     換成 root 相對路徑或 `<outside>`。其他值一律原樣(例:`true`、`test_b`、`tests/test_*.py`)——
-    不改寫證據本身。"""
+    不改寫證據本身。
+
+    「越出 root」的基準是 root,不是 `base`(invocation dir)(S5e-F2;〈四十一〉41.1 第 3 點):
+    pytest 解析 ini 的路徑值也不用 invocation dir(`cache_dir` 用 rootpath),
+    而以 invocation dir 為基準時,從 root 外執行會把 `true` 這類非路徑值判成越界。"""
     if not isinstance(values, (list, tuple)):
         return None
     out = []
@@ -652,7 +661,7 @@ def normalize_overrides(values, root, base=None):
         if sep and val:
             if _is_abs_path(val):
                 val = _root_relative(val, root, base)
-            elif _root_relative(val, root, base) == OUTSIDE:
+            elif _root_relative(val, root) == OUTSIDE:
                 val = OUTSIDE
         out.append(key + sep + val)
     return out
@@ -741,7 +750,7 @@ def _completeness_problems(comp):
     if not isinstance(comp.get("python_version"), str):
         problems.append("python_version 缺欄或型別不符")
     if isinstance(options, dict):
-        for key in ("runxfail", "trace"):
+        for key in ("runxfail", "trace", "usepdb"):
             if not isinstance(options.get(key), bool):
                 problems.append("options.%s 缺欄或型別不符" % key)
         warn = options.get("pythonwarnings")
@@ -765,6 +774,8 @@ def _completeness_verdict(run, tf, idents):
     - (xviii) Python major.minor 不在 `KNOWN_PYTHON_VERSIONS` ⇒ unknown
     - (xv)(xvii) `runxfail` / `trace` 不是 False ⇒ unknown;(xvi) pytest `-W` 有值 ⇒ unknown
       (assertmode 不判定:`optimize == 0` 時 plain 只影響 reporting)
+    - (xix) `usepdb`(`--pdb`)不是 False ⇒ unknown(〈三十九〉39.3 第 3 點;與 (xvii) 同理:除錯模式下人可在
+      中途改變狀態)。`usepdb_cls`(`--pdbcls`)不判定(〈四十一〉41.1 第 1 點)
     - (ii) `lf` / `stepwise` / `stepwise_skip` 不是 False ⇒ false(縮小機制作用中)。
       `cacheprovider_blocked` 只是紀錄,不再有判定權(〈二十九〉2 (xii) 取代〈二十三〉裁決 4)
     - (iii) maxfail / collectonly / setuponly / setupplan ⇒ unknown
@@ -797,6 +808,8 @@ def _completeness_verdict(run, tf, idents):
     if comp["python_version"] not in KNOWN_PYTHON_VERSIONS:
         return "unknown"
     if options["runxfail"] is not False or options["trace"] is not False:
+        return "unknown"
+    if options["usepdb"] is not False:
         return "unknown"
     if options["pythonwarnings"] not in (None, []):
         return "unknown"

@@ -584,7 +584,8 @@ class TestTestsUnderTicketUsesTheLatestRecordPerFile:
                 u"options": {u"lf": False, u"last_failed_no_failures": u"all", u"stepwise": False,
                              u"stepwise_skip": False, u"maxfail": None, u"collectonly": False,
                              u"setuponly": False, u"setupplan": False,
-                             u"runxfail": False, u"pythonwarnings": None, u"trace": False},
+                             u"runxfail": False, u"pythonwarnings": None, u"trace": False,
+                             u"usepdb": False},
                 u"cacheprovider_blocked": False, u"shouldstop": False, u"shouldfail": False,
                 u"pre_narrowing": {u"tests/test_a.py": [u"tests/test_a.py::test_one"]},
                 u"plugins": [{u"name": u"main", u"kind": u"builtin"},
@@ -1357,7 +1358,7 @@ class TestOrphans:
                                                  u"maxfail": None, u"collectonly": False,
                                                  u"setuponly": False, u"setupplan": False,
                                                  u"runxfail": False, u"pythonwarnings": None,
-                                                 u"trace": False},
+                                                 u"trace": False, u"usepdb": False},
                                     u"cacheprovider_blocked": False, u"shouldstop": False,
                                     u"shouldfail": False,
                                     u"pre_narrowing": {u"tests/test_x.py": [new, keep]},
@@ -1894,6 +1895,7 @@ _S_OPTION_DEFAULTS = {
     "setupplan": False, "setupshow": False, "keyword": "", "markexpr": "",
     "deselect": None, "ignore": None, "ignore_glob": None,
     "runxfail": False, "pythonwarnings": None, "trace": False,
+    "usepdb": False,
 }
 
 

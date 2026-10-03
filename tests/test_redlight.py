@@ -770,6 +770,7 @@ _C_OPTION_DEFAULTS = {
     "setupplan": False, "setupshow": False, "keyword": "", "markexpr": "",
     "deselect": None, "ignore": None, "ignore_glob": None,
     "runxfail": False, "pythonwarnings": None, "trace": False,
+    "usepdb": False,
 }
 
 
