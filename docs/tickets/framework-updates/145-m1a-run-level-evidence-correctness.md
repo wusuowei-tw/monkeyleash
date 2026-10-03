@@ -1756,6 +1756,22 @@ tests orphaned under ticket 145: (無)
 
 ---
 
+## 三十六、Station 3e 紅燈證據
+
+- 報告:`docs/audits/2026-10-03-m1a-station3e-redlight.md`。
+- S3e-1 `7ebbb815fbba96124d971fe0066c096c3f1db8e8`:兩個測試檔各一個接在檔尾的 hunk(`@@ -1532,0 +1533,317 @@`、`@@ -2565,0 +2566,160 @@`),沒有刪除行;commit 前只跑 py_compile。
+- 固定全套(只跑一次,在 S3e-1 上):exit 1。失敗集合恰為〈三十五〉35.3 的 18 支;10 支 regression-lock 與其他全部既有測試通過。
+  - 計數(由帳本第 18 行與 status 重建):collected 2021 / passed 1997 / failed 18 / skipped 3 / xfail 3。
+  - **pytest 摘要行原文缺失**:工具輸出被截斷,依規定未重跑;詳見報告第 4 節。
+- 帳本 H5 → H6 只追加:
+  - test-runs 684893 → 697745 bytes(2549 → 2595 行,+46)。
+  - test-sessions 4891233 → 5599744 bytes(17 → 18 行,+1)。
+  - 兩本前段 sha256 等於 H5(`23f397d4…` / `7463a452…`)。
+- status:red 只有 tests/test_redlight.py、tests/test_status.py;最近一次 run 為 B(collected 2021)。
+- anyio 4.15.0 唯讀查證:沒有會把失敗轉成通過的機制(〈三十五〉35.2)。
+
+---
+
 ## 相關
 
 - **票 139** —— 原始 finding。本票承接;其證據與未查邊界不改寫。
