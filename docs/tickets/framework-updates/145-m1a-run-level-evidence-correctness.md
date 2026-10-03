@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3f 紅燈已提交;待固定全套驗證。
+**狀態**:動工 —— Station 3f 紅燈已寫(待 Jeff 驗收);Station 4f 未開始。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -100,6 +100,9 @@
 >
 > - 狀態(舊,第三十代):~~`動工 —— Station 3f 紅燈規劃已寫(待 Jeff 裁);未寫測試。`~~
 >   —— 2026-10-03 Station 3f 紅燈提交後由第 3 行取代(見〈四十一〉)。
+>
+> - 狀態(舊,第三十一代):~~`動工 —— Station 3f 紅燈已提交;待固定全套驗證。`~~
+>   —— 2026-10-03 Station 3f 固定全套驗證成立後由第 3 行取代(見〈四十二〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -477,15 +480,20 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3e — Red-light(補) | PASS / ACCEPTED |
 | Station 4e — Implementation(修正) | PASS / COMPLETED（待 5e 審查） |
 | Station 5e — Review | FAIL(依 Jeff 裁決;審查者原判 PASS) |
-| Station 3f — Red-light(補) | 紅燈已提交,待固定全套驗證 |
+| Station 3f — Red-light(補) | 紅燈已寫,待 Jeff 驗收 |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3f 紅燈已提交;待固定全套驗證(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3f 紅燈已寫(待 Jeff 驗收);Station 4f 未開始(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第二十二代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3f 紅燈已提交;待固定全套驗證(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 3f 固定全套驗證成立後隨第 3 行同步更新(見〈四十二〉)。
+>
+> **〈十〉表格舊值(F-036)**:Station 3f 列 ~~`紅燈已提交,待固定全套驗證`~~ → `紅燈已寫,待 Jeff 驗收`(2026-10-03,S3f-2)。
 
 > **舊句(F-036,保留不刪,第二十一代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3f 紅燈規劃已寫(待 Jeff 裁);未寫測試(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 3f 紅燈提交後隨第 3 行同步更新(見〈四十一〉)。
@@ -2052,6 +2060,20 @@ tests orphaned under ticket 145: (無)
 
 **平台附註**:`test_f3s_a_backslash_escape_override_never_persists_a_path`(R13)在**本機 Windows 為綠、POSIX 為紅**(Windows 的 `ntpath.normpath` 本來就收合反斜線的 `..`);
 POSIX 上 failed 預期為 14。
+
+---
+
+## 四十二、Station 3f 紅燈證據
+
+- 報告:`docs/audits/2026-10-03-m1a-station3f-redlight.md`。
+- S3f-1 `229b5e762f087193e138c7c8d0f0d0b0f3e5cbb5`:只在兩個測試檔的檔尾新增(`-U0` 各恰一個 hunk:`@@ -1850,0 +1851,293 @@`、`@@ -2731,0 +2732,125 @@`;沒有刪除行),另改票 145。
+- 固定全套(在 S3f-1 上只跑一次):exit 1;摘要行原文 `13 failed, 2038 passed, 3 skipped, 3 xfailed in 169.02s (0:02:49)`(collected 2057)。
+- 失敗集合恰為〈四十一〉41.3 的 13 支 behavior-red;23 支 regression-lock 與全部既有測試通過(帳本第 20 行逐支相符)。
+- 帳本 H7 → H8 只追加:兩本前段 sha256 = H7;test-runs +46 行、test-sessions +1 行。
+  H8:test-runs 721553 bytes / 2687 行 / `f7a025c6de2ad0d97ef38eac1725ea0e8d566fb0a0d453d3a5e530b84018a379`;
+  test-sessions 7030070 bytes / 20 行 / `4ceb819ea08f78e3c9aa5849bf89e3ab2a54ca42619427fb0dfeab36e4f576fc`。
+- status:red 只有 `tests/test_redlight.py`、`tests/test_status.py`;最近一次 run B(collected 2057)。
+- R13 在本機 Windows 為綠、POSIX 為紅(未實測)。
 
 ---
 
