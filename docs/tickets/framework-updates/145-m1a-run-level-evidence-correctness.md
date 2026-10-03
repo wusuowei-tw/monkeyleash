@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 4d 修正完成(固定全套 exit 0);待 Station 5d 審查。
+**狀態**:動工 —— Station 5d 審查包已建立;待獨立審查。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -70,6 +70,9 @@
 >
 > - 狀態(舊,第二十代):~~`動工 —— Station 3d 紅燈已寫(待 Jeff 驗收);Station 4d 未開始。`~~
 >   —— 2026-10-02 Station 4d 修正完成、固定全套 exit 0 後由第 3 行取代(見〈三十一〉)。
+>
+> - 狀態(舊,第二十一代):~~`動工 —— Station 4d 修正完成(固定全套 exit 0);待 Station 5d 審查。`~~
+>   —— 2026-10-02 Station 5d 審查包建立後由第 3 行取代(見〈三十二〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -442,16 +445,19 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 4c — Implementation(修正) | PASS / COMPLETED（待 5c 審查） |
 | Station 5c — Review | FAIL |
 | Station 3d — Red-light(補) | PASS / ACCEPTED |
-| Station 4d — Implementation(修正) | 修正完成，待審查 |
-| Station 5d — Review | NOT STARTED |
+| Station 4d — Implementation(修正) | PASS / COMPLETED（待 5d 審查） |
+| Station 5d — Review | 審查包已建立，待審 |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4d 修正完成(固定全套 exit 0);待 Station 5d 審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5d 審查包已建立;待獨立審查(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第十二代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4d 修正完成(固定全套 exit 0);待 Station 5d 審查(與票頭第 3 行一致)。~~
+> 2026-10-02 Station 5d 審查包建立後隨第 3 行同步更新(見〈三十二〉)。
 
 > **舊句(F-036,保留不刪,第十一代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3d 紅燈已寫(待 Jeff 驗收);Station 4d 未開始(與票頭第 3 行一致)。~~
 > 2026-10-02 Station 4d 修正完成後隨第 3 行同步更新(見〈三十一〉)。
@@ -1556,6 +1562,21 @@ tests orphaned under ticket 145: (無)
     pyproject.toml / tests/conftest.py 的 worktree blob = head blob、`pytest_version` "9.1.1"、
     anyio 4.15.0 為 known_dist、None 項目 0、other 0;producer 自行產生的欄位無絕對路徑;全帳本本機使用者名稱 0 筆。
   - (d) 帳本 H4 → H5 只追加 —— **成立**(兩本前段 sha256 = H4)。
+
+---
+
+## 三十二、Station 5d 審查包
+
+| 項 | 值 |
+|---|---|
+| 審查對象(Implementation TARGET) | `889fbd8f666ea522ff6af172979a8d020e50b86b` |
+| S4d-2 docs commit(S4D2) | `6bc15df88d54bbb6761310de5b8e86c400c4b2a7` |
+| Station 3d 最後 commit(S3D2) | `5262828ab7f8fb89bb6bb85a6f63e24fdf852532` |
+| 審查包 | `docs/audits/2026-10-02-m1a-station5d-review-package.md` |
+| bytes / 行數(工作複本,LF) | 382481 / 6821 |
+| SHA-256(工作複本) | `c3f0a6070265b17e7b626fc894bbfb470ef0d66e5a5ee1837c5ee1584ec0d575` |
+| staged blob ID | `8ea2d705057abcae7c7f5932837e92b991d42c99` |
+| S5d-0 commit | 見 S5d-0 視窗回報;記錄 5d 結果時回填 |
 
 ---
 
