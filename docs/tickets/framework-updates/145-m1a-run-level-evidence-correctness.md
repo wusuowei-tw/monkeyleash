@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3f 紅燈規劃已寫(待 Jeff 裁);未寫測試。
+**狀態**:動工 —— Station 3f 紅燈已提交;待固定全套驗證。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -97,6 +97,9 @@
 >
 > - 狀態(舊,第二十九代):~~`動工 —— Station 5e 依 Jeff 裁決 FAIL(S5e-F1;審查者原判 PASS);待 Station 3f 紅燈規劃。`~~
 >   —— 2026-10-03 Station 3f 紅燈規劃寫完後由第 3 行取代(見〈四十〉)。
+>
+> - 狀態(舊,第三十代):~~`動工 —— Station 3f 紅燈規劃已寫(待 Jeff 裁);未寫測試。`~~
+>   —— 2026-10-03 Station 3f 紅燈提交後由第 3 行取代(見〈四十一〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -474,15 +477,20 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3e — Red-light(補) | PASS / ACCEPTED |
 | Station 4e — Implementation(修正) | PASS / COMPLETED（待 5e 審查） |
 | Station 5e — Review | FAIL(依 Jeff 裁決;審查者原判 PASS) |
-| Station 3f — Red-light(補) | 規劃已寫(待 Jeff 裁),未寫測試 |
+| Station 3f — Red-light(補) | 紅燈已提交,待固定全套驗證 |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3f 紅燈規劃已寫(待 Jeff 裁);未寫測試(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3f 紅燈已提交;待固定全套驗證(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第二十一代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3f 紅燈規劃已寫(待 Jeff 裁);未寫測試(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 3f 紅燈提交後隨第 3 行同步更新(見〈四十一〉)。
+>
+> **〈十〉表格舊值(F-036)**:Station 3f 列 ~~`規劃已寫(待 Jeff 裁),未寫測試`~~ → `紅燈已提交,待固定全套驗證`(2026-10-03,S3f-1)。
 
 > **舊句(F-036,保留不刪,第二十代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5e 依 Jeff 裁決 FAIL(S5e-F1;審查者原判 PASS);待 Station 3f 紅燈規劃(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 3f 紅燈規劃寫完後隨第 3 行同步更新(見〈四十〉)。
@@ -1971,8 +1979,89 @@ tests orphaned under ticket 145: (無)
 
 ---
 
+## 四十一、Station 3f 裁決與紅燈集合（2026-10-03，Jeff）
+
+### 41.1 裁決(照錄;針對 S3f-0 8bdc4f2072a6b4300deb011a7b5a0d574254fc9c 規劃檔 P10)
+
+1. usepdb_cls:A —— 不加入 (xix);只寫 regression-lock R5。
+2. 防錯欄位:A —— pytestconfig._parser.parse_known_args(...)(本次 session 的完整 parser)。
+3. S5e-F2:乙 —— override value 以 root 為基準判越界。合約澄清:〈三十五〉35.1 第 4 點 (2) 類「越出 root」的基準為 root。
+   (1) 類(inifilename、invocation.args)維持以 invocation_params.dir 解析。
+4. S5e-F3 紅燈:A —— 以 proxy 替換 redlight 模組所見的 os(posixpath / ntpath 兩種語意,R9–R12),另加真實平台 producer 測試 R13。
+5. 「執行的程式碼不是工作樹那一份」(I-9 / I-6 族):A —— 列殘餘,另開追蹤票(受測物件身分 / provenance),本票不處理。
+6. 授權:A —— 照規劃檔 7.4 原文(4f 可在 _C_OPTION_DEFAULTS、_S_OPTION_DEFAULTS 各只新增 "usepdb": False;
+   2 支直接寫 completeness dict 的測試在 options 補 u"usepdb": False;assertion、docstring、test identity 一律不改)。
+7. 補正(裁決助手):R2 改為參數化兩案,覆蓋裁決的「缺欄或型別錯」:
+   tests/test_redlight.py::TestDebuggerModeCoverage::test_f3p_a_missing_or_malformed_usepdb_fact_is_not_full_coverage[missing]
+   tests/test_redlight.py::TestDebuggerModeCoverage::test_f3p_a_missing_or_malformed_usepdb_fact_is_not_full_coverage[str]
+   ([str] 的破壞組:option.usepdb = "False"(字串);兩案皆含對照組 usepdb=False ⇒ "true")。
+   ⇒ 新增 36 支(behavior-red 13、regression-lock 23);預期 collected 2057;本機預期 failed 13、passed 2038、skipped 3、xfailed 3;
+     POSIX 上 R13 另紅(14)。其餘 nodeid、情境、分類照規劃檔 7.3。
+
+### 41.2 裁決助手外部驗證(隔離環境;非帳本證據)
+
+來源:Jeff 的 Station 3f-1 指令第 8 點,照錄。
+
+- pytest 9.1.1 中 pytestconfig._parser.parse_known_args(["--strict-markers","--pdb"])
+  得 usepdb True、usepdb_cls None、override_ini ["strict_markers=true"];["--strict-markers","--pdbcls=pdb:Pdb"] 得 usepdb False、
+  usepdb_cls ("pdb","Pdb");以 -p no:cacheprovider 執行時 namespace 無 lf 屬性(大聲失敗)。_pytest/cacheprovider.py:141 以 config.rootpath 解析 cache_dir。
+
+### 41.3 預期集合(36 支,完整 nodeid)
+
+預期紅集合(behavior-red,13 支,在 S3f-1 上必須失敗):
+
+- tests/test_redlight.py::TestDebuggerModeCoverage::test_f3p_pdb_alone_is_not_full_coverage
+- tests/test_redlight.py::TestDebuggerModeCoverage::test_f3p_a_missing_or_malformed_usepdb_fact_is_not_full_coverage[missing]
+- tests/test_redlight.py::TestDebuggerModeCoverage::test_f3p_a_missing_or_malformed_usepdb_fact_is_not_full_coverage[str]
+- tests/test_redlight.py::TestDebuggerModeCoverage::test_f3p_the_producer_records_usepdb_from_the_pytest_parser
+- tests/test_redlight.py::TestDebuggerModeCoverage::test_f3p_pdb_parsed_by_pytest_is_not_full_coverage
+- tests/test_redlight.py::TestOverrideBaseCoverage::test_f3o_an_invocation_dir_outside_the_root_keeps_non_path_override_values
+- tests/test_redlight.py::TestOverrideBaseCoverage::test_f3o_the_fixed_command_from_the_parent_dir_is_full_coverage
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_a_backslash_escape_is_outside_under_posix_semantics[override]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_a_backslash_escape_is_outside_under_posix_semantics[config-file]
+- tests/test_redlight.py::TestIdentifierFullMatch::test_f3i_a_plugin_name_with_a_trailing_newline_is_not_persisted_verbatim
+- tests/test_status.py::TestDebuggerModeChain::test_f3p_pdb_pass_does_not_retire_a_known_red
+- tests/test_status.py::TestDebuggerModeChain::test_f3p_pdb_parsed_by_pytest_does_not_retire_a_known_red
+- tests/test_status.py::TestOverrideBaseChain::test_f3o_the_fixed_command_from_the_parent_dir_retires_the_red
+
+預期綠集合(regression-lock,23 支,在 S3f-1 上必須通過;以本機 Windows 為準):
+
+- tests/test_redlight.py::TestDebuggerModeCoverage::test_f3c_pdbcls_alone_does_not_lower_authority
+- tests/test_redlight.py::TestOverrideBaseCoverage::test_f3o_an_escaping_relative_override_is_outside_from_the_parent_dir
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_posix_semantics[win-drive-backslash]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_posix_semantics[win-drive-slash]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_posix_semantics[drive-relative]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_posix_semantics[unc]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_posix_semantics[device]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_posix_semantics[posix-abs]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_posix_semantics[rel-escape]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_posix_semantics[rel-inside]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_posix_semantics[mixed-inside]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_windows_semantics[win-drive-backslash]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_windows_semantics[win-drive-slash]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_windows_semantics[drive-relative]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_windows_semantics[unc]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_windows_semantics[device]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_windows_semantics[posix-abs]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_windows_semantics[rel-escape]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_windows_semantics[rel-inside]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_windows_semantics[mixed-inside]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_g3_inputs_under_windows_semantics[cross-drive]
+- tests/test_redlight.py::TestPlatformIndependentNormalization::test_f3s_a_backslash_escape_override_never_persists_a_path
+- tests/test_status.py::TestDebuggerModeLocks::test_f3d_the_fixed_command_full_run_still_retires_the_red
+
+**平台附註**:`test_f3s_a_backslash_escape_override_never_persists_a_path`(R13)在**本機 Windows 為綠、POSIX 為紅**(Windows 的 `ntpath.normpath` 本來就收合反斜線的 `..`);
+POSIX 上 failed 預期為 14。
+
+---
+
 ## 相關
 
 - **票 139** —— 原始 finding。本票承接;其證據與未查邊界不改寫。
 - **票 137** —— 被票 139 那次窄選遮蔽的那條紅。**本票不處理它。**
 - **票 93** —— CI 的 `--deselect`。**本票不處理它。**
+- **追蹤票(待建,2026-10-03 登記)受測物件身分 / provenance(I-9 / I-6 族)** —— 執行的程式碼不是工作樹那一份
+  (`PYTHONPATH`、site-packages 的另一份、`-P`;同秒同大小的改寫快取)。依〈四十一〉41.1 第 5 點列殘餘,**本票不處理**。
+  分析見 `docs/audits/2026-10-03-m1a-station3f-redlight-plan.md` P3。
+- **追蹤票(待建,2026-10-03 登記)S5e-F6** —— override 的 key 與 `pythonwarnings` 原樣落帳(可帶路徑)。
+  依〈三十九〉39.3 列入 privacy / provenance 追蹤票,**本票不修**。

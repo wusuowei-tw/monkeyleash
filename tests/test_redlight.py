@@ -1848,3 +1848,296 @@ class TestProducerPathNormalization:
         _d_committed_root(tmp_path)
         run = _e_run(tmp_path, monkeypatch, option=_e_option(inifilename="alt.toml"))
         assert run["completeness"]["inifilename"] == "alt.toml", run["completeness"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145 Station 3f 紅燈 —— `--pdb`(xix)與 S5e-F2 / F3 / F4
+#
+# 合約:票 145〈三十九〉39.3、〈四十一〉41.1。規劃:docs/audits/2026-10-03-m1a-station3f-redlight-plan.md P7。
+# 下文 `<TARGET>` = 0139a7e803fc2d41eb354f1196a6206cfe304701(與 BASELINE e0459be4 之間產品碼相同)。
+#
+# driver 原則(沿用 3c-1b / 3d / 3e):
+#   - 每次模擬執行載入全新的 conftest(`_isolated_conftest`);tmp root 是真的 git repo(`_d_committed_root`)。
+#   - **防錯欄位**(〈四十一〉41.1 第 2 點):R3 / R4 / R5 的 `config.option` 是本次 session 的 pytest parser
+#     (`pytestconfig._parser.parse_known_args(...)`)解析出的 namespace —— dest 與預設值都是 pytest 9.1.1 自己的,
+#     不是測試自造的同名屬性。只呼叫 argparse,不執行巢狀 session、不觸發 `pytest_configure`。
+#   - **平台語意模擬**(〈四十一〉41.1 第 4 點):R9–R12 以 `monkeypatch.setattr(redlight, "os", _FOs(...))`
+#     只替換 **redlight 模組所見的** `os`;`path` 換成 `posixpath` / `ntpath`,其他屬性轉給真的 `os`。不改全域。
+#   - 單點測試在同一支測試內放對照組。
+# 本段 helper 全部新寫;既有 helper(`_isolated_conftest` / `_d_committed_root` / `_d_option` / `_d_plugins` /
+# `_DConfig` / `_DInvocationParams` / `_e_run` / `_e_option` / `_e_coverage` / `_e_persisted_line` 等)只呼叫、不修改。
+# ─────────────────────────────────────────────────────────────────────────────
+
+import ntpath as _f_ntpath
+import os as _f_real_os
+import posixpath as _f_posixpath
+
+_F_USER = "e3p-user"
+
+
+class _FOs(object):
+    """redlight 模組所見的 `os` 替身:`path` 由測試指定,其他屬性一律轉給真的 `os`。"""
+
+    def __init__(self, pathmod):
+        self.path = pathmod
+
+    def __getattr__(self, name):
+        return getattr(_f_real_os, name)
+
+
+def _f_parse(pytestconfig, args):
+    """本次 session 的 pytest parser 解析 `args` ⇒ namespace(pytest 真正的 dest 與預設值)。"""
+    return pytestconfig._parser.parse_known_args(list(args))
+
+
+def _f_run(tmp_path, monkeypatch, option, from_parent=False):
+    """一次模擬執行(全新 conftest;`_D_FULL` 全收集、全 passed、exit 0;其他事實同固定全套)。
+
+    `from_parent` ⇒ 從 root 的上一層執行 `python -X utf8 -m pytest -q <root 目錄名>`:
+    `config.args == [<root 目錄名>]`、`invocation_params.dir` = root 的上一層(rootdir / inipath 不變)。
+    回傳**最後一筆** session。"""
+    def hook(name):
+        return getattr(c, name, None) or (lambda *a, **k: None)
+
+    root = pathlib.Path(str(tmp_path))
+    selected = [n for ids in _D_FULL.values() for n in ids]
+    c = _isolated_conftest(monkeypatch, tmp_path)
+    for path in sorted(_D_FULL):
+        report = _CCollectReport(path, [_c_item(n) for n in _D_FULL[path]])
+        _c_call_collect_wrapper(c, _c_file(tmp_path, path), report)
+        hook("pytest_collectreport")(report)
+    config = _DConfig(tmp_path, option, _d_plugins(c, tmp_path))
+    if from_parent:
+        config.args = [root.name]
+        config.args_source = pytest.Config.ArgsSource.ARGS
+        config.invocation_params = _DInvocationParams(("-q", root.name), root.parent)
+    session = _CompletenessSession([_c_item(n) for n in selected], config)
+    hook("pytest_collection_finish")(session)
+    for nodeid in selected:
+        for rep in _c_reports(nodeid, "passed"):
+            hook("pytest_runtest_logreport")(rep)
+    hook("pytest_sessionfinish")(session, 0)
+    runs = redlight.load_runs(str(tmp_path))
+    assert runs, runs
+    return runs[-1]
+
+
+class TestDebuggerModeCoverage:
+
+    def test_f3p_pdb_alone_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """R1(〈三十九〉39.3 第 3 點 (xix);S5e-F1)。分類:behavior-red。
+
+        對照組:`usepdb=False`、其他事實同固定全套 ⇒ `"true"`。破壞組:只把 `usepdb` 設為 True(`--pdb`)
+        ⇒ 不得為 `"true"`。
+        TARGET 上失敗的原因:`<TARGET>:.claude/hooks/redlight.py:462-465` 的 `COMPLETENESS_OPTIONS` 沒有 usepdb,
+        `:795-802` 沒有對應條件 ⇒ `:820` 回 `"true"`。
+        """
+        _d_committed_root(tmp_path)
+        control = _e_coverage(tmp_path, monkeypatch, option=_e_option(usepdb=False))
+        broken = _e_coverage(tmp_path, monkeypatch, option=_e_option(usepdb=True))
+        assert control == "true", control
+        assert broken != "true", broken
+
+    @pytest.mark.parametrize("shape", ["missing", "str"])
+    def test_f3p_a_missing_or_malformed_usepdb_fact_is_not_full_coverage(self, tmp_path, monkeypatch, shape):
+        """R2(〈三十九〉39.3 第 3 點:缺欄或型別錯 ⇒ 不得為 "true";〈四十一〉41.1 第 7 點)。分類:behavior-red。
+
+        對照組:`usepdb=False` ⇒ `"true"`。破壞組:`[missing]` option 沒有 `usepdb` 屬性;
+        `[str]` `usepdb == "False"`(字串)⇒ 不得為 `"true"`。
+        TARGET 上失敗的原因:同 R1(`<TARGET>:.claude/hooks/redlight.py:462-465`;`:820`)。
+        """
+        _d_committed_root(tmp_path)
+        control = _e_coverage(tmp_path, monkeypatch, option=_e_option(usepdb=False))
+        if shape == "missing":
+            option = _d_option(missing=("usepdb",), runxfail=False, pythonwarnings=None, trace=False)
+        else:
+            option = _e_option(usepdb="False")
+        broken = _e_coverage(tmp_path, monkeypatch, option=option)
+        assert control == "true", control
+        assert broken != "true", broken
+
+    def test_f3p_the_producer_records_usepdb_from_the_pytest_parser(self, tmp_path, monkeypatch, pytestconfig):
+        """R3(防錯欄位;〈四十一〉41.1 第 2 點)。分類:behavior-red。
+
+        option 由本次 session 的 pytest parser 解析:`["--strict-markers", "--pdb"]` ⇒ 持久化的
+        `options["usepdb"] is True`;`["--strict-markers"]` ⇒ `is False`。鎖住「producer 讀的是 pytest 真正的 dest」。
+        TARGET 上失敗的原因:`<TARGET>:tests/conftest.py:369-370` 只記 `COMPLETENESS_OPTIONS`
+        (`<TARGET>:.claude/hooks/redlight.py:462-465`)的鍵,沒有 usepdb。
+        """
+        _d_committed_root(tmp_path)
+        with_pdb = _f_parse(pytestconfig, ["--strict-markers", "--pdb"])
+        without = _f_parse(pytestconfig, ["--strict-markers"])
+        assert with_pdb.usepdb is True and without.usepdb is False, (with_pdb, without)
+        got_pdb = (_e_run(tmp_path, monkeypatch, option=with_pdb).get("completeness") or {}).get("options") or {}
+        got_plain = (_e_run(tmp_path, monkeypatch, option=without).get("completeness") or {}).get("options") or {}
+        assert got_pdb.get("usepdb") is True, got_pdb
+        assert got_plain.get("usepdb") is False, got_plain
+
+    def test_f3p_pdb_parsed_by_pytest_is_not_full_coverage(self, tmp_path, monkeypatch, pytestconfig):
+        """R4(防錯欄位的判定版;(xix))。分類:behavior-red。
+
+        對照組:pytest parser 解析 `["--strict-markers"]`(等同已提交 addopts 帶來的 override)⇒ `"true"`。
+        破壞組:解析 `["--strict-markers", "--pdb"]` ⇒ 不得為 `"true"`。
+        TARGET 上失敗的原因:同 R1(`<TARGET>:.claude/hooks/redlight.py:820`)。
+        """
+        _d_committed_root(tmp_path)
+        control = _e_coverage(tmp_path, monkeypatch, option=_f_parse(pytestconfig, ["--strict-markers"]))
+        broken = _e_coverage(tmp_path, monkeypatch,
+                             option=_f_parse(pytestconfig, ["--strict-markers", "--pdb"]))
+        assert control == "true", control
+        assert broken != "true", broken
+
+    def test_f3c_pdbcls_alone_does_not_lower_authority(self, tmp_path, monkeypatch, pytestconfig):
+        """R5(〈四十一〉41.1 第 1 點:usepdb_cls 不加入 (xix))。分類:regression-lock。
+
+        pytest parser 解析 `["--strict-markers", "--pdbcls=pdb:Pdb"]`:`usepdb_cls == ("pdb", "Pdb")`、`usepdb` False
+        ⇒ 仍為 `"true"`(規劃檔 P2:`usepdb_cls` 只在 debugger 被建立時才讀,`_pytest/debugging.py:117`)。
+        """
+        _d_committed_root(tmp_path)
+        option = _f_parse(pytestconfig, ["--strict-markers", "--pdbcls=pdb:Pdb"])
+        assert tuple(option.usepdb_cls) == ("pdb", "Pdb") and option.usepdb is False, option
+        got = _e_coverage(tmp_path, monkeypatch, option=option)
+        assert got == "true", got
+
+
+class TestOverrideBaseCoverage:
+
+    def test_f3o_an_invocation_dir_outside_the_root_keeps_non_path_override_values(self, tmp_path, monkeypatch):
+        """R6(S5e-F2;〈四十一〉41.1 第 3 點:(2) 類「越出 root」以 root 為基準)。分類:behavior-red。
+
+        對照組:從 root 執行 ⇒ 持久化 `override_ini == ["strict_markers=true"]`。破壞組:從 root 的上一層執行
+        (`invocation_params.dir` = 上一層)⇒ 仍須為 `["strict_markers=true"]`(`true` 不是路徑,不得改寫)。
+        TARGET 上失敗的原因:`<TARGET>:tests/conftest.py:378-379` 以 invocation dir 為基準,
+        `<TARGET>:.claude/hooks/redlight.py:655-656` 把 `true` 判為越界 ⇒ `strict_markers=<outside>`。
+        """
+        _d_committed_root(tmp_path)
+        control = _f_run(tmp_path, monkeypatch, _e_option(usepdb=False))
+        from_parent = _f_run(tmp_path, monkeypatch, _e_option(usepdb=False), from_parent=True)
+        assert control["completeness"]["override_ini"] == ["strict_markers=true"], control["completeness"]
+        assert from_parent["completeness"]["override_ini"] == ["strict_markers=true"], from_parent["completeness"]
+
+    def test_f3o_the_fixed_command_from_the_parent_dir_is_full_coverage(self, tmp_path, monkeypatch):
+        """R7(S5e-F2)。分類:behavior-red。
+
+        對照組:從 root 執行固定全套 ⇒ `"true"`。破壞組:從 root 的上一層執行 `pytest -q <root 目錄名>`
+        (位置參數經 `_normalize_arg` 得 `.`)、其他事實同固定全套 ⇒ 仍須為 `"true"`。
+        情境斷言:兩筆 session 的 `invocation.args` 分別為 `["tests"]` 與 `["."]`。
+        TARGET 上失敗的原因:R6 的改寫使 `<TARGET>:.claude/hooks/redlight.py:784` 不相等 ⇒ unknown。
+        """
+        _d_committed_root(tmp_path)
+        control = _f_run(tmp_path, monkeypatch, _e_option(usepdb=False))
+        from_parent = _f_run(tmp_path, monkeypatch, _e_option(usepdb=False), from_parent=True)
+        assert control["invocation"]["args"] == ["tests"], control["invocation"]
+        assert from_parent["invocation"]["args"] == ["."], from_parent["invocation"]
+        got_control = redlight.file_coverage(control, "tests/test_x.py")
+        got_parent = redlight.file_coverage(from_parent, "tests/test_x.py")
+        assert got_control == "true", got_control
+        assert got_parent == "true", got_parent
+
+    def test_f3o_an_escaping_relative_override_is_outside_from_the_parent_dir(self, tmp_path, monkeypatch):
+        """R8(S5e-F2 修正後仍不洩漏)。分類:regression-lock。
+
+        從 root 的上一層執行,`override_ini` 另有 `cache_dir=../../e3p-user/c`(以 root 為基準也越界)
+        ⇒ 持久化行不含 `e3p-user`。
+        """
+        _d_committed_root(tmp_path)
+        _f_run(tmp_path, monkeypatch,
+               _e_option(usepdb=False, override_ini=["strict_markers=true", "cache_dir=../../" + _F_USER + "/c"]),
+               from_parent=True)
+        line = _e_persisted_line(tmp_path)
+        assert _F_USER not in line, line
+
+
+# P5 的 G3 輸入(「混用分隔符、會越界」那一列由 R9 / R10 負責)
+_F_G3_POSIX = [
+    pytest.param(r"C:\x", "<outside>", id="win-drive-backslash"),
+    pytest.param("C:/x", "<outside>", id="win-drive-slash"),
+    pytest.param("D:rel", "<outside>", id="drive-relative"),
+    pytest.param(r"\\server\share\x", "<outside>", id="unc"),
+    pytest.param("\\\\?\\C:\\x", "<outside>", id="device"),
+    pytest.param("/etc/x", "<outside>", id="posix-abs"),
+    pytest.param("../../x", "<outside>", id="rel-escape"),
+    pytest.param("sub/x", "sub/x", id="rel-inside"),
+    pytest.param(r"sub\y/z", "sub/y/z", id="mixed-inside"),
+]
+
+_F_G3_WINDOWS = _F_G3_POSIX + [
+    pytest.param(r"D:\x", "<outside>", id="cross-drive"),
+]
+
+_F_POSIX_ROOT = "/home/u/repo"
+_F_WINDOWS_ROOT = r"C:\r\repo"
+
+
+class TestPlatformIndependentNormalization:
+
+    @pytest.mark.parametrize("field", ["override", "config-file"])
+    def test_f3s_a_backslash_escape_is_outside_under_posix_semantics(self, monkeypatch, field):
+        """R9 / R10(S5e-F3;〈四十一〉41.1 第 4 點)。分類:behavior-red。
+
+        以 POSIX 語意(redlight 所見的 `os.path` = `posixpath`)正規化 `a\\..\\..\\..\\e3p-user\\…`(混用分隔符、越出 root):
+        `[override]` ⇒ `normalize_overrides` 的結果不含 `e3p-user`;`[config-file]` ⇒ `normalize_config_path` 為 `<outside>`。
+        TARGET 上失敗的原因:`<TARGET>:.claude/hooks/redlight.py:561-563` 先以 posixpath join / normpath(看不到反斜線的 `..`),
+        `:566` relpath 之後才換分隔符 ⇒ `a/../../../e3p-user/…` 不以 `../` 開頭;override 另在 `:655-657` 保留原字串。
+        """
+        monkeypatch.setattr(redlight, "os", _FOs(_f_posixpath))
+        if field == "override":
+            got = redlight.normalize_overrides(["cache_dir=a\\..\\..\\..\\" + _F_USER + "\\c"],
+                                               _F_POSIX_ROOT, _F_POSIX_ROOT)
+            assert got is not None and all(_F_USER not in v for v in got), got
+        else:
+            got = redlight.normalize_config_path("a\\..\\..\\..\\" + _F_USER + "\\alt.toml",
+                                                 _F_POSIX_ROOT, _F_POSIX_ROOT)
+            assert got == redlight.OUTSIDE, got
+
+    @pytest.mark.parametrize("value, expected", _F_G3_POSIX)
+    def test_f3s_g3_inputs_under_posix_semantics(self, monkeypatch, value, expected):
+        """R11(規劃檔 P5 表 POSIX 欄)。分類:regression-lock。
+
+        以 POSIX 語意呼叫 `normalize_config_path(value, root, root)`((1) 類)⇒ 預期落帳值。
+        """
+        monkeypatch.setattr(redlight, "os", _FOs(_f_posixpath))
+        got = redlight.normalize_config_path(value, _F_POSIX_ROOT, _F_POSIX_ROOT)
+        assert got == expected, (value, got)
+
+    @pytest.mark.parametrize("value, expected", _F_G3_WINDOWS)
+    def test_f3s_g3_inputs_under_windows_semantics(self, monkeypatch, value, expected):
+        """R12(規劃檔 P5 表 Windows 欄)。分類:regression-lock。
+
+        以 Windows 語意(redlight 所見的 `os.path` = `ntpath`)呼叫 `normalize_config_path(value, root, root)` ⇒ 預期落帳值。
+        `posix-abs` 依賴 Python 3.11 的 `ntpath.isabs("/x")` 為真(`ntpath.py:98-102`)。
+        """
+        monkeypatch.setattr(redlight, "os", _FOs(_f_ntpath))
+        got = redlight.normalize_config_path(value, _F_WINDOWS_ROOT, _F_WINDOWS_ROOT)
+        assert got == expected, (value, got)
+
+    def test_f3s_a_backslash_escape_override_never_persists_a_path(self, tmp_path, monkeypatch):
+        """R13(S5e-F3 的真實平台 producer 版)。分類:regression-lock(本機 Windows;POSIX 上為紅)。
+
+        經真實 conftest producer、在本機平台上:`override_ini` 含 `cache_dir=a\\..\\..\\..\\e3p-user\\c`
+        ⇒ 持久化行不含 `e3p-user`。
+        """
+        _d_committed_root(tmp_path)
+        _e_run(tmp_path, monkeypatch,
+               option=_e_option(usepdb=False,
+                                override_ini=["strict_markers=true",
+                                              "cache_dir=a\\..\\..\\..\\" + _F_USER + "\\c"]))
+        line = _e_persisted_line(tmp_path)
+        assert _F_USER not in line, line
+
+
+class TestIdentifierFullMatch:
+
+    def test_f3i_a_plugin_name_with_a_trailing_newline_is_not_persisted_verbatim(self, tmp_path, monkeypatch):
+        """R14(S5e-F4)。分類:behavior-red。
+
+        對照組:`-p no:abc` ⇒ 持久化 `blocked == ["abc"]`。破壞組:`-p no:abc\\n`(結尾帶換行)
+        ⇒ 持久化 `blocked == ["<non-identifier>"]`(合約字元集 `[A-Za-z0-9_.-]+` 不含換行)。
+        TARGET 上失敗的原因:`<TARGET>:.claude/hooks/redlight.py:540` 的 `$` 配 `:582` 的 `match`
+        會匹配結尾換行之前 ⇒ 原樣 `"abc\\n"`。
+        """
+        _d_committed_root(tmp_path)
+        control = _e_run(tmp_path, monkeypatch, blocked=("abc",))
+        broken = _e_run(tmp_path, monkeypatch, blocked=("abc\n",))
+        assert control["completeness"]["blocked"] == ["abc"], control["completeness"]
+        assert broken["completeness"]["blocked"] == [redlight.NON_IDENTIFIER], broken["completeness"]

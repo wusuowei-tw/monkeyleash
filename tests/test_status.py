@@ -2729,3 +2729,128 @@ class TestPassValidityLocks:
         got = _lines_of(root)
         assert u"tests/test_x.py" in got[u"green"], got
         assert u"tests/test_x.py" not in got[u"red"], got
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 票 145 Station 3f 紅燈 —— `--pdb`(xix)與 S5e-F2 的串接(producer → 持久化 run 事實 → status)
+#
+# 合約:票 145〈三十九〉39.3、〈四十一〉41.1。規劃:docs/audits/2026-10-03-m1a-station3f-redlight-plan.md P7。
+# 下文 `<TARGET>` = 0139a7e803fc2d41eb354f1196a6206cfe304701。
+#
+# 每一次模擬執行都經**真實 tests/conftest.py**(`_chain_conftest` 每次載入全新模組)寫入 tmp root 的帳本,
+# 再由 status 讀回判定;tmp root 是真的 git repo(`_t_committed`)。
+# S2 的 R2 option 是本次 session 的 pytest parser(`pytestconfig._parser.parse_known_args(...)`)解析出的
+# namespace(防錯欄位;〈四十一〉41.1 第 2 點)。
+# 本段 helper 全部新寫;既有 helper(`_root_with_redlight` / `_chain_conftest` / `_seed_red` / `_lines_of` /
+# `_t_committed` / `_t_plugins` / `_TConfig` / `_TInvocationParams` / `_e_red_then` / `_e_option` / `_e_sys`)只呼叫、不修改。
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _f_drive_from_parent(c, root, files, selected, outcomes, option, exitstatus=0):
+    """從 root 的上一層執行 `python -X utf8 -m pytest -q <root 目錄名>`(同 `_t_drive`,只改
+    `config.args`、`args_source`、`invocation_params.dir`;rootdir / inipath 不變)。"""
+    def hook(name):
+        return getattr(c, name, None) or (lambda *a, **k: None)
+
+    base = pathlib.Path(str(root))
+    for path in sorted(files):
+        report = _SCollectReport(path, [_s_item(n) for n in files[path]])
+        _s_call_collect_wrapper(c, _s_file(root, path), report)
+        hook("pytest_collectreport")(report)
+    config = _TConfig(root, option, _t_plugins(c, root))
+    config.args = [base.name]
+    config.args_source = pytest.Config.ArgsSource.ARGS
+    config.invocation_params = _TInvocationParams((u"-q", base.name), base.parent)
+    session = _CompletenessSession([_s_item(n) for n in selected], config)
+    hook("pytest_collection_finish")(session)
+    for nodeid, kind in outcomes.items():
+        for rep in _s_reports(nodeid, kind):
+            hook("pytest_runtest_logreport")(rep)
+    hook("pytest_sessionfinish")(session, exitstatus)
+
+
+class TestDebuggerModeChain:
+
+    def test_f3p_pdb_pass_does_not_retire_a_known_red(self, tmp_path, monkeypatch):
+        """S1(S5e-F1 串接;〈三十九〉39.3 第 3 點 (xix))。分類:behavior-red。
+
+        R1 固定全套:test_a failed(exit 1)⇒ 已知紅。R2:`--pdb`(`usepdb=True`),test_a passed(exit 0)
+        ⇒ 不得退紅、不得 green。情境斷言:R1 為 B;R2 schema 合格且為 A。
+        TARGET 上失敗的原因:R2 在 `<TARGET>:.claude/hooks/redlight.py:820` 判 `"true"` ⇒
+        `<TARGET>:.claude/portable/status.py:474` 退掉 test_a ⇒ `:475` green。
+        """
+        root = _root_with_redlight(tmp_path)
+        _t_committed(root)
+        runs = _e_red_then(root, monkeypatch, option=_e_option(usepdb=True))
+        assert redlight.run_state(runs[0]) == u"B", runs[0]
+        assert redlight.validate_session(runs[1]) == [], runs[1]
+        assert redlight.run_state(runs[1]) == u"A", runs[1]
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+    def test_f3p_pdb_parsed_by_pytest_does_not_retire_a_known_red(self, tmp_path, monkeypatch, pytestconfig):
+        """S2(防錯欄位的串接版;〈四十一〉41.1 第 2 點)。分類:behavior-red。
+
+        同 S1,但 R2 的 option 由本次 session 的 pytest parser 解析 `["--strict-markers", "--pdb"]` 取得
+        ⇒ 不得退紅、不得 green。情境斷言:namespace 的 `usepdb is True`;R1 為 B;R2 schema 合格且為 A。
+        TARGET 上失敗的原因:同 S1(`<TARGET>:.claude/hooks/redlight.py:820`;`<TARGET>:.claude/portable/status.py:474-475`)。
+        """
+        option = pytestconfig._parser.parse_known_args([u"--strict-markers", u"--pdb"])
+        assert option.usepdb is True, option
+        root = _root_with_redlight(tmp_path)
+        _t_committed(root)
+        runs = _e_red_then(root, monkeypatch, option=option)
+        assert redlight.run_state(runs[0]) == u"B", runs[0]
+        assert redlight.validate_session(runs[1]) == [], runs[1]
+        assert redlight.run_state(runs[1]) == u"A", runs[1]
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+
+class TestOverrideBaseChain:
+
+    def test_f3o_the_fixed_command_from_the_parent_dir_retires_the_red(self, tmp_path, monkeypatch):
+        """S3(S5e-F2 串接;〈四十一〉41.1 第 3 點)。分類:behavior-red。
+
+        X 的已知紅 CHAIN_X;之後從 root 的上一層執行一次固定全套(`pytest -q <root 目錄名>`;全收集、全 passed;
+        `usepdb=False`,其他事實同固定全套)⇒ X 退紅、在 green。
+        情境斷言:session 合格且為 A;`invocation.args == ["."]`;`override_ini` 未被改寫。
+        TARGET 上失敗的原因:`<TARGET>:.claude/hooks/redlight.py:655-656` 以 invocation dir 判越界 ⇒
+        `strict_markers=<outside>` ⇒ `:784` unknown ⇒ `<TARGET>:.claude/portable/status.py:456-458` 不退紅。
+        """
+        root = _root_with_redlight(tmp_path)
+        _t_committed(root)
+        c = _chain_conftest(root, monkeypatch)
+        _seed_red(["test_target"])
+        _f_drive_from_parent(c, root, {u"tests/test_x.py": [CHAIN_X, CHAIN_Y]}, [CHAIN_X, CHAIN_Y],
+                             {CHAIN_X: "passed", CHAIN_Y: "passed"}, _e_option(usepdb=False))
+        runs = redlight.load_runs(root)
+        assert len(runs) == 1, runs
+        assert redlight.run_state(runs[0]) == u"A", runs[0]
+        assert runs[0]["invocation"]["args"] == [u"."], runs[0]["invocation"]
+        assert runs[0]["completeness"]["override_ini"] == [u"strict_markers=true"], runs[0]["completeness"]
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"green"], got
+        assert u"tests/test_x.py" not in got[u"red"], got
+
+
+class TestDebuggerModeLocks:
+
+    def test_f3d_the_fixed_command_full_run_still_retires_the_red(self, tmp_path, monkeypatch):
+        """S4((xix) 之下固定全套仍可退紅)。分類:regression-lock。
+
+        X 的已知紅 CHAIN_X;之後一次固定全套(`usepdb=False`、`optimize=0` 明確注入,其他事實同 3e 的 E3d-2)
+        ⇒ X 退紅、在 green。
+        """
+        root = _root_with_redlight(tmp_path)
+        _t_committed(root)
+        c = _chain_conftest(root, monkeypatch)
+        monkeypatch.setattr(c, "sys", _e_sys(optimize=0), raising=False)
+        _seed_red(["test_target"])
+        _t_drive(c, root, {u"tests/test_x.py": [CHAIN_X, CHAIN_Y]}, [CHAIN_X, CHAIN_Y],
+                 {CHAIN_X: "passed", CHAIN_Y: "passed"}, exitstatus=0, option=_e_option(usepdb=False))
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"green"], got
+        assert u"tests/test_x.py" not in got[u"red"], got
