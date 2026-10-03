@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5e 依 Jeff 裁決 FAIL(S5e-F1;審查者原判 PASS);待 Station 3f 紅燈規劃。
+**狀態**:動工 —— Station 3f 紅燈規劃已寫(待 Jeff 裁);未寫測試。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -94,6 +94,9 @@
 >
 > - 狀態(舊,第二十八代):~~`動工 —— Station 5e 審查包已建立;待獨立審查。`~~
 >   —— 2026-10-03 Station 5e 獨立審查結果與 Jeff 裁決記錄後由第 3 行取代(見〈三十九〉)。
+>
+> - 狀態(舊,第二十九代):~~`動工 —— Station 5e 依 Jeff 裁決 FAIL(S5e-F1;審查者原判 PASS);待 Station 3f 紅燈規劃。`~~
+>   —— 2026-10-03 Station 3f 紅燈規劃寫完後由第 3 行取代(見〈四十〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -471,14 +474,20 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3e — Red-light(補) | PASS / ACCEPTED |
 | Station 4e — Implementation(修正) | PASS / COMPLETED（待 5e 審查） |
 | Station 5e — Review | FAIL(依 Jeff 裁決;審查者原判 PASS) |
+| Station 3f — Red-light(補) | 規劃已寫(待 Jeff 裁),未寫測試 |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5e 依 Jeff 裁決 FAIL(S5e-F1;審查者原判 PASS);待 Station 3f 紅燈規劃(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3f 紅燈規劃已寫(待 Jeff 裁);未寫測試(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第二十代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5e 依 Jeff 裁決 FAIL(S5e-F1;審查者原判 PASS);待 Station 3f 紅燈規劃(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 3f 紅燈規劃寫完後隨第 3 行同步更新(見〈四十〉)。
+>
+> **〈十〉表格新增(F-036)**:Station 3f 列為新增列,沒有舊值(2026-10-03,S3f-0)。
 
 > **舊句(F-036,保留不刪,第十九代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5e 審查包已建立;待獨立審查(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 5e 獨立審查結果與 Jeff 裁決記錄後隨第 3 行同步更新(見〈三十九〉)。
@@ -1941,6 +1950,24 @@ tests orphaned under ticket 145: (無)
    - S5e-F6:非阻擋,列入 privacy / provenance 追蹤票,不在本票修。
 
 (39.3 第 2 點的「見第 4 點」指 Jeff 指令的第 4 點,即本節 39.2。)
+
+---
+
+## 四十、Station 3f 紅燈規劃
+
+- 規劃檔:`docs/audits/2026-10-03-m1a-station3f-redlight-plan.md`(只規劃,未寫測試、未改 .py、未跑 pytest)。
+- BASELINE:`e0459be46bfa5d3f7514526e57cf1f05127bb841`(S5e-1;產品碼與 TARGET `0139a7e803fc2d41eb354f1196a6206cfe304701` 相同)。
+- 規劃結論摘要:
+  - P2:`usepdb_cls` 在 `usepdb=False` 且 `trace=False` 時不能單獨改變執行 ⇒ 結論 (a)(唯一讀點 `_pytest/debugging.py:117` 只在 debugger 被建立時執行;剩下的進入點只有被執行的程式碼自己呼叫,歸 P-1)。
+  - P3:複查 3e-0 判為「不影響」的列,另找到 I-9 / I-6 族(執行的程式碼不是工作樹那一份),列為待裁;O-16(`-s` 下讀 stdin)歸 P-1。
+  - P7:新增 35 支(behavior-red 12、regression-lock 23);預期固定全套 collected 2056(以 S4e-1 的 2021 為底)、failed 12(本機 Windows)。
+- P10 待 Jeff 裁(各項選項、建議與理由見規劃檔 P10):
+  1. `usepdb_cls` 是否加入 (xix) —— 建議 A:不加,只寫 regression-lock。
+  2. 防錯欄位測試的取得方式 —— 建議 A:`pytestconfig._parser.parse_known_args(...)`。
+  3. S5e-F2 修法 —— 建議乙:override value 以 root 為基準判越界(需確認〈三十五〉35.1 4 (2) 類以 root 為基準的合約澄清)。
+  4. S5e-F3 本機紅燈 —— 建議 A:以 proxy 替換 redlight 模組所見的 `os` 模擬兩種平台,另加真實平台測試。
+  5. I-9 / I-6 族 —— 建議 A:列殘餘、另開追蹤票,本票不處理。
+  6. 測試授權文字 —— 建議 A:兩個共用 dict 各加 `"usepdb": False`,2 支直接寫 dict 的測試補 `u"usepdb": False`。
 
 ---
 
