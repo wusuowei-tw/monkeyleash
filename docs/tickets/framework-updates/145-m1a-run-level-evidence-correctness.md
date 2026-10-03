@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 4e 修正完成(固定全套 exit 0);待 Station 5e 審查。
+**狀態**:動工 —— Station 5e 審查包已建立;待獨立審查。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -88,6 +88,9 @@
 >
 > - 狀態(舊,第二十六代):~~`動工 —— Station 4e 實作已提交;待固定全套驗收。`~~
 >   —— 2026-10-03 Station 4e 固定全套 exit 0 後由第 3 行取代(見〈三十七〉37.2)。
+>
+> - 狀態(舊,第二十七代):~~`動工 —— Station 4e 修正完成(固定全套 exit 0);待 Station 5e 審查。`~~
+>   —— 2026-10-03 Station 5e 審查包建立後由第 3 行取代(見〈三十八〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -464,15 +467,20 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5d — Review | FAIL |
 | Station 3e — Red-light(補) | PASS / ACCEPTED |
 | Station 4e — Implementation(修正) | PASS / COMPLETED（待 5e 審查） |
-| Station 5e — Review | NOT STARTED |
+| Station 5e — Review | 審查包已建立，待審 |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4e 修正完成(固定全套 exit 0);待 Station 5e 審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5e 審查包已建立;待獨立審查(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第十八代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4e 修正完成(固定全套 exit 0);待 Station 5e 審查(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 5e 審查包建立後隨第 3 行同步更新(見〈三十八〉)。
+>
+> **〈十〉表格舊值(F-036)**:Station 5e 列 ~~`NOT STARTED`~~ → `審查包已建立，待審`(2026-10-03,S5e-0)。
 
 > **舊句(F-036,保留不刪,第十七代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4e 實作已提交;待固定全套驗收(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 4e 固定全套 exit 0 後隨第 3 行同步更新(見〈三十七〉37.2)。
@@ -1848,6 +1856,25 @@ tests orphaned under ticket 145: (無)
   - (d) status:red(無)、green 46、最近一次 run A —— **成立**。
 - 3c / 3d 中斷言 `!= "true"` 的既有測試:沒有任何一支是因 4e 新條件才通過(報告第 4e 節逐支列出主因條件與行號)。
 - 程序記錄:〈十〉Station 3e 列已在 S4e-1 依 3e 裁決同步為 PASS / ACCEPTED(舊值「紅燈已寫,待驗收」)。
+
+---
+
+## 三十八、Station 5e 審查包
+
+| 名稱 | 值 |
+|---|---|
+| BASE | `84014bae237a4741dae8ad18c6c041a3c3ef97b0` |
+| TARGET(唯一審查對象,S4e-1) | `0139a7e803fc2d41eb354f1196a6206cfe304701` |
+| S4E2(4e 證據) | `f9d67d8e83778741cd5dcaf8ad13f11602d9b0b5` |
+| S3E2(3e 證據) | `1c771c400c620a03135971063c37b89d4d237c74` |
+| 審查包 | `docs/audits/2026-10-03-m1a-station5e-review-package.md` |
+| 審查包大小 | 394851 bytes / 6994 行 |
+| 審查包 SHA-256 | `754721dc20305e127dfd5de0c4ddccc001f040abe5fd6c06c7ced033615fb302` |
+| 審查包 staged blob | `ec6f6c68e88a78bff8aedaa93263157548080a93` |
+| S5e-0(本 commit) | 記錄 5e 結果時回填 |
+
+- 審查報告只寫到 `.scratch/m1a-s5e/review-report.md`;審查者規則見審查包 A.3。
+- 審查包內的逐字段落皆以 cmp 對出處核對過(詳見 S5e-0 的回報)。
 
 ---
 
