@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3e 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試。
+**狀態**:動工 —— Station 3e 紅燈已寫(待 Jeff 驗收);Station 4e 未開始。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -79,6 +79,9 @@
 >
 > - 狀態(舊,第二十三代):~~`動工 —— Station 5d FAIL(S5d-F1 阻擋);回 Station 3e 規劃與補紅燈。`~~
 >   —— 2026-10-03 Station 3e 紅燈規劃寫完後由第 3 行取代(見〈三十四〉)。
+>
+> - 狀態(舊,第二十四代):~~`動工 —— Station 3e 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試。`~~
+>   —— 2026-10-03 Station 3e 紅燈寫完後由第 3 行取代(見〈三十五〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -453,7 +456,7 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3d — Red-light(補) | PASS / ACCEPTED |
 | Station 4d — Implementation(修正) | PASS / COMPLETED（待 5d 審查） |
 | Station 5d — Review | FAIL |
-| Station 3e — Red-light(補) | 規劃已寫，待裁 |
+| Station 3e — Red-light(補) | 紅燈已寫，待驗收 |
 | Station 4e — Implementation(修正) | NOT STARTED |
 | Station 5e — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
@@ -462,8 +465,11 @@ Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3e 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3e 紅燈已寫(待 Jeff 驗收);Station 4e 未開始(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第十五代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3e 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 3e 紅燈寫完後隨第 3 行同步更新(見〈三十五〉)。
 
 > **舊句(F-036,保留不刪,第十四代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5d FAIL(S5d-F1 阻擋);回 Station 3e 規劃與補紅燈(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 3e 紅燈規劃寫完後隨第 3 行同步更新(見〈三十四〉)。
@@ -1655,6 +1661,98 @@ tests orphaned under ticket 145: (無)
   - S5d-F3:F3-甲(規則式、平台無關的路徑判定 + 名稱封閉字元集 + override 只動路徑值)、F3-乙(ini 型別表)、F3-丙(拒絕)。
   - 規劃建議:**乙 + F3-甲**。
 - **P4 草案**(依建議組法):預期紅 16 支、預期綠 10 支(以本機 Windows 為準;4 支 `[win-abs]` / `[posix-abs]` 的綠在 POSIX 上會變紅,即 S5d-F3 的跨平台缺口);4e 後受影響的既有測試:乙 14 支、甲 2 支,授權方式 A / B 待裁。
+
+---
+
+## 三十五、Station 3e 裁決與 pass 有效性合約（2026-10-03，Jeff）
+
+### 35.1 裁決(照錄)
+
+1. 裁決助手在隔離環境以 pytest 9.1.1 實測（不是本 repo 帳本證據），規劃檔 P1 三項推論成立：
+   (a) 測試本體呼叫 pytest.xfail(...) 後無其他斷言：正常 ⇒ XFAIL；加 --runxfail ⇒ PASSED。
+   (b) 已提交 filterwarnings = ["error::UserWarning"]，測試發出 UserWarning：正常 ⇒ FAILED；加 -W ignore::UserWarning ⇒ PASSED。
+   (c) 未開最佳化時 --assert=plain：失敗的 assert 仍 FAILED（只失去 introspection 訊息）⇒ 歸 (D)，不列入合約。
+   (d) 直譯器層的警告設定不會蓋過已提交的 filterwarnings：已提交 filterwarnings = ["error::UserWarning"]、測試發出 UserWarning，
+       PYTHONWARNINGS=ignore::UserWarning、PYTHONWARNINGS=default、python -W ignore::UserWarning 三種情形皆仍為 FAILED；
+       只有 pytest 的 -W ignore::UserWarning 會變成 PASSED（已由 (xvi) 擋下）。
+       ⇒ 與規劃檔 P1 I-8 的推論一致（pytest 每個測試把 ini filterwarnings 疊在直譯器層 filter 之後，後者優先序最低）。
+       sys.warnoptions 不列為合約條件；依賴環境預設 filter 的斷言屬 scope 外 S-3。
+2. authority scope（沿用 3e-0 補充裁決 1）：受 agent-gates 管控的 pytest 主執行環境中，passed 未因 interpreter / pytest execution mode 失去通常的 pass 語意；
+   不涵蓋測試自行啟動的子行程或外部 runtime。
+3. 合約新增條件（受支援執行環境白名單的直譯器與 pass 有效性層）；full_file_coverage == "true" 須全部成立：
+   (xiv)   sys.flags.optimize == 0（int，不接受 bool）；producer 在 sessionfinish 當下經 conftest 模組層的 sys 讀取；缺欄或型別錯 ⇒ 不得為 "true"。
+   (xv)    config.option.runxfail is False；缺欄 ⇒ 不得為 "true"。
+   (xvi)   config.option.pythonwarnings 為 None 或空 list。
+   (xvii)  config.option.trace is False；缺欄 ⇒ 不得為 "true"（除錯模式下人可在中途改變狀態，不作為證據執行）。
+   (xviii) Python 版本（major.minor）屬於已盤點清單，目前為 {"3.11"}，以常數定義在 redlight.py；不在清單 ⇒ 不得為 "true"。
+           理由：P1 對 sys.flags 的盤點只對 3.11 成立；升級 Python 須走票重做盤點（與 (xiii) 鎖 pytest 版本同理）。
+           鎖 major.minor 而非 micro：P1 對 sys.flags 與 assert 移除的依據是 Python 3.11 的文件化語意，不是特定 patch 版的實作細節；
+           patch 升級不改這些語意，鎖到 micro 只會讓安全更新也須走票。
+   不新增 assertmode 條件（--assert=plain 在 optimize == 0 時屬 reporting）。
+4. S5d-F3 採規劃檔 P3 的 F3-甲（規則式，依欄位類別，不依特定字串）：
+   - 絕對路徑判定與平台無關：posixpath.isabs(v) or ntpath.isabs(v)，或以磁碟代號開頭。
+   - (1) 類欄位（inipath、inifilename、invocation.args、plugins[].name 中的路徑型名稱）：絕對 ⇒ root 相對 posix 路徑或 <outside>；
+     相對 ⇒ 先以 invocation_params.dir 解析再同上；越出 root ⇒ <outside>。
+   - 名稱欄位（plugins[].name、blocked[]）：conftest 註冊的路徑名依上一條；符合 [A-Za-z0-9_.-]+（含數字 id）者原樣；其他記 <non-identifier>；
+     kind 判定用原始名稱，正規化只作用於落帳字串。
+   - (2) 類欄位（override_ini）：key 一律原樣；value 只在依上述規則為絕對路徑、或 normpath 後越出 root 時正規化；其他值一律原樣。
+5. 授權（明文例外）：4e 可在兩個共用預設 dict（tests/test_redlight.py 的 _C_OPTION_DEFAULTS、tests/test_status.py 的 _S_OPTION_DEFAULTS）
+   只新增三個鍵 "runxfail": False、"pythonwarnings": None、"trace": False（皆為真實 pytest 預設值），其他 helper 內容一律不改；
+   並在規劃檔 P4「直接以 record_session 寫入 completeness dict」的 2 支測試補上 optimize: 0、python 版本、三個 option 鍵。
+   assertion、docstring、test identity 一律不改。
+6. 殘餘（照實記錄）：I-7（刻意製作的最佳化 bytecode）；P-1 殘餘（S5c-F4、S5d-F2）；scope 外 S-1–S-3。
+
+### 35.2 anyio 4.15.0 唯讀查證(Station 3e-1 第 0 步)
+
+以 Grep 搜尋已安裝 anyio 的 `pytest_plugin.py`:
+
+| 搜尋項 | 結果 | 用途 |
+|---|---|---|
+| `addoption` | 有:`anyio/pytest_plugin.py:94-103`(`--anyio-mode`,dest `anyio_mode`);另有 ini `anyio_mode`(`:89-93`,預設 `strict`) | `auto` 時所有 async 測試由 anyio 執行(`:106-109, 192-207`) |
+| `pytest_runtest_makereport` | 無 | — |
+| `pytest_pyfunc_call` | 有:`anyio/pytest_plugin.py:268-302`(tryfirst) | 只處理帶 `anyio_backend` 的協程測試,在 runner 中執行本體;例外(含 ExceptionGroup 內的 Exit / KeyboardInterrupt / SystemExit)一律重拋(`:291-298`),成功才回 True |
+| `pytest_collection_modifyitems` | 無 | — |
+| 其他 hook(附帶) | `pytest_configure`(`:112-128`,註冊 `anyio` marker)、`pytest_fixture_setup` hookwrapper(`:131-189`,只包 async fixture)、`pytest_pycollect_makeitem`(`:192-207`,只加 `usefixtures("anyio_backend")`)、`pytest_collection_finish`(`:210-265`,把未帶 backend 的 anyio 協程測試換成依 backend 參數化的項目) | 不改 outcome |
+
+判斷:**沒有找到會把失敗轉成通過的機制。**
+- `--anyio-mode=auto` 只會讓原本因 pytest 不支援 async 而 `fail` 的測試(`_pytest/python.py:147-169`)**真的執行**。執行後的斷言照常評估,失敗照常重拋 ⇒ passed 仍代表本體執行並通過。
+- `pytest_collection_finish` 的項目替換屬 selection 面:producer 記下的 selected 與 outcome 身分若對不上,會由 `validate_session` 判為不合格(方向為 fail-closed)。本 repo 的 `tests/` 沒有 async 測試。
+
+### 35.3 預期集合(Station 3e-1;完整 nodeid)
+
+預期紅集合(behavior-red,18 支,在 2258490 上必須失敗):
+
+- tests/test_redlight.py::TestPassValidityCoverage::test_e3o_an_optimized_interpreter_is_not_full_coverage[1]
+- tests/test_redlight.py::TestPassValidityCoverage::test_e3o_an_optimized_interpreter_is_not_full_coverage[2]
+- tests/test_redlight.py::TestPassValidityCoverage::test_e3o_a_missing_optimize_fact_is_not_full_coverage
+- tests/test_redlight.py::TestPassValidityCoverage::test_e3x_runxfail_alone_is_not_full_coverage
+- tests/test_redlight.py::TestPassValidityCoverage::test_e3w_a_pytest_warning_filter_alone_is_not_full_coverage
+- tests/test_redlight.py::TestPassValidityCoverage::test_e3t_trace_alone_is_not_full_coverage
+- tests/test_redlight.py::TestPassValidityCoverage::test_e3v_an_unrecognized_python_version_is_not_full_coverage
+- tests/test_redlight.py::TestPassValidityCoverage::test_e3o_the_producer_records_the_interpreter_optimize_flag
+- tests/test_redlight.py::TestPassValidityCoverage::test_e3x_the_producer_records_runxfail_and_pythonwarnings
+- tests/test_redlight.py::TestProducerPathNormalization::test_e3p_blocked_plugin_names_never_persist_a_path[win-abs]
+- tests/test_redlight.py::TestProducerPathNormalization::test_e3p_blocked_plugin_names_never_persist_a_path[posix-abs]
+- tests/test_redlight.py::TestProducerPathNormalization::test_e3p_blocked_plugin_names_never_persist_a_path[rel-escape]
+- tests/test_redlight.py::TestProducerPathNormalization::test_e3p_a_config_file_option_never_persists_a_path[rel-escape]
+- tests/test_redlight.py::TestProducerPathNormalization::test_e3p_an_override_value_never_persists_a_path[rel-escape]
+- tests/test_status.py::TestPassValidityChain::test_e3o_optimized_pass_does_not_retire_a_known_red
+- tests/test_status.py::TestPassValidityChain::test_e3o_optimized_run_does_not_make_a_clean_file_green
+- tests/test_status.py::TestPassValidityChain::test_e3x_runxfail_pass_does_not_retire_a_known_red
+- tests/test_status.py::TestPassValidityChain::test_e3w_warning_filter_pass_does_not_retire_a_known_red
+
+預期綠集合(regression-lock,10 支,在 2258490 上必須通過;以本機 Windows 為準):
+
+- tests/test_redlight.py::TestPassValidityCoverage::test_e3d_the_fixed_command_with_a_plain_interpreter_is_full_coverage
+- tests/test_redlight.py::TestPassValidityCoverage::test_e3a_plain_assert_mode_on_a_plain_interpreter_is_still_full_coverage
+- tests/test_redlight.py::TestProducerPathNormalization::test_e3p_a_config_file_option_never_persists_a_path[win-abs]
+- tests/test_redlight.py::TestProducerPathNormalization::test_e3p_a_config_file_option_never_persists_a_path[posix-abs]
+- tests/test_redlight.py::TestProducerPathNormalization::test_e3p_an_override_value_never_persists_a_path[win-abs]
+- tests/test_redlight.py::TestProducerPathNormalization::test_e3p_an_override_value_never_persists_a_path[posix-abs]
+- tests/test_redlight.py::TestProducerPathNormalization::test_e3p_non_path_override_values_are_persisted_verbatim
+- tests/test_redlight.py::TestProducerPathNormalization::test_e3p_non_path_plugin_names_are_persisted_verbatim
+- tests/test_redlight.py::TestProducerPathNormalization::test_e3p_a_root_relative_config_file_option_is_persisted_as_given
+- tests/test_status.py::TestPassValidityLocks::test_e3d_the_fixed_command_full_run_still_retires_the_red
 
 ---
 

@@ -2563,3 +2563,163 @@ class TestCollectionDefinitionLocks:
         got = _lines_of(root)
         assert u"tests/test_x.py" in got[u"green"], got
         assert u"tests/test_x.py" not in got[u"red"], got
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 票 145 Station 3e 紅燈 —— pass 有效性的串接(producer → 持久化 run 事實 → status;〈三十五〉)
+#
+# 合約:票 145〈三十五〉3 (xiv)–(xvii)。規劃:docs/audits/2026-10-03-m1a-station3e-redlight-plan.md P4。
+# 下文 `<TARGET>` = 889fbd8f666ea522ff6af172979a8d020e50b86b(與 2258490 之間程式碼相同)。
+#
+# 每一次模擬執行都經**真實 tests/conftest.py**(`_chain_conftest` 每次載入全新模組,沿用 3c-1b)寫入
+# tmp root 的帳本,再由 status 讀回判定;tmp root 是真的 git repo(`_t_committed`)。
+# 直譯器事實以 `monkeypatch.setattr(c, "sys", _e_sys(...), raising=False)` 注入**該 conftest 所見的** `sys`,
+# 不改全域 `sys.flags`(與 tests/test_redlight.py 的 3e 段同一介面細節)。
+# `runxfail` / `pythonwarnings` / `trace` 以 `_e_option(...)` 明確帶入真實 pytest 的預設值。
+# 本段 helper 全部新寫;既有 helper(`_root_with_redlight` / `_chain_conftest` / `_seed_red` / `_lines_of` /
+# `_t_committed` / `_t_option` / `_t_drive`)只呼叫、不修改。
+# ═══════════════════════════════════════════════════════════════════════════
+
+import collections as _e_collections
+
+_E_FLAG_FIELDS = tuple(
+    n for n in dir(sys.flags)
+    if not n.startswith(("_", "n_")) and not callable(getattr(sys.flags, n)))
+
+_EVersion = _e_collections.namedtuple("_EVersion", "major minor micro releaselevel serial")
+
+
+class _ESys(object):
+    """conftest 所見的 `sys` 替身:`flags` / `version_info` 由測試指定,其他屬性一律轉給真的 `sys`。"""
+
+    def __init__(self, flags, version_info):
+        self.flags = flags
+        self.version_info = version_info
+
+    def __getattr__(self, name):
+        return getattr(sys, name)
+
+
+def _e_sys(optimize=0, drop=(), version_info=None):
+    """複製真實 `sys.flags` 的全部公開欄位,只把 `optimize` 換成指定值;`drop` 中的欄位不存在。"""
+    values = dict((n, getattr(sys.flags, n)) for n in _E_FLAG_FIELDS)
+    values["optimize"] = optimize
+    for k in drop:
+        values.pop(k, None)
+    vi = version_info if version_info is not None else _EVersion(*tuple(sys.version_info))
+    return _ESys(_s_types.SimpleNamespace(**values), vi)
+
+
+def _e_option(**overrides):
+    """固定全套的 `config.option`(`_t_option`)+ 三個 pass 有效性選項的真實預設值。"""
+    values = {"runxfail": False, "pythonwarnings": None, "trace": False}
+    values.update(overrides)
+    return _t_option(**values)
+
+
+def _e_drive(root, monkeypatch, outcomes, exitstatus, sys_=None, option=None):
+    """一次模擬執行:全新 conftest;tests/test_x.py 的 S_A / S_B 全收集;其他事實同固定全套。
+    `sys_` 為 None ⇒ 不注入(producer 看到真的 `sys`)。"""
+    c = _chain_conftest(root, monkeypatch)
+    if sys_ is not None:
+        monkeypatch.setattr(c, "sys", sys_, raising=False)
+    _t_drive(c, root, {u"tests/test_x.py": [S_A, S_B]}, [S_A, S_B], outcomes,
+             exitstatus=exitstatus, option=option if option is not None else _e_option())
+
+
+def _e_red_then(root, monkeypatch, sys_=None, option=None):
+    """R1 固定全套:S_A failed、S_B passed(exit 1)⇒ S_A 為已知紅;R2 依 `sys_` / `option`:S_A、S_B 皆 passed(exit 0)。
+    回傳兩筆 run 事實(各自用全新 conftest)。"""
+    _e_drive(root, monkeypatch, {S_A: "failed", S_B: "passed"}, 1, sys_=_e_sys(optimize=0))
+    _e_drive(root, monkeypatch, {S_A: "passed", S_B: "passed"}, 0, sys_=sys_, option=option)
+    runs = redlight.load_runs(root)
+    assert len(runs) == 2, runs
+    return runs
+
+
+class TestPassValidityChain:
+
+    def test_e3o_optimized_pass_does_not_retire_a_known_red(self, tmp_path, monkeypatch):
+        """E3o-4(S5d-F1 / S5d-X1 串接;〈三十五〉3 (xiv))。分類:behavior-red。
+
+        R1 固定全套:test_a failed(exit 1)⇒ 已知紅。R2:conftest 所見的 `sys.flags.optimize = 1`,
+        test_a passed(exit 0)⇒ 不得退紅、不得 green。情境斷言:R1 為 B;R2 schema 合格且為 A。
+        TARGET 上失敗的原因:R2 在 `<TARGET>:.claude/hooks/redlight.py:733` 判 `"true"` ⇒
+        `<TARGET>:.claude/portable/status.py:474` 退掉 test_a ⇒ `:475` green。
+        """
+        root = _root_with_redlight(tmp_path)
+        _t_committed(root)
+        runs = _e_red_then(root, monkeypatch, sys_=_e_sys(optimize=1))
+        assert redlight.run_state(runs[0]) == u"B", runs[0]
+        assert redlight.validate_session(runs[1]) == [], runs[1]
+        assert redlight.run_state(runs[1]) == u"A", runs[1]
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+    def test_e3o_optimized_run_does_not_make_a_clean_file_green(self, tmp_path, monkeypatch):
+        """E3o-5(〈三十五〉3 (xiv))。分類:behavior-red。
+
+        test_x.py 先前沒有紅;一次 `optimize = 1` 的全 passed run(exit 0)⇒ 不得 green。
+        TARGET 上失敗的原因:`<TARGET>:.claude/hooks/redlight.py:733` 判 `"true"` ⇒
+        `<TARGET>:.claude/portable/status.py:475` `green_now = True`。
+        """
+        root = _root_with_redlight(tmp_path)
+        _t_committed(root)
+        _e_drive(root, monkeypatch, {S_A: "passed", S_B: "passed"}, 0, sys_=_e_sys(optimize=1))
+        runs = redlight.load_runs(root)
+        assert len(runs) == 1 and redlight.validate_session(runs[0]) == [], runs
+        got = _lines_of(root)
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+    def test_e3x_runxfail_pass_does_not_retire_a_known_red(self, tmp_path, monkeypatch):
+        """E3x-3(〈三十五〉3 (xv);〈三十五〉1 (a))。分類:behavior-red。
+
+        同 E3o-4,R2 改為 `--runxfail`(`optimize` 為真實值)⇒ 不得退紅、不得 green。
+        TARGET 上失敗的原因:同 E3o-4(`<TARGET>:.claude/hooks/redlight.py:733`;
+        `<TARGET>:.claude/portable/status.py:474-475`)。
+        """
+        root = _root_with_redlight(tmp_path)
+        _t_committed(root)
+        runs = _e_red_then(root, monkeypatch, option=_e_option(runxfail=True))
+        assert redlight.run_state(runs[0]) == u"B", runs[0]
+        assert redlight.validate_session(runs[1]) == [], runs[1]
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+    def test_e3w_warning_filter_pass_does_not_retire_a_known_red(self, tmp_path, monkeypatch):
+        """E3w-2(〈三十五〉3 (xvi);〈三十五〉1 (b))。分類:behavior-red。
+
+        同 E3o-4,R2 改為 pytest 的 `-W ignore::UserWarning` ⇒ 不得退紅、不得 green。
+        TARGET 上失敗的原因:同 E3o-4(`<TARGET>:.claude/hooks/redlight.py:733`;
+        `<TARGET>:.claude/portable/status.py:474-475`)。
+        """
+        root = _root_with_redlight(tmp_path)
+        _t_committed(root)
+        runs = _e_red_then(root, monkeypatch, option=_e_option(pythonwarnings=["ignore::UserWarning"]))
+        assert redlight.run_state(runs[0]) == u"B", runs[0]
+        assert redlight.validate_session(runs[1]) == [], runs[1]
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+
+class TestPassValidityLocks:
+
+    def test_e3d_the_fixed_command_full_run_still_retires_the_red(self, tmp_path, monkeypatch):
+        """E3d-2(〈三十五〉3 全部條件成立)。分類:regression-lock。
+
+        X 的已知紅 CHAIN_X;之後一次固定全套(`optimize=0` 明確注入、真實 Python 版本、`runxfail=False`、
+        `pythonwarnings=None`、`trace=False`,其他事實同 4d 的 D3d-2;全收集、全 passed)⇒ X 退紅、在 green。
+        """
+        root = _root_with_redlight(tmp_path)
+        _t_committed(root)
+        c = _chain_conftest(root, monkeypatch)
+        monkeypatch.setattr(c, "sys", _e_sys(optimize=0), raising=False)
+        _seed_red(["test_target"])
+        _t_drive(c, root, {u"tests/test_x.py": [CHAIN_X, CHAIN_Y]}, [CHAIN_X, CHAIN_Y],
+                 {CHAIN_X: "passed", CHAIN_Y: "passed"}, exitstatus=0, option=_e_option())
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"green"], got
+        assert u"tests/test_x.py" not in got[u"red"], got
