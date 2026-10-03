@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 4f 修正完成(Windows 固定全套 exit 0 + POSIX 外部驗證通過);待 Station 5f 審查。
+**狀態**:動工 —— Station 5f 審查包已建立;待獨立審查。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -112,6 +112,9 @@
 >
 > - 狀態(舊,第三十四代):~~`動工 —— Station 4f 本機固定全套驗收通過;待 POSIX 跨平台驗收。`~~
 >   —— 2026-10-03 POSIX 外部驗證通過後由第 3 行取代(見〈四十三〉43.3)。
+>
+> - 狀態(舊,第三十五代):~~`動工 —— Station 4f 修正完成(Windows 固定全套 exit 0 + POSIX 外部驗證通過);待 Station 5f 審查。`~~
+>   —— 2026-10-03 Station 5f 審查包建立後由第 3 行取代(見〈四十四〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -491,14 +494,20 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5e — Review | FAIL(依 Jeff 裁決;審查者原判 PASS) |
 | Station 3f — Red-light(補) | PASS / ACCEPTED |
 | Station 4f — Implementation(修正) | PASS / COMPLETED（待 5f 審查） |
+| Station 5f — Review | 審查包已建立，待審 |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4f 修正完成(Windows 固定全套 exit 0 + POSIX 外部驗證通過);待 Station 5f 審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5f 審查包已建立;待獨立審查(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第二十六代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4f 修正完成(Windows 固定全套 exit 0 + POSIX 外部驗證通過);待 Station 5f 審查(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 5f 審查包建立後隨第 3 行同步更新(見〈四十四〉)。
+>
+> **〈十〉表格新增(F-036)**:Station 5f 列為新增列,沒有舊值(2026-10-03,S5f-0)。
 
 > **舊句(F-036,保留不刪,第二十五代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4f 本機固定全套驗收通過;待 POSIX 跨平台驗收(與票頭第 3 行一致)。~~
 > 2026-10-03 POSIX 外部驗證通過後隨第 3 行同步更新(見〈四十三〉43.3)。
@@ -2180,6 +2189,28 @@ POSIX 上 failed 預期為 14。
 
 - 4f 報告(`docs/audits/2026-10-03-m1a-station4f-fix.md`)不改。其第 7 節「未證明」第 1 點(R9–R13 的 POSIX 實測)由本節結案。
 - S4F2 `a761d2276a1a6d2dbdcd4a74cea4d401c75513db`。
+
+---
+
+## 四十四、Station 5f 審查包
+
+| 名稱 | 值 |
+|---|---|
+| BASE | `84014bae237a4741dae8ad18c6c041a3c3ef97b0` |
+| TARGET(唯一審查對象,S4F1) | `ad14418d903b26212dc9e98754f44aaa894375c8` |
+| S4F2(本機 Windows 驗收證據) | `a761d2276a1a6d2dbdcd4a74cea4d401c75513db` |
+| S4F3(POSIX 外部驗證紀錄) | `bd57e617d3529b20d88d75b99da0f660f1b3685d` |
+| S3F2 | `2f6743fff2f13170b27c52c3390a69cc361dfe26` |
+| S3F1 | `229b5e762f087193e138c7c8d0f0d0b0f3e5cbb5` |
+| 5E_TARGET(前一次審查對象) | `0139a7e803fc2d41eb354f1196a6206cfe304701` |
+| 審查包 | `docs/audits/2026-10-03-m1a-station5f-review-package.md` |
+| 審查包大小 | 413243 bytes / 7100 行 |
+| 審查包 SHA-256 | `f254a9d7278e1cbdfb50d67443ac1014bdaa5094d0db000e2d5e9b2eb6e5c385` |
+| 審查包 staged blob | `a5821b099b8b8d0c6c626297348ecc8682255150` |
+| S5f-0(本 commit) | 記錄 5f 結果時回填 |
+
+- 審查報告只寫到 `.scratch/m1a-s5f/review-report.md`;審查者規則見審查包 A.3(含第 10 條:不得用 python -c / heredoc;pytest / pluggy 安裝位置只准用 `python -m pip show`)。
+- 審查包內的逐字段落皆以 cmp 對出處核對過(詳見 S5f-0 的回報)。
 
 ---
 
