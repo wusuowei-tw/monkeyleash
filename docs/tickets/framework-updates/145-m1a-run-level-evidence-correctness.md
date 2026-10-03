@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5d FAIL(S5d-F1 阻擋);回 Station 3e 規劃與補紅燈。
+**狀態**:動工 —— Station 3e 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -76,6 +76,9 @@
 >
 > - 狀態(舊,第二十二代):~~`動工 —— Station 5d 審查包已建立;待獨立審查。`~~
 >   —— 2026-10-02 Station 5d 獨立審查 FAIL 後由第 3 行取代(見〈三十三〉)。
+>
+> - 狀態(舊,第二十三代):~~`動工 —— Station 5d FAIL(S5d-F1 阻擋);回 Station 3e 規劃與補紅燈。`~~
+>   —— 2026-10-03 Station 3e 紅燈規劃寫完後由第 3 行取代(見〈三十四〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -450,7 +453,7 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3d — Red-light(補) | PASS / ACCEPTED |
 | Station 4d — Implementation(修正) | PASS / COMPLETED（待 5d 審查） |
 | Station 5d — Review | FAIL |
-| Station 3e — Red-light(補) | NOT STARTED |
+| Station 3e — Red-light(補) | 規劃已寫，待裁 |
 | Station 4e — Implementation(修正) | NOT STARTED |
 | Station 5e — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
@@ -459,8 +462,11 @@ Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5d FAIL(S5d-F1 阻擋);回 Station 3e 規劃與補紅燈(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3e 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第十四代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5d FAIL(S5d-F1 阻擋);回 Station 3e 規劃與補紅燈(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 3e 紅燈規劃寫完後隨第 3 行同步更新(見〈三十四〉)。
 
 > **舊句(F-036,保留不刪,第十三代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5d 審查包已建立;待獨立審查(與票頭第 3 行一致)。~~
 > 2026-10-02 Station 5d 獨立審查 FAIL 後隨第 3 行同步更新(見〈三十三〉)。
@@ -1631,6 +1637,24 @@ tests orphaned under ticket 145: (無)
 6. 結案後追蹤票清單更新為：conftest 不受 R2/R3 管的缺口；session 帳本增長；S5b-F2–F6；S5c-F3；
    S5c-F4 + S5d-F2（行程內程式碼使事實失真）；S5d-F4、S5d-F5、S5d-F6；
    pytest / anyio 版本未在 dependency 精確 pin；測試身分 parametrize ID 帶本機 repo 路徑；上游票 139 少一空行。
+
+---
+
+## 三十四、Station 3e 紅燈規劃
+
+- 規劃檔:`docs/audits/2026-10-03-m1a-station3e-redlight-plan.md`(依〈三十三〉33.3 裁決 1–3 與 Jeff 併入 3e-0 指令的補充裁決 1–3;只讀原始碼推得,未執行 pytest)。
+- **authority scope**:受 agent-gates 管控的 pytest 主執行環境中,`passed` 沒有因 interpreter / pytest execution mode 而失去通常的 pass 語意;測試自行啟動的子行程、外部工具屬 scope 外。
+- **P1**:69 列;(A) 8、(B) 10、(C) 9、(D) 6、(E) 33、scope 外 3。pytest 9.1.1 的內建 CLI 選項以 Grep `addoption(` 全數列舉;`sys.flags` 逐欄分類。
+- **P2(a)**:`-O` / `-OO` / `PYTHONOPTIMIZE` 都反映在 `sys.flags.optimize`(唯讀,行程內無公開途徑可改);讀取點放在 `_completeness_of`(`<TARGET>:tests/conftest.py:335-357`),在 sessionfinish 當下經模組層 `sys` 讀取。
+- **P2(b)**:被 pytest 改寫的 assert 在 `-O` 下仍執行,未改寫的輔助模組不執行(S5d-X1);`optimize == 0` 時 `--assert=plain` 只失去訊息 ⇒ 歸 (D),合約不需要 assertmode,只鎖 `optimize == 0`。
+- **P2(c)**:(xii)「任何 `(name, None)` ⇒ 不得為 `"true"`」不需調整;它同時擋住 `-p no:skipping` / `no:warnings` / `no:unraisableexception` / `no:threadexception` 這些會改變 outcome 解讀的停用。
+- **P2(d)**:producer 寫入的欄位逐欄歸入三類;缺口在 `blocked`(完全不正規化)、`plugins[].name` 的 `pytest_<路徑>`、`inifilename` 與 `override_ini` value 的越界相對路徑,以及全部依賴平台相依的 `os.path.isabs`。
+- **P3 摘要**(待 Jeff 裁):
+  - 新增條件候選:(xiv) `sys.flags.optimize == 0`;(xv) `runxfail is False`;(xvi) `pythonwarnings` 為 None / 空;(xvii,可選) `trace is False`。
+  - 組法:甲 (xiv);乙 (xiv)+(xv)+(xvi);乙+ 再加 (xvii);丙 option 全鍵枚舉。
+  - S5d-F3:F3-甲(規則式、平台無關的路徑判定 + 名稱封閉字元集 + override 只動路徑值)、F3-乙(ini 型別表)、F3-丙(拒絕)。
+  - 規劃建議:**乙 + F3-甲**。
+- **P4 草案**(依建議組法):預期紅 16 支、預期綠 10 支(以本機 Windows 為準;4 支 `[win-abs]` / `[posix-abs]` 的綠在 POSIX 上會變紅,即 S5d-F3 的跨平台缺口);4e 後受影響的既有測試:乙 14 支、甲 2 支,授權方式 A / B 待裁。
 
 ---
 
