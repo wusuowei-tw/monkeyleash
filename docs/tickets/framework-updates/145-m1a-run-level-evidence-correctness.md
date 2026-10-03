@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5f 審查包已建立;待獨立審查。
+**狀態**:動工 —— Station 5f 獨立審查 PASS;待 push 與 CI 確認(Station 6)。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -115,6 +115,9 @@
 >
 > - 狀態(舊,第三十五代):~~`動工 —— Station 4f 修正完成(Windows 固定全套 exit 0 + POSIX 外部驗證通過);待 Station 5f 審查。`~~
 >   —— 2026-10-03 Station 5f 審查包建立後由第 3 行取代(見〈四十四〉)。
+>
+> - 狀態(舊,第三十六代):~~`動工 —— Station 5f 審查包已建立;待獨立審查。`~~
+>   —— 2026-10-03 Station 5f 獨立審查 PASS(依 Jeff 裁決)後由第 3 行取代(見〈四十五〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -494,15 +497,20 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5e — Review | FAIL(依 Jeff 裁決;審查者原判 PASS) |
 | Station 3f — Red-light(補) | PASS / ACCEPTED |
 | Station 4f — Implementation(修正) | PASS / COMPLETED（待 5f 審查） |
-| Station 5f — Review | 審查包已建立，待審 |
+| Station 5f — Review | PASS |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5f 審查包已建立;待獨立審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5f 獨立審查 PASS;待 push 與 CI 確認(Station 6)(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第二十七代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5f 審查包已建立;待獨立審查(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 5f 獨立審查 PASS 後隨第 3 行同步更新(見〈四十五〉)。
+>
+> **〈十〉表格舊值(F-036)**:Station 5f 列 ~~`審查包已建立，待審`~~ → `PASS`(2026-10-03,S5f-1)。
 
 > **舊句(F-036,保留不刪,第二十六代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4f 修正完成(Windows 固定全套 exit 0 + POSIX 外部驗證通過);待 Station 5f 審查(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 5f 審查包建立後隨第 3 行同步更新(見〈四十四〉)。
@@ -2207,10 +2215,51 @@ POSIX 上 failed 預期為 14。
 | 審查包大小 | 413243 bytes / 7100 行 |
 | 審查包 SHA-256 | `f254a9d7278e1cbdfb50d67443ac1014bdaa5094d0db000e2d5e9b2eb6e5c385` |
 | 審查包 staged blob | `a5821b099b8b8d0c6c626297348ecc8682255150` |
-| S5f-0(本 commit) | 記錄 5f 結果時回填 |
+| S5f-0(本 commit) | `695909f2f22ec17f97d4609f3fd28a5d146f252d`(回填) |
 
 - 審查報告只寫到 `.scratch/m1a-s5f/review-report.md`;審查者規則見審查包 A.3(含第 10 條:不得用 python -c / heredoc;pytest / pluggy 安裝位置只准用 `python -m pip show`)。
 - 審查包內的逐字段落皆以 cmp 對出處核對過(詳見 S5f-0 的回報)。
+
+---
+
+## 四十五、Station 5f 獨立審查（PASS）與裁決（2026-10-03，Jeff）
+
+### 45.1 審查報告
+
+- 路徑 `docs/audits/2026-10-03-m1a-station5f-independent-review.md`;raw = repo 副本(與審查者原檔 `.scratch/m1a-s5f/review-report.md` 以 `cmp` 逐位元組相同,無任何改動);
+  sha256 `2fe5758e63ca0b7845552ffa5f651aed4ba4879ad574e9c6eb9fb5b92ed91e2c`;45652 bytes。
+- 審查對象 TARGET `ad14418d903b26212dc9e98754f44aaa894375c8`;審查包所在 commit S5f-0 `695909f2f22ec17f97d4609f3fd28a5d146f252d`。
+- **審查者原始判決:PASS**(阻擋 0、非阻擋 3)。報告第 1 節的附帶聲明原文:
+
+  > **附帶聲明**:S5f-F1(logging 擷取選項 `--log-level` / `--log-disable` 等不在合約內)我判為非阻擋,理由是 TARGET 目前已提交的設定下,它能翻盤的情形全部落在已裁決的 scope 外 S-3。**但它與 (xvi) pytest `-W` 的納入理由同形**(3e-0 的 O-3 以「已提交設定若有 `error::X`,CLI 會蓋過它」納入合約,即使本 repo 當時實際能翻的也只有 S-3 類)。若裁決者以 O-3 / (xvi) 的同一標準看待它(與 S5e-F1 以 (xvii) 標準看待 `--pdb` 同型),本判決應改為 **FAIL**。判斷依據寫在 S5f-F1 的「為什麼判非阻擋」。
+
+- 發現清單(報告第 3 節標題原文):
+  - S5f-F1【非阻擋(請裁決)】logging 擷取選項(`--log-level` / `--log-disable` / `--log-cli-level` / `--log-file-level`)能讓失敗的斷言變成 passed,TARGET 仍判 `"true"`;歸 S-3 的前提沒有機制守住,且與 (xvi) 的納入標準不一致
+  - S5f-F2【非阻擋】POSIX 上 root 路徑本身含 `\` 時,固定全套永遠 unknown(4f 引入;與 4f 報告第 7 節第 3 點「判定不受影響」的敘述不符)
+  - S5f-F3【非阻擋】`normalize_overrides` 的 docstring 對 pytest 的敘述過度概括:「pytest 解析 ini 的路徑值也不用 invocation dir」
+
+### 45.2 裁決助手外部重現(隔離環境;非獨立審查 finding;非本 repo 帳本證據)
+
+來源:Jeff 的 Station 5f-1 指令裁決第 4 點,照錄。
+
+Linux + Python 3.11 + pytest 9.1.1 + TARGET 的 redlight.py / conftest.py:測試 test_quiet(caplog) 呼叫會發 WARNING 的 impl.run() 並斷言 caplog.records == [];
+固定指令 ⇒ failed、run_state B;加 --log-level=ERROR ⇒ passed、run_state A、file_coverage == "true" ⇒ 會退紅。S5f-F1 情境一成立(屬 S-3)。
+
+### 45.3 裁決(照錄)
+
+1. 獨立審查者原始判決:PASS(阻擋 0、非阻擋 3),附帶聲明 S5f-F1 若以 (xvi) 標準看待則改為 FAIL。原始判決照錄。
+   Jeff 裁定:S5f-F1 維持〈三十五〉35.1 第 6 點的 S-3 scope 邊界,不是目前 TARGET 的阻擋項 ⇒ Station 5f 最終結果 = PASS;不進 3g。
+2. 理由:(xvi) 納入 authority,是因為 repo 有已提交的 filterwarnings 政策,CLI -W 可覆蓋該已提交的證據環境。
+   TARGET 的 pyproject.toml 沒有提交 log_level / log_cli_level / log_file_level;--log-level 等能翻轉的,是依賴 pytest 預設 logging 擷取層級的測試,屬已裁定的 S-3。
+   若未來 repo 提交 logging level 政策,CLI 覆蓋它即與 -W 同形,屆時必須重新納入 authority 合約。
+   S5e-F1(--pdb)不依賴測試本身的環境相依性,與本項不同。
+3. 登記追蹤項(寫在票 145「相關」段;本步不建立新票檔,稱「追蹤項」):
+   - logging 鎖步絆線待辦(目前尚未 machine-enforced):後續追蹤項須新增測試,讀取已提交的 pyproject.toml(git show HEAD:pyproject.toml),
+     斷言 [tool.pytest.ini_options] 尚未出現 log_level / log_cli_level / log_file_level(做法同 D4)。
+     在該機器絆線實作並通過前,新增上述已提交 logging 政策的變更,不得視為已被 M1-a authority 覆蓋。此為程序約束,目前尚非機器 enforcement。
+   - 一般化研究:以「實際生效的 option namespace 等於固定指令的解析結果」取代逐項列舉(可收斂 (xv)–(xix) 與 logging 族);獨立設計,不在 M1-a 處理。
+   - S5f-F2:POSIX 上 root 路徑本身含 \ 時固定全套永遠 unknown(fail-closed 的可用性問題);並更正 4f 報告第 7 節第 3 點的敘述(在新紀錄更正,不回寫)。
+   - S5f-F3:normalize_overrides docstring 對 pytest 解析基準的敘述過度概括(log_file 以 cwd 解析);屬文件準確度,不改 authority 語意。
 
 ---
 
@@ -2224,3 +2273,15 @@ POSIX 上 failed 預期為 14。
   分析見 `docs/audits/2026-10-03-m1a-station3f-redlight-plan.md` P3。
 - **追蹤票(待建,2026-10-03 登記)S5e-F6** —— override 的 key 與 `pythonwarnings` 原樣落帳(可帶路徑)。
   依〈三十九〉39.3 列入 privacy / provenance 追蹤票,**本票不修**。
+- **追蹤項(2026-10-03 登記,〈四十五〉45.3 第 3 點)logging 鎖步絆線待辦(目前尚未 machine-enforced)** ——
+  後續追蹤項須新增測試,讀取已提交的 pyproject.toml(`git show HEAD:pyproject.toml`),斷言 `[tool.pytest.ini_options]`
+  尚未出現 `log_level` / `log_cli_level` / `log_file_level`(做法同 D4)。在該機器絆線實作並通過前,
+  新增上述已提交 logging 政策的變更,**不得視為已被 M1-a authority 覆蓋**。此為程序約束,目前尚非機器 enforcement。
+- **追蹤項(2026-10-03 登記,〈四十五〉45.3 第 3 點)一般化研究** —— 以「實際生效的 option namespace 等於固定指令的解析結果」
+  取代逐項列舉(可收斂 (xv)–(xix) 與 logging 族);獨立設計,**不在 M1-a 處理**。
+- **追蹤項(2026-10-03 登記,〈四十五〉45.3 第 3 點)S5f-F2** —— POSIX 上 root 路徑本身含 `\` 時固定全套永遠 unknown
+  (fail-closed 的可用性問題)。
+  4f 報告第 7 節第 3 點的敘述更正(在本紀錄更正,不回寫 4f 報告):該點只涵蓋「值」含 `\` 的情形;
+  **root 路徑本身含 `\` 時,受影響的是固定全套本身**((vii)、(x) 判 unknown),不是只有 `-c` / override。
+- **追蹤項(2026-10-03 登記,〈四十五〉45.3 第 3 點)S5f-F3** —— `normalize_overrides` docstring 對 pytest 解析基準的敘述過度概括
+  (`log_file` 以 cwd 解析);屬文件準確度,不改 authority 語意。
