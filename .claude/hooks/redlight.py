@@ -33,7 +33,10 @@ R3 的原始規格是「對應測試檔存在 **且** 有紅燈紀錄」,實作�
 import hashlib
 import io
 import json
+import ntpath
 import os
+import posixpath
+import re
 from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -188,6 +191,8 @@ def _normalize_arg(arg, root, invocation_dir):
     path, sep, rest = s.partition("::")
     if not path:
         return None
+    if _is_abs_path(path) and not os.path.isabs(path):
+        return None                     # 他平台的絕對路徑(例:POSIX 上的 `C:/…`)不可能在本機 root 之內
     base = os.fspath(invocation_dir) if invocation_dir else os.fspath(root)
     full = path if os.path.isabs(path) else os.path.join(base, path)
     try:
@@ -455,13 +460,19 @@ def file_coverage(run, test_file):
 # ─────────────────────────────────────────────────────────────────────────────
 
 COMPLETENESS_OPTIONS = ("lf", "last_failed_no_failures", "stepwise", "stepwise_skip",
-                        "maxfail", "collectonly", "setuponly", "setupplan")
+                        "maxfail", "collectonly", "setuponly", "setupplan",
+                        # 票 145 Station 4e(〈三十五〉3 (xv)–(xvii)):pass 有效性的 pytest 層事實
+                        "runxfail", "pythonwarnings", "trace")
 
 PLUGIN_KINDS = ("builtin", "root_conftest", "known_dist", "other")
 SUPPORTED_PLUGIN_KINDS = ("builtin", "root_conftest", "known_dist")
 BUILTIN_MODULE = "_pytest"
 ROOT_CONFTEST = "tests/conftest.py"
 OUTSIDE = "<outside>"
+NON_IDENTIFIER = "<non-identifier>"
+
+# (xviii) P1 對 sys.flags 與 assert 移除的盤點只對這些 Python 版本(major.minor)成立;升級須走票。
+KNOWN_PYTHON_VERSIONS = ("3.11",)
 
 # ── 票 145 Station 4d —— 收集定義完整性與版本邊界(〈二十九〉2 (vii′)–(xiii))
 # 以下四組是「已盤點」清單,**變更須走票**。版本邊界總表(〈二十九〉2):
@@ -518,16 +529,59 @@ def _defining_module(plugin):
     return getattr(type(plugin), "__module__", None)
 
 
-def _plugin_path_name(name, root):
-    """路徑型名稱 → root 相對 posix 路徑;root 以外(含跨磁碟)⇒ `<outside>`。"""
+# ── 票 145 Station 4e —— producer 自行產生的路徑型 metadata 的正規化(S5d-F3;〈三十五〉4 的 F3-甲)
+# 依**欄位類別**套規則,不依特定字串:
+#   (1) 類(inipath、inifilename、invocation.args、conftest 註冊的路徑名)⇒ root 相對 posix 路徑或 `<outside>`;
+#   名稱欄位(plugins[].name、blocked[])⇒ 路徑名依 (1);模組 / entry-point 名稱(含數字 id)原樣;其他 `<non-identifier>`;
+#   (2) 類(override_ini)⇒ key 原樣;value 只在是絕對路徑、或解析後越出 root 時正規化。
+# **絕對路徑的判定與平台無關**:只用 `os.path.isabs` 的話,POSIX 上認不出 `C:\…`,同一個輸入在兩種平台落帳不同。
+
+_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9_.\-]+$")
+
+
+def _is_abs_path(text):
+    """任一平台意義下的絕對路徑:`posixpath.isabs` 或 `ntpath.isabs`,或以磁碟代號開頭。"""
+    text = str(text)
+    return posixpath.isabs(text) or ntpath.isabs(text) or bool(_DRIVE_PREFIX.match(text))
+
+
+def _root_relative(value, root, base=None):
+    """(1) 類路徑 → root 相對 posix 路徑;root 以外(含跨磁碟、他平台的絕對路徑)⇒ `<outside>`。
+
+    相對路徑先以 `base`(producer 給的 `invocation_params.dir`;沒有就用 root)解析。
+    本機意義下的絕對 / 相對用 `os.path`(Windows 上大小寫不敏感,與 pytest 給的路徑一致);
+    只有「他平台才算絕對」的值(例:POSIX 上的 `C:\\…`)直接記 `<outside>` —— 它不可能在本機 root 之內。
+    """
+    text = os.fspath(value) if isinstance(value, os.PathLike) else str(value)
+    host_abs = os.path.isabs(text)
+    if _is_abs_path(text) and not host_abs:
+        return OUTSIDE
+    start = os.fspath(base) if base is not None else os.fspath(root)
+    full = text if host_abs else os.path.join(start, text)
     try:
-        rel = os.path.relpath(os.path.normpath(name), os.path.normpath(os.fspath(root)))
-    except ValueError:
+        rel = os.path.relpath(os.path.normpath(full), os.path.normpath(os.fspath(root)))
+    except (ValueError, OSError, TypeError):
         return OUTSIDE
     rel = rel.replace("\\", "/")
-    if rel == ".." or rel.startswith("../") or os.path.isabs(rel):
+    if rel == ".." or rel.startswith("../") or _is_abs_path(rel):
         return OUTSIDE
     return rel
+
+
+def _plugin_path_name(name, root):
+    """路徑型名稱 → root 相對 posix 路徑;root 以外(含跨磁碟)⇒ `<outside>`。"""
+    return _root_relative(name, root)
+
+
+def _plugin_name(name, root):
+    """名稱欄位的落帳字串(〈三十五〉4):路徑名依 (1) 類;模組 / entry-point 名稱(含數字 id)原樣;
+    其他(例:`-p no:<路徑>` 留下的 `pytest_<路徑>`)⇒ `<non-identifier>`。"""
+    if _is_abs_path(name):
+        return _root_relative(name, root)
+    if _IDENTIFIER.match(name):
+        return name
+    return NON_IDENTIFIER
 
 
 def classify_plugins(root, name_plugins, distinfo):
@@ -539,20 +593,21 @@ def classify_plugins(root, name_plugins, distinfo):
       2. 名稱是絕對路徑(conftest 的註冊名稱)⇒ root 相對路徑恰為 `ROOT_CONFTEST` 為 root_conftest,否則 other
       3. 定義模組為 `_pytest` 或 `_pytest.*` ⇒ builtin
       4. 其他(含 `-p no:` 留下的 `(name, None)`)⇒ other
-    帳本只記正規化名稱:路徑型一律轉 root 相對路徑(root 以外記 `<outside>`),不記絕對路徑。
+    帳本只記正規化名稱(`_plugin_name`;〈三十五〉4):路徑型轉 root 相對路徑(root 以外記 `<outside>`),
+    非識別字形狀的名稱記 `<non-identifier>`,不記絕對路徑。**kind 用原始名稱判定**,正規化只作用於落帳字串。
     配對到 dist 的項目另記 `dists`(`[[名稱, 版本], ...]`)。
     """
     dists = [(p, _dist_name(d), _dist_version(d)) for p, d in (distinfo or [])]
     out = []
     for name, plugin in name_plugins or []:
         name = str(name)
-        is_path = os.path.isabs(name)
-        shown = _plugin_path_name(name, root) if is_path else name
+        is_path = _is_abs_path(name)
+        shown = _plugin_name(name, root)
         paired = [(dn, dv) for p, dn, dv in dists if p is plugin]
         if paired:
             kind = "known_dist" if all(pair in KNOWN_DISTS for pair in paired) else "other"
         elif is_path:
-            kind = "root_conftest" if shown == ROOT_CONFTEST else "other"
+            kind = "root_conftest" if _plugin_path_name(name, root) == ROOT_CONFTEST else "other"
         else:
             mod = _defining_module(plugin)
             builtin = isinstance(mod, str) and (
@@ -565,33 +620,40 @@ def classify_plugins(root, name_plugins, distinfo):
     return out
 
 
-def blocked_plugins(name_plugins):
+def blocked_plugins(name_plugins, root=None):
     """`list_name_plugin()` 中值為 None 的名稱 —— `-p no:<name>` 的 pluggy 表示方式
-    (`pluggy/_manager.py:230-233`)。〈二十九〉2 (xii)。"""
-    return [str(name) for name, plugin in (name_plugins or []) if plugin is None]
+    (`pluggy/_manager.py:230-233`)。〈二十九〉2 (xii)。
+
+    給 `root` ⇒ 落帳字串依名稱欄位規則正規化(`_plugin_name`;〈三十五〉4)。判定只看「非空」,不受正規化影響。"""
+    names = [str(name) for name, plugin in (name_plugins or []) if plugin is None]
+    return names if root is None else [_plugin_name(n, root) for n in names]
 
 
-def normalize_config_path(value, root):
-    """`inifilename` / `inipath` → 落帳形狀。None ⇒ None;絕對路徑 ⇒ root 相對 posix 路徑
-    (root 以外 `<outside>`);相對路徑 ⇒ 反斜線換成 `/`。**不落帳絕對路徑。**"""
+def normalize_config_path(value, root, base=None):
+    """`inifilename` / `inipath` → 落帳形狀(〈三十五〉4 的 (1) 類)。None ⇒ None;
+    其他 ⇒ root 相對 posix 路徑,root 以外 `<outside>`。相對路徑先以 `base`(invocation dir)解析。
+    **不落帳絕對路徑,也不落帳越出 root 的相對路徑。**"""
     if value is None:
         return None
-    text = os.fspath(value) if isinstance(value, os.PathLike) else str(value)
-    if os.path.isabs(text):
-        return _plugin_path_name(text, root)
-    return text.replace("\\", "/")
+    return _root_relative(value, root, base)
 
 
-def normalize_overrides(values, root):
-    """`config.option.override_ini`(解析後清單)→ 落帳形狀。不是 list ⇒ None。
-    值是絕對路徑的項目(例 `-o cache_dir=…`)只把值換成 root 相對路徑或 `<outside>`,不落帳絕對路徑。"""
+def normalize_overrides(values, root, base=None):
+    """`config.option.override_ini`(解析後清單)→ 落帳形狀(〈三十五〉4 的 (2) 類)。不是 list ⇒ None。
+
+    key 一律原樣;value 只在是絕對路徑(平台無關判定)、或以 `base` 解析後越出 root 時,
+    換成 root 相對路徑或 `<outside>`。其他值一律原樣(例:`true`、`test_b`、`tests/test_*.py`)——
+    不改寫證據本身。"""
     if not isinstance(values, (list, tuple)):
         return None
     out = []
     for item in values:
         key, sep, val = str(item).partition("=")
-        if sep and os.path.isabs(val):
-            val = _plugin_path_name(val, root)
+        if sep and val:
+            if _is_abs_path(val):
+                val = _root_relative(val, root, base)
+            elif _root_relative(val, root, base) == OUTSIDE:
+                val = OUTSIDE
         out.append(key + sep + val)
     return out
 
@@ -672,6 +734,19 @@ def _completeness_problems(comp):
                     for k in ("worktree", "head"))
             for p in COMMITTED_FILES):
         problems.append("config_blobs 缺欄或型別不符")
+    # 〈三十五〉3 (xiv)–(xviii) 的事實。Station 4e 之前的 session 沒有這些欄位 ⇒ 不合格 ⇒ unknown。
+    # 型別在這裡驗,malformed 的事實不得只靠 verdict 的值判斷而繞過。
+    if type(comp.get("optimize")) is not int:            # int,不含 bool
+        problems.append("optimize 缺欄或型別不符")
+    if not isinstance(comp.get("python_version"), str):
+        problems.append("python_version 缺欄或型別不符")
+    if isinstance(options, dict):
+        for key in ("runxfail", "trace"):
+            if not isinstance(options.get(key), bool):
+                problems.append("options.%s 缺欄或型別不符" % key)
+        warn = options.get("pythonwarnings")
+        if not (warn is None or _is_str_list(warn)):
+            problems.append("options.pythonwarnings 型別不符")
     return problems
 
 
@@ -686,6 +761,10 @@ def _completeness_verdict(run, tf, idents):
     - (ix) 有 `-c` / `--config-file` ⇒ unknown(即使指向已提交的權威檔)
     - (x) 實際採用的設定檔不是 `CONFIG_FILE` ⇒ unknown
     - (xi) `COMMITTED_FILES` 任一檔的工作樹 blob ≠ HEAD blob,或取不到 ⇒ unknown
+    - (xiv) `sys.flags.optimize` 不是 0 ⇒ unknown(assert 可能沒有執行;〈三十五〉3)
+    - (xviii) Python major.minor 不在 `KNOWN_PYTHON_VERSIONS` ⇒ unknown
+    - (xv)(xvii) `runxfail` / `trace` 不是 False ⇒ unknown;(xvi) pytest `-W` 有值 ⇒ unknown
+      (assertmode 不判定:`optimize == 0` 時 plain 只影響 reporting)
     - (ii) `lf` / `stepwise` / `stepwise_skip` 不是 False ⇒ false(縮小機制作用中)。
       `cacheprovider_blocked` 只是紀錄,不再有判定權(〈二十九〉2 (xii) 取代〈二十三〉裁決 4)
     - (iii) maxfail / collectonly / setuponly / setupplan ⇒ unknown
@@ -713,6 +792,14 @@ def _completeness_verdict(run, tf, idents):
                for p in COMMITTED_FILES):
         return "unknown"
     options = comp["options"]
+    if comp["optimize"] != 0:
+        return "unknown"
+    if comp["python_version"] not in KNOWN_PYTHON_VERSIONS:
+        return "unknown"
+    if options["runxfail"] is not False or options["trace"] is not False:
+        return "unknown"
+    if options["pythonwarnings"] not in (None, []):
+        return "unknown"
     if not (options["lf"] is False and options["stepwise"] is False
             and options["stepwise_skip"] is False):
         return "false"

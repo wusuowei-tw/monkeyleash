@@ -583,7 +583,8 @@ class TestTestsUnderTicketUsesTheLatestRecordPerFile:
             completeness={
                 u"options": {u"lf": False, u"last_failed_no_failures": u"all", u"stepwise": False,
                              u"stepwise_skip": False, u"maxfail": None, u"collectonly": False,
-                             u"setuponly": False, u"setupplan": False},
+                             u"setuponly": False, u"setupplan": False,
+                             u"runxfail": False, u"pythonwarnings": None, u"trace": False},
                 u"cacheprovider_blocked": False, u"shouldstop": False, u"shouldfail": False,
                 u"pre_narrowing": {u"tests/test_a.py": [u"tests/test_a.py::test_one"]},
                 u"plugins": [{u"name": u"main", u"kind": u"builtin"},
@@ -591,7 +592,8 @@ class TestTestsUnderTicketUsesTheLatestRecordPerFile:
                              {u"name": u"anyio", u"kind": u"known_dist",
                               u"dists": [[u"anyio", u"4.15.0"]]}],
                 u"blocked": [], u"override_ini": list(_T_FIXED_OVERRIDES), u"inifilename": None,
-                u"inipath": u"pyproject.toml", u"config_blobs": blobs, u"pytest_version": u"9.1.1"})
+                u"inipath": u"pyproject.toml", u"config_blobs": blobs, u"pytest_version": u"9.1.1",
+                u"optimize": 0, u"python_version": u"3.11"})
 
         out = render(root)
         red = _value_of(out, u"tests red under ticket 99")
@@ -1353,7 +1355,9 @@ class TestOrphans:
                                     u"options": {u"lf": False, u"last_failed_no_failures": u"all",
                                                  u"stepwise": False, u"stepwise_skip": False,
                                                  u"maxfail": None, u"collectonly": False,
-                                                 u"setuponly": False, u"setupplan": False},
+                                                 u"setuponly": False, u"setupplan": False,
+                                                 u"runxfail": False, u"pythonwarnings": None,
+                                                 u"trace": False},
                                     u"cacheprovider_blocked": False, u"shouldstop": False,
                                     u"shouldfail": False,
                                     u"pre_narrowing": {u"tests/test_x.py": [new, keep]},
@@ -1364,7 +1368,8 @@ class TestOrphans:
                                                   u"dists": [[u"anyio", u"4.15.0"]]}],
                                     u"blocked": [], u"override_ini": list(_T_FIXED_OVERRIDES),
                                     u"inifilename": None, u"inipath": u"pyproject.toml",
-                                    u"config_blobs": blobs, u"pytest_version": u"9.1.1"})
+                                    u"config_blobs": blobs, u"pytest_version": u"9.1.1",
+                                    u"optimize": 0, u"python_version": u"3.11"})
         out = render(root)
         orphaned = _value_of(out, u"tests orphaned under ticket 99")
         green = _value_of(out, u"tests green under ticket 99")
@@ -1888,6 +1893,7 @@ _S_OPTION_DEFAULTS = {
     "stepwise_reset": False, "maxfail": None, "collectonly": False, "setuponly": False,
     "setupplan": False, "setupshow": False, "keyword": "", "markexpr": "",
     "deselect": None, "ignore": None, "ignore_glob": None,
+    "runxfail": False, "pythonwarnings": None, "trace": False,
 }
 
 

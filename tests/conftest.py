@@ -1,6 +1,7 @@
 """Shared pytest fixtures that prevent CI hangs when API keys are absent."""
 
 import os
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -306,10 +307,32 @@ def pytest_make_collect_report(collector):
 
 
 def _plain(value):
-    """config.option 的值照原樣記;不是 JSON 原生型別的,記型別名(寫不出來就整筆 session 遺失)。"""
+    """config.option 的值照原樣記;不是 JSON 原生型別的,記型別名(寫不出來就整筆 session 遺失)。
+    字串 list(例:`-W` 的 filter 清單,〈三十五〉3 (xvi))照原樣記成 list。"""
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
+    if isinstance(value, (list, tuple)) and all(isinstance(v, str) for v in value):
+        return list(value)
     return "<%s>" % type(value).__name__
+
+
+def _optimize_flag():
+    """`sys.flags.optimize`(〈三十五〉3 (xiv))。**在呼叫當下經模組層 `sys` 讀**,不在 import 時快取 ——
+    測試以 `monkeypatch.setattr(<本模組>, "sys", …)` 注入替身。不是 int(含 bool)⇒ None(缺欄 ⇒ 涵蓋未知)。"""
+    try:
+        value = getattr(getattr(sys, "flags", None), "optimize", None)
+    except Exception:
+        return None
+    return value if type(value) is int else None
+
+
+def _python_version():
+    """Python 的 major.minor(〈三十五〉3 (xviii)),經模組層 `sys.version_info` 在呼叫當下讀;讀不到 ⇒ None。"""
+    try:
+        info = tuple(sys.version_info)
+        return "%d.%d" % (info[0], info[1])
+    except Exception:
+        return None
 
 
 def _flag(session, name):
@@ -328,6 +351,10 @@ def _completeness_of(session):
     pyproject.toml 與本檔的工作樹 blob vs HEAD blob(git 子程序,失敗 ⇒ None);`pytest_version`
     取自本檔 import 的 `pytest`;`blocked` 是 `list_name_plugin()` 中值為 None 的名稱(`-p no:`)。
     路徑型事實一律轉成 root 相對路徑,不落帳絕對路徑。
+
+    票 145 Station 4e(〈三十五〉3 (xiv)–(xviii)、4)另記 pass 有效性的事實:`optimize` 與 `python_version`
+    在此刻經模組層 `sys` 讀;`runxfail` / `pythonwarnings` / `trace` 隨 `COMPLETENESS_OPTIONS` 記在 `options`。
+    路徑型 metadata 依欄位類別正規化(F3-甲):相對路徑以 `invocation_params.dir` 解析。
     """
     try:
         if _pre_narrowing_broken:
@@ -337,6 +364,7 @@ def _completeness_of(session):
         pm = cfg.pluginmanager
         name_plugins = pm.list_name_plugin()
         version = getattr(pytest, "__version__", None)
+        inv_dir = getattr(getattr(cfg, "invocation_params", None), "dir", None)
         return {
             "options": dict((k, _plain(getattr(option, k, None)))
                             for k in _redlight.COMPLETENESS_OPTIONS),
@@ -346,12 +374,16 @@ def _completeness_of(session):
             "pre_narrowing": dict((f, list(ids)) for f, ids in _pre_narrowing.items()),
             "plugins": _redlight.classify_plugins(_ROOT, name_plugins,
                                                   pm.list_plugin_distinfo()),
-            "blocked": _redlight.blocked_plugins(name_plugins),
-            "override_ini": _redlight.normalize_overrides(getattr(option, "override_ini", None), _ROOT),
-            "inifilename": _redlight.normalize_config_path(getattr(option, "inifilename", None), _ROOT),
+            "blocked": _redlight.blocked_plugins(name_plugins, _ROOT),
+            "override_ini": _redlight.normalize_overrides(getattr(option, "override_ini", None),
+                                                          _ROOT, inv_dir),
+            "inifilename": _redlight.normalize_config_path(getattr(option, "inifilename", None),
+                                                           _ROOT, inv_dir),
             "inipath": _redlight.normalize_config_path(getattr(cfg, "inipath", None), _ROOT),
             "config_blobs": _redlight.committed_blobs(_ROOT),
             "pytest_version": version if isinstance(version, str) else None,
+            "optimize": _optimize_flag(),
+            "python_version": _python_version(),
         }
     except Exception:
         return None

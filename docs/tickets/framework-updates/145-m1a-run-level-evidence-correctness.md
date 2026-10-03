@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3e 紅燈已寫(待 Jeff 驗收);Station 4e 未開始。
+**狀態**:動工 —— Station 4e 實作已提交;待固定全套驗收。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -82,6 +82,9 @@
 >
 > - 狀態(舊,第二十四代):~~`動工 —— Station 3e 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試。`~~
 >   —— 2026-10-03 Station 3e 紅燈寫完後由第 3 行取代(見〈三十五〉)。
+>
+> - 狀態(舊,第二十五代):~~`動工 —— Station 3e 紅燈已寫(待 Jeff 驗收);Station 4e 未開始。`~~
+>   —— 2026-10-03 Station 4e 實作提交後由第 3 行取代(見〈三十七〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -456,8 +459,8 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3d — Red-light(補) | PASS / ACCEPTED |
 | Station 4d — Implementation(修正) | PASS / COMPLETED（待 5d 審查） |
 | Station 5d — Review | FAIL |
-| Station 3e — Red-light(補) | 紅燈已寫，待驗收 |
-| Station 4e — Implementation(修正) | NOT STARTED |
+| Station 3e — Red-light(補) | PASS / ACCEPTED |
+| Station 4e — Implementation(修正) | 實作已提交，待驗收 |
 | Station 5e — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
 
@@ -465,8 +468,11 @@ Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3e 紅燈已寫(待 Jeff 驗收);Station 4e 未開始(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4e 實作已提交;待固定全套驗收(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第十六代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3e 紅燈已寫(待 Jeff 驗收);Station 4e 未開始(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 4e 實作提交後隨第 3 行同步更新(見〈三十七〉)。
 
 > **舊句(F-036,保留不刪,第十五代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3e 紅燈規劃已寫(待 Jeff 裁 P3);未寫測試(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 3e 紅燈寫完後隨第 3 行同步更新(見〈三十五〉)。
@@ -1769,6 +1775,59 @@ tests orphaned under ticket 145: (無)
   - 兩本前段 sha256 等於 H5(`23f397d4…` / `7463a452…`)。
 - status:red 只有 tests/test_redlight.py、tests/test_status.py;最近一次 run 為 B(collected 2021)。
 - anyio 4.15.0 唯讀查證:沒有會把失敗轉成通過的機制(〈三十五〉35.2)。
+- commit(回填):S3e-1 `7ebbb815fbba96124d971fe0066c096c3f1db8e8`;S3e-2(證據)`1c771c400c620a03135971063c37b89d4d237c74`。
+
+---
+
+## 三十七、Station 4e 修正
+
+裁決(2026-10-03,Jeff;照錄):
+
+- Station 3e = PASS / ACCEPTED,選 A(以帳本第 18 行 producer 紀錄代替缺失的 pytest 摘要行,不重跑 3e;
+  裁決助手已在隔離環境以 pytest 9.1.1 獨立重現 18 支的失敗原因皆正確 —— 非本 repo 帳本證據)。以 Jeff 切換 pipeline 為 implement 為驗收。
+
+裁決助手外部觀察(**隔離環境、非帳本證據**):
+
+- 在 Linux 上,S3e-1 的 3e 28 支為 20 failed / 8 passed。
+- 多出的 2 支 = `test_e3p_a_config_file_option_never_persists_a_path[win-abs]`、`test_e3p_an_override_value_never_persists_a_path[win-abs]`(POSIX 上認不出 Windows 絕對路徑 = S5d-F3 跨平台缺口)。
+- 4e 的 F3-甲 必須讓這 6 個參數化案例在兩種平台都綠;此點列為 5e 審查題。
+
+### 37.1 實作內容(S4e-1)
+
+**`.claude/hooks/redlight.py`**:
+- 依〈三十五〉35.1 第 3 點新增五個事實與條件:
+  - `COMPLETENESS_OPTIONS` 加 `runxfail`、`pythonwarnings`、`trace`。
+  - 新常數 `KNOWN_PYTHON_VERSIONS = ("3.11",)`。
+  - `_completeness_problems` 加驗:`optimize`(int,不含 bool)、`python_version`(字串)、`options.runxfail` / `options.trace`(bool)、`options.pythonwarnings`(None 或字串 list)。缺欄或型別錯 ⇒ 不合格 ⇒ unknown。
+  - `_completeness_verdict` 加:`optimize != 0`、版本不在清單、`runxfail` / `trace` 不是 False、`pythonwarnings` 不是 None / 空 ⇒ unknown。
+  - 唯一 `"true"` 出口不變;不新增 assertmode 條件;不帶入 `sys.warnoptions`。
+- F3-甲(〈三十五〉35.1 第 4 點):
+  - 平台無關的絕對路徑判定 `_is_abs_path`(`posixpath.isabs` 或 `ntpath.isabs` 或磁碟代號開頭)。
+  - (1) 類路徑 `_root_relative`:相對路徑先以 base 解析,越出 root 或他平台絕對路徑 ⇒ `<outside>`。
+  - 名稱欄位 `_plugin_name`:路徑名 ⇒ (1);`[A-Za-z0-9_.-]+` 原樣;其他 `<non-identifier>`。
+  - `classify_plugins` 以原始名稱判 kind,落帳字串正規化。
+  - `blocked_plugins(name_plugins, root)` 正規化落帳字串。
+  - `normalize_config_path(value, root, base)` 一律走 (1)。
+  - `normalize_overrides(values, root, base)`:key 原樣;value 只在絕對或越出 root 時正規化。
+  - `_normalize_arg`(invocation.args)對他平台的絕對路徑回 None。
+- `validate_session` 未改。
+
+**`tests/conftest.py`(producer)**:
+- 模組層 `import sys`。
+- `_optimize_flag()` / `_python_version()` 在 sessionfinish 當下經模組層 `sys` 讀 `sys.flags.optimize`、`sys.version_info`(不在 import 時快取)。
+- completeness 新增 `optimize`、`python_version` 兩鍵。
+- `_plain` 把字串 list 原樣記成 list(`-W` 的 filter)。
+- `blocked` / `override_ini` / `inifilename` 傳入 root 與 `invocation_params.dir`。
+
+**授權補件(〈三十五〉35.1 第 5 點)**:
+- `_C_OPTION_DEFAULTS`、`_S_OPTION_DEFAULTS` 各加三個鍵。
+- 兩支直接寫 dict 的測試補 `optimize: 0`、`python_version: "3.11"` 與三個 option 鍵。
+
+**未改**:`.claude/portable/status.py`。
+
+### 37.2 驗收結果
+
+(待 S4e-2 填入。)
 
 ---
 
