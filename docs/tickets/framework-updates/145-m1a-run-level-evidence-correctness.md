@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5d 審查包已建立;待獨立審查。
+**狀態**:動工 —— Station 5d FAIL(S5d-F1 阻擋);回 Station 3e 規劃與補紅燈。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -73,6 +73,9 @@
 >
 > - 狀態(舊,第二十一代):~~`動工 —— Station 4d 修正完成(固定全套 exit 0);待 Station 5d 審查。`~~
 >   —— 2026-10-02 Station 5d 審查包建立後由第 3 行取代(見〈三十二〉)。
+>
+> - 狀態(舊,第二十二代):~~`動工 —— Station 5d 審查包已建立;待獨立審查。`~~
+>   —— 2026-10-02 Station 5d 獨立審查 FAIL 後由第 3 行取代(見〈三十三〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -446,15 +449,21 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5c — Review | FAIL |
 | Station 3d — Red-light(補) | PASS / ACCEPTED |
 | Station 4d — Implementation(修正) | PASS / COMPLETED（待 5d 審查） |
-| Station 5d — Review | 審查包已建立，待審 |
+| Station 5d — Review | FAIL |
+| Station 3e — Red-light(補) | NOT STARTED |
+| Station 4e — Implementation(修正) | NOT STARTED |
+| Station 5e — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5d 審查包已建立;待獨立審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5d FAIL(S5d-F1 阻擋);回 Station 3e 規劃與補紅燈(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第十三代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5d 審查包已建立;待獨立審查(與票頭第 3 行一致)。~~
+> 2026-10-02 Station 5d 獨立審查 FAIL 後隨第 3 行同步更新(見〈三十三〉)。
 
 > **舊句(F-036,保留不刪,第十二代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4d 修正完成(固定全套 exit 0);待 Station 5d 審查(與票頭第 3 行一致)。~~
 > 2026-10-02 Station 5d 審查包建立後隨第 3 行同步更新(見〈三十二〉)。
@@ -1576,7 +1585,52 @@ tests orphaned under ticket 145: (無)
 | bytes / 行數(工作複本,LF) | 382481 / 6821 |
 | SHA-256(工作複本) | `c3f0a6070265b17e7b626fc894bbfb470ef0d66e5a5ee1837c5ee1584ec0d575` |
 | staged blob ID | `8ea2d705057abcae7c7f5932837e92b991d42c99` |
-| S5d-0 commit | 見 S5d-0 視窗回報;記錄 5d 結果時回填 |
+| S5d-0 commit | `5ffae457f8c97d47f5cb649c107e584ca5219dd6` |
+
+---
+
+## 三十三、Station 5d 獨立審查（FAIL）與 Station 3e 裁決（2026-10-02，Jeff）
+
+### 33.1 審查報告
+
+- 路徑 docs/audits/2026-10-02-m1a-station5d-independent-review-fail.md；raw = normalized（LF），sha256 35a385d859056528f22a1bb369bea92901c3e0e0f4de22e085e8796a79e863cf
+- 審查對象 889fbd8f666ea522ff6af172979a8d020e50b86b；判決 FAIL（valid independent review，於全新對話執行）；阻擋 1（S5d-F1），非阻擋 5（S5d-F2–F6）
+- 報告內的本機路徑已由審查者遮罩為 <user>。
+
+### 33.2 裁決助手外部重現（隔離環境；不是本 repo 的帳本證據；未寫入本 repo 任何檔案）
+
+- 環境：pytest 9.1.1。測試 `def test_a(): assert 1 == 2`。
+- 正常執行 ⇒ 1 failed。PYTHONOPTIMIZE=1 ⇒ 1 failed（測試模組的 assert 經 rewrite 仍執行）。
+- PYTHONOPTIMIZE=1 + PYTEST_ADDOPTS=--assert=plain ⇒ 1 passed；pytest 只發出 PytestConfigWarning
+  「ASSERTIONS ARE NOT EXECUTED and FAILING TESTS WILL PASS」。⇒ S5d-F1 在真實執行上成立。
+- 附加發現（裁決助手，非審查者發現，記為 S5d-X1）：assert 寫在非測試的輔助模組（不被 rewrite）時，
+  只要 PYTHONOPTIMIZE=1（預設 rewrite 模式、不加 --assert=plain）⇒ 1 passed。
+  ⇒ 審查報告「本發現只成立於 plain 模式」的範圍過窄；根因是直譯器的最佳化旗標，不是 assert 模式。
+
+### 33.3 裁決
+
+1. Station 5d FAIL 成立；S5d-F1 為阻擋，納入 M1-a（審查報告的選項 A）。
+   理由：後果與 S5b-F1、S5c-F1 同為假綠；兩個環境變數即可觸發，屬一般使用而非對抗；
+   依 ODC-1 第 2 項「確實執行並通過」，assert 不執行的 run 不得取得退紅權。
+   依流程回 Station 3e（規劃 + 紅燈）→ 4e（修正）→ 5e（新的獨立審查）。不推、不回滾、不改寫歷史。
+2. 方向（合約）：從「列舉會出問題的管道」改為「定義合格的執行環境」（受支援執行邊界）。
+   pytest 版本、plugin、收集設定已是白名單；本輪補上「直譯器與 pass 有效性」這一層。
+   最低要求：producer 正向記錄 sys.flags.optimize，非 0 或缺欄 ⇒ 不得為 "true"。
+   Station 3e-0 規劃時一次盤點：哪些直譯器旗標、pytest 選項或環境輸入會讓「passed」不再代表斷言確實執行並通過
+   （至少涵蓋 -O / -OO / PYTHONOPTIMIZE、--assert 模式、會改變 pass / fail 語意的其他內建選項），
+   逐項附 pytest 9.1.1 / CPython 出處、分類（會造成假通過／只會更嚴／不影響）、producer 能否正向讀到，再定白名單合約。
+3. S5d-F3（刻意構造的輸入使 producer 寫入未正規化路徑）：納入 4e 修正（違反〈二十五〉裁決 1 (1) 的字面，修正成本低）；
+   3e 規劃須列出對應的紅燈。
+4. S5d-F2（plugin 自行 unregister）：非阻擋，併入 S5c-F4 的追蹤票（行程內程式碼使事實失真）。
+   S5d-F4（Windows 上 subprocess 逾時不保證有上界）、S5d-F5（鎖步測試推導的寫法缺口）、S5d-F6（resolve 與 absolutepath 形式不同）：
+   非阻擋，皆只會 fail-closed / fail-loud，登記到結案後追蹤票。
+5. 程序事件：審查者一次誤用 pipe（git grep 正規表示式中的 | 被 shell 解讀；後段未執行、無寫入），事後以 git show 全檔 + Grep 重做；
+   工具環境自動把超長輸出存到 repo 外的 tool-results 目錄。審查前後 HEAD、樹狀態、兩本帳、閘門攔截數皆未變
+   （裁決助手以 status_all 核對）。照實記錄，不影響審查效力。
+   另記：本輪曾誤把審查提示貼到實作 session，該 session 拒絕自審並停手；正式審查改在全新對話執行。
+6. 結案後追蹤票清單更新為：conftest 不受 R2/R3 管的缺口；session 帳本增長；S5b-F2–F6；S5c-F3；
+   S5c-F4 + S5d-F2（行程內程式碼使事實失真）；S5d-F4、S5d-F5、S5d-F6；
+   pytest / anyio 版本未在 dependency 精確 pin；測試身分 parametrize ID 帶本機 repo 路徑；上游票 139 少一空行。
 
 ---
 
