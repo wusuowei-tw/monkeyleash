@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 4e 實作已提交;待固定全套驗收。
+**狀態**:動工 —— Station 4e 修正完成(固定全套 exit 0);待 Station 5e 審查。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -85,6 +85,9 @@
 >
 > - 狀態(舊,第二十五代):~~`動工 —— Station 3e 紅燈已寫(待 Jeff 驗收);Station 4e 未開始。`~~
 >   —— 2026-10-03 Station 4e 實作提交後由第 3 行取代(見〈三十七〉)。
+>
+> - 狀態(舊,第二十六代):~~`動工 —— Station 4e 實作已提交;待固定全套驗收。`~~
+>   —— 2026-10-03 Station 4e 固定全套 exit 0 後由第 3 行取代(見〈三十七〉37.2)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -460,7 +463,7 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 4d — Implementation(修正) | PASS / COMPLETED（待 5d 審查） |
 | Station 5d — Review | FAIL |
 | Station 3e — Red-light(補) | PASS / ACCEPTED |
-| Station 4e — Implementation(修正) | 實作已提交，待驗收 |
+| Station 4e — Implementation(修正) | PASS / COMPLETED（待 5e 審查） |
 | Station 5e — Review | NOT STARTED |
 | Station 6 — Acceptance | NOT STARTED |
 
@@ -468,8 +471,13 @@ Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4e 實作已提交;待固定全套驗收(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4e 修正完成(固定全套 exit 0);待 Station 5e 審查(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第十七代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4e 實作已提交;待固定全套驗收(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 4e 固定全套 exit 0 後隨第 3 行同步更新(見〈三十七〉37.2)。
+>
+> **〈十〉表格舊值(F-036)**:Station 4e 列 ~~`實作已提交，待驗收`~~ → `PASS / COMPLETED（待 5e 審查）`(2026-10-03,S4e-2)。
 
 > **舊句(F-036,保留不刪,第十六代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3e 紅燈已寫(待 Jeff 驗收);Station 4e 未開始(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 4e 實作提交後隨第 3 行同步更新(見〈三十七〉)。
@@ -1827,7 +1835,19 @@ tests orphaned under ticket 145: (無)
 
 ### 37.2 驗收結果
 
-(待 S4e-2 填入。)
+- 報告:`docs/audits/2026-10-03-m1a-station4e-fix.md`。
+- S4e-1 `0139a7e803fc2d41eb354f1196a6206cfe304701`(`5 files changed, 222 insertions(+), 37 deletions(-)`)。
+- 固定全套(只跑一次,在 S4e-1 上):`2015 passed, 3 skipped, 3 xfailed in 159.82s (0:02:39)`,exit 0(collected 2021)。輸出經 shell 導入 session scratch 檔保存,pytest 指令本身未加參數。
+- 四項判定:
+  - (a) 3e 的 18 支全部轉綠,10 支 regression-lock 仍綠 —— **成立**(帳本第 19 行 28 支皆 `passed`)。
+  - (b) 第 19 行新事實合格 —— **成立**:
+    - `optimize` 0、`python_version` "3.11"、`runxfail` false、`pythonwarnings` null、`trace` false。
+    - 舊事實不變:`override_ini == ["strict_markers=true"]`、`inifilename` null、`inipath` "pyproject.toml"、兩個 blob worktree = head、`pytest_version` "9.1.1"、anyio 4.15.0 known_dist、other 0、None 項目 0。
+    - producer 欄位無絕對路徑;全帳本本機使用者名稱 0 筆。
+  - (c) 帳本 H6 → H7 只追加 —— **成立**:兩本前段 sha256 = H6;test-runs +46 行、test-sessions +1 行。
+  - (d) status:red(無)、green 46、最近一次 run A —— **成立**。
+- 3c / 3d 中斷言 `!= "true"` 的既有測試:沒有任何一支是因 4e 新條件才通過(報告第 4e 節逐支列出主因條件與行號)。
+- 程序記錄:〈十〉Station 3e 列已在 S4e-1 依 3e 裁決同步為 PASS / ACCEPTED(舊值「紅燈已寫,待驗收」)。
 
 ---
 
