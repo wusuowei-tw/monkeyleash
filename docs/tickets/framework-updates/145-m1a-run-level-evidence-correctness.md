@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 4f 實作已提交;待固定全套驗收。
+**狀態**:動工 —— Station 4f 本機固定全套驗收通過;待 POSIX 跨平台驗收。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -106,6 +106,9 @@
 >
 > - 狀態(舊,第三十二代):~~`動工 —— Station 3f 紅燈已寫(待 Jeff 驗收);Station 4f 未開始。`~~
 >   —— 2026-10-03 Station 4f 實作提交後由第 3 行取代(見〈四十三〉)。
+>
+> - 狀態(舊,第三十三代):~~`動工 —— Station 4f 實作已提交;待固定全套驗收。`~~
+>   —— 2026-10-03 Station 4f 本機固定全套驗收通過後由第 3 行取代(見〈四十三〉43.2)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -484,15 +487,20 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 4e — Implementation(修正) | PASS / COMPLETED（待 5e 審查） |
 | Station 5e — Review | FAIL(依 Jeff 裁決;審查者原判 PASS) |
 | Station 3f — Red-light(補) | PASS / ACCEPTED |
-| Station 4f — Implementation(修正) | 實作已提交，待驗收 |
+| Station 4f — Implementation(修正) | Windows acceptance PASS；POSIX pending |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4f 實作已提交;待固定全套驗收(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4f 本機固定全套驗收通過;待 POSIX 跨平台驗收(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第二十四代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4f 實作已提交;待固定全套驗收(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 4f 本機固定全套驗收通過後隨第 3 行同步更新(見〈四十三〉43.2)。
+>
+> **〈十〉表格舊值(F-036)**:Station 4f 列 ~~`實作已提交，待驗收`~~ → `Windows acceptance PASS；POSIX pending`(2026-10-03,S4f-2)。
 
 > **舊句(F-036,保留不刪,第二十三代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3f 紅燈已寫(待 Jeff 驗收);Station 4f 未開始(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 4f 實作提交後隨第 3 行同步更新(見〈四十三〉)。
@@ -2127,9 +2135,21 @@ POSIX 上 failed 預期為 14。
 
 **未改**:`.claude/portable/status.py`。
 
-### 43.2 驗收結果
+### 43.2 驗收結果(本機 Windows;S4F2)
 
-(待 S4F2。)
+- 報告:`docs/audits/2026-10-03-m1a-station4f-fix.md`。
+- S4F1 `ad14418d903b26212dc9e98754f44aaa894375c8`(`4 files changed, 85 insertions(+), 13 deletions(-)`);conftest 未改。
+- 固定全套(只跑一次,在 S4F1 上):`2051 passed, 3 skipped, 3 xfailed in 166.17s (0:02:46)`,exit 0(collected 2057)。
+- 判定:
+  - (a) 3f 的 13 支 behavior-red 全部轉綠,23 支 regression-lock 仍綠;規劃檔 7.4 的 24 支既有測試全部通過 —— **成立**(帳本第 21 行)。
+  - (b) 第 21 行 `options.usepdb` false;既有事實不變;other 0;producer 欄位無絕對路徑;全帳本本機使用者名稱 0 筆 —— **成立**。
+  - (c) 帳本 H8 → H9 只追加 —— **成立**:
+    - 兩本前段 sha256 等於 H8;test-runs 2733 行(+46)、test-sessions 21 行(+1)。
+    - H9:test-runs 732856 bytes / `ec6bc011…`;test-sessions 7751802 bytes / `33b920e9…`。
+  - (d) status:red(無)、green 46、最近一次 run A —— **成立**。
+  - (e) S5e-F5 更正已照錄進 4f 報告的 correction 段(3f 規劃檔 P8;未回寫 4e 報告)。
+  - (f) (xix) 不是任何 3c / 3d / 3e `!= "true"` 測試通過的唯一理由(靜態推理,見報告 5f)。
+- **未證明:R9–R13 的 POSIX 實測尚未完成,待裁決助手外部驗證。** 4f 在 S4F3 之前不標 PASS / COMPLETED。
 
 ---
 
