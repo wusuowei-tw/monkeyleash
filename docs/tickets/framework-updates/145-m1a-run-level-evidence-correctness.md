@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5e 審查包已建立;待獨立審查。
+**狀態**:動工 —— Station 5e 依 Jeff 裁決 FAIL(S5e-F1;審查者原判 PASS);待 Station 3f 紅燈規劃。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -91,6 +91,9 @@
 >
 > - 狀態(舊,第二十七代):~~`動工 —— Station 4e 修正完成(固定全套 exit 0);待 Station 5e 審查。`~~
 >   —— 2026-10-03 Station 5e 審查包建立後由第 3 行取代(見〈三十八〉)。
+>
+> - 狀態(舊,第二十八代):~~`動工 —— Station 5e 審查包已建立;待獨立審查。`~~
+>   —— 2026-10-03 Station 5e 獨立審查結果與 Jeff 裁決記錄後由第 3 行取代(見〈三十九〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -467,15 +470,20 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5d — Review | FAIL |
 | Station 3e — Red-light(補) | PASS / ACCEPTED |
 | Station 4e — Implementation(修正) | PASS / COMPLETED（待 5e 審查） |
-| Station 5e — Review | 審查包已建立，待審 |
+| Station 5e — Review | FAIL(依 Jeff 裁決;審查者原判 PASS) |
 | Station 6 — Acceptance | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5e 審查包已建立;待獨立審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5e 依 Jeff 裁決 FAIL(S5e-F1;審查者原判 PASS);待 Station 3f 紅燈規劃(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
+
+> **舊句(F-036,保留不刪,第十九代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5e 審查包已建立;待獨立審查(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 5e 獨立審查結果與 Jeff 裁決記錄後隨第 3 行同步更新(見〈三十九〉)。
+>
+> **〈十〉表格舊值(F-036)**:Station 5e 列 ~~`審查包已建立，待審`~~ → `FAIL(依 Jeff 裁決;審查者原判 PASS)`(2026-10-03,S5e-1)。
 
 > **舊句(F-036,保留不刪,第十八代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4e 修正完成(固定全套 exit 0);待 Station 5e 審查(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 5e 審查包建立後隨第 3 行同步更新(見〈三十八〉)。
@@ -1871,10 +1879,68 @@ tests orphaned under ticket 145: (無)
 | 審查包大小 | 394851 bytes / 6994 行 |
 | 審查包 SHA-256 | `754721dc20305e127dfd5de0c4ddccc001f040abe5fd6c06c7ced033615fb302` |
 | 審查包 staged blob | `ec6f6c68e88a78bff8aedaa93263157548080a93` |
-| S5e-0(本 commit) | 記錄 5e 結果時回填 |
+| S5e-0(本 commit) | `4f839d2399c36cf1c8bca36b91a27d4932c6e5e2`(2026-10-03 於 S5e-1 回填;原值「記錄 5e 結果時回填」) |
 
 - 審查報告只寫到 `.scratch/m1a-s5e/review-report.md`;審查者規則見審查包 A.3。
 - 審查包內的逐字段落皆以 cmp 對出處核對過(詳見 S5e-0 的回報)。
+
+---
+
+## 三十九、Station 5e 獨立審查（審查者 PASS;依 Jeff 裁決 FAIL）與 Station 3f 裁決（2026-10-03，Jeff）
+
+### 39.1 審查報告
+
+- 路徑 `docs/audits/2026-10-03-m1a-station5e-independent-review.md`;raw = repo 副本(與審查者原檔 `.scratch/m1a-s5e/review-report.md` 以 `cmp` 逐位元組相同,無任何改動);
+  sha256 `c8ed7d0ba20dcaa39258532bd0f7dda1329f638490bd5dcbb8acf80a4ea8259d`;40861 bytes。
+- 審查對象 TARGET `0139a7e803fc2d41eb354f1196a6206cfe304701`;審查包所在 commit S5e-0 `4f839d2399c36cf1c8bca36b91a27d4932c6e5e2`。
+- **審查者原始判決:PASS**(阻擋 0、非阻擋 6)。報告第 1 節的附帶聲明原文:
+
+  > **附帶聲明**:S5e-F1(`--pdb` 不在白名單合約內)我判為非阻擋,但它的理由與 (xvii) 收 `--trace` 的理由相同。若裁決者認定它屬於 M1-a 範圍(F1 的選項 A),本判決應改為 FAIL。判斷依據寫在 S5e-F1 的「為什麼判非阻擋」。
+
+- 審查過程曾被 R7(`python -c`)擋下一次;審查者停手回報,Jeff 裁定停手正確、不算違規,並指定只用 `python -m pip show` 取得 pytest / pluggy 安裝位置。經過記於報告第 5 節。
+- 發現清單(報告第 3 節標題原文):
+  - S5e-F1【非阻擋(請裁決)】`--pdb`:失敗後進入 post-mortem,人可以改行程內狀態再 `continue`,讓**其他檔**的已知紅被退掉。白名單合約沒有涵蓋它
+  - S5e-F2【非阻擋】invocation dir 在 root 之外時,`override_ini` 的非路徑值 `true` 被改寫成 `<outside>`;固定指令從上層目錄執行時永遠是 unknown(相較 889fbd8 是可用性退步,方向為 fail-closed)
+  - S5e-F3【非阻擋】POSIX 上,以反斜線分隔、會越出 root 的相對值,在值類欄位不被認為越界,原字串照樣落帳(可帶本機使用者名稱;與 Windows 結果不同)
+  - S5e-F4【非阻擋】`_IDENTIFIER` 用 `re.match` 配 `$`,接受結尾帶換行的名稱,與合約字元集 `[A-Za-z0-9_.-]+` 的字面不符
+  - S5e-F5【非阻擋】4e 報告 4e 表把 c3 生產端測試的第一個擋下條件寫成 (viii) `:784-785`,實際是 (vii′) `:778-779`
+  - S5e-F6【非阻擋】依合約原樣落帳、但可以帶路徑的兩個欄位:override 的 key、`pythonwarnings`
+
+### 39.2 裁決助手外部重現(隔離環境;非獨立審查 finding;非本 repo 帳本證據)
+
+來源:Jeff 的 Station 5e-1 指令第 4 點,照錄。
+
+- Linux + Python 3.11 + pytest 9.1.1 + TARGET 的 redlight.py / conftest.py:
+  R1 固定全套 test_x 失敗(已知紅);R2 加 --pdb,另一檔 test_a 失敗進 pdb,輸入 `!import impl; impl.f = lambda: 2` 後 `c`,
+  test_x 通過;R2 run_state B、file_coverage(run, "tests/test_x.py") == "true" ⇒ 會退紅。S5e-F1 成立。
+- normalize_overrides(["strict_markers=true"], root, root 的上一層) ⇒ ["strict_markers=<outside>"];實際從上一層執行,
+  落帳 override_ini 為 ["strict_markers=<outside>"]、file_coverage 為 "unknown"。S5e-F2 成立。
+- POSIX 上 normalize_overrides(["cache_dir=a\..\..\..\home\x\c"], root, root) 原樣保留。S5e-F3 成立。
+- _plugin_name("abc\n", root) 回 "abc\n"。S5e-F4 成立。
+- pytest 9.1.1 讀碼:--pdbcls 的 dest 為 usepdb_cls(_pytest/debugging.py:51);其模組只在 debugger 被叫出時才 import
+  (_pytest/debugging.py:117-139)。此點僅供 3f-0 參考,不構成裁定。
+
+### 39.3 裁決(照錄)
+
+1. 獨立審查者原始判決:PASS(阻擋 0、非阻擋 6),附帶聲明 S5e-F1 若屬 M1-a 範圍則判決改為 FAIL。原始判決照錄,不得改寫為「審查者判 FAIL」。
+   Jeff 裁定:S5e-F1 屬 M1-a 範圍,視為阻擋 ⇒ Station 5e 最終結果 = FAIL(依 Jeff 裁決;審查本身為有效獨立審查)。
+2. 理由:〈三十五〉合約要求受支援的 pytest 主執行環境中,passed 不因 execution mode 失去正常證據語意;
+   (xvii) 收 --trace 的理由「除錯模式下人可在中途改變狀態,不作為證據執行」對 --pdb 同樣成立;只收其一,合約內部不一致。
+   且裁決助手已實際重現 false green(見第 4 點)。
+3. Station 3f 範圍(由 3f-0 規劃細化,本步不寫測試):
+   - 必做:S5e-F1 —— 新增 (xix):config.option.usepdb is False;缺欄或型別錯 ⇒ 不得為 "true"。
+   - 待證明項(3f-0 依 pytest 9.1.1 原始碼裁定,本步不得預先決定):usepdb_cls(--pdbcls 的 dest;注意名稱含底線)
+     在 usepdb=False、trace=False 時能否單獨啟動或改變 debugger / execution semantics。
+     若不能:新增 regression-lock,證明非 None 的 usepdb_cls 本身不降低 authority,避免不必要的 fail-closed;
+     若能:才把 usepdb_cls 加入 (xix)。
+   - 防「錯欄位測試」:3f 紅燈須至少一支經真實 pytest 參數解析(真實 conftest producer)證明 producer 讀到的是 pytest 真正的
+     config.option.usepdb(及 3f-0 若裁定需要的 usepdb_cls);不得只以人工 dict 塞同名欄位給 consumer 來證明。
+   - 一併修:S5e-F2(override 非路徑值在 invocation dir 位於 root 外時被改寫成 <outside>)、
+     S5e-F3(POSIX 反斜線越界未被認出,原字串落帳)、S5e-F4(_IDENTIFIER 以 match + $ 接受結尾換行)。
+   - S5e-F5:4e 表行號更正,寫在 3f 報告的 correction 段,不回寫 4e 報告。
+   - S5e-F6:非阻擋,列入 privacy / provenance 追蹤票,不在本票修。
+
+(39.3 第 2 點的「見第 4 點」指 Jeff 指令的第 4 點,即本節 39.2。)
 
 ---
 
