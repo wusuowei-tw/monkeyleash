@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5f 獨立審查 PASS;待 push 與 CI 確認(Station 6)。
+**狀態**:動工 —— Station 6 FAIL(淨室驗證);待 Station 3g 紅燈規劃。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -118,6 +118,9 @@
 >
 > - 狀態(舊,第三十六代):~~`動工 —— Station 5f 審查包已建立;待獨立審查。`~~
 >   —— 2026-10-03 Station 5f 獨立審查 PASS(依 Jeff 裁決)後由第 3 行取代(見〈四十五〉)。
+>
+> - 狀態(舊,第三十七代):~~`動工 —— Station 5f 獨立審查 PASS;待 push 與 CI 確認(Station 6)。`~~
+>   —— 2026-10-03 Station 6 CI 淨室驗證 FAIL(依 Jeff 裁決)後由第 3 行取代(見〈四十六〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -498,15 +501,22 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3f — Red-light(補) | PASS / ACCEPTED |
 | Station 4f — Implementation(修正) | PASS / COMPLETED（待 5f 審查） |
 | Station 5f — Review | PASS |
-| Station 6 — Acceptance | NOT STARTED |
+| Station 6 — Acceptance | FAIL(淨室驗證;依 Jeff 裁決) |
+| Station 3g — Red-light(補) | 待紅燈規劃 |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5f 獨立審查 PASS;待 push 與 CI 確認(Station 6)(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 6 FAIL(淨室驗證);待 Station 3g 紅燈規劃(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第二十八代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5f 獨立審查 PASS;待 push 與 CI 確認(Station 6)(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 6 FAIL 後隨第 3 行同步更新(見〈四十六〉)。
+>
+> **〈十〉表格舊值(F-036)**:Station 6 列 ~~`NOT STARTED`~~ → `FAIL(淨室驗證;依 Jeff 裁決)`(2026-10-03,S6-1)。
+> Station 3g 列為新增列,沒有舊值(2026-10-03,S6-1)。
+>
 > **舊句(F-036,保留不刪,第二十七代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5f 審查包已建立;待獨立審查(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 5f 獨立審查 PASS 後隨第 3 行同步更新(見〈四十五〉)。
 >
@@ -2260,6 +2270,74 @@ Linux + Python 3.11 + pytest 9.1.1 + TARGET 的 redlight.py / conftest.py:測試
    - 一般化研究:以「實際生效的 option namespace 等於固定指令的解析結果」取代逐項列舉(可收斂 (xv)–(xix) 與 logging 族);獨立設計,不在 M1-a 處理。
    - S5f-F2:POSIX 上 root 路徑本身含 \ 時固定全套永遠 unknown(fail-closed 的可用性問題);並更正 4f 報告第 7 節第 3 點的敘述(在新紀錄更正,不回寫)。
    - S5f-F3:normalize_overrides docstring 對 pytest 解析基準的敘述過度概括(log_file 以 cwd 解析);屬文件準確度,不改 authority 語意。
+
+---
+
+## 四十六、Station 6 push 與 CI(FAIL)及 Station 3g 裁決（2026-10-03，Jeff）
+
+### 46.1 push 紀錄
+
+- 指令 `git push origin master`(無 force、無 `--no-verify`);輸出原文:
+
+  ```
+  To https://github.com/wusuowei-tw/monkeyleash
+     84014ba..de36ebc  master -> master
+  ```
+
+- BASE `84014bae237a4741dae8ad18c6c041a3c3ef97b0` → `de36ebcbab284ef11064a9943b5191750482dd93`(S5f-1)。
+- push 前 `git rev-list --left-right --count origin/master...HEAD` = `0 48`(原輸出以 tab 分隔);push 後 = `0 0`;工作樹兩次皆乾淨。
+
+### 46.2 CI 失敗原文
+
+來源:Jeff 自 GitHub Actions 貼回(淨室驗證步驟),照錄:
+
+```
+=== 框架自己的測試,在這個新 repo 裡跑一次 ===
+框架測試在新 repo 裡不是全綠 —— 那些紅與新專案無關,會訓練人忽略訊號。框架測試只能斷言框架的性質。
+    1 failed, 1904 passed, 4 skipped, 3 xfailed in 23.57s
+    在新 repo 裡紅的:
+      FAILED tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d4_the_committed_addopts_override_constant_matches_pyproject - AssertionError: b"fatal: path 'pyproject.toml' does not exist in 'HEAD'
+Error: Process completed with exit code 1.
+```
+
+### 46.3 裁決助手外部重現
+
+**隔離環境;非獨立審查 finding;非本 repo 帳本證據。** 來源:Jeff 的 Station 6-1 / 3g-0 指令(修正第二版),照錄:
+
+- git clone 公開 repo(HEAD de36ebcbab284ef11064a9943b5191750482dd93),Linux + Python 3.11 + pytest 9.1.1,執行
+  python .claude/portable/verify_gates.py <暫存目錄>:R1–R9 各擋下一次、權威層偵測正常;框架測試 1 failed, 1904 passed,
+  失敗即上述 test_d4(與 CI 相同)。
+- 淨室安裝出的 repo:沒有 pyproject.toml;其帳本最後一筆 session:run_state B、_completeness_problems 為空、
+  override_ini None、inipath None、inifilename None、config_blobs 兩檔 worktree / head 皆 None;
+  抽查 tests/test_apply_patches.py 等檔 file_coverage 皆 "unknown"。⇒ 第二層成立。
+
+### 46.4 裁決(照錄)
+
+1. Station 6 = FAIL。公開的紅 CI 保留,不撤回、不 force rewrite;後續以正常 commit 修好再 push。
+2. 票 145 回 Station 3g-0;3g 同時處理兩層:
+   (第一層)框架 self-test 錯置:tests/test_redlight.py::TestCollectionDefinitionCoverage::test_d4_the_committed_addopts_override_constant_matches_pyproject
+     斷言宿主 repo(agent-gates)已提交的 pyproject.toml,違反「框架測試只能斷言框架的性質」;在淨室安裝的 repo 必紅。
+   (第二層)downstream evidence-policy 可移植性:全新安裝的 repo 跑固定指令,所有檔案 file_coverage 永遠 unknown,既有紅永遠無法合法退休。
+     這直接碰到 M1-a 的核心交付(框架裝到 downstream 後,可信的 pass 能否取得 true authority),屬票 145,不是之後再改善的可用性問題。
+3. 設計原則(3g-0 須遵守):
+   - 三類拆分:(a) Framework invariant —— 所有安裝都必須一致;框架 self-test 不得要求宿主 repo 剛好有 agent-gates 的 pyproject.toml。
+     (b) Framework capability boundary —— 框架實際驗證 / 支援到哪裡(例:Python major.minor、pytest audited versions、known plugin / dist)。
+     (c) Host evidence policy —— 宿主 repo 在 (b) 之內,自己選擇接受哪些已提交設定;必須來自宿主已提交、可審計的 policy / config,不得在執行當下自動猜測。
+   - 最終可取得 authority 的集合 = Framework capability boundary ∩ Host 已提交 policy。host policy 只能收窄,不能擴張框架未驗證的能力。
+   - 不得把「缺少 host policy」解讀成可信。狀態模型:新 repo 尚未建立 / 提交 evidence policy ⇒ unknown ⇒ 不得退紅(正確的 fail-closed);
+     經框架初始化流程,宿主提交自己的 policy ⇒ 實際有效環境 == 宿主已提交 policy(且在 capability boundary 內)⇒ 才可能 true。
+   - 不得修成「新 repo 沒有 pyproject.toml 也直接給 true」。
+4. 驗收須包含 clean-room 兩正三負:
+   - (正一)Uninitialized clean repo:框架測試本身全綠;host evidence authority 為 unknown(預期結果)。
+   - (正二)Initialized + matching policy:提交合法 policy → 製造 red → 正常固定指令 → true → red 合法退休(端到端證據)。
+   - (負一)Initialized + policy / environment mismatch(例:policy 認可某 override,實際不同)⇒ unknown,不能退休。
+   - (負二)HEAD 有 policy,但 worktree 與 HEAD 不同(本地改了未 commit)⇒ unknown,不能退休。
+   - (負三)worktree 有 policy,但 HEAD 根本沒有 policy(從未提交)⇒ unknown,不能退休。
+5. 流程教訓:Station 6 push 前,clean-room verification(.claude/portable/verify_gates.py)成為固定 pre-push acceptance 項,不得只靠 GitHub CI 第一次發現。
+6. Policy bootstrap trust root:policy 的 canonical location、schema bootstrap 與 policy 自身的 HEAD / worktree integrity 屬 framework invariant,
+   不得由 policy 內容自行指定或自我授權。缺檔、未提交、worktree ≠ HEAD、schema / version 未知 ⇒ 只能 unknown。
+   policy authority 內容必須由 HEAD committed blob 解析;worktree 僅用來做 HEAD / worktree identity check,不作為 authority policy 的內容來源
+   (不得在比對相等後再把 worktree 檔案當 authority source)。
 
 ---
 
