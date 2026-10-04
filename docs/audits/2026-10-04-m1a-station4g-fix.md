@@ -397,4 +397,20 @@ $ git status --porcelain
 7. **`addopts_overrides` 推導不了的寫法**(合併短旗標 `-qo x`、長旗標縮寫):方向是 unknown(fail-closed),不是假綠。
 8. **本機只驗 Windows**。POSIX 的淨室結果目前只有裁決助手的原型驗證(第 3 節),不是本樹的實測。
 
-### 9. POSIX 外部 clean-room 驗收:待執行(裁決助手)
+### 9. POSIX 外部 clean-room 驗收
+
+> **舊文字(F-036,保留不刪)**:本節標題原為 ~~`### 9. POSIX 外部 clean-room 驗收:待執行(裁決助手)`~~,沒有內文。
+> 2026-10-04 S4G4 依 Jeff 裁決改為下方照錄段落。
+
+POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳本證據）——2026-10-04 約 18:50 ET
+- 環境：Linux，Python 3.11.16，pytest 9.1.1，anyio 4.15.0。
+- 受測樹：以公開 repo de36ebcbab284ef11064a9943b5191750482dd93 的 clone 為底，覆蓋 Windows 工作樹於 S4G3 時點的 12 個程式 / 測試 / 設定檔（.claude/hooks/redlight.py、.claude/portable/install.py、.claude/portable/status.py、.claude/portable/verify_gates.py、tests/conftest.py、tests/test_redlight.py、tests/test_status.py、tests/test_install.py、tests/test_verify_gates.py、tests/test_host_evidence_policy.py、.agents/portable-manifest.txt、.agents/evidence-policy.json；CRLF→LF）。docs 未同步（不影響程式行為）。
+- verify_gates.py：R1–R9 各擋下一次；權威層偵測三項成立；淨室框架測試 1945 passed、4 skipped、3 xfailed、0 failed；evidence policy 兩正三負全部成立：
+    正一 未初始化 成立（35 個框架測試檔皆 unknown；evidence policy: 未初始化）
+    正二 已初始化且相符 成立（rc 1→0；file_coverage=true；green=tests/test_evidence_probe.py；evidence policy: 有效）
+    負一 policy / 環境不符 成立（file_coverage=unknown；紅仍在）
+    負二 HEAD 有、工作樹不同 成立（file_coverage=unknown；evidence policy: 工作樹與 HEAD 不同）
+    負三 工作樹有、HEAD 沒有 成立（file_coverage=unknown；evidence policy: 未提交）
+- 宿主固定全套（Linux）：collected 2100；2084 passed、13 failed、3 xfailed。13 支為 tests/test_gate.py::TestAuthorityLayerIsWired::test_this_repo_itself_is_wired 與 tests/test_known_items_regression.py 的 12 支；同一沙盒在 4g 之前的已推送版本 de36ebc 上同樣恰為這 13 支失敗 ⇒ 屬沙盒環境因素（推測：clone 未設 hooksPath、缺本機私有資料），與 4g 無關。evidence 相關 5 檔（test_redlight / test_status / test_install / test_verify_gates / test_host_evidence_policy）全過。
+- 先前的 S4G1 Linux 重現（正二不成立、成因 override_ini 為 None）與修法 B 原型驗證，見〈五十一〉51.1 / 證據報告。
+- 結論：POSIX 外部 clean-room 驗收 PASS。
