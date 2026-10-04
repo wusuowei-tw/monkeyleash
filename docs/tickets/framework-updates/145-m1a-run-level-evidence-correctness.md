@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 6 FAIL(淨室驗證);待 Station 3g 紅燈規劃。
+**狀態**:動工 —— Station 3g 紅燈規劃已寫(待 Jeff 裁);未寫測試。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -121,6 +121,9 @@
 >
 > - 狀態(舊,第三十七代):~~`動工 —— Station 5f 獨立審查 PASS;待 push 與 CI 確認(Station 6)。`~~
 >   —— 2026-10-03 Station 6 CI 淨室驗證 FAIL(依 Jeff 裁決)後由第 3 行取代(見〈四十六〉)。
+>
+> - 狀態(舊,第三十八代):~~`動工 —— Station 6 FAIL(淨室驗證);待 Station 3g 紅燈規劃。`~~
+>   —— 2026-10-03 Station 3g 紅燈規劃寫完後由第 3 行取代(見〈四十七〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -502,15 +505,20 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 4f — Implementation(修正) | PASS / COMPLETED（待 5f 審查） |
 | Station 5f — Review | PASS |
 | Station 6 — Acceptance | FAIL(淨室驗證;依 Jeff 裁決) |
-| Station 3g — Red-light(補) | 待紅燈規劃 |
+| Station 3g — Red-light(補) | 規劃已寫(待 Jeff 裁),未寫測試 |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 6 FAIL(淨室驗證);待 Station 3g 紅燈規劃(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g 紅燈規劃已寫(待 Jeff 裁);未寫測試(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第二十九代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 6 FAIL(淨室驗證);待 Station 3g 紅燈規劃(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 3g 紅燈規劃寫完後隨第 3 行同步更新(見〈四十七〉)。
+>
+> **〈十〉表格舊值(F-036)**:Station 3g 列 ~~`待紅燈規劃`~~ → `規劃已寫(待 Jeff 裁),未寫測試`(2026-10-03,S3g-0)。
+>
 > **舊句(F-036,保留不刪,第二十八代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5f 獨立審查 PASS;待 push 與 CI 確認(Station 6)(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 6 FAIL 後隨第 3 行同步更新(見〈四十六〉)。
 >
@@ -2338,6 +2346,27 @@ Error: Process completed with exit code 1.
    不得由 policy 內容自行指定或自我授權。缺檔、未提交、worktree ≠ HEAD、schema / version 未知 ⇒ 只能 unknown。
    policy authority 內容必須由 HEAD committed blob 解析;worktree 僅用來做 HEAD / worktree identity check,不作為 authority policy 的內容來源
    (不得在比對相等後再把 worktree 檔案當 authority source)。
+
+---
+
+## 四十七、Station 3g 紅燈規劃
+
+- 規劃檔:`docs/audits/2026-10-03-m1a-station3g-redlight-plan.md`。只規劃:未寫測試、未改 .py、未跑 pytest、未執行 verify_gates.py。
+- BASELINE:`faf7cb47823e33b65c2a21ffd85db3dd416adea1`(S6-1)。
+- 規劃結論摘要:
+  - P1:淨室的 unknown 有三個各自獨立的來源 —— (viii) `COMMITTED_ADDOPTS_OVERRIDES`、(x) `CONFIG_FILE`、(xi) `COMMITTED_FILES` 的 pyproject 那一半。三者都是 agent-gates 的宿主事實(Host evidence policy),被寫成了框架常數。
+    `KNOWN_PYTHON_VERSIONS` / `KNOWN_PYTEST_VERSIONS` / `KNOWN_DISTS` 屬能力邊界;`tests/conftest.py`、`_ROOT` 屬框架不變式。
+  - P2:test_d4 錯在**位置**,不在語意(出貨檔讀宿主 HEAD)。另發現 P2-B:斷言 "true" 的正控依賴真實 Python 3.11 + pytest 9.1.1,在其他環境的下游會出現與下游無關的紅。
+  - P3:canonical path 與 schema 屬框架常數;bootstrap 依 HEAD 存在 → HEAD blob → worktree identity → 由 HEAD blob 解析 → 與 runtime 比對;effective = 能力邊界 ∩ policy。
+  - P6:新增 33 支(behavior-red 26、regression-lock 7);預期 collected 2090(以 S4F1 的 2057 為底,未實測)、本機 failed 26。
+    負二、負三分別為 `test_g3_an_uncommitted_policy_state_is_not_full_coverage[worktree-differs]` / `[worktree-only]`(另有 test_status 鏈條版)。
+- P8 待 Jeff 裁(各項選項、建議與理由見規劃檔 P8):
+  1. policy 載體 —— 建議甲:獨立檔 `.agents/evidence-policy.json`。
+  2. 誰解析 policy —— 建議 A:producer 從 HEAD blob 解析並記入 session。
+  3. policy 列出能力邊界外的值 —— 建議 A:整份不合格 ⇒ unknown。
+  4. test_d4 處置 —— 建議 C:框架推導測試 + verdict 時機器鎖步 + 宿主專用檔保留 agent-gates 自身鎖步(〈三十一〉裁決 3 只改適用位置)。
+  5. 環境相依正控 —— 建議 A:在共用 driver 固定版本事實。
+  6. 初始化 —— 建議 A:安裝器只寫非 canonical 範本 + decisions-pending + status 顯示 policy 狀態。
 
 ---
 
