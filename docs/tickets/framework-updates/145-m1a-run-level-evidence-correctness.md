@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 4g PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5g 獨立審查。
+**狀態**:動工 —— Station 5g 審查包已建立；待獨立審查。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -142,6 +142,9 @@
 >
 > - 狀態(舊,第四十四代):~~`動工 —— Station 4g 本機固定全套與 clean-room 驗收通過;待 POSIX 外部驗收。`~~
 >   —— 2026-10-04 POSIX 外部 clean-room 驗收通過、Jeff 裁決 Station 4g = PASS / COMPLETED 後由第 3 行取代(見〈五十一〉51.3)。
+>
+> - 狀態(舊,第四十五代):~~`動工 —— Station 4g PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5g 獨立審查。`~~
+>   —— 2026-10-04 Station 5g 審查包建立後由第 3 行取代(見〈五十二〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -526,14 +529,19 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3g — Red-light(補) | PASS / ACCEPTED(26 behavior-red + 7 regression-lock;S3G2) |
 | Station 3g-1b — Red-light(補) | PASS / ACCEPTED(9 behavior-red;S3G1B-2) |
 | Station 4g — Implementation(修正) | PASS / COMPLETED（Windows/local acceptance PASS；POSIX clean-room PASS） |
+| Station 5g — Review | 審查包已建立，待審 |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4g PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5g 獨立審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5g 審查包已建立；待獨立審查(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第三十六代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4g PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5g 獨立審查(與票頭第 3 行一致)。~~
+> 2026-10-04 Station 5g 審查包建立後隨第 3 行同步更新(見〈五十二〉)。
+> Station 5g 列為新增列,沒有舊值(2026-10-04,S5g-0)。
+>
 > **舊句(F-036,保留不刪,第三十五代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4g 本機固定全套與 clean-room 驗收通過;待 POSIX 外部驗收(與票頭第 3 行一致)。~~
 > 2026-10-04 POSIX 外部 clean-room 驗收通過、Station 4g = PASS / COMPLETED 後隨第 3 行同步更新(見〈五十一〉51.3)。
 >
@@ -2631,6 +2639,39 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
 - 宿主固定全套（Linux）：collected 2100；2084 passed、13 failed、3 xfailed。13 支為 tests/test_gate.py::TestAuthorityLayerIsWired::test_this_repo_itself_is_wired 與 tests/test_known_items_regression.py 的 12 支；同一沙盒在 4g 之前的已推送版本 de36ebc 上同樣恰為這 13 支失敗 ⇒ 屬沙盒環境因素（推測：clone 未設 hooksPath、缺本機私有資料），與 4g 無關。evidence 相關 5 檔（test_redlight / test_status / test_install / test_verify_gates / test_host_evidence_policy）全過。
 - 先前的 S4G1 Linux 重現（正二不成立、成因 override_ini 為 None）與修法 B 原型驗證，見〈五十一〉51.1 / 證據報告。
 - 結論：POSIX 外部 clean-room 驗收 PASS。
+
+---
+
+## 五十二、Station 5g 審查包
+
+- Jeff 裁決(2026-10-04):Station 4g = PASS / COMPLETED(S4G4、S4G5 已提交);S4G5 = review baseline;Station 5g-0 = APPROVED TO BUILD REVIEW PACKAGE。
+- 審查包:`docs/audits/2026-10-04-m1a-station5g-review-package.md`。
+  - 347652 bytes / 5820 行;SHA-256 `c88ddd71af4fd4f3038d0363c5372a51951c6f256aea9ac8bfcd75c00cfbcfb5`;
+  - staged blob `26141bdc40a83a0f2f85da97eefb64ace226cb4d`。
+- 身分(13 個完整 SHA):
+
+| 代號 | 完整 SHA |
+|---|---|
+| BASE(已推送、5f 審過的最後狀態 S5f-1) | `de36ebcbab284ef11064a9943b5191750482dd93` |
+| S6-1 | `faf7cb47823e33b65c2a21ffd85db3dd416adea1` |
+| S3g-0 | `560f618560ddac1a34e0e835b99a1e3a5cc7eda5` |
+| S3G1(3g 主紅燈基線:33 支 = 26 + 7) | `2737e02c64b88f4d0a39bdafbea2f3776993cf2b` |
+| S3G2 | `7a15ea081da1bf23cc79e04aef76065438f65219` |
+| S3G1B(3g-1b 補紅燈基線:+9 behavior-red) | `83258dd9ab415a793eaf2b140a9e34c5b91069f2` |
+| S3G1B-2 | `3eb112b1cafb399f2757274264281436729e7e42` |
+| S4G1 | `f4fa0418aa037f95ef7d1f59c6fe6a812a80414c` |
+| S4G1B(T1/T2) | `f581a02a5b7a65c8eaf150bf7231acc464f99072` |
+| TARGET(S4G1C;最後一個程式 commit) | `8e7775526e462d984abb0992ed74c1e1aa3648dd` |
+| S4G3 | `2fe52d0ea7ec2d465768b5e907d64726bb1d9256` |
+| S4G4 | `b127ae016ce6a7a7d096742e5771f1e6d328f52a` |
+| REVIEW_HEAD(S4G5) | `b5db3734f6795d8a371e4f58b172e0a8ffb066eb` |
+
+- 數量用語(審查包與審查報告一律照此):
+  - 3g(S3G1)新增 33 支 = 26 behavior-red + 7 regression-lock;
+  - 3g-1b(S3G1B)再新增 9 支 behavior-red;
+  - 3g / 3g-1b 合計 42 支 = 35 behavior-red + 7 regression-lock;這 42 支在 4g 都不得被改動;
+  - 4g 另合法新增 T1(behavior-red)+ T2(regression-lock)於 S4G1B。
+- S5g-0(審查包 commit):記錄 5g 結果時回填。
 
 ---
 
