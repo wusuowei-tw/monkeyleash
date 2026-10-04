@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3g 紅燈已寫(待 Jeff 驗收);Station 4g 未開始。
+**狀態**:動工 —— Station 3g-1b 紅燈已提交;待固定全套驗證。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -130,6 +130,9 @@
 >
 > - 狀態(舊,第四十代):~~`動工 —— Station 3g 紅燈已提交;待固定全套驗證。`~~
 >   —— 2026-10-03 Station 3g 固定全套驗證成立後由第 3 行取代(見〈四十九〉)。
+>
+> - 狀態(舊,第四十一代):~~`動工 —— Station 3g 紅燈已寫(待 Jeff 驗收);Station 4g 未開始。`~~
+>   —— 2026-10-04 Station 3g-1b 紅燈提交後由第 3 行取代(見〈五十〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -511,15 +514,22 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 4f — Implementation(修正) | PASS / COMPLETED（待 5f 審查） |
 | Station 5f — Review | PASS |
 | Station 6 — Acceptance | FAIL(淨室驗證;依 Jeff 裁決) |
-| Station 3g — Red-light(補) | 紅燈已寫,待 Jeff 驗收 |
+| Station 3g — Red-light(補) | PASS / ACCEPTED(26 behavior-red + 7 regression-lock;S3G2) |
+| Station 3g-1b — Red-light(補) | 紅燈已提交,待固定全套驗證 |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g 紅燈已寫(待 Jeff 驗收);Station 4g 未開始(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g-1b 紅燈已提交;待固定全套驗證(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第三十二代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g 紅燈已寫(待 Jeff 驗收);Station 4g 未開始(與票頭第 3 行一致)。~~
+> 2026-10-04 Station 3g-1b 紅燈提交後隨第 3 行同步更新(見〈五十〉)。
+>
+> **〈十〉表格舊值(F-036)**:Station 3g 列 ~~`紅燈已寫,待 Jeff 驗收`~~ → `PASS / ACCEPTED(26 behavior-red + 7 regression-lock;S3G2)`(2026-10-04,依〈五十〉50.1 第 1 點)。
+> Station 3g-1b 列為新增列,沒有舊值(2026-10-04,S3g-1b)。
+>
 > **舊句(F-036,保留不刪,第三十一代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g 紅燈已提交;待固定全套驗證(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 3g 固定全套驗證成立後隨第 3 行同步更新(見〈四十九〉)。
 >
@@ -2464,7 +2474,59 @@ Error: Process completed with exit code 1.
   每支都失敗在破壞組 / 主斷言,對照組與情境斷言皆通過(報告第 4 節逐支表)。
 - 帳本 H9 → H10 只追加:兩本前段 sha256 = H9r / H9s;test-runs 2733 → 2780 行(+47 = 46 + 新檔 1)、test-sessions 21 → 22 行(+1)。
 - status:red 恰為 `tests/test_host_evidence_policy.py`、`tests/test_redlight.py`、`tests/test_status.py`、`tests/test_verify_gates.py`;最近一次 run B(collected 2090)。
-- commit(回填):S3G1 `2737e02c64b88f4d0a39bdafbea2f3776993cf2b`;S3G2(證據)見下一次落票。
+- commit(回填):S3G1 `2737e02c64b88f4d0a39bdafbea2f3776993cf2b`;S3G2(證據)`7a15ea081da1bf23cc79e04aef76065438f65219`。
+
+---
+
+## 五十、Station 3g-1b 補紅燈
+
+### 50.1 裁決(照錄)
+
+1. Station 3g 現有 26 behavior-red + 7 regression-lock(S3G2 7a15ea081da1bf23cc79e04aef76065438f65219)= PASS / ACCEPTED。
+   〈四十八〉48.1 第 6 點的兩項設計(安裝範本、status policy 狀態行)沒有對應紅燈;缺口處理選 A:先補 3g-1b,再進 4g。
+2. 裁決助手外部驗證(隔離環境;非本 repo 帳本證據;寫進票並標明來源):
+   - Linux + Python 3.11 + pytest 9.1.1,以 S3G1 2737e02c64b88f4d0a39bdafbea2f3776993cf2b 的測試檔:3g 新增 33 支為 26 failed / 7 passed,失敗集合同〈四十八〉48.2。
+   - 以 S3G1 的樹跑 verify_gates.py:淨室安裝的 repo 不含 tests/test_host_evidence_policy.py;淨室框架測試 26 failed(25 支出貨的 3g 紅燈 + 原 test_d4)、1911 passed;
+     7 支 regression-lock 在淨室為綠。
+   - 既有事實:install.main 既有流程即以 git add -A + commit 提交安裝結果(.claude/portable/install.py 約 :516–:520);本輪紅燈不得把「範本已提交」列為要求。
+3. 本輪新增紅燈(全部 behavior-red;在 S3G2 上必須失敗):
+   tests/test_install.py(檔尾新增 class TestEvidencePolicyTemplate):
+     I1 test_g3_install_writes_the_template_outside_the_canonical_path:install.main(<tmp 新 repo>) 後,
+        .agents/evidence-policy.template.json 存在;.agents/evidence-policy.json 不存在。
+        並以真實 producer / consumer 驗證:該 repo(安裝後、未建立 canonical policy)的固定全套 session,其 file_coverage 不得為 "true"
+        —— 範本位於非 canonical path,無論是否 tracked / committed,都不得成為 evidence authority。
+        (不得斷言範本「已提交」或「未提交」;那不是本票裁決的需求。)
+     I2 test_g3_the_template_lists_exactly_the_capability_boundary:範本為 schema "monkeyleash.evidence-policy" v1;python_versions / pytest_versions / dists
+        分別等於 redlight 的框架能力邊界常數;config_file 屬 FRAMEWORK_CONFIG_FILES。(常數名稱以 4g 實作為準,測試以 getattr 取得;取不到 ⇒ 失敗。)
+     I3 test_g3_decisions_pending_asks_to_initialize_the_policy:docs/decisions-pending.md 含 evidence policy 初始化的待決項(含 canonical 路徑 .agents/evidence-policy.json)。
+   tests/test_status.py(檔尾新增 class TestEvidencePolicyStatusLine;參數化 6 案;經真 git tmp repo):
+     test_g3_status_shows_the_policy_state[<state>],state ∈ uninitialized / uncommitted / worktree-differs / unknown-schema / outside-boundary / valid;
+     status 輸出須有一行以 "evidence policy: " 開頭,其後依序為:未初始化 / 未提交 / 工作樹與 HEAD 不同 / 格式不明 / 超出框架能力邊界 / 有效,
+     且該行帶 (source: .agents/evidence-policy.json)。
+     [unknown-schema] 必須在同一支測試內依序涵蓋四種已提交文件:JSON malformed、schema 名稱不認得、version 不支援、必要欄位缺失 / 型別錯誤;
+     每一種都須顯示「格式不明」(逐一斷言,不得只測一種)。
+   ⇒ 新增 9 支;預期固定全套:collected 2099;failed 35(既有 26 + 新 9);passed 2058;skipped 3;xfailed 3。
+
+### 50.2 外部驗證(來源)
+
+50.1 第 2 點為裁決助手在隔離環境的外部驗證,來源是 Jeff 的 Station 3g-1b 指令(修正版),照錄於上。
+**非獨立審查 finding;非本 repo 帳本證據。**
+
+### 50.3 新增 9 支(完整 nodeid;全部 behavior-red,在 S3G1B 上必須失敗)
+
+- tests/test_install.py::TestEvidencePolicyTemplate::test_g3_install_writes_the_template_outside_the_canonical_path
+- tests/test_install.py::TestEvidencePolicyTemplate::test_g3_the_template_lists_exactly_the_capability_boundary
+- tests/test_install.py::TestEvidencePolicyTemplate::test_g3_decisions_pending_asks_to_initialize_the_policy
+- tests/test_status.py::TestEvidencePolicyStatusLine::test_g3_status_shows_the_policy_state[uninitialized]
+- tests/test_status.py::TestEvidencePolicyStatusLine::test_g3_status_shows_the_policy_state[uncommitted]
+- tests/test_status.py::TestEvidencePolicyStatusLine::test_g3_status_shows_the_policy_state[worktree-differs]
+- tests/test_status.py::TestEvidencePolicyStatusLine::test_g3_status_shows_the_policy_state[unknown-schema]
+- tests/test_status.py::TestEvidencePolicyStatusLine::test_g3_status_shows_the_policy_state[outside-boundary]
+- tests/test_status.py::TestEvidencePolicyStatusLine::test_g3_status_shows_the_policy_state[valid]
+
+附註:
+- `[unknown-schema]` 逐一涵蓋五份已提交文件。「必要欄位缺失 / 型別錯誤」那一類兩種都測:缺 `dists`、`python_versions` 為字串。
+- I1 為了讓「範本不得成為 authority」不被其他 unknown 原因遮蔽,在安裝出的 repo 另提交一份 `pyproject.toml`(以 `--no-verify` 提交,同 install.main 自己的 commit),再驅動真實 producer。
 
 ---
 

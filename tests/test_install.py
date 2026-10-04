@@ -461,3 +461,208 @@ class TestGitignoreDedupIsLineExact:
         want = list(install_mod.GITIGNORE_FRAMEWORK) + list(install_mod.GITIGNORE_SECRETS)
         missing = [p for p in want if p not in got]
         assert not missing, "註解吃掉了 %d 條真防護行:%r" % (len(missing), missing)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145 Station 3g-1b 紅燈 —— 安裝範本(〈四十八〉48.1 第 6 點;〈五十〉50.1)
+#
+# 合約:安裝器只在**非 canonical** 路徑 `.agents/evidence-policy.template.json` 寫範本(內容 = 框架能力邊界常數),
+# 並在 `docs/decisions-pending.md` 加 evidence policy 初始化的待決項;canonical `.agents/evidence-policy.json`
+# **只有人**放上去並 commit 才存在。
+# 下文 `<BASELINE>` = 7a15ea081da1bf23cc79e04aef76065438f65219(S3G2)。
+#
+# **呼叫真的 `install.main()`**,在 tmp 目錄裝一個新 repo(module 範圍只裝一次,三支共用)。
+# `install.main()` 會往 `sys.path` 插入目標 repo 的 hooks 目錄、從 `sys.modules` 移除 `gate`
+# (`.claude/portable/install.py:364-366`)—— fixture 先存再還原,不讓它漏到其他測試。
+# **不斷言範本「已提交」或「未提交」**(〈五十〉50.1 第 2 點:那不是本票裁決的需求)。
+# 本段 helper 全部新寫;既有 helper(`_load`)只呼叫、不修改。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_G_POLICY_FILE = ".agents/evidence-policy.json"
+_G_TEMPLATE_FILE = ".agents/evidence-policy.template.json"
+_G_TEST_X = ("tests/test_x.py::test_a", "tests/test_x.py::test_b")
+
+
+@pytest.fixture(scope="module")
+def g3_installed_repo(tmp_path_factory):
+    """`install.main(<tmp>/repo)` 裝好的新 repo(真安裝)。回傳 repo 路徑(pathlib.Path)。"""
+    import sys
+    target = tmp_path_factory.mktemp("g3-install") / "repo"
+    mp = pytest.MonkeyPatch()
+    try:
+        mp.setattr(sys, "path", list(sys.path))
+        if "gate" in sys.modules:
+            mp.setitem(sys.modules, "gate", sys.modules["gate"])
+        mod = _load("install_for_g3_template", "install.py")
+        mod.main(str(target))
+    finally:
+        mp.undo()
+    return target
+
+
+def _g_load_from(path, name):
+    spec = importlib.util.spec_from_file_location(name, str(path))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+class _GInstallItem(pytest.Item):
+    """真的 `pytest.Item` 子類;只帶 nodeid(producer 以 isinstance 判斷)。"""
+
+    def runtest(self):
+        pass
+
+
+def _g_install_item(nodeid):
+    it = object.__new__(_GInstallItem)
+    it._nodeid = nodeid
+    it.name = nodeid.split("::")[-1]
+    return it
+
+
+class _GSys(object):
+    """conftest 所見的 `sys` 替身:版本固定為 3.11、`flags.optimize` 為 0,其他屬性轉給真的 `sys`。"""
+
+    def __init__(self):
+        import sys as real
+        import types
+        self._real = real
+        self.version_info = (3, 11, 0, "final", 0)
+        self.flags = types.SimpleNamespace(optimize=0)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+class _GPluginManager(object):
+    def __init__(self, name_plugins):
+        self._name_plugins = list(name_plugins)
+
+    def list_name_plugin(self):
+        return list(self._name_plugins)
+
+    def list_plugin_distinfo(self):
+        return []
+
+    def is_blocked(self, name):
+        return False
+
+    def get_plugin(self, name):
+        return dict(self._name_plugins).get(name)
+
+    def has_plugin(self, name):
+        return self.get_plugin(name) is not None
+
+
+def _g_drive_fixed_command(c, root):
+    """依 pytest 9.1.1 的呼叫順序驅動**安裝出來的** `tests/conftest.py`,模擬一次固定全套
+    `python -X utf8 -m pytest -q`:tests/test_x.py 的兩個身分全收集、全 passed、exit 0;
+    選項全部關閉、`override_ini == ["strict_markers=true"]`、`inipath` 為 `pyproject.toml`;
+    plugin 只有 `_pytest` 內建與 root conftest。"""
+    import types
+    files = {"tests/test_x.py": list(_G_TEST_X)}
+    for path, ids in sorted(files.items()):
+        report = types.SimpleNamespace(nodeid=path, result=[_g_install_item(n) for n in ids],
+                                       failed=False, passed=True, skipped=False, outcome="passed")
+        collector = types.SimpleNamespace(nodeid=path, path=root / path)
+        gen = c.pytest_make_collect_report(collector)
+        next(gen)
+        try:
+            gen.send(report)
+        except StopIteration:
+            pass
+        c.pytest_collectreport(report)
+    option_values = {"lf": False, "last_failed_no_failures": "all", "stepwise": False, "stepwise_skip": False,
+                     "maxfail": None, "collectonly": False, "setuponly": False, "setupplan": False,
+                     "runxfail": False, "pythonwarnings": None, "trace": False, "usepdb": False,
+                     "override_ini": ["strict_markers=true"], "inifilename": None, "pyargs": False}
+    option = types.SimpleNamespace(**option_values)
+    pm = _GPluginManager([("main", types.ModuleType("_pytest.main")),
+                          (os.path.join(str(root), "tests", "conftest.py"), c)])
+    config = types.SimpleNamespace(
+        args=["tests"], args_source=pytest.Config.ArgsSource.TESTPATHS, rootpath=root,
+        invocation_params=types.SimpleNamespace(args=("-q",), plugins=None, dir=root),
+        option=option, pluginmanager=pm, inipath=root / "pyproject.toml",
+        getoption=lambda name, default=None, skip=False: getattr(option, name, default))
+    selected = [n for ids in files.values() for n in ids]
+    session = types.SimpleNamespace(items=[_g_install_item(n) for n in selected],
+                                    testscollected=len(selected), config=config,
+                                    shouldstop=False, shouldfail=False)
+    c.pytest_collection_finish(session)
+    for nodeid in selected:
+        for when in ("setup", "call", "teardown"):
+            c.pytest_runtest_logreport(types.SimpleNamespace(
+                nodeid=nodeid, fspath=nodeid.split("::", 1)[0], when=when, outcome="passed",
+                passed=True, failed=False, skipped=False))
+    c.pytest_sessionfinish(session, 0)
+
+
+class TestEvidencePolicyTemplate:
+
+    def test_g3_install_writes_the_template_outside_the_canonical_path(self, g3_installed_repo, monkeypatch):
+        """I1(〈五十〉50.1 第 3 點)。分類:behavior-red。
+
+        `install.main(<tmp 新 repo>)` 之後:`.agents/evidence-policy.template.json` 存在;
+        `.agents/evidence-policy.json`(canonical)**不存在**。
+        再以安裝出來的**真實** producer(`tests/conftest.py`)與 consumer(`.claude/hooks/redlight.py`)驗證:
+        在該 repo 提交一份 `pyproject.toml`(與 install.main 自己的 commit 同樣以 `--no-verify` 提交,
+        `.claude/portable/install.py:520, :526`)後,模擬一次固定全套(版本事實固定為 3.11 / 9.1.1)——
+        session 合格且為 A,但 `file_coverage` 不得為 `"true"`:範本位於非 canonical path,
+        無論是否 tracked / committed,都不得成為 evidence authority。
+        BASELINE 上失敗的原因:`<BASELINE>:.claude/portable/install.py:497-530` 不寫任何範本。
+        """
+        import subprocess
+        root = g3_installed_repo
+        assert (root / _G_TEMPLATE_FILE).is_file(), "安裝器沒有寫 %s" % _G_TEMPLATE_FILE
+        assert not (root / _G_POLICY_FILE).exists(), "安裝器寫了 canonical policy —— 那等於自動信任"
+        with open(str(root / "pyproject.toml"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(u'[tool.pytest.ini_options]\ntestpaths = ["tests"]\naddopts = "-ra --strict-markers"\n')
+        for args in (["add", "pyproject.toml"], ["commit", "-q", "--no-verify", "-m", "g3 pyproject"]):
+            subprocess.run(["git"] + args, cwd=str(root), capture_output=True, check=True)
+        c = _g_load_from(root / "tests" / "conftest.py", "conftest_in_installed_repo_g3")
+        assert c._redlight is not None, "安裝出來的 conftest 載不到 redlight"
+        monkeypatch.setattr(c, "sys", _GSys(), raising=False)
+        monkeypatch.setattr(pytest, "__version__", "9.1.1")
+        _g_drive_fixed_command(c, c._ROOT)
+        rl = _g_load_from(root / ".claude" / "hooks" / "redlight.py", "redlight_in_installed_repo_g3")
+        runs = rl.load_runs(str(c._ROOT))
+        assert runs, runs
+        run = runs[-1]
+        assert rl.validate_session(run) == [], run
+        assert rl.run_state(run) == "A", run
+        got = rl.file_coverage(run, "tests/test_x.py")
+        assert got != "true", got
+
+    def test_g3_the_template_lists_exactly_the_capability_boundary(self, g3_installed_repo):
+        """I2(〈五十〉50.1 第 3 點)。分類:behavior-red。
+
+        範本為 schema `"monkeyleash.evidence-policy"` v1;`python_versions` / `pytest_versions` / `dists`
+        分別等於安裝出來的 redlight 的框架能力邊界常數(`KNOWN_PYTHON_VERSIONS` / `KNOWN_PYTEST_VERSIONS` /
+        `KNOWN_DISTS`);`config_file` 屬 `FRAMEWORK_CONFIG_FILES`。常數以 getattr 取得,取不到 ⇒ 失敗。
+        BASELINE 上失敗的原因:沒有範本檔(`<BASELINE>:.claude/portable/install.py:497-530`)。
+        """
+        import json
+        root = g3_installed_repo
+        path = root / _G_TEMPLATE_FILE
+        assert path.is_file(), "安裝器沒有寫 %s" % _G_TEMPLATE_FILE
+        template = json.loads(path.read_text(encoding="utf-8"))
+        rl = _g_load_from(root / ".claude" / "hooks" / "redlight.py", "redlight_for_template_g3")
+        assert template.get("schema") == "monkeyleash.evidence-policy" and template.get("version") == 1, template
+        assert template.get("python_versions") == list(getattr(rl, "KNOWN_PYTHON_VERSIONS")), template
+        assert template.get("pytest_versions") == list(getattr(rl, "KNOWN_PYTEST_VERSIONS")), template
+        assert template.get("dists") == [list(d) for d in getattr(rl, "KNOWN_DISTS")], template
+        assert template.get("config_file") in getattr(rl, "FRAMEWORK_CONFIG_FILES"), template
+
+    def test_g3_decisions_pending_asks_to_initialize_the_policy(self, g3_installed_repo):
+        """I3(〈五十〉50.1 第 3 點)。分類:behavior-red。
+
+        `docs/decisions-pending.md` 含 evidence policy 初始化的待決項,且點名 canonical 路徑
+        `.agents/evidence-policy.json`。
+        BASELINE 上失敗的原因:`<BASELINE>:.claude/portable/install.py:386-422` 的待決項沒有 evidence policy。
+        """
+        path = g3_installed_repo / "docs" / "decisions-pending.md"
+        assert path.is_file(), "安裝器沒有寫 docs/decisions-pending.md"
+        body = path.read_text(encoding="utf-8")
+        assert "evidence policy" in body.lower(), body
+        assert _G_POLICY_FILE in body, body

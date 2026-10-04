@@ -3015,3 +3015,120 @@ class TestEvidencePolicyChain:
         got = _lines_of(root)
         assert u"tests/test_x.py" in got[u"green"], got
         assert u"tests/test_x.py" not in got[u"red"], got
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 票 145 Station 3g-1b 紅燈 —— status 的 evidence policy 狀態行(〈四十八〉48.1 第 6 點;〈五十〉50.1)
+#
+# 合約:status 輸出恰有一行以 `evidence policy: ` 開頭,值依 policy 狀態為
+# 未初始化 / 未提交 / 工作樹與 HEAD 不同 / 格式不明 / 超出框架能力邊界 / 有效,
+# 並帶 `(source: .agents/evidence-policy.json)`。沒有這一行,「未初始化 ⇒ 永遠 unknown」對下游是靜默的。
+# 下文 `<BASELINE>` = 7a15ea081da1bf23cc79e04aef76065438f65219(S3G2)。
+#
+# 每一案都在**真的** git tmp repo(`_g_committed`)上佈置 policy 狀態,再呼叫 `render(root)`。
+# 本段 helper 全部新寫;既有 helper(`_root_with_redlight` / `_g_committed` / `_g_policy` / `_g_write` /
+# `_t_git` / `_lines` / `render`)只呼叫、不修改。
+# ═══════════════════════════════════════════════════════════════════════════
+
+_G_STATUS_PREFIX = u"evidence policy: "
+_G_STATUS_SOURCE = u"(source: .agents/evidence-policy.json)"
+
+_G_STATUS_EXPECTED = {
+    u"uninitialized": u"未初始化",
+    u"uncommitted": u"未提交",
+    u"worktree-differs": u"工作樹與 HEAD 不同",
+    u"unknown-schema": u"格式不明",
+    u"outside-boundary": u"超出框架能力邊界",
+    u"valid": u"有效",
+}
+
+
+def _g_policy_json(policy):
+    return json.dumps(policy, ensure_ascii=False, indent=2) + u"\n"
+
+
+def _g_without_key(policy, key):
+    out = dict(policy)
+    out.pop(key)
+    return out
+
+
+# [unknown-schema] 依序涵蓋的已提交文件:JSON malformed、schema 名稱不認得、version 不支援、
+# 必要欄位缺失、型別錯誤(後兩者同屬「必要欄位缺失 / 型別錯誤」一類,兩種都測)。
+_G_UNKNOWN_DOCUMENTS = [
+    (u"malformed-json", u"{not json\n"),
+    (u"unknown-schema-name", _g_policy_json(_g_policy(schema=u"other.evidence-policy"))),
+    (u"unsupported-version", _g_policy_json(_g_policy(version=2))),
+    (u"missing-field", _g_policy_json(_g_without_key(_g_policy(), u"dists"))),
+    (u"wrong-type", _g_policy_json(_g_policy(python_versions=u"3.11"))),
+]
+
+
+def _g_policy_status_line(root):
+    """`render(root)` 裡以 `evidence policy: ` 開頭的行;必須恰有一行。"""
+    out = render(root)
+    hits = [ln.strip() for ln in _lines(out) if ln.strip().startswith(_G_STATUS_PREFIX)]
+    assert len(hits) == 1, (hits, out)
+    return hits[0]
+
+
+def _g_assert_status(line, expected):
+    value = line[len(_G_STATUS_PREFIX):].split(u"(source:")[0].strip()
+    assert value.startswith(expected), (expected, line)
+    assert _G_STATUS_SOURCE in line, line
+
+
+def _g_status_root(base, state):
+    """在 `base` 底下造一個帶 redlight 的 tmp repo,佈置成 `state`;回傳 root。"""
+    root = _root_with_redlight(base)
+    if state == u"uninitialized":
+        _g_committed(root)
+    elif state == u"uncommitted":
+        _g_committed(root, policy=_g_policy(), commit_policy=False)
+    elif state == u"worktree-differs":
+        _g_committed(root, policy=_g_policy())
+        _g_write(root, _G_POLICY_FILE, _g_policy_json(_g_policy()) + u"\n")
+    elif state == u"outside-boundary":
+        _g_committed(root, policy=_g_policy(python_versions=[u"3.11", u"3.12"]))
+    elif state == u"valid":
+        _g_committed(root, policy=_g_policy())
+    else:
+        raise ValueError(state)
+    return root
+
+
+def _g_committed_raw_policy(base, text):
+    """已提交設定與 conftest 的 repo,再把 `text`(原樣)提交為 canonical policy。"""
+    root = _root_with_redlight(base)
+    _g_committed(root)
+    _g_write(root, _G_POLICY_FILE, text)
+    _t_git(root, "add", _G_POLICY_FILE)
+    _t_git(root, "commit", "-q", "-m", "policy")
+    return root
+
+
+class TestEvidencePolicyStatusLine:
+
+    @pytest.mark.parametrize("state", list(_G_STATUS_EXPECTED))
+    def test_g3_status_shows_the_policy_state(self, tmp_path, state):
+        """〈五十〉50.1 第 3 點(status 的 policy 狀態行)。分類:behavior-red。
+
+        - `[uninitialized]`:repo 從未有 policy ⇒ `未初始化`;
+        - `[uncommitted]`:合法 policy 只在工作樹 ⇒ `未提交`;
+        - `[worktree-differs]`:HEAD 有合法 policy,工作樹內容不同 ⇒ `工作樹與 HEAD 不同`;
+        - `[unknown-schema]`:依序五份**已提交**文件(JSON malformed、schema 名稱不認得、version 2、
+          缺 `dists`、`python_versions` 為字串),**逐一**斷言 ⇒ 都是 `格式不明`;
+        - `[outside-boundary]`:已提交 policy 的 `python_versions` 含 3.12(框架能力邊界外)⇒ `超出框架能力邊界`;
+        - `[valid]`:已提交合法 policy、工作樹 = HEAD ⇒ `有效`。
+        每一案的那一行都須帶 `(source: .agents/evidence-policy.json)`。
+        BASELINE 上失敗的原因:`<BASELINE>:.claude/portable/status.py` 沒有 `evidence policy:` 這一行
+        (`_g_policy_status_line` 的「恰有一行」斷言)。
+        """
+        expected = _G_STATUS_EXPECTED[state]
+        if state == u"unknown-schema":
+            for name, text in _G_UNKNOWN_DOCUMENTS:
+                root = _g_committed_raw_policy(tmp_path / name, text)
+                _g_assert_status(_g_policy_status_line(root), expected)
+            return
+        root = _g_status_root(tmp_path, state)
+        _g_assert_status(_g_policy_status_line(root), expected)
