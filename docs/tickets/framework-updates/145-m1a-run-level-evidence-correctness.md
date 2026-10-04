@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3g-1b 紅燈完成;待 Station 4g 實作。
+**狀態**:動工 —— Station 4g 本機固定全套與 clean-room 驗收通過;待 POSIX 外部驗收。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -136,6 +136,9 @@
 >
 > - 狀態(舊,第四十二代):~~`動工 —— Station 3g-1b 紅燈已提交;待固定全套驗證。`~~
 >   —— 2026-10-04 Station 3g-1b 固定全套驗證(乾淨工作樹重跑)成立後由第 3 行取代(見〈五十〉50.4)。
+>
+> - 狀態(舊,第四十三代):~~`動工 —— Station 3g-1b 紅燈完成;待 Station 4g 實作。`~~
+>   —— 2026-10-04 Station 4g 本機固定全套與 clean-room 驗收通過後由第 3 行取代(見〈五十一〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -518,15 +521,22 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5f — Review | PASS |
 | Station 6 — Acceptance | FAIL(淨室驗證;依 Jeff 裁決) |
 | Station 3g — Red-light(補) | PASS / ACCEPTED(26 behavior-red + 7 regression-lock;S3G2) |
-| Station 3g-1b — Red-light(補) | 紅燈完成,待 Station 4g 實作 |
+| Station 3g-1b — Red-light(補) | PASS / ACCEPTED(9 behavior-red;S3G1B-2) |
+| Station 4g — Implementation(修正) | Windows/local acceptance PASS;POSIX clean-room pending |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g-1b 紅燈完成;待 Station 4g 實作(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4g 本機固定全套與 clean-room 驗收通過;待 POSIX 外部驗收(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第三十四代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g-1b 紅燈完成;待 Station 4g 實作(與票頭第 3 行一致)。~~
+> 2026-10-04 Station 4g 本機固定全套與 clean-room 驗收通過後隨第 3 行同步更新(見〈五十一〉)。
+>
+> **〈十〉表格舊值(F-036)**:Station 3g-1b 列 ~~`紅燈完成,待 Station 4g 實作`~~ → `PASS / ACCEPTED(9 behavior-red;S3G1B-2)`(2026-10-04,依〈五十一〉51.1 第 1 點)。
+> Station 4g 列為新增列,沒有舊值(2026-10-04,S4G3)。
+>
 > **舊句(F-036,保留不刪,第三十三代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g-1b 紅燈已提交;待固定全套驗證(與票頭第 3 行一致)。~~
 > 2026-10-04 Station 3g-1b 固定全套驗證(乾淨工作樹重跑)成立後隨第 3 行同步更新(見〈五十〉50.4)。
 >
@@ -2549,7 +2559,53 @@ Error: Process completed with exit code 1.
 - 新 9 支的失敗點:I1 / I2 在 `test_install.py:617` / `:648`(範本不存在);I3 在 `:667`(decisions-pending 沒有 evidence policy);
   status 6 案都在 `test_status.py:3071`(`evidence policy:` 行 0 行);`[unknown-schema]` 在第一份文件 `malformed-json` 就失敗。
 - 帳本 H11 → H12 只追加:兩本前段 sha256 = H11r / H11s;test-runs 2827 → 2874 行(+47)、test-sessions 23 → 24 行(+1)。
-- commit(回填):S3G1B `83258dd9ab415a793eaf2b140a9e34c5b91069f2`;S3G1B-2(證據)於下一次提交回填。
+- commit(回填):S3G1B `83258dd9ab415a793eaf2b140a9e34c5b91069f2`;S3G1B-2(證據)`3eb112b1cafb399f2757274264281436729e7e42`。
+  (F-036:本行原文為「S3G1B-2(證據)於下一次提交回填」;2026-10-04 於 S4G3 回填。)
+
+---
+
+## 五十一、Station 4g 修正
+
+### 51.1 裁決(照錄要點;Jeff,2026-10-04)
+
+1. Station 3g-1b = PASS / ACCEPTED(證據 S3G1B-2 `3eb112b1cafb399f2757274264281436729e7e42`)。4g plan = APPROVED WITH 2 FIXES。
+   4g 期間外來 3 檔 stash,票 146 / 147 視窗暫停。三段式:S4G1 實作 → S4G2 本機驗收 → S4G3 docs-only;POSIX 外部 clean-room 由裁決助手執行,通過後另以 S4G4 升級。
+2. R3 擋下後續作:
+   - R3 擋下屬預期的 fail-closed 行為(非產品缺陷);允許 `git restore` 丟棄 redlight.py 半成品。
+   - 編輯規矩:漸進遷移或一次 Write;每次寫入 redlight.py 後以 status.py 為 import 探針;不得修改 `content_hash` 及其呼叫的函式。
+   - 第 7 鍵 `committed_addopts` = APPROVED:`evidence_policy` 為 7 鍵。`committed_addopts` 的語意:None = 取得或解析失敗;`""` = config 合法但沒有 addopts;`str` / `list[str]` = 原值。
+   - `addopts_overrides(value)` 只接受 `str` / `list[str]`,不讀 git / 檔案。
+3. 淨室正二不成立後續作:
+   - 修法 B = APPROVED:producer 先判欄位是否存在、再解讀值。
+   - A = REJECTED:在 consumer 把 None 當 [],會把「事實取不到」當成「確定沒有 override」⇒ fail-open。
+   - C = REJECTED:只是繞過缺陷。
+   - 授權新增 T1 + T2;負一到負三須在正二修好後的同一次淨室執行中重新驗證。
+
+### 51.2 證據
+
+- 報告:`docs/audits/2026-10-04-m1a-station4g-fix.md`。
+- commit:
+  - S4G1 `f4fa0418aa037f95ef7d1f59c6fe6a812a80414c`(實作);
+  - S4G1B `f581a02a5b7a65c8eaf150bf7231acc464f99072`(T1 / T2;`tests/test_redlight.py` 檔尾一個 hunk `@@ -2492,0 +2493,42 @@`,只有 + 行);
+  - S4G1C `8e7775526e462d984abb0992ed74c1e1aa3648dd`(`tests/conftest.py` 的 producer 修正);
+  - S4G3(本次證據提交)於下一次提交回填。
+- 第一次淨室(S4G1):正二不成立(`file_coverage=unknown`)。成因:pytest 9.1.1 沒給 `-o` 時 `override_ini` 為 None,producer 原樣落帳,consumer (viii) 比 `None != []`。該次負一到負三不作為證據。
+- 裁決助手外部驗證(Linux,Python 3.11 + pytest 9.1.1;隔離環境;**非本 repo 帳本證據**),照錄於報告第 3 節。
+- S4G1B 紅燈全套(只跑一次):`1 failed, 2093 passed, 3 skipped, 3 xfailed in 342.54s (0:05:42)`(collected 2100)。唯一的 FAILED 為 T1,失敗行為 `assert 'unknown' == 'true'`。
+- S4G1C 本機全套(只跑一次):`2094 passed, 3 skipped, 3 xfailed in 341.79s (0:05:41)`(collected 2100、0 failed)。
+- status:`evidence policy: 有效`;`tests red under ticket 145: (無)`;run 事實未知 0;原本的 5 個紅檔都在 green。
+  - 「有效」只代表 policy 文件本身有效,不代表 runtime 一定取得 true authority(報告第 8 節第 2 點)。
+- 第二次淨室(S4G1C;同一次執行):兩正三負全部成立。正二 `file_coverage=true`、`green=tests/test_evidence_probe.py`;淨室框架測試 `1944 passed, 7 skipped, 3 xfailed`。
+- 帳本只追加:
+  - B13 → B14:test-runs 2921 → 2968、test-sessions 25 → 26;
+  - B14 → 本次:test-runs 2968 → 3015、test-sessions 26 → 27;
+  - 兩次前段 sha256 都等於基準。
+  - 淨室驗收前後,本 repo 兩本帳本的 bytes 與 sha256 都不變。
+- 殘餘與未證明:見報告第 8 節。其中 status 行不檢查 addopts 鎖步、淨室負情境不斷言成因、logging 鎖步絆線,**目前尚未 machine-enforced**。
+
+### 51.3 POSIX 外部 clean-room 驗收
+
+待執行(裁決助手)。
 
 ---
 
