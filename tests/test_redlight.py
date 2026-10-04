@@ -2490,3 +2490,45 @@ class TestAddoptsDerivation:
                                      policy_text=_g_policy_text(_g_policy())), monkeypatch)
         assert control == "true", control
         assert broken != "true", broken
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145 Station 4g 補紅燈 —— 「沒有任何 override」的正控與「override 事實取不到」的鎖
+#
+# 成因:pytest 9.1.1 的 `-o` 是 `action="append"`、沒有 default(`_pytest/helpconfig.py:112-119`),
+# 沒給任何 `-o` / OverrideIniAction 旗標時 `config.option.override_ini` 為 **None**(屬性存在)。
+# 3g / 3g-1b 的正控都帶 `--strict-markers`,沒有一支走到這條路徑;S4G1 的淨室「正二」因此不成立
+# (`.dev/reports/2026-10-04T213043Z-ticket145-station4g-s4g1-local-pass-cleanroom-pos2-fail.md`)。
+# 裁決:修法 B(producer 先判欄位是否存在、再解讀值);A(consumer 把 None 當 [])否決。
+# 既有 helper(`_g_root` / `_g_policy` / `_g_policy_text` / `_g_coverage` / `_e_option` / `_d_option`)只呼叫、不修改。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestEvidencePolicyNoOverride:
+
+    def test_g3_no_override_anywhere_is_full_coverage(self, tmp_path, monkeypatch):
+        """T1。分類:behavior-red(在 S4G1 上必須失敗)。
+
+        已提交 addopts `-ra`(推導出的 override 為 `[]`)、policy `committed_overrides: []`(兩者自洽)、
+        執行時沒有任何 `-o`:pytest 明確表示「沒有 override」,`option.override_ini is None`(屬性存在)
+        ⇒ 必須能取得 full coverage(`"true"`)。否則設定裡沒有 `-o` 類旗標的宿主永遠退不了紅。
+        S4G1 上失敗的原因:`tests/conftest.py` 的 producer 把 None 原樣交給 `normalize_overrides`,
+        落帳 `override_ini: null`;`.claude/hooks/redlight.py` 的 (viii) 比 `None != []` ⇒ unknown。
+        """
+        root = _g_root(tmp_path / "root", policy_text=_g_policy_text(_g_policy(committed_overrides=[])),
+                       addopts="-ra")
+        got = _g_coverage(root, monkeypatch, option=_e_option(usepdb=False, override_ini=None))
+        assert got == "true", got
+
+    def test_g3_a_missing_override_fact_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """T2。分類:regression-lock(在 S4G1 上必須通過)。
+
+        與 T1 同一種佈置,但 `config.option` 根本沒有 `override_ini` 屬性 ⇒ 事實取不到 ⇒ 不得為 `"true"`。
+        **事實取不到 ≠ 沒有 override**:鎖住修法 B 的語意,防止日後改成在 consumer 把 None 當 `[]`
+        (修法 A;那會把「取不到」當成「確定沒有」⇒ fail-open)。
+        """
+        root = _g_root(tmp_path / "root", policy_text=_g_policy_text(_g_policy(committed_overrides=[])),
+                       addopts="-ra")
+        option = _d_option(missing=("override_ini",), runxfail=False, pythonwarnings=None, trace=False,
+                           usepdb=False)
+        got = _g_coverage(root, monkeypatch, option=option)
+        assert got != "true", got
