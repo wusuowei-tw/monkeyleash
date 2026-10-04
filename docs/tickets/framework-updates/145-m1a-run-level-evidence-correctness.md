@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3g 紅燈已提交;待固定全套驗證。
+**狀態**:動工 —— Station 3g 紅燈已寫(待 Jeff 驗收);Station 4g 未開始。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -127,6 +127,9 @@
 >
 > - 狀態(舊,第三十九代):~~`動工 —— Station 3g 紅燈規劃已寫(待 Jeff 裁);未寫測試。`~~
 >   —— 2026-10-03 Station 3g 紅燈提交後由第 3 行取代(見〈四十八〉)。
+>
+> - 狀態(舊,第四十代):~~`動工 —— Station 3g 紅燈已提交;待固定全套驗證。`~~
+>   —— 2026-10-03 Station 3g 固定全套驗證成立後由第 3 行取代(見〈四十九〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -508,15 +511,20 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 4f — Implementation(修正) | PASS / COMPLETED（待 5f 審查） |
 | Station 5f — Review | PASS |
 | Station 6 — Acceptance | FAIL(淨室驗證;依 Jeff 裁決) |
-| Station 3g — Red-light(補) | 紅燈已提交,待固定全套驗證 |
+| Station 3g — Red-light(補) | 紅燈已寫,待 Jeff 驗收 |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g 紅燈已提交;待固定全套驗證(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g 紅燈已寫(待 Jeff 驗收);Station 4g 未開始(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第三十一代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g 紅燈已提交;待固定全套驗證(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 3g 固定全套驗證成立後隨第 3 行同步更新(見〈四十九〉)。
+>
+> **〈十〉表格舊值(F-036)**:Station 3g 列 ~~`紅燈已提交,待固定全套驗證`~~ → `紅燈已寫,待 Jeff 驗收`(2026-10-03,S3g-2)。
+>
 > **舊句(F-036,保留不刪,第三十代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g 紅燈規劃已寫(待 Jeff 裁);未寫測試(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 3g 紅燈提交後隨第 3 行同步更新(見〈四十八〉)。
 >
@@ -2443,6 +2451,20 @@ Error: Process completed with exit code 1.
 
 - 預期固定全套:collected 2090(以 S4F1 實測的 collected 2057 為底;S5f-0 到 S3G0 都沒有改測試)。
 - 本機 Windows 預期:26 failed、2058 passed、3 skipped、3 xfailed。
+
+---
+
+## 四十九、Station 3g 紅燈證據
+
+- 報告:`docs/audits/2026-10-03-m1a-station3g-redlight.md`。
+- S3G1 `2737e02c64b88f4d0a39bdafbea2f3776993cf2b`:三個測試檔各只在檔尾新增一個 hunk(`-U0` 標頭 `@@ -2144,0 +2145,363 @@`、`@@ -2858,0 +2859,159 @@`、`@@ -291,0 +292,24 @@`;沒有刪除行);
+  新檔 `tests/test_host_evidence_policy.py`;`.agents/portable-manifest.txt` 恰新增一行 `tests/test_host_evidence_policy.py skip`;另改票 145。commit 前只跑 py_compile。
+- 固定全套(在 S3G1 上只跑一次):exit 1;摘要行原文 `26 failed, 2058 passed, 3 skipped, 3 xfailed in 243.99s (0:04:03)`(collected 2090)。
+- 失敗集合恰為〈四十八〉48.2 的 26 支 behavior-red。7 支 regression-lock 與全部既有測試都通過(帳本第 22 行逐支相符)。
+  每支都失敗在破壞組 / 主斷言,對照組與情境斷言皆通過(報告第 4 節逐支表)。
+- 帳本 H9 → H10 只追加:兩本前段 sha256 = H9r / H9s;test-runs 2733 → 2780 行(+47 = 46 + 新檔 1)、test-sessions 21 → 22 行(+1)。
+- status:red 恰為 `tests/test_host_evidence_policy.py`、`tests/test_redlight.py`、`tests/test_status.py`、`tests/test_verify_gates.py`;最近一次 run B(collected 2090)。
+- commit(回填):S3G1 `2737e02c64b88f4d0a39bdafbea2f3776993cf2b`;S3G2(證據)見下一次落票。
 
 ---
 
