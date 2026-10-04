@@ -594,7 +594,8 @@ class TestTestsUnderTicketUsesTheLatestRecordPerFile:
                               u"dists": [[u"anyio", u"4.15.0"]]}],
                 u"blocked": [], u"override_ini": list(_T_FIXED_OVERRIDES), u"inifilename": None,
                 u"inipath": u"pyproject.toml", u"config_blobs": blobs, u"pytest_version": u"9.1.1",
-                u"optimize": 0, u"python_version": u"3.11"})
+                u"optimize": 0, u"python_version": u"3.11",
+                u"evidence_policy": _t_policy_facts(root)})
 
         out = render(root)
         red = _value_of(out, u"tests red under ticket 99")
@@ -1370,7 +1371,8 @@ class TestOrphans:
                                     u"blocked": [], u"override_ini": list(_T_FIXED_OVERRIDES),
                                     u"inifilename": None, u"inipath": u"pyproject.toml",
                                     u"config_blobs": blobs, u"pytest_version": u"9.1.1",
-                                    u"optimize": 0, u"python_version": u"3.11"})
+                                    u"optimize": 0, u"python_version": u"3.11",
+                                    u"evidence_policy": _t_policy_facts(root)})
         out = render(root)
         orphaned = _value_of(out, u"tests orphaned under ticket 99")
         green = _value_of(out, u"tests green under ticket 99")
@@ -1495,6 +1497,14 @@ class _ChainSession:
         self.config = _ChainConfig(args, root)
 
 
+# 票 145 Station 4g 授權 G3(〈四十八〉48.1 第 5 點;規劃檔 S3g-0 P2-B):driver 把 conftest 所見的版本事實
+# 固定在能力邊界內,正控不再依賴執行它的直譯器 / pytest 版本。模組載入當下的真實版本記在這裡 ——
+# 測試在呼叫 driver **之前**自己設過 `pytest.__version__` 時不覆蓋它(與 tests/test_redlight.py 同式)。
+_REAL_PYTEST_VERSION = pytest.__version__
+_PINNED_PYTEST_VERSION = u"9.1.1"
+_PINNED_PYTHON = (3, 11, 0, u"final", 0)
+
+
 def _chain_conftest(root, monkeypatch):
     """載入 tests/conftest.py,並把它與本檔那一份 redlight 的所有寫入都導到 `root`。"""
     import importlib.util
@@ -1509,6 +1519,10 @@ def _chain_conftest(root, monkeypatch):
                         str(pathlib.Path(root) / ".dev" / "pipeline.json"))
     monkeypatch.setattr(c, "_redlight", redlight)
     monkeypatch.setattr(c, "_ROOT", pathlib.Path(root))
+    monkeypatch.setattr(c, "sys", _e_sys(optimize=sys.flags.optimize,
+                                         version_info=_EVersion(*_PINNED_PYTHON)), raising=False)
+    if pytest.__version__ == _REAL_PYTEST_VERSION:
+        monkeypatch.setattr(pytest, "__version__", _PINNED_PYTEST_VERSION)
     return c
 
 
@@ -2362,6 +2376,20 @@ _T_BASELINE_INI = {
 
 _T_FIXED_OVERRIDES = [u"strict_markers=true"]
 
+# 票 145 Station 4g 授權 G1(規劃檔 S3g-0 P6「需要的授權」1):與 baseline 相符的已提交 evidence policy ——
+# 已提交 addopts `-ra --strict-markers` ⇒ `strict_markers=true`;版本與 dist 等於 driver 固定的事實(授權 3)。
+_T_POLICY_FILE = u".agents/evidence-policy.json"
+_T_BASELINE_POLICY = {
+    u"schema": u"monkeyleash.evidence-policy",
+    u"version": 1,
+    u"config_file": u"pyproject.toml",
+    u"committed_overrides": list(_T_FIXED_OVERRIDES),
+    u"python_versions": [u"3.11"],
+    u"pytest_versions": [u"9.1.1"],
+    u"dists": [[u"anyio", u"4.15.0"]],
+}
+_T_BASELINE_ADDOPTS = u"-ra --strict-markers"
+
 
 def _t_git(root, *args):
     return subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True)
@@ -2374,12 +2402,26 @@ def _t_committed(root):
     conftest = pathlib.Path(root) / "tests" / "conftest.py"
     conftest.parent.mkdir(parents=True, exist_ok=True)
     conftest.write_bytes((ROOT / "tests" / "conftest.py").read_bytes())
+    policy = pathlib.Path(root) / ".agents" / "evidence-policy.json"
+    policy.parent.mkdir(parents=True, exist_ok=True)
+    with io.open(str(policy), "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(_T_BASELINE_POLICY, ensure_ascii=False, indent=2) + u"\n")
     _t_git(root, "init", "-q")
     _t_git(root, "config", "user.email", "t@example.invalid")
     _t_git(root, "config", "user.name", "t")
-    _t_git(root, "add", "pyproject.toml", "tests/conftest.py")
+    _t_git(root, "add", "pyproject.toml", "tests/conftest.py", _T_POLICY_FILE)
     _t_git(root, "commit", "-q", "-m", "baseline")
     return root
+
+
+def _t_policy_facts(root):
+    """`_t_committed(root)` 之後的 `completeness["evidence_policy"]` 事實(7 鍵;授權 G2 用):
+    blob 由 git 實際取得,內容 = 已提交的 baseline policy,`committed_addopts` = 已提交的 addopts 原值。"""
+    head = _t_git(root, "rev-parse", "HEAD:" + _T_POLICY_FILE).stdout.decode().strip()
+    worktree = _t_git(root, "hash-object", _T_POLICY_FILE).stdout.decode().strip()
+    return {u"path": _T_POLICY_FILE, u"head": head, u"worktree": worktree,
+            u"schema": _T_BASELINE_POLICY[u"schema"], u"version": _T_BASELINE_POLICY[u"version"],
+            u"policy": dict(_T_BASELINE_POLICY), u"committed_addopts": _T_BASELINE_ADDOPTS}
 
 
 class _TDist:

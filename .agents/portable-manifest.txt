@@ -100,6 +100,10 @@ bootstrap.sh                    skip
 # 那就是合併,而合併是逐次判斷、覆蓋是每次都跑,一個會出錯的合併比較糟。
 # 代價:框架每新增一個檔案,各目標 repo 要人手動補一行。接受。
 .agents/portable-manifest.txt   ask
+# 票 145 Station 4g:host evidence policy(canonical path)。**skip**:它描述的是**這個 repo** 接受哪些
+# 已提交設定與執行環境,每個 repo 自己的那一份只能由人放上去並 commit(〈四十八〉48.1 第 6 點)。
+# 照抄到下游等於替下游自動信任上游的環境 —— 那正是本票要拆掉的狀態。
+.agents/evidence-policy.json    skip
 scripts/skills-update.sh        copy
 # 票 84 專用的一次性探針(寫死 wusuowei-tw/monkeyleash、寫死那組 sha、
 # 讀本 repo 的 commit-map)。**標 skip 不標 copy**:照抄到下游,它會去打
@@ -114,6 +118,10 @@ scripts/e2e_authority_layer.py  skip
 # ── 綁死這個 repo,必須重新產生 ────────────────────────────────
 .agents/legacy-no-redlight.txt  generate
 .dev/                           generate
+# 票 145 Station 4g:evidence policy 範本,由安裝器以目標 repo 的 `redlight.policy_template()` 產生
+# (框架能力邊界常數的完整列舉,不是觀察值)。放在非 canonical 路徑,永遠不是 authority。
+# 不另放範本來源檔(常數只有 redlight 那一份)。
+.agents/evidence-policy.template.json generate
 
 # ── 框架的測試(閘門自己的) ───────────────────────────────────
 tests/conftest.py               copy

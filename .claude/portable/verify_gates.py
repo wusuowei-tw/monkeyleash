@@ -269,6 +269,224 @@ def restore(target):
     install.build_mirrors(target)
 
 
+# ── 票 145 Station 4g —— evidence policy 的淨室兩正三負(〈四十六〉46.4 第 4 點;規劃檔 S3g-0 P5)
+#
+# 接在「框架測試在新 repo 跑一次」之後。正一直接讀那一次留下的帳本;其餘四個各自從同一個
+# 基準 commit(安裝 + 規則情境之後的 HEAD)出發,做完 `_ev_restore` 回到基準 ——
+# 目標 repo 的 `.dev/` 是被追蹤的(安裝器不 ignore 它),不回到基準的話上一個情境的帳本與 commit
+# 會留給下一個。
+#
+# 探針只收一支測試檔:已提交的 pyproject 以 `python_files` 把收集範圍定成探針那一支
+# (那是宿主自己的已提交設定,不是窄選 —— consumer 鎖 `inipath` 與 blob,不看 `python_files` 的值)。
+# 否則每個情境的固定指令都要把整套框架測試再跑兩次。
+#
+# 佈置用的 commit 以 `--no-verify` 提交,同 `install.main` 自己的兩個 commit(`install.py` 的 main):
+# 這裡驗的是證據鏈,不是閘門;閘門由上面的規則情境各擋一次。
+
+EV_PROBE = "tests/test_evidence_probe.py"
+EV_RED = "def test_probe():\n    assert False\n"
+EV_GREEN = "def test_probe():\n    assert True\n"
+EV_PYPROJECT = ('[tool.pytest.ini_options]\n'
+                'testpaths = ["tests"]\n'
+                'python_files = ["test_evidence_probe.py"]\n')
+FIXED_COMMAND = [sys.executable, "-X", "utf8", "-m", "pytest", "-q"]
+
+
+def load_target_redlight(target):
+    """每次重新載入(帳本是讀檔,模組本身不快取 run 事實;重新載入只是避免沿用上一個情境的模組狀態)。"""
+    spec = importlib.util.spec_from_file_location(
+        "target_redlight", os.path.join(target, ".claude", "hooks", "redlight.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _ev_status(target):
+    """在子行程跑目標 repo 自己的 status.py,回傳 `{欄位: 值}`(值去掉 `(source: …)`)。"""
+    _rc, out = sh([sys.executable, "-X", "utf8",
+                   os.path.join(target, ".claude", "portable", "status.py"), "--root", target],
+                  target, check=False)
+    fields = {}
+    for line in out.splitlines():
+        key, sep, rest = line.partition(": ")
+        if sep:
+            fields[key.strip()] = rest.split("  (source:")[0].strip()
+    return fields
+
+
+def _ev_set_ticket(target, ticket):
+    p = os.path.join(target, ".dev", "pipeline.json")
+    io.open(p, "w", encoding="utf-8", newline="\n").write(
+        json.dumps({"current_stage": "implement", "feature": "verify",
+                    "ticket_id": ticket, "updated": ""}, ensure_ascii=False, indent=2) + "\n")
+
+
+def _ev_matching_policy(target):
+    """正二的 policy:值 = 當下環境 ∩ 框架能力邊界(規劃檔 P5)。不在邊界內的環境 ⇒ 對應欄位為空,
+    正二會因此不成立 —— 那是正確的(那個環境本來就退不了紅),而失敗訊息會點名正二。"""
+    from importlib import metadata
+    rl = load_target_redlight(target)
+    here = "%d.%d" % tuple(sys.version_info[:2])
+    try:
+        pytest_version = metadata.version("pytest")
+    except Exception:
+        pytest_version = None
+    dists = []
+    for name, version in rl.KNOWN_DISTS:
+        try:
+            if metadata.version(name) == version:
+                dists.append([name, version])
+        except Exception:
+            pass
+    return {"schema": rl.POLICY_SCHEMAS[0][0], "version": rl.POLICY_SCHEMAS[0][1],
+            "config_file": rl.FRAMEWORK_CONFIG_FILES[0],
+            "committed_overrides": [],
+            "python_versions": [v for v in rl.KNOWN_PYTHON_VERSIONS if v == here],
+            "pytest_versions": [v for v in rl.KNOWN_PYTEST_VERSIONS if v == pytest_version],
+            "dists": dists}
+
+
+def _ev_fixed_run(target, extra_env=None):
+    env = dict(os.environ)
+    env.pop("PYTEST_ADDOPTS", None)
+    env.update(extra_env or {})
+    p = subprocess.run(FIXED_COMMAND, cwd=target, capture_output=True, env=env)
+    return p.returncode, (p.stdout + p.stderr).decode("utf-8", "replace")
+
+
+def _ev_red_then_green(target, ticket, commit_policy=True, dirty_policy=False, extra_env=None):
+    """佈置 pyproject + 失敗的探針(+ policy)並提交 → 固定指令(紅)→ 修好探針、提交
+    →(負二:policy 工作樹多一行)→ 固定指令(依 `extra_env`)。
+    回傳 `(第一次 rc, 第二次 rc, 第二次的 file_coverage, status 欄位, 第二次輸出尾行)`。"""
+    _ev_set_ticket(target, ticket)
+    rl = load_target_redlight(target)
+    policy_text = json.dumps(_ev_matching_policy(target), ensure_ascii=False, indent=2) + "\n"
+    write(target, "pyproject.toml", EV_PYPROJECT)
+    write(target, EV_PROBE, EV_RED)
+    write(target, rl.POLICY_FILE, policy_text)
+    tracked = ["pyproject.toml", EV_PROBE] + ([rl.POLICY_FILE] if commit_policy else [])
+    sh(["git", "add"] + tracked, target)
+    sh(["git", "commit", "-q", "--no-verify", "-m", "evidence %s: red probe" % ticket], target)
+    rc1, _out1 = _ev_fixed_run(target)
+    write(target, EV_PROBE, EV_GREEN)
+    sh(["git", "add", EV_PROBE], target)
+    sh(["git", "commit", "-q", "--no-verify", "-m", "evidence %s: fix probe" % ticket], target)
+    if dirty_policy:
+        write(target, rl.POLICY_FILE, policy_text + "\n")
+    rc2, out2 = _ev_fixed_run(target, extra_env)
+    runs = load_target_redlight(target).load_runs(target)
+    cov = rl.file_coverage(runs[-1], EV_PROBE) if runs else "(沒有 run 事實)"
+    tail = [l for l in out2.strip().splitlines() if l.strip()][-1:]
+    return rc1, rc2, cov, _ev_status(target), (tail[0] if tail else "(沒有輸出)")
+
+
+def _ev_verdict_line(fields, ticket, kind):
+    return fields.get("tests %s under ticket %s" % (kind, ticket), "")
+
+
+def ev_pos1_uninitialized(target, _base=None):
+    """正一:安裝後不動 —— 框架測試全綠(由 main 的上一步保證);那一次 run 對框架測試檔的
+    `file_coverage` 必須是 unknown,status 的 policy 行為「未初始化」。"""
+    rl = load_target_redlight(target)
+    runs = rl.load_runs(target)
+    if not runs:
+        return False, "淨室帳本沒有 run 事實 —— 框架測試那一次沒有留下 session"
+    last = runs[-1]
+    files = sorted(set(n.split("::", 1)[0] for n in last.get("collected") or []))
+    if not files:
+        return False, "最後一筆 session 沒有收集到任何檔"
+    covs = dict((f, rl.file_coverage(last, f)) for f in files)
+    not_unknown = sorted(f for f, c in covs.items() if c != "unknown")
+    state = _ev_status(target).get("evidence policy")
+    ok = not not_unknown and state == rl.POLICY_UNINITIALIZED
+    return ok, "%d 個框架測試檔皆 unknown=%s;evidence policy: %s%s" % (
+        len(files), not not_unknown, state,
+        (";非 unknown 的檔:%s" % ", ".join(not_unknown)) if not_unknown else "")
+
+
+def ev_pos2_initialized(target, _base=None):
+    """正二:已提交且與環境相符的 policy ⇒ 紅 → 固定全套 → true → 合法退休(status 端到端)。"""
+    ticket = "ev-pos2"
+    rc1, rc2, cov, fields, tail = _ev_red_then_green(target, ticket)
+    green = _ev_verdict_line(fields, ticket, "green")
+    red = _ev_verdict_line(fields, ticket, "red")
+    ok = (rc1 == 1 and rc2 == 0 and cov == "true"
+          and EV_PROBE in green and EV_PROBE not in red
+          and fields.get("evidence policy") == load_target_redlight(target).POLICY_VALID)
+    return ok, "rc %s→%s;file_coverage=%s;red=%s;green=%s;evidence policy: %s;%s" % (
+        rc1, rc2, cov, red, green, fields.get("evidence policy"), tail)
+
+
+def _ev_negative(target, ticket, **kw):
+    rc1, rc2, cov, fields, tail = _ev_red_then_green(target, ticket, **kw)
+    red = _ev_verdict_line(fields, ticket, "red")
+    green = _ev_verdict_line(fields, ticket, "green")
+    ok = rc1 == 1 and rc2 == 0 and cov == "unknown" and EV_PROBE in red and EV_PROBE not in green
+    return ok, "rc %s→%s;file_coverage=%s;red=%s;green=%s;evidence policy: %s;%s" % (
+        rc1, rc2, cov, red, green, fields.get("evidence policy"), tail)
+
+
+def ev_neg1_mismatch(target, _base=None):
+    """負一:policy 與環境不符 —— 修好後那一次多一個 policy 未列的 override ⇒ unknown,紅仍在。"""
+    return _ev_negative(target, "ev-neg1",
+                        extra_env={"PYTEST_ADDOPTS": "-o python_functions=test"})
+
+
+def ev_neg2_worktree_differs(target, _base=None):
+    """負二:HEAD 有 policy、工作樹多一行(未 commit)⇒ unknown,紅仍在。"""
+    return _ev_negative(target, "ev-neg2", dirty_policy=True)
+
+
+def ev_neg3_worktree_only(target, _base=None):
+    """負三:policy 只在工作樹、從未 commit ⇒ unknown,紅仍在。"""
+    return _ev_negative(target, "ev-neg3", commit_policy=False)
+
+
+# 鍵 ↔ 情境,比照 `SCENARIOS`。`tests/test_verify_gates.py` 斷言五個鍵都在。
+EVIDENCE_SCENARIOS = {
+    "pos1-uninitialized": ev_pos1_uninitialized,
+    "pos2-initialized": ev_pos2_initialized,
+    "neg1-mismatch": ev_neg1_mismatch,
+    "neg2-worktree-differs": ev_neg2_worktree_differs,
+    "neg3-worktree-only": ev_neg3_worktree_only,
+}
+
+EVIDENCE_LABELS = {
+    "pos1-uninitialized": "正一 未初始化",
+    "pos2-initialized": "正二 已初始化且相符",
+    "neg1-mismatch": "負一 policy / 環境不符",
+    "neg2-worktree-differs": "負二 HEAD 有、工作樹不同",
+    "neg3-worktree-only": "負三 工作樹有、HEAD 沒有",
+}
+
+
+def _ev_restore(target, base):
+    """回到證據情境的基準 commit(兩半,同 `restore`:追蹤側由 git、鏡像重建)。"""
+    sh(["git", "reset", "-q", "--hard", base], target)
+    sh(["git", "clean", "-qfd"], target)
+    install.build_mirrors(target)
+
+
+def run_evidence_scenarios(target):
+    """依序跑五個情境;每個各印一行(不合併)。回傳失敗的 `[(鍵, 細節)]`。"""
+    _rc, base = sh(["git", "rev-parse", "HEAD"], target)
+    base = base.strip()
+    failures = []
+    for key in ("pos1-uninitialized", "pos2-initialized", "neg1-mismatch",
+                "neg2-worktree-differs", "neg3-worktree-only"):
+        try:
+            ok, detail = EVIDENCE_SCENARIOS[key](target, base)
+        except SystemExit as e:
+            ok, detail = False, "情境執行失敗:%s" % e
+        finally:
+            if key != "pos1-uninitialized":
+                _ev_restore(target, base)
+        _out("    %-24s %s  %s" % (EVIDENCE_LABELS[key], "成立 ✓" if ok else "不成立 ✗", detail))
+        if not ok:
+            failures.append((key, detail))
+    return failures
+
+
 def run_scenario(target, code):
     marker = SCENARIOS[code](target)
     if marker == "predicate":
@@ -389,7 +607,16 @@ def main(workdir):
             "框架測試在新 repo 裡不是全綠 —— 那些紅與新專案無關,"
             "會訓練人忽略訊號。框架測試只能斷言框架的性質。")
 
-    _out("\n全部 %d 條規則各擋下一次,權威層偵測正常,框架測試在新 repo 全綠。"
+    # 票 145 Station 4g:evidence policy 的兩正三負。正一讀的就是上面那一次框架測試的帳本,
+    # 所以必須緊接在它之後、任何 reset 之前。
+    _out("\n=== evidence policy 淨室情境(兩正三負;每個情境各一行)===")
+    ev_failures = run_evidence_scenarios(target)
+    if ev_failures:
+        raise SystemExit("\n%d 個 evidence policy 情境沒有成立:%s"
+                         % (len(ev_failures), " ".join(EVIDENCE_LABELS[k] for k, _ in ev_failures)))
+
+    _out("\n全部 %d 條規則各擋下一次,權威層偵測正常,框架測試在新 repo 全綠,"
+         "evidence policy 兩正三負成立。"
          "\n安裝位置:%s" % (len(codes), target))
 
 

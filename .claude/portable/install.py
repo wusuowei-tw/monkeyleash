@@ -383,14 +383,54 @@ def generate_legacy_list(target, go_live):
     return files
 
 
-def write_decisions_pending(target, buckets, carried_untracked, unmarked):
+POLICY_TEMPLATE = ".agents/evidence-policy.template.json"
+
+
+def _target_redlight(target):
+    """目標 repo 的 `.claude/hooks/redlight.py`(剛複製過去的那一份)。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "target_redlight", os.path.join(target, ".claude", "hooks", "redlight.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def write_policy_template(target):
+    """evidence policy 範本 —— 寫到**非 canonical** 路徑(票 145〈四十八〉48.1 第 6 點 A)。
+
+    內容取自目標 repo 的 redlight `policy_template()`:框架能力邊界常數的完整列舉,**不是本機觀察值**
+    (不自動信任首次觀察值)。範本會隨安裝 commit 一起提交,但它不在 canonical path
+    (`redlight.POLICY_FILE`),**永遠不會被當成 authority**;canonical 那一份只有人放上去並 commit 才存在。
+    不另放範本來源檔:常數只有 redlight 那一份,範本由它產生,兩者不會漂移。
+    """
+    rl = _target_redlight(target)
+    dst = os.path.join(target, *POLICY_TEMPLATE.split("/"))
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    with io.open(dst, "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(rl.policy_template(), ensure_ascii=False, indent=2) + "\n")
+    return dst, rl.POLICY_FILE
+
+
+def write_decisions_pending(target, buckets, carried_untracked, unmarked, policy_file=None):
     """把需要人決定的項目**寫成檔案**,不只印終端機。
 
     印出來沒人看等於沒列(F-036 的同一個病:訊號不落地就等於沒有訊號)。
     寫成 docs/decisions-pending.md —— 人回頭找得到,也進得了版控、能被 review。
     沒有任何待決項目時回 None(不留空檔案佔位)。
+
+    `policy_file`(canonical evidence policy 路徑)給了 ⇒ 一律加一項「evidence policy 未初始化」
+    (票 145〈四十八〉48.1 第 6 點 A):安裝後 canonical policy 必然不存在,在人建立之前任何 run 都退不了紅。
     """
     sections = []
+    if policy_file:
+        sections.append(("evidence policy 未初始化 —— 在建立之前,任何測試執行都不會讓紅燈退休",
+                         [policy_file],
+                         "審閱 `%s`(框架能力邊界的完整列舉)→ 依本 repo 需要收窄;"
+                         "`committed_overrides` 必須等於本 repo 已提交設定檔 addopts 帶來的 override"
+                         "(例:`--strict-markers` ⇒ `strict_markers=true`)→ 存成 `%s` → commit。"
+                         "**這一步只有人做**;status 的 `evidence policy:` 行會顯示目前狀態。"
+                         % (POLICY_TEMPLATE, policy_file)))
     if buckets.get("ask"):
         sections.append(("需要你決定帶不帶(標記為 ask,安裝時沒有帶過去)",
                          buckets["ask"],
@@ -512,6 +552,7 @@ def main(target):
     generate_state(target)
     hook = install_hook(target)
     portable_hook, boot = install_portable_layer(target)
+    _template, policy_file = write_policy_template(target)
 
     run(["git", "add", "-A"], target)
     # **在 add 之後、commit 之前。** `update-index --chmod` 改的是既有 index 條目,
@@ -527,7 +568,8 @@ def main(target):
          "凍結既有 .py 的紅燈豁免清單(go-live %s)" % go_live[:7]], target)
 
     blocked = verify(target)
-    pending = write_decisions_pending(target, buckets, carried_untracked, unmarked)
+    pending = write_decisions_pending(target, buckets, carried_untracked, unmarked,
+                                      policy_file=policy_file)
 
     _out("裝好了:%s" % target)
     _out("  複製      %d 個檔案" % len(buckets["copy"]))

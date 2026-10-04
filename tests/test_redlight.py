@@ -287,6 +287,14 @@ class _Session:
         self.testscollected = len(self.items)
 
 
+# 票 145 Station 4g 授權 G3(〈四十八〉48.1 第 5 點;規劃檔 S3g-0 P2-B):driver 把 conftest 所見的版本事實
+# 固定在能力邊界內,正控不再依賴執行它的直譯器 / pytest 版本。模組載入當下的真實版本記在這裡 ——
+# 測試在呼叫 driver **之前**自己設過 `pytest.__version__`(例:測「版本不在清單」的那支)時不覆蓋它。
+_REAL_PYTEST_VERSION = pytest.__version__
+_PINNED_PYTEST_VERSION = "9.1.1"
+_PINNED_PYTHON = (3, 11, 0, "final", 0)
+
+
 def _isolated_conftest(monkeypatch, tmp_path):
     c = TestTheRecorderCannotKillTheRunner._conftest()
     monkeypatch.setattr(redlight, "ROOT", str(tmp_path))
@@ -296,6 +304,10 @@ def _isolated_conftest(monkeypatch, tmp_path):
                         str(tmp_path / ".dev" / "pipeline.json"))
     monkeypatch.setattr(c, "_redlight", redlight)
     monkeypatch.setattr(c, "_ROOT", tmp_path)
+    monkeypatch.setattr(c, "sys", _e_sys(optimize=_e_real_sys.flags.optimize,
+                                         version_info=_EVersion(*_PINNED_PYTHON)), raising=False)
+    if pytest.__version__ == _REAL_PYTEST_VERSION:
+        monkeypatch.setattr(pytest, "__version__", _PINNED_PYTEST_VERSION)
     c._outcomes.clear()
     return c
 
@@ -1128,6 +1140,19 @@ _D_CACHEPROVIDER_BLOCKED = ("cacheprovider", "pytest_cacheprovider", "stepwise",
 _D_FULL = {"tests/test_x.py": [X_A, X_B]}
 _D_ONLY_B = {"tests/test_x.py": [X_B]}
 
+# 票 145 Station 4g 授權 G1(規劃檔 S3g-0 P6「需要的授權」1):與 baseline 相符的已提交 evidence policy ——
+# 已提交 addopts `-ra --strict-markers` ⇒ `strict_markers=true`;版本與 dist 等於 driver 固定的事實(授權 3)。
+_D_POLICY_FILE = ".agents/evidence-policy.json"
+_D_BASELINE_POLICY = {
+    "schema": "monkeyleash.evidence-policy",
+    "version": 1,
+    "config_file": "pyproject.toml",
+    "committed_overrides": list(_D_FIXED_OVERRIDES),
+    "python_versions": ["3.11"],
+    "pytest_versions": ["9.1.1"],
+    "dists": [["anyio", "4.15.0"]],
+}
+
 
 def _d_write(root, rel, text):
     p = pathlib.Path(str(root)) / rel
@@ -1146,10 +1171,11 @@ def _d_committed_root(root):
     conftest = pathlib.Path(str(root)) / "tests" / "conftest.py"
     conftest.parent.mkdir(parents=True, exist_ok=True)
     conftest.write_bytes((ROOT / "tests" / "conftest.py").read_bytes())
+    _d_write(root, _D_POLICY_FILE, json.dumps(_D_BASELINE_POLICY, ensure_ascii=False, indent=2) + u"\n")
     _d_git(root, "init", "-q")
     _d_git(root, "config", "user.email", "t@example.invalid")
     _d_git(root, "config", "user.name", "t")
-    _d_git(root, "add", "pyproject.toml", "tests/conftest.py")
+    _d_git(root, "add", "pyproject.toml", "tests/conftest.py", _D_POLICY_FILE)
     _d_git(root, "commit", "-q", "-m", "baseline")
     return root
 
@@ -1486,52 +1512,11 @@ class TestCollectionDefinitionCoverage:
         got = _d_coverage(tmp_path, monkeypatch)
         assert got == "true", got
 
-    def test_d4_the_committed_addopts_override_constant_matches_pyproject(self):
-        """D4-1(票 145〈三十一〉裁決 3;〈二十九〉2 (viii) 的鎖步測試)。Station 4d 授權新增。
-
-        鎖的是「`redlight.COMMITTED_ADDOPTS_OVERRIDES` ↔ agent-gates repo **真正提交**的
-        `pyproject.toml` addopts」。來源固定為 `git show HEAD:pyproject.toml`(在 repo 根執行,唯讀);
-        不讀工作樹、不用 tmp repo、不寫死 addopts 字串 —— 用自造的設定只會驗到測試自己。
-        git 不可用或讀取失敗 ⇒ 失敗(不 skip)。
-
-        推導(pytest 9.1.1):addopts 以 shlex 切開(ini 模式下 type="args",`_pytest/config/__init__.py:1547`;
-        放到 args 最前面一起解析,`:1559-1562`),逐一對應:
-          - `OverrideIniAction` 旗標(`_pytest/main.py:76-96`;動作本體 `_pytest/config/argparsing.py:491-503`):
-            `--strict-config` → `strict_config=true`、`--strict-markers` → `strict_markers=true`、
-            `--strict` → `strict=true`;
-          - `-o` / `--override-ini KEY=VAL`(`_pytest/helpconfig.py:113-116`,append)→ `KEY=VAL`;
-          - 其他旗標不產生 override 項目。
-        依出現順序組成清單,必須恰等於常數。
-        """
-        import shlex
-        try:
-            import tomllib as _toml
-        except ImportError:                      # Python 3.10
-            import tomli as _toml
-        proc = _d_subprocess.run(["git", "-C", str(ROOT), "show", "HEAD:pyproject.toml"],
-                                 capture_output=True)
-        assert proc.returncode == 0, proc.stderr
-        cfg = _toml.loads(proc.stdout.decode("utf-8"))
-        addopts = cfg["tool"]["pytest"]["ini_options"]["addopts"]
-        tokens = shlex.split(addopts) if isinstance(addopts, str) else list(addopts)
-        flags = {"--strict-config": "strict_config=true",
-                 "--strict-markers": "strict_markers=true",
-                 "--strict": "strict=true"}
-        expected = []
-        i = 0
-        while i < len(tokens):
-            tok = tokens[i]
-            if tok in flags:
-                expected.append(flags[tok])
-            elif tok in ("-o", "--override-ini"):
-                i += 1
-                expected.append(tokens[i])
-            elif tok.startswith("--override-ini="):
-                expected.append(tok.split("=", 1)[1])
-            elif tok.startswith("-o"):
-                expected.append(tok[2:])
-            i += 1
-        assert list(redlight.COMMITTED_ADDOPTS_OVERRIDES) == expected, (addopts, expected)
+    # 原 `test_d4_the_committed_addopts_override_constant_matches_pyproject` 於票 145 Station 4g 刪除
+    # (〈四十八〉48.1 第 4 點 C,Jeff 明文修訂〈三十一〉裁決 3 的**適用位置**,語意不變):
+    # 常數 `COMMITTED_ADDOPTS_OVERRIDES` 已移進宿主 policy;框架那一半由 `TestAddoptsDerivation`(fixture)
+    # 與 verdict 時的機器鎖步承接,agent-gates 自身「policy ↔ pyproject」的鎖步由宿主專用、不出貨的
+    # tests/test_host_evidence_policy.py 承接(git show HEAD、讀不到即失敗、不 skip)。
 
 
 # ─────────────────────────────────────────────────────────────────────────────

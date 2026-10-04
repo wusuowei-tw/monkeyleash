@@ -557,6 +557,24 @@ def _invalid_count(facts, rl, ticket):
                 and rl.validate_session(r)])
 
 
+POLICY_SOURCE = u".agents/evidence-policy.json"
+
+
+def _policy_line(root, rl):
+    """`evidence policy: <狀態>`(票 145〈五十〉50.1 第 3 點)。狀態由該 root 的 redlight
+    `policy_state()` 判(未初始化 / 未提交 / 工作樹與 HEAD 不同 / 格式不明 / 超出框架能力邊界 / 有效);
+    本檔不另寫判準。沒有這一行的話,「未初始化 ⇒ 永遠 unknown、永遠退不了紅」對下游是靜默的。
+    舊版 redlight(無該函式)或判定拋例外 ⇒ 未記錄,不猜。"""
+    src = getattr(rl, "POLICY_FILE", None) or POLICY_SOURCE
+    if rl is None or not hasattr(rl, "policy_state"):
+        return _line(u"evidence policy", NO_FUNC.replace(u"gate", u"redlight"), src)
+    try:
+        state = rl.policy_state(root)
+    except Exception as e:
+        state = u"%s(%s)" % (UNRECORDED, type(e).__name__)
+    return _line(u"evidence policy", state, src)
+
+
 def _run_source(root, run_log, rl):
     left = _rel(root, run_log) if run_log else NO_FUNC
     right = (_rel(root, rl.session_log(root)) if rl is not None and hasattr(rl, "session_log")
@@ -846,6 +864,7 @@ def _evidence(root, gate, ticket):
             _invalid_count(facts, rl, ticket), tail,
             _last_run_text(facts, rl, ticket))
     out.append(_line(u"test-runs", val, _run_source(root, run_log, rl)))
+    out.append(_policy_line(root, rl))
 
     # ── intercepts 印**兩行**,不是一行 ────────────────────────────────
     # 合成一行的話,「這個月還沒有人被擋」與「這個 repo 從來沒有攔截紀錄」

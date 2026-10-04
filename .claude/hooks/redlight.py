@@ -488,13 +488,42 @@ KNOWN_DISTS = (("anyio", "4.15.0"),)
 # (xiii) P1 的盤點只對這些 pytest 版本成立;換版後非 ini 的 CLI 選項要重新盤點。
 KNOWN_PYTEST_VERSIONS = ("9.1.1",)
 
-# (viii) 已提交 pyproject.toml 的 addopts 帶來的 override 清單(`--strict-markers` ⇒
-# `strict_markers=true`)。由 tests/test_redlight.py 的鎖步測試對照已提交的 addopts。
-COMMITTED_ADDOPTS_OVERRIDES = ("strict_markers=true",)
+# (x) 框架盤點過的設定檔型態(root 相對路徑;P1 只盤點了 pyproject 的 `[tool.pytest.ini_options]`)。
+# 宿主用哪一個由 evidence policy 的 `config_file` 指定,必須屬於這裡。
+FRAMEWORK_CONFIG_FILES = ("pyproject.toml",)
 
-# (x) 唯一可接受的設定檔(root 相對路徑);(xi) 工作樹內容必須等於 HEAD blob 的檔。
-CONFIG_FILE = "pyproject.toml"
-COMMITTED_FILES = (CONFIG_FILE, ROOT_CONFTEST)
+# (xi) producer 記錄工作樹 blob 與 HEAD blob 的檔:框架能盤點的設定檔 + root producer 本身。
+# consumer 只看 `ROOT_CONFTEST` 與 policy 指定的 `config_file` 兩項。
+BLOB_FILES = FRAMEWORK_CONFIG_FILES + (ROOT_CONFTEST,)
+
+# ── 票 145 Station 4g —— Host evidence policy(〈四十八〉48.1;規劃檔 S3g-0 P3)
+# 上面的 `KNOWN_*` 與 `FRAMEWORK_CONFIG_FILES` 是框架能力邊界(B);宿主在 B 之內自己選擇接受什麼(H),
+# 寫在 canonical path 的 policy 檔、並且**已提交**。原本的 `COMMITTED_ADDOPTS_OVERRIDES` / `CONFIG_FILE`
+# 是 agent-gates 自己的宿主事實被寫成了框架常數 —— 淨室 repo 因此永遠 unknown(〈四十六〉46.2)。
+#
+# I-1:位置是框架常數,policy 內容不得指定位置(多一個鍵 ⇒ 整份不合格)。
+# I-2:認得的 (schema, version) 由框架列舉;policy 不能宣告自己用哪一套解析規則。
+POLICY_FILE = ".agents/evidence-policy.json"
+POLICY_SCHEMAS = (("monkeyleash.evidence-policy", 1),)
+POLICY_FIELDS = ("schema", "version", "config_file", "committed_overrides",
+                 "python_versions", "pytest_versions", "dists")
+
+# producer 記在 `completeness["evidence_policy"]` 的 7 鍵(〈五十一〉裁決 3)。
+EVIDENCE_POLICY_KEYS = ("path", "head", "worktree", "schema", "version", "policy", "committed_addopts")
+
+# status 的 policy 狀態行(〈五十〉50.1 第 3 點);文字以裁決為準。
+POLICY_UNINITIALIZED = u"未初始化"
+POLICY_UNCOMMITTED = u"未提交"
+POLICY_WORKTREE_DIFFERS = u"工作樹與 HEAD 不同"
+POLICY_UNKNOWN_FORMAT = u"格式不明"
+POLICY_OUTSIDE_BOUNDARY = u"超出框架能力邊界"
+POLICY_VALID = u"有效"
+
+# (viii) 的推導規則(pytest 9.1.1):`OverrideIniAction` 旗標(`_pytest/main.py:76-96`;
+# 動作本體 `_pytest/config/argparsing.py:491-503`)與 `-o` / `--override-ini`(`_pytest/helpconfig.py:113-116`)。
+OVERRIDE_FLAGS = {"--strict-config": "strict_config=true",
+                  "--strict-markers": "strict_markers=true",
+                  "--strict": "strict=true"}
 
 # 「執行完成」的終態:call 的 passed / failed、任何 phase 的 skip、明確辨識的 xfail / xpass。
 # 籠統的 "other"(4c 之前的 xfail 記法)不算 —— 不得讓 other 自動取得 completeness。
@@ -683,24 +712,272 @@ def _git_lines(root, args, expected):
     return lines
 
 
-def committed_blobs(root, paths=COMMITTED_FILES):
+def _git_bytes(root, args):
+    """一條 git 的原始 stdout;失敗 ⇒ None。不拋例外。"""
+    import subprocess
+    try:
+        proc = subprocess.run(["git", "-C", os.fspath(root)] + list(args),
+                              capture_output=True, timeout=30)
+    except Exception:
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def committed_blobs(root, paths=BLOB_FILES):
     """`{path: {"worktree": blob, "head": blob}}` —— 工作樹檔案(`git hash-object`,依
     .gitattributes 正規化)與 `HEAD:<path>` 的 blob。〈二十九〉2 (xi)。
 
     git 不可用、不是 repo、檔案不存在或任何一步出錯 ⇒ 該值 None(缺欄 ⇒ 不得為 `"true"`)。
+    **逐路徑各呼叫一次 git**(票 145 Station 4g;規劃檔 P3 遷移第 3 點):一次處理全部路徑的話,
+    缺一個檔整次失敗、所有路徑都成 None —— 淨室 repo 沒有 pyproject 時,conftest 的 blob 也一起遺失。
     **不拋例外**:這是 producer 在 sessionfinish 呼叫的,不得讓 pytest 失敗。
     """
-    paths = list(paths)
-    out = dict((p, {"worktree": None, "head": None}) for p in paths)
+    out = {}
+    for p in list(paths):
+        entry = {"worktree": None, "head": None}
+        try:
+            worktree = _git_lines(root, ["hash-object", p], 1)
+            head = _git_lines(root, ["rev-parse", "HEAD:" + p], 1)
+            entry["worktree"] = worktree[0] if worktree else None
+            entry["head"] = head[0] if head else None
+        except Exception:
+            pass
+        out[p] = entry
+    return out
+
+
+def addopts_overrides(value):
+    """已提交設定的 addopts **原值** → 它帶來的 override 清單,依出現順序(pytest 9.1.1;(viii) 的推導規則)。
+
+    輸入合約(票 145〈五十一〉裁決 3):`value` 是 HEAD config 經 TOML 解析後的 raw addopts —— 只接受
+    `str`(依 shlex 切開;ini 的 type="args",`_pytest/config/__init__.py:1547`)或 `list[str]`(逐項使用);
+    沒有 addopts 時呼叫端傳 `""`。**本函式不讀 git、工作樹或任何檔案。**
+      - `OVERRIDE_FLAGS` 的旗標 → 對應的 `<ini>=true`;`-o VAL` / `-oVAL` / `--override-ini VAL` /
+        `--override-ini=VAL` → `VAL`;其他 token 不產生 override;
+      - 型別不符、引號不成對、`-o` 後面沒有值 ⇒ None,由呼叫端判 unknown —— 不猜。
+
+    推導漏掉的寫法(例:合併短旗標 `-qo x`、長旗標縮寫)會讓「推導值 ≠ 實際 override」,
+    方向是 unknown(fail-closed),不是假綠:runtime 的 `override_ini` 仍要另外等於 policy(viii)。
+    """
+    import shlex
+    if isinstance(value, str):
+        try:
+            tokens = shlex.split(value)
+        except ValueError:
+            return None
+    elif isinstance(value, list) and all(isinstance(t, str) for t in value):
+        tokens = list(value)
+    else:
+        return None
+    out = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in OVERRIDE_FLAGS:
+            out.append(OVERRIDE_FLAGS[tok])
+        elif tok in ("-o", "--override-ini"):
+            i += 1
+            if i >= len(tokens):
+                return None
+            out.append(tokens[i])
+        elif tok.startswith("--override-ini="):
+            out.append(tok.split("=", 1)[1])
+        elif tok.startswith("-o") and not tok.startswith("--"):
+            out.append(tok[2:])
+        i += 1
+    return out
+
+
+def _committed_addopts(root, config_file):
+    """`HEAD:<config_file>` 的 `[tool.pytest.ini_options].addopts` 原值(事實擷取,不判定)。
+
+    語意(〈五十一〉裁決 3,不得混用):
+      - `str` / `list[str]` = 原值照錄;
+      - `""` = config 存在且合法、`[tool.pytest.ini_options]` 段在、只是沒有 addopts 鍵;
+      - None = 取得或解析事實失敗:blob 讀不到、不是 UTF-8 / TOML、沒有 `[tool.pytest.ini_options]` 段、
+        addopts 型別不是 str / list[str]、或直譯器沒有 `tomllib`(3.11 起的標準庫;沒有它本來就在能力邊界外)。
+    只讀 HEAD 的 blob(`git cat-file`),不讀工作樹(工作樹 ≠ HEAD 由 (xi) 另外判)。
+    """
     try:
-        worktree = _git_lines(root, ["hash-object"] + paths, len(paths))
-        head = _git_lines(root, ["rev-parse"] + ["HEAD:" + p for p in paths], len(paths))
-        for i, p in enumerate(paths):
-            out[p]["worktree"] = worktree[i] if worktree else None
-            out[p]["head"] = head[i] if head else None
+        import tomllib
+    except ImportError:
+        return None
+    raw = _git_bytes(root, ["cat-file", "blob", "HEAD:" + config_file])
+    if raw is None:
+        return None
+    try:
+        doc = tomllib.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
+    tool = doc.get("tool")
+    pytest_section = tool.get("pytest") if isinstance(tool, dict) else None
+    section = pytest_section.get("ini_options") if isinstance(pytest_section, dict) else None
+    if not isinstance(section, dict):
+        return None
+    if "addopts" not in section:
+        return ""
+    value = section["addopts"]
+    if isinstance(value, str) or (isinstance(value, list) and all(isinstance(v, str) for v in value)):
+        return value
+    return None
+
+
+def evidence_policy_facts(root):
+    """producer 的 policy 事實(票 145 規劃檔 P3 I-3;〈四十八〉48.1 第 2 點)。依序:
+
+      1. 固定 canonical path `POLICY_FILE`;
+      2. `git rev-parse HEAD:<path>` —— HEAD 沒有 ⇒ 停在這裡(`head` 為 None);
+      3. 第 2 步的輸出就是 HEAD committed blob;
+      4. `git hash-object <path>`(套用 .gitattributes,與 `committed_blobs` 同一手法)取 worktree blob;
+         ≠ HEAD blob 或缺檔 ⇒ 停在這裡;
+      5. 內容**只從 HEAD blob** 取(`git cat-file blob <sha>`)並解析 JSON —— 第 4 步的工作樹檔只做
+         identity 比對,之後不再讀;記下 `schema` / `version` 與整份內容 `policy`;
+      6. policy 的 `config_file` 屬於 `FRAMEWORK_CONFIG_FILES` 時,另記它在 HEAD 的 addopts 原值
+         `committed_addopts`(`_committed_addopts`),供 consumer 做「policy ↔ 已提交設定」的機器鎖步。
+
+    回傳 7 鍵 `{"path", "head", "worktree", "schema", "version", "policy", "committed_addopts"}`
+    (〈五十一〉裁決 3);走不下去的那一步之後的欄位都是 None。
+    **只擷取事實,不判定** —— 型別、schema、邊界、鎖步都由 consumer 驗。不拋例外(sessionfinish 呼叫)。
+    """
+    out = {"path": POLICY_FILE, "head": None, "worktree": None, "schema": None,
+           "version": None, "policy": None, "committed_addopts": None}
+    try:
+        head = _git_lines(root, ["rev-parse", "HEAD:" + POLICY_FILE], 1)
+        if not head:
+            return out
+        out["head"] = head[0]
+        worktree = _git_lines(root, ["hash-object", POLICY_FILE], 1)
+        out["worktree"] = worktree[0] if worktree else None
+        if out["worktree"] != out["head"]:
+            return out
+        raw = _git_bytes(root, ["cat-file", "blob", out["head"]])
+        if raw is None:
+            return out
+        doc = json.loads(raw.decode("utf-8"))
+        if not isinstance(doc, dict):
+            return out
+        out["schema"] = doc.get("schema")
+        out["version"] = doc.get("version")
+        out["policy"] = doc
+        if doc.get("config_file") in FRAMEWORK_CONFIG_FILES:
+            out["committed_addopts"] = _committed_addopts(root, doc["config_file"])
     except Exception:
         pass
     return out
+
+
+def _is_pair_list(v):
+    return isinstance(v, list) and all(
+        isinstance(d, list) and len(d) == 2 and all(isinstance(x, str) for x in d) for d in v)
+
+
+def policy_document_problems(policy):
+    """`(格式問題, 邊界問題)` 兩個 list;都空 = 合格。consumer 與 status 共用。
+
+    - 格式(I-1、I-2):不是物件、`(schema, version)` 不在 `POLICY_SCHEMAS`、鍵集合不恰為 `POLICY_FIELDS`、
+      欄位型別不對。**schema 不認得就不往下看** —— 別的 version 的欄位語意不是本版能判讀的。
+    - 邊界(I-4;〈四十八〉48.1 第 3 點 A):任一欄位超出框架能力邊界 ⇒ 整份不合格,不取交集、不靜默忽略。
+    """
+    if not isinstance(policy, dict):
+        return [u"不是物件"], []
+    schema, version = policy.get("schema"), policy.get("version")
+    if not (isinstance(schema, str) and type(version) is int and (schema, version) in POLICY_SCHEMAS):
+        return [u"schema / version 不認得"], []
+    fmt = []
+    keys = set(policy)
+    if keys != set(POLICY_FIELDS):
+        fmt.append(u"欄位不符(多 %s;缺 %s)" % (sorted(keys - set(POLICY_FIELDS)),
+                                              sorted(set(POLICY_FIELDS) - keys)))
+    if not isinstance(policy.get("config_file"), str):
+        fmt.append(u"config_file 型別不符")
+    for key in ("committed_overrides", "python_versions", "pytest_versions"):
+        if not _is_str_list(policy.get(key)):
+            fmt.append(u"%s 型別不符" % key)
+    if not _is_pair_list(policy.get("dists")):
+        fmt.append(u"dists 型別不符")
+    if fmt:
+        return fmt, []
+    bnd = []
+    if policy["config_file"] not in FRAMEWORK_CONFIG_FILES:
+        bnd.append(u"config_file")
+    if not set(policy["python_versions"]) <= set(KNOWN_PYTHON_VERSIONS):
+        bnd.append(u"python_versions")
+    if not set(policy["pytest_versions"]) <= set(KNOWN_PYTEST_VERSIONS):
+        bnd.append(u"pytest_versions")
+    if not set(tuple(d) for d in policy["dists"]) <= set(KNOWN_DISTS):
+        bnd.append(u"dists")
+    return [], bnd
+
+
+def policy_state(root):
+    """`<root>` 現在的 policy 狀態(status 行用;〈五十〉50.1 第 3 點)。依序:
+    HEAD 沒有 ⇒ 工作樹有檔為「未提交」、否則「未初始化」;工作樹 ≠ HEAD ⇒「工作樹與 HEAD 不同」;
+    格式問題 ⇒「格式不明」;邊界問題 ⇒「超出框架能力邊界」;其餘「有效」。
+
+    「有效」只說**文件本身**可用;一次 run 能不能退紅,還要看那次的環境與鎖步(`_completeness_verdict`)。"""
+    facts = evidence_policy_facts(root)
+    if facts["head"] is None:
+        exists = os.path.exists(os.path.join(os.fspath(root), *POLICY_FILE.split("/")))
+        return POLICY_UNCOMMITTED if exists else POLICY_UNINITIALIZED
+    if facts["worktree"] != facts["head"]:
+        return POLICY_WORKTREE_DIFFERS
+    fmt, bnd = policy_document_problems(facts["policy"])
+    if fmt:
+        return POLICY_UNKNOWN_FORMAT
+    if bnd:
+        return POLICY_OUTSIDE_BOUNDARY
+    return POLICY_VALID
+
+
+def policy_template():
+    """安裝器寫到非 canonical 路徑的範本內容(〈四十八〉48.1 第 6 點 A):框架能力邊界常數的完整列舉,
+    **不是本機觀察值**。`committed_overrides` 留空 —— 它必須等於宿主自己已提交 addopts 的推導,
+    框架不替人填。"""
+    schema, version = POLICY_SCHEMAS[0]
+    return {"schema": schema, "version": version,
+            "config_file": FRAMEWORK_CONFIG_FILES[0],
+            "committed_overrides": [],
+            "python_versions": list(KNOWN_PYTHON_VERSIONS),
+            "pytest_versions": list(KNOWN_PYTEST_VERSIONS),
+            "dists": [list(d) for d in KNOWN_DISTS]}
+
+
+def _effective_policy(ep):
+    """session 記下的 `evidence_policy` → 可用的 policy(dict);任何一項不成立 ⇒ None(unknown)。
+
+    驗:型別、path 為 canonical、`head == worktree` 且非 None、文件格式與邊界(`policy_document_problems`)、
+    記錄的 schema / version 與文件一致、`committed_overrides == addopts_overrides(committed_addopts)`
+    (機器鎖步,取代原 test_d4;`committed_addopts` 為 None 或推導不了 ⇒ unknown)。
+    policy 已驗過 ⊆ 能力邊界,所以 effective = B ∩ policy = policy。"""
+    if not isinstance(ep, dict) or ep.get("path") != POLICY_FILE:
+        return None
+    head = ep.get("head")
+    if not (isinstance(head, str) and head and ep.get("worktree") == head):
+        return None
+    policy = ep.get("policy")
+    fmt, bnd = policy_document_problems(policy)
+    if fmt or bnd:
+        return None
+    if ep.get("schema") != policy["schema"] or ep.get("version") != policy["version"]:
+        return None
+    committed = ep.get("committed_addopts")
+    if committed is None:
+        return None
+    derived = addopts_overrides(committed)
+    if derived is None or derived != policy["committed_overrides"]:
+        return None
+    return policy
+
+
+def _effective(boundary, chosen):
+    """effective = B ∩ policy(I-3 第 6 步)。"""
+    return [v for v in chosen if v in boundary]
+
+
+def _known_dists_accepted(plugin, accepted):
+    """known_dist 項目的每個 (名稱, 版本) 都要在 effective 的 dists 內;沒有 `dists` 事實 ⇒ 不成立。"""
+    dists = plugin.get("dists")
+    return _is_pair_list(dists) and bool(dists) and all(tuple(d) in accepted for d in dists)
 
 
 def _is_str_list(v):
@@ -736,13 +1013,17 @@ def _completeness_problems(comp):
             problems.append("%s 缺欄或型別不符" % key)
     if not _is_str_list(comp.get("blocked")):
         problems.append("blocked 缺欄或型別不符")
+    # (xi):root producer 那一項必須在;policy 指定的設定檔那一項由 verdict 在知道 config_file 之後查。
     blobs = comp.get("config_blobs")
-    if not isinstance(blobs, dict) or not all(
-            isinstance(blobs.get(p), dict)
-            and all(blobs[p].get(k) is None or isinstance(blobs[p].get(k), str)
-                    for k in ("worktree", "head"))
-            for p in COMMITTED_FILES):
+    if not isinstance(blobs, dict) or ROOT_CONFTEST not in blobs or not all(
+            isinstance(b, dict)
+            and all(b.get(k) is None or isinstance(b.get(k), str) for k in ("worktree", "head"))
+            for b in blobs.values()):
         problems.append("config_blobs 缺欄或型別不符")
+    # 票 145 Station 4g:policy 事實(7 鍵;〈五十一〉裁決 3)。Station 4g 之前的 session 沒有 ⇒ 不合格 ⇒ unknown。
+    ep = comp.get("evidence_policy")
+    if not isinstance(ep, dict) or any(k not in ep for k in EVIDENCE_POLICY_KEYS):
+        problems.append("evidence_policy 缺欄或型別不符")
     # 〈三十五〉3 (xiv)–(xviii) 的事實。Station 4e 之前的 session 沒有這些欄位 ⇒ 不合格 ⇒ unknown。
     # 型別在這裡驗,malformed 的事實不得只靠 verdict 的值判斷而繞過。
     if type(comp.get("optimize")) is not int:            # int,不含 bool
@@ -763,15 +1044,19 @@ def _completeness_verdict(run, tf, idents):
     """位置參數已涵蓋 `tf` 之後,依〈二十三〉7 (i)–(vii) 判 `"true"` / `"false"` / `"unknown"`。
 
     - (i) 缺欄 / 型別錯 ⇒ unknown
-    - (vii)(vii′) 有 plugin 不在受支援範圍(含版本不在清單的 dist)⇒ unknown(在支援邊界之外,不知道)
+    - (P) evidence policy 不可用(未提交、工作樹 ≠ HEAD、格式不明、超出能力邊界、與 HEAD 設定檔的 addopts
+      推導不一致;`_effective_policy`)⇒ unknown(票 145 Station 4g;〈四十八〉48.1)。
+      以下的「effective」= 框架能力邊界 B ∩ policy
+    - (vii)(vii′) 有 plugin 不在受支援範圍(含版本不在清單的 dist),或 known_dist 的 (名稱, 版本) 不在
+      effective 的 `dists` ⇒ unknown(在支援邊界之外,不知道)
     - (xii) 有任何 `-p no:<name>` ⇒ unknown
-    - (xiii) pytest 版本不在 `KNOWN_PYTEST_VERSIONS` ⇒ unknown
-    - (viii) `override_ini` 不恰等於 `COMMITTED_ADDOPTS_OVERRIDES` ⇒ unknown(本次的收集定義被覆寫)
+    - (xiii) pytest 版本不在 effective 的 `pytest_versions` ⇒ unknown
+    - (viii) `override_ini` 不恰等於 policy 的 `committed_overrides` ⇒ unknown(本次的收集定義被覆寫)
     - (ix) 有 `-c` / `--config-file` ⇒ unknown(即使指向已提交的權威檔)
-    - (x) 實際採用的設定檔不是 `CONFIG_FILE` ⇒ unknown
-    - (xi) `COMMITTED_FILES` 任一檔的工作樹 blob ≠ HEAD blob,或取不到 ⇒ unknown
+    - (x) 實際採用的設定檔不是 policy 的 `config_file` ⇒ unknown
+    - (xi) `ROOT_CONFTEST` 與 policy 的 `config_file` 任一檔的工作樹 blob ≠ HEAD blob,或取不到 ⇒ unknown
     - (xiv) `sys.flags.optimize` 不是 0 ⇒ unknown(assert 可能沒有執行;〈三十五〉3)
-    - (xviii) Python major.minor 不在 `KNOWN_PYTHON_VERSIONS` ⇒ unknown
+    - (xviii) Python major.minor 不在 effective 的 `python_versions` ⇒ unknown
     - (xv)(xvii) `runxfail` / `trace` 不是 False ⇒ unknown;(xvi) pytest `-W` 有值 ⇒ unknown
       (assertmode 不判定:`optimize == 0` 時 plain 只影響 reporting)
     - (xix) `usepdb`(`--pdb`)不是 False ⇒ unknown(〈三十九〉39.3 第 3 點;與 (xvii) 同理:除錯模式下人可在
@@ -786,26 +1071,35 @@ def _completeness_verdict(run, tf, idents):
     comp = run.get("completeness")
     if _completeness_problems(comp):
         return "unknown"
+    policy = _effective_policy(comp["evidence_policy"])
+    if policy is None:
+        return "unknown"
+    accepted_dists = set(tuple(d) for d in _effective(KNOWN_DISTS, [tuple(d) for d in policy["dists"]]))
     if any(p["kind"] not in SUPPORTED_PLUGIN_KINDS for p in comp["plugins"]):
+        return "unknown"
+    if any(p["kind"] == "known_dist" and not _known_dists_accepted(p, accepted_dists)
+           for p in comp["plugins"]):
         return "unknown"
     if comp["blocked"]:
         return "unknown"
-    if comp["pytest_version"] not in KNOWN_PYTEST_VERSIONS:
+    if comp["pytest_version"] not in _effective(KNOWN_PYTEST_VERSIONS, policy["pytest_versions"]):
         return "unknown"
-    if comp["override_ini"] != list(COMMITTED_ADDOPTS_OVERRIDES):
+    if comp["override_ini"] != list(policy["committed_overrides"]):
         return "unknown"
     if comp["inifilename"] is not None:
         return "unknown"
-    if comp["inipath"] != CONFIG_FILE:
+    config_file = policy["config_file"]
+    if config_file not in FRAMEWORK_CONFIG_FILES or comp["inipath"] != config_file:
         return "unknown"
     blobs = comp["config_blobs"]
-    if not all(blobs[p]["worktree"] and blobs[p]["worktree"] == blobs[p]["head"]
-               for p in COMMITTED_FILES):
-        return "unknown"
+    for p in (config_file, ROOT_CONFTEST):
+        b = blobs.get(p)
+        if not (isinstance(b, dict) and b.get("worktree") and b.get("worktree") == b.get("head")):
+            return "unknown"
     options = comp["options"]
     if comp["optimize"] != 0:
         return "unknown"
-    if comp["python_version"] not in KNOWN_PYTHON_VERSIONS:
+    if comp["python_version"] not in _effective(KNOWN_PYTHON_VERSIONS, policy["python_versions"]):
         return "unknown"
     if options["runxfail"] is not False or options["trace"] is not False:
         return "unknown"

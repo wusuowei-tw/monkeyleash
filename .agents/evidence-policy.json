@@ -1,0 +1,9 @@
+{
+  "schema": "monkeyleash.evidence-policy",
+  "version": 1,
+  "config_file": "pyproject.toml",
+  "committed_overrides": ["strict_markers=true"],
+  "python_versions": ["3.11"],
+  "pytest_versions": ["9.1.1"],
+  "dists": [["anyio", "4.15.0"]]
+}

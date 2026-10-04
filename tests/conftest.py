@@ -355,6 +355,13 @@ def _completeness_of(session):
     票 145 Station 4e(〈三十五〉3 (xiv)–(xviii)、4)另記 pass 有效性的事實:`optimize` 與 `python_version`
     在此刻經模組層 `sys` 讀;`runxfail` / `pythonwarnings` / `trace` 隨 `COMPLETENESS_OPTIONS` 記在 `options`。
     路徑型 metadata 依欄位類別正規化(F3-甲):相對路徑以 `invocation_params.dir` 解析。
+
+    票 145 Station 4g(〈四十八〉48.1 第 2 點 A)另記 host evidence policy 的事實 `evidence_policy`(7 鍵),
+    依規劃檔 P3 I-3 的六步:HEAD 有沒有 → HEAD blob → 工作樹 blob(`git hash-object`)是否相同 →
+    內容**只從 HEAD blob**(`git cat-file`)解析 → schema / version → 記錄;另記 policy 指定的設定檔
+    在 HEAD 的 addopts 原值。工作樹的 policy 檔只做 identity 比對,之後不再讀。步驟本體在
+    `redlight.evidence_policy_facts`(與 `committed_blobs` 同一處,status 共用);本檔只擷取事實,不判定。
+    舊版 redlight.py(下游未同步)沒有該函式 ⇒ 記 None(涵蓋未知)。
     """
     try:
         if _pre_narrowing_broken:
@@ -381,6 +388,8 @@ def _completeness_of(session):
                                                            _ROOT, inv_dir),
             "inipath": _redlight.normalize_config_path(getattr(cfg, "inipath", None), _ROOT),
             "config_blobs": _redlight.committed_blobs(_ROOT),
+            "evidence_policy": (_redlight.evidence_policy_facts(_ROOT)
+                                if hasattr(_redlight, "evidence_policy_facts") else None),
             "pytest_version": version if isinstance(version, str) else None,
             "optimize": _optimize_flag(),
             "python_version": _python_version(),
