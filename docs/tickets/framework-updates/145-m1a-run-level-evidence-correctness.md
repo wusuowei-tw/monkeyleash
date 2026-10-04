@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3g-1b 紅燈已提交;待固定全套驗證。
+**狀態**:動工 —— Station 3g-1b 紅燈完成;待 Station 4g 實作。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -133,6 +133,9 @@
 >
 > - 狀態(舊,第四十一代):~~`動工 —— Station 3g 紅燈已寫(待 Jeff 驗收);Station 4g 未開始。`~~
 >   —— 2026-10-04 Station 3g-1b 紅燈提交後由第 3 行取代(見〈五十〉)。
+>
+> - 狀態(舊,第四十二代):~~`動工 —— Station 3g-1b 紅燈已提交;待固定全套驗證。`~~
+>   —— 2026-10-04 Station 3g-1b 固定全套驗證(乾淨工作樹重跑)成立後由第 3 行取代(見〈五十〉50.4)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -515,15 +518,20 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5f — Review | PASS |
 | Station 6 — Acceptance | FAIL(淨室驗證;依 Jeff 裁決) |
 | Station 3g — Red-light(補) | PASS / ACCEPTED(26 behavior-red + 7 regression-lock;S3G2) |
-| Station 3g-1b — Red-light(補) | 紅燈已提交,待固定全套驗證 |
+| Station 3g-1b — Red-light(補) | 紅燈完成,待 Station 4g 實作 |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g-1b 紅燈已提交;待固定全套驗證(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g-1b 紅燈完成;待 Station 4g 實作(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第三十三代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g-1b 紅燈已提交;待固定全套驗證(與票頭第 3 行一致)。~~
+> 2026-10-04 Station 3g-1b 固定全套驗證(乾淨工作樹重跑)成立後隨第 3 行同步更新(見〈五十〉50.4)。
+>
+> **〈十〉表格舊值(F-036)**:Station 3g-1b 列 ~~`紅燈已提交,待固定全套驗證`~~ → `紅燈完成,待 Station 4g 實作`(2026-10-04,S3G1B-2)。
+>
 > **舊句(F-036,保留不刪,第三十二代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g 紅燈已寫(待 Jeff 驗收);Station 4g 未開始(與票頭第 3 行一致)。~~
 > 2026-10-04 Station 3g-1b 紅燈提交後隨第 3 行同步更新(見〈五十〉)。
 >
@@ -2527,6 +2535,21 @@ Error: Process completed with exit code 1.
 附註:
 - `[unknown-schema]` 逐一涵蓋五份已提交文件。「必要欄位缺失 / 型別錯誤」那一類兩種都測:缺 `dists`、`python_versions` 為字串。
 - I1 為了讓「範本不得成為 authority」不被其他 unknown 原因遮蔽,在安裝出的 repo 另提交一份 `pyproject.toml`(以 `--no-verify` 提交,同 install.main 自己的 commit),再驅動真實 producer。
+
+### 50.4 紅燈證據
+
+- 報告:`docs/audits/2026-10-04-m1a-station3g-1b-redlight.md`。
+- S3G1B `83258dd9ab415a793eaf2b140a9e34c5b91069f2`:`tests/test_install.py`、`tests/test_status.py` 各只在檔尾新增一個 hunk(`-U0` 標頭 `@@ -463,0 +464,205 @@`、`@@ -3017,0 +3018,117 @@`;沒有刪除行);另改票 145。commit 前只跑 py_compile。
+- 固定全套在 S3G1B 上跑了兩次:
+  - (a) 第一次:工作樹含 3 個外來 docs 變更(` M docs/agents/friction-log.md`、`?? …/146-…`、`?? …/147-…`)⇒ **不作為正式證據**。
+    摘要行原文 `35 failed, 2058 passed, 3 skipped, 3 xfailed in 351.04s (0:05:51)`;停手報告 `.dev/reports/2026-10-04T112500Z-ticket145-station3g-1b-stop.md`。
+  - (b) 依 Jeff 裁決 B,外來 3 檔以 `git stash push -u -m jeff-mods-recon-20261004` 收起後重跑一次 ⇒ **正式證據**。
+    跑前、跑後 `git status --porcelain` 皆無輸出。exit 1;摘要行原文 `35 failed, 2058 passed, 3 skipped, 3 xfailed in 351.00s (0:05:50)`(collected 2099)。
+- 失敗集合恰為〈四十八〉48.2 的 26 支 + 50.3 的 9 支,沒有多、也沒有少;與第一次執行逐條相同。其餘 2058 支(含 3g 的 7 支 regression-lock)通過。
+- 新 9 支的失敗點:I1 / I2 在 `test_install.py:617` / `:648`(範本不存在);I3 在 `:667`(decisions-pending 沒有 evidence policy);
+  status 6 案都在 `test_status.py:3071`(`evidence policy:` 行 0 行);`[unknown-schema]` 在第一份文件 `malformed-json` 就失敗。
+- 帳本 H11 → H12 只追加:兩本前段 sha256 = H11r / H11s;test-runs 2827 → 2874 行(+47)、test-sessions 23 → 24 行(+1)。
+- commit(回填):S3G1B `83258dd9ab415a793eaf2b140a9e34c5b91069f2`;S3G1B-2(證據)於下一次提交回填。
 
 ---
 
