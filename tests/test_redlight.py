@@ -2142,3 +2142,366 @@ class TestIdentifierFullMatch:
         broken = _e_run(tmp_path, monkeypatch, blocked=("abc\n",))
         assert control["completeness"]["blocked"] == ["abc"], control["completeness"]
         assert broken["completeness"]["blocked"] == [redlight.NON_IDENTIFIER], broken["completeness"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145 Station 3g 紅燈 —— Host evidence policy(〈四十六〉46.4、〈四十八〉48.1)
+#
+# 合約:票 145〈四十八〉48.1(Jeff 對 S3g-0 規劃檔 P8 的裁決)。規劃:docs/audits/2026-10-03-m1a-station3g-redlight-plan.md P3、P6。
+# 下文 `<BASELINE>` = 560f618560ddac1a34e0e835b99a1e3a5cc7eda5(S3G0;產品碼與 S6-1 faf7cb4 相同)。
+#
+# 介面(本刀定稿;語意依規劃檔 P3):
+#   - canonical path `.agents/evidence-policy.json`(框架常數,不可由 policy 指定);
+#   - schema `"monkeyleash.evidence-policy"` version 1;欄位全部必填、不得有多餘鍵:
+#     `config_file` / `committed_overrides` / `python_versions` / `pytest_versions` / `dists`;
+#   - producer 在 session 的 `completeness["evidence_policy"]` 記 `{"path", "head", "worktree", "schema", "version", "policy"}`,
+#     內容由 HEAD committed blob 解析;worktree 只做 identity 比對;
+#   - 框架推導函式 `redlight.addopts_overrides(addopts)`:已提交 addopts → override 清單(pytest 9.1.1 的對應)。
+#
+# driver 原則(沿用 3c-1b / 3d / 3e / 3f):
+#   - 每次模擬執行載入全新 conftest(`_isolated_conftest`);tmp root 是**真的** git repo,policy 檔**真的**提交 / 修改;
+#   - **版本事實一律固定**(〈四十八〉48.1 第 5 點):conftest 所見的 `sys.version_info` 為 3.11、`pytest.__version__` 為 9.1.1,
+#     除非該案例本身就在測版本 —— 本段的正控不依賴執行它的直譯器;
+#   - 需要兩種 repo 狀態的案例,對照組與破壞組各用 `tmp_path` 底下一個子目錄當 root;
+#   - 單點測試在同一支測試內放對照組。
+# 本段 helper 全部新寫;既有 helper(`_isolated_conftest` / `_d_plugins` / `_d_drive` / `_D_FULL` / `_e_option` /
+# `_e_sys` / `_EVersion` 等)只呼叫、不修改。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_G_POLICY_FILE = ".agents/evidence-policy.json"
+_G_SCHEMA = "monkeyleash.evidence-policy"
+_G_FIXED_ADDOPTS = "-ra --strict-markers"
+
+
+def _g_policy(**overrides):
+    """與 agent-gates 現行常數一致、且在能力邊界之內的 policy(dict)。"""
+    policy = {
+        "schema": _G_SCHEMA,
+        "version": 1,
+        "config_file": "pyproject.toml",
+        "committed_overrides": ["strict_markers=true"],
+        "python_versions": ["3.11"],
+        "pytest_versions": ["9.1.1"],
+        "dists": [["anyio", "4.15.0"]],
+    }
+    policy.update(overrides)
+    return policy
+
+
+def _g_policy_text(policy):
+    return json.dumps(policy, ensure_ascii=False, indent=2) + "\n"
+
+
+def _g_write(root, rel, text):
+    p = pathlib.Path(str(root)) / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with io.open(str(p), "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
+def _g_root(root, policy_text=None, commit_policy=True, addopts=_G_FIXED_ADDOPTS,
+            policy_path=_G_POLICY_FILE, extra_files=None):
+    """在 `root` 建真的 git repo:提交 `pyproject.toml`(addopts 由參數決定)、root conftest(真檔內容)、
+    `extra_files`;`policy_text` 不為 None ⇒ 寫到 `policy_path`,`commit_policy` 為真才一起提交。"""
+    root = pathlib.Path(str(root))
+    root.mkdir(parents=True, exist_ok=True)
+    pyproject = u'[tool.pytest.ini_options]\ntestpaths = ["tests"]\n'
+    if addopts is not None:
+        pyproject += u'addopts = "%s"\n' % addopts
+    _g_write(root, "pyproject.toml", pyproject)
+    conftest = root / "tests" / "conftest.py"
+    conftest.parent.mkdir(parents=True, exist_ok=True)
+    conftest.write_bytes((ROOT / "tests" / "conftest.py").read_bytes())
+    tracked = ["pyproject.toml", "tests/conftest.py"]
+    for rel, text in (extra_files or {}).items():
+        _g_write(root, rel, text)
+        tracked.append(rel)
+    if policy_text is not None:
+        _g_write(root, policy_path, policy_text)
+        if commit_policy:
+            tracked.append(policy_path)
+    _d_git(root, "init", "-q")
+    _d_git(root, "config", "user.email", "t@example.invalid")
+    _d_git(root, "config", "user.name", "t")
+    _d_git(root, "add", *tracked)
+    _d_git(root, "commit", "-q", "-m", "baseline")
+    return root
+
+
+def _g_default_root(root):
+    """提交了合法、與執行環境一致的 policy 的 repo(正控用)。"""
+    return _g_root(root, policy_text=_g_policy_text(_g_policy()))
+
+
+def _g_run(root, monkeypatch, option=None, python=(3, 11), pytest_version="9.1.1",
+           anyio_version="4.15.0", inipath="pyproject.toml", ini=None):
+    """一次模擬執行(全新 conftest;`_D_FULL` 全收集、全 passed、exit 0;其他事實同固定全套)。
+    版本事實固定為參數值(預設 3.11 / 9.1.1 / anyio 4.15.0)。回傳**最後一筆** session。"""
+    root = pathlib.Path(str(root))
+    selected = [n for ids in _D_FULL.values() for n in ids]
+    c = _isolated_conftest(monkeypatch, root)
+    monkeypatch.setattr(c, "sys", _e_sys(optimize=0, version_info=_EVersion(python[0], python[1], 0, "final", 0)),
+                        raising=False)
+    monkeypatch.setattr(pytest, "__version__", pytest_version)
+    pm = _d_plugins(c, root, anyio_version=anyio_version)
+    _d_drive(c, root, _D_FULL, selected, dict((n, "passed") for n in selected),
+             option=option if option is not None else _e_option(usepdb=False), pm=pm,
+             inipath=inipath, ini=ini)
+    runs = redlight.load_runs(str(root))
+    assert runs, runs
+    return runs[-1]
+
+
+def _g_coverage(root, monkeypatch, **kw):
+    return redlight.file_coverage(_g_run(root, monkeypatch, **kw), "tests/test_x.py")
+
+
+def _g_control(tmp_path, monkeypatch):
+    """對照組:`tmp_path/control` 是提交了合法 policy 的 repo,固定全套 ⇒ 應為 `"true"`。"""
+    return _g_coverage(_g_default_root(tmp_path / "control"), monkeypatch)
+
+
+def _g_without(policy, key):
+    out = dict(policy)
+    out.pop(key)
+    return out
+
+
+# 規劃檔 P6 #2–#5:policy 自身的 HEAD / worktree integrity 不成立的四種狀態。
+_G_UNCOMMITTED_STATES = ["worktree-only", "worktree-differs", "staged-only", "deleted-in-worktree"]
+
+# 規劃檔 P6 #6–#10:HEAD 與 worktree 一致,但文件本身看不懂。
+_G_UNKNOWN_DOCUMENTS = [
+    pytest.param(u"{not json\n", id="malformed-json"),
+    pytest.param(_g_policy_text(_g_policy(schema="other.evidence-policy")), id="unknown-schema"),
+    pytest.param(_g_policy_text(_g_policy(version=2)), id="unknown-version"),
+    pytest.param(_g_policy_text(_g_policy(location=".agents/elsewhere.json")), id="unknown-key"),
+    pytest.param(_g_policy_text(_g_without(_g_policy(), "dists")), id="missing-field"),
+]
+
+
+class TestEvidencePolicyBootstrap:
+
+    def test_g3_a_repo_without_a_policy_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """#1(〈四十六〉46.4 第 3 點:缺少 host policy 不得解讀成可信;規劃檔 P3 I-3 第 2 步)。分類:behavior-red。
+
+        對照組:提交了合法 policy 的 repo ⇒ `"true"`。破壞組:同樣的已提交設定與 conftest,但 repo 從未有 policy
+        (淨室安裝後、尚未初始化的狀態)⇒ 不得為 `"true"`。
+        BASELINE 上失敗的原因:`<BASELINE>:.claude/hooks/redlight.py:786-833` 不讀任何 policy ⇒ `:833` 回 `"true"`。
+        """
+        control = _g_control(tmp_path, monkeypatch)
+        broken = _g_coverage(_g_root(tmp_path / "broken"), monkeypatch)
+        assert control == "true", control
+        assert broken != "true", broken
+
+    @pytest.mark.parametrize("state", _G_UNCOMMITTED_STATES)
+    def test_g3_an_uncommitted_policy_state_is_not_full_coverage(self, tmp_path, monkeypatch, state):
+        """#2–#5(〈四十六〉46.4 第 4 點 負二 / 負三、第 6 點;規劃檔 P3 I-3 第 2、4 步)。分類:behavior-red。
+
+        對照組:提交了合法 policy 的 repo ⇒ `"true"`。破壞組(policy 內容皆為同一份合法 policy):
+          - `[worktree-only]`:policy 只在工作樹,HEAD 從未有它(負三)⇒ 不得為 `"true"`;
+          - `[worktree-differs]`:HEAD 有 policy,工作樹內容不同(本地改了未 commit)(負二)⇒ 不得為 `"true"`;
+          - `[staged-only]`:policy 已 `git add` 但未 commit ⇒ 不得為 `"true"`;
+          - `[deleted-in-worktree]`:HEAD 有 policy,工作樹把它刪了 ⇒ 不得為 `"true"`。
+        BASELINE 上失敗的原因:同 #1(`<BASELINE>:.claude/hooks/redlight.py:833`)。
+        """
+        control = _g_control(tmp_path, monkeypatch)
+        text = _g_policy_text(_g_policy())
+        broken_root = tmp_path / "broken"
+        if state == "worktree-only":
+            _g_root(broken_root, policy_text=text, commit_policy=False)
+        elif state == "staged-only":
+            _g_root(broken_root, policy_text=text, commit_policy=False)
+            _d_git(broken_root, "add", _G_POLICY_FILE)
+        else:
+            _g_root(broken_root, policy_text=text)
+            policy = broken_root / _G_POLICY_FILE
+            if state == "worktree-differs":
+                _g_write(broken_root, _G_POLICY_FILE, text + u"\n")
+            else:
+                policy.unlink()
+        broken = _g_coverage(broken_root, monkeypatch)
+        assert control == "true", control
+        assert broken != "true", broken
+
+    @pytest.mark.parametrize("text", _G_UNKNOWN_DOCUMENTS)
+    def test_g3_an_unknown_policy_document_is_not_full_coverage(self, tmp_path, monkeypatch, text):
+        """#6–#10(〈四十六〉46.4 第 6 點:schema / version 未知 ⇒ 只能 unknown;規劃檔 P3 I-1、I-2、I-3 第 5 步)。
+        分類:behavior-red。
+
+        對照組:提交了合法 policy 的 repo ⇒ `"true"`。破壞組:policy 已提交且工作樹 = HEAD,但內容為
+        `[malformed-json]` 不是 JSON、`[unknown-schema]` schema 不是 `monkeyleash.evidence-policy`、
+        `[unknown-version]` version 2、`[unknown-key]` 多一個自我指定位置的鍵 `location`(I-1)、
+        `[missing-field]` 缺 `dists` ⇒ 不得為 `"true"`。
+        BASELINE 上失敗的原因:同 #1(`<BASELINE>:.claude/hooks/redlight.py:833`)。
+        """
+        control = _g_control(tmp_path, monkeypatch)
+        broken = _g_coverage(_g_root(tmp_path / "broken", policy_text=text), monkeypatch)
+        assert control == "true", control
+        assert broken != "true", broken
+
+    def test_g3_a_policy_outside_the_canonical_path_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """#11(〈四十六〉46.4 第 6 點:canonical location 屬框架不變式;規劃檔 P3 I-1)。分類:behavior-red。
+
+        對照組:policy 提交在 `.agents/evidence-policy.json` ⇒ `"true"`。破壞組:同一份合法 policy 只提交在
+        repo 根的 `evidence-policy.json`(canonical path 沒有檔)⇒ 不得為 `"true"`。
+        BASELINE 上失敗的原因:同 #1(`<BASELINE>:.claude/hooks/redlight.py:833`)。
+        """
+        control = _g_control(tmp_path, monkeypatch)
+        broken = _g_coverage(_g_root(tmp_path / "broken", policy_text=_g_policy_text(_g_policy()),
+                                     policy_path="evidence-policy.json"), monkeypatch)
+        assert control == "true", control
+        assert broken != "true", broken
+
+    def test_g3_the_producer_records_the_policy_identity(self, tmp_path, monkeypatch):
+        """#12(〈四十八〉48.1 第 2 點:producer 依 I-3 從 HEAD committed blob 解析並記入 session)。分類:behavior-red。
+
+        對照組:repo 沒有 policy ⇒ `evidence_policy` 沒有 HEAD blob(整欄 None 或 `head` 為 None)。
+        破壞組(主斷言):提交了合法 policy ⇒ 持久化的 `completeness["evidence_policy"]` 為
+        `{"path": ".agents/evidence-policy.json", "head": <HEAD blob>, "worktree": <同一個 blob>,
+        "schema": "monkeyleash.evidence-policy", "version": 1, "policy": <解析後內容>}`;
+        `<HEAD blob>` 由測試自己以 `git rev-parse HEAD:<path>` 取得。
+        BASELINE 上失敗的原因:`<BASELINE>:tests/conftest.py:368-387` 的 completeness 沒有 `evidence_policy` 欄。
+        """
+        none_run = _g_run(_g_root(tmp_path / "none"), monkeypatch)
+        none_ep = (none_run.get("completeness") or {}).get("evidence_policy")
+        root = _g_default_root(tmp_path / "with")
+        head = _d_git(root, "rev-parse", "HEAD:" + _G_POLICY_FILE).stdout.decode("ascii").strip()
+        run = _g_run(root, monkeypatch)
+        ep = (run.get("completeness") or {}).get("evidence_policy")
+        assert isinstance(ep, dict), run.get("completeness")
+        assert ep.get("path") == _G_POLICY_FILE, ep
+        assert ep.get("head") == head and ep.get("worktree") == head, (ep, head)
+        assert ep.get("schema") == _G_SCHEMA and ep.get("version") == 1, ep
+        assert ep.get("policy") == _g_policy(), ep
+        assert none_ep is None or none_ep.get("head") is None, none_ep
+
+    def test_g3_policy_content_is_not_read_from_the_worktree(self, tmp_path, monkeypatch):
+        """#13(〈四十六〉46.4 第 6 點:worktree 只做 identity check,不作為 authority 內容來源;規劃檔 P3 I-3 第 5 步)。
+        分類:regression-lock。
+
+        提交了合法 policy;模擬執行期間,Python 層的 `open` / `io.open` 只要開 canonical path 就拋例外
+        (`git hash-object` / `git cat-file` 由子行程自己讀,不受影響)⇒ 仍須為 `"true"`。
+        前置控制:guard 確實擋得住對 canonical path 的 open。
+        BASELINE 上通過:根本不讀 policy。上線後鎖住「內容只從 HEAD blob 來」。
+        """
+        import builtins
+        root = _g_default_root(tmp_path / "root")
+        policy_path = str(root / _G_POLICY_FILE)
+        real_open = builtins.open
+
+        def guarded(file, *args, **kwargs):
+            if str(file).replace("\\", "/").endswith(_G_POLICY_FILE):
+                raise OSError("worktree policy must not be read as authority content: %s" % file)
+            return real_open(file, *args, **kwargs)
+
+        with monkeypatch.context() as m:
+            m.setattr(builtins, "open", guarded)
+            m.setattr(io, "open", guarded)
+            with pytest.raises(OSError):
+                io.open(policy_path, encoding="utf-8")
+            got = _g_coverage(root, monkeypatch)
+        assert got == "true", got
+
+    def test_g3_a_matching_committed_policy_is_full_coverage(self, tmp_path, monkeypatch):
+        """#14(〈四十六〉46.4 第 3 點:宿主已提交 policy 且實際環境 == policy ⇒ 才可能 true;正二的單元版)。
+        分類:regression-lock。
+
+        提交了合法 policy(值 = 現行常數)、工作樹 = HEAD、版本事實 3.11 / 9.1.1 / anyio 4.15.0、
+        `override_ini == ["strict_markers=true"]`、全收集、全 passed ⇒ `"true"`。
+        """
+        got = _g_coverage(_g_default_root(tmp_path / "root"), monkeypatch)
+        assert got == "true", got
+
+
+# 規劃檔 P6 #15–#18:(policy 的覆寫, 執行事實, 額外提交的檔)
+_G_WIDENING = [
+    pytest.param({"python_versions": ["3.11", "3.12"]}, {"python": (3, 12)}, None, id="python"),
+    pytest.param({"pytest_versions": ["9.1.1", "9.2.0"]}, {"pytest_version": "9.2.0"}, None, id="pytest"),
+    pytest.param({"dists": [["anyio", "4.15.0"], ["anyio", "9.9.9"]]}, {"anyio_version": "9.9.9"}, None, id="dist"),
+    pytest.param({"config_file": "pytest.ini"}, {"inipath": "pytest.ini"},
+                 {"pytest.ini": u"[pytest]\ntestpaths = tests\naddopts = -ra --strict-markers\n"}, id="config-file"),
+]
+
+
+class TestEvidencePolicyBoundary:
+
+    @pytest.mark.parametrize("policy_overrides, run_kw, extra_files", _G_WIDENING)
+    def test_g3_a_policy_cannot_widen_the_capability_boundary(self, tmp_path, monkeypatch,
+                                                              policy_overrides, run_kw, extra_files):
+        """#15–#18(〈四十六〉46.4 第 3 點:host policy 只能收窄,不能擴張;〈四十八〉48.1 第 3 點)。分類:regression-lock。
+
+        對照組:合法 policy、環境在邊界內 ⇒ `"true"`。破壞組:policy 列出能力邊界外的值,且執行環境正是那個值 ——
+        `[python]` 3.12、`[pytest]` 9.2.0、`[dist]` anyio 9.9.9、`[config-file]` `pytest.ini`(另提交該檔)⇒ 不得為 `"true"`。
+        BASELINE 上通過:框架常數已擋下這四種環境(`<BASELINE>:.claude/hooks/redlight.py:793-794, 799-800, 808-809, 613`)。
+        上線後鎖住「policy 不能把它們加回來」。
+        """
+        control = _g_control(tmp_path, monkeypatch)
+        broken_root = _g_root(tmp_path / "broken", policy_text=_g_policy_text(_g_policy(**policy_overrides)),
+                              extra_files=extra_files)
+        broken = _g_coverage(broken_root, monkeypatch, **run_kw)
+        assert control == "true", control
+        assert broken != "true", broken
+
+    @pytest.mark.parametrize("case", ["override", "narrowed-dist"])
+    def test_g3_a_policy_environment_mismatch_is_not_full_coverage(self, tmp_path, monkeypatch, case):
+        """#19–#20(〈四十六〉46.4 第 4 點 負一:policy / environment mismatch ⇒ unknown)。分類:behavior-red。
+
+        對照組:合法 policy、固定全套 ⇒ `"true"`。破壞組:
+          - `[override]`:已提交 addopts 為 `-ra`、policy `committed_overrides: []`(兩者自洽);
+            執行時經 `PYTEST_ADDOPTS` 帶入 `--strict-markers` ⇒ `override_ini == ["strict_markers=true"]`(policy 未列)⇒ 不得為 `"true"`;
+          - `[narrowed-dist]`:policy `dists: []`(宿主不接受 anyio);執行時 anyio 4.15.0 已載入 ⇒ 不得為 `"true"`。
+        BASELINE 上失敗的原因:`<BASELINE>:.claude/hooks/redlight.py:795` 的比較對象是框架常數 `["strict_markers=true"]`、
+        `:613` 的 `KNOWN_DISTS` 含 anyio 4.15.0 ⇒ `:833` 回 `"true"`。
+        """
+        control = _g_control(tmp_path, monkeypatch)
+        if case == "override":
+            broken_root = _g_root(tmp_path / "broken", addopts="-ra",
+                                  policy_text=_g_policy_text(_g_policy(committed_overrides=[])))
+        else:
+            broken_root = _g_root(tmp_path / "broken", policy_text=_g_policy_text(_g_policy(dists=[])))
+        broken = _g_coverage(broken_root, monkeypatch)
+        assert control == "true", control
+        assert broken != "true", broken
+
+
+# 規劃檔 P6 #21–#25:已提交 addopts → override 清單(pytest 9.1.1:`_pytest/main.py:76-96` 的 OverrideIniAction 旗標、
+# `_pytest/helpconfig.py:113-116` 的 `-o` / `--override-ini`;其他旗標不產生 override)
+_G_DERIVATIONS = [
+    pytest.param("-ra --strict-markers", ["strict_markers=true"], id="strict-markers"),
+    pytest.param("--strict-config -q", ["strict_config=true"], id="strict-config"),
+    pytest.param("-o python_files=check_*.py -oxfail_strict=true", ["python_files=check_*.py", "xfail_strict=true"],
+                 id="o-flag"),
+    pytest.param("--override-ini=cache_dir=.c --strict-markers", ["cache_dir=.c", "strict_markers=true"],
+                 id="override-ini-eq"),
+    pytest.param("", [], id="no-addopts"),
+]
+
+
+class TestAddoptsDerivation:
+
+    @pytest.mark.parametrize("addopts, expected", _G_DERIVATIONS)
+    def test_g3_overrides_are_derived_from_committed_addopts(self, addopts, expected):
+        """#21–#25(〈四十八〉48.1 第 4 點:框架推導規則以 fixture 測)。分類:behavior-red。
+
+        `redlight.addopts_overrides(addopts)` 依出現順序回傳 override 清單,必須恰等於預期。
+        這裡驗的是**推導規則**(框架性質),不是「常數 ↔ 宿主設定」—— 後者在 tests/test_host_evidence_policy.py。
+        BASELINE 上失敗的原因:`<BASELINE>:.claude/hooks/redlight.py` 沒有 `addopts_overrides`(只有常數 `:493`)。
+        """
+        derive = getattr(redlight, "addopts_overrides")
+        assert derive(addopts) == expected, (addopts, derive(addopts))
+
+    def test_g3_a_policy_disagreeing_with_the_committed_addopts_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """#26(〈四十八〉48.1 第 4 點:verdict 時機器鎖步 —— policy 必須與 HEAD 設定檔的 addopts 推導一致)。
+        分類:behavior-red。
+
+        對照組:已提交 addopts `-ra --strict-markers`、policy `["strict_markers=true"]` ⇒ `"true"`。
+        破壞組:只改已提交 addopts 為 `-ra`(policy 與執行時 override 都仍是 `["strict_markers=true"]`,
+        後者經 `PYTEST_ADDOPTS` 帶入)⇒ policy 與已提交設定不一致 ⇒ 不得為 `"true"`。
+        BASELINE 上失敗的原因:`<BASELINE>:.claude/hooks/redlight.py:795` 只比框架常數,不讀已提交 addopts ⇒ `:833` 回 `"true"`。
+        """
+        control = _g_control(tmp_path, monkeypatch)
+        broken = _g_coverage(_g_root(tmp_path / "broken", addopts="-ra",
+                                     policy_text=_g_policy_text(_g_policy())), monkeypatch)
+        assert control == "true", control
+        assert broken != "true", broken

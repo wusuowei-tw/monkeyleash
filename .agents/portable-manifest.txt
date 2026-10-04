@@ -218,6 +218,7 @@ tests/test_declared_in_is_an_identity.py copy
 # 出貨的話它會在每個下游紅,而那些紅與新專案無關 —— 訓練人忽略訊號(F-031)。
 # 前例:`tests/test_adr_numbering.py` 同樣標 skip,同樣是 ADR 集合的性質。
 tests/test_adr_numbers_resolve_upstream.py skip
+tests/test_host_evidence_policy.py skip
 # 票 89 第 3 條:`KNOWN_GAPS` 每一項必須有票號。**出貨**:它驗的
 # `.claude/portable/g1_verify.py` 落在 `.claude/portable/` 前綴底下(標 copy),
 # 所以下游一定有那個 list —— 「帶走測試卻不帶走它驗的東西」那個形狀不成立。

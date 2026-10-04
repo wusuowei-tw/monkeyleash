@@ -289,3 +289,27 @@ class TestScenarioR4LeavesTheTargetClean:
             "追蹤側沒有被還原乾淨:%r" % dirty.decode("utf-8", "replace")
         assert not os.path.exists(os.path.join(target, "docs", "adr", "verify-trigger.md")), \
             "情境寫的未追蹤檔沒有被清掉"
+
+
+# 票 145 Station 3g 紅燈 #33(〈四十六〉46.4 第 4、5 點;規劃檔 docs/audits/2026-10-03-m1a-station3g-redlight-plan.md P5)。
+# 淨室的兩正三負由 `verify_gates.EVIDENCE_SCENARIOS` 列舉,比照 `SCENARIOS` 的「規則 ↔ 情境」對照。
+# **這一條只證明情境有接線,不證明情境結果** —— 結果由 4g 本機實跑 verify_gates 照錄(〈四十八〉48.1 第 7 點)。
+_EVIDENCE_SCENARIO_KEYS = {
+    "pos1-uninitialized",       # 正一:未初始化 ⇒ 框架測試全綠、authority 為 unknown
+    "pos2-initialized",         # 正二:已提交且相符的 policy ⇒ 紅 → 固定全套 → true → 合法退休
+    "neg1-mismatch",            # 負一:policy / environment 不符 ⇒ unknown
+    "neg2-worktree-differs",    # 負二:HEAD 有 policy、worktree 不同 ⇒ unknown
+    "neg3-worktree-only",       # 負三:worktree 有 policy、HEAD 沒有 ⇒ unknown
+}
+
+
+def test_every_evidence_policy_scenario_is_wired():
+    """#33。分類:behavior-red。
+
+    `verify_gates.EVIDENCE_SCENARIOS` 必須是 dict,鍵恰為兩正三負五個情境,值皆可呼叫。
+    BASELINE(560f618)上失敗的原因:`.claude/portable/verify_gates.py` 沒有 `EVIDENCE_SCENARIOS`(只有 `SCENARIOS`,`:225-235`)。
+    """
+    table = getattr(vg, "EVIDENCE_SCENARIOS", None)
+    assert isinstance(table, dict), "verify_gates 沒有 EVIDENCE_SCENARIOS:淨室的兩正三負沒有接線"
+    assert set(table) == _EVIDENCE_SCENARIO_KEYS, sorted(table)
+    assert all(callable(f) for f in table.values()), table

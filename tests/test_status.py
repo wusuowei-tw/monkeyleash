@@ -2856,3 +2856,162 @@ class TestDebuggerModeLocks:
         got = _lines_of(root)
         assert u"tests/test_x.py" in got[u"green"], got
         assert u"tests/test_x.py" not in got[u"red"], got
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 票 145 Station 3g 紅燈 —— Host evidence policy 的串接(producer → 持久化 run 事實 → status)
+#
+# 合約:票 145〈四十八〉48.1。規劃:docs/audits/2026-10-03-m1a-station3g-redlight-plan.md P3、P6。
+# 下文 `<BASELINE>` = 560f618560ddac1a34e0e835b99a1e3a5cc7eda5(S3G0)。
+#
+# 每一次模擬執行都經**真實 tests/conftest.py**(`_chain_conftest` 每次載入全新模組)寫入 tmp root 的帳本,
+# 再由 status 讀回判定;tmp root 是真的 git repo,policy 檔**真的**提交 / 修改(canonical path
+# `.agents/evidence-policy.json`;schema 與欄位同 tests/test_redlight.py 的 3g 段)。
+# **版本事實一律固定**(〈四十八〉48.1 第 5 點):conftest 所見的 `sys.version_info` 為 3.11、`pytest.__version__` 為 9.1.1。
+# 本段 helper 全部新寫;既有 helper(`_root_with_redlight` / `_chain_conftest` / `_lines_of` / `_t_option` /
+# `_t_drive` / `_e_option` / `_e_sys` / `_EVersion`)只呼叫、不修改。
+# ═══════════════════════════════════════════════════════════════════════════
+
+_G_POLICY_FILE = u".agents/evidence-policy.json"
+
+
+def _g_policy(**overrides):
+    policy = {
+        u"schema": u"monkeyleash.evidence-policy",
+        u"version": 1,
+        u"config_file": u"pyproject.toml",
+        u"committed_overrides": [u"strict_markers=true"],
+        u"python_versions": [u"3.11"],
+        u"pytest_versions": [u"9.1.1"],
+        u"dists": [[u"anyio", u"4.15.0"]],
+    }
+    policy.update(overrides)
+    return policy
+
+
+def _g_write(root, rel, text):
+    p = pathlib.Path(str(root)) / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with io.open(str(p), "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
+def _g_committed(root, policy=None, commit_policy=True, addopts=u"-ra --strict-markers"):
+    """把 `root` 變成真的 git repo:提交 `pyproject.toml`(addopts 由參數決定)與 root conftest(真檔內容);
+    `policy` 不為 None ⇒ 寫到 canonical path,`commit_policy` 為真才一起提交。"""
+    _g_write(root, u"pyproject.toml",
+             u'[tool.pytest.ini_options]\ntestpaths = ["tests"]\naddopts = "%s"\n' % addopts)
+    conftest = pathlib.Path(root) / "tests" / "conftest.py"
+    conftest.parent.mkdir(parents=True, exist_ok=True)
+    conftest.write_bytes((ROOT / "tests" / "conftest.py").read_bytes())
+    tracked = [u"pyproject.toml", u"tests/conftest.py"]
+    if policy is not None:
+        _g_write(root, _G_POLICY_FILE, json.dumps(policy, ensure_ascii=False, indent=2) + u"\n")
+        if commit_policy:
+            tracked.append(_G_POLICY_FILE)
+    _t_git(root, "init", "-q")
+    _t_git(root, "config", "user.email", "t@example.invalid")
+    _t_git(root, "config", "user.name", "t")
+    _t_git(root, "add", *tracked)
+    _t_git(root, "commit", "-q", "-m", "baseline")
+    return root
+
+
+def _g_drive(root, monkeypatch, outcomes, exitstatus, option=None):
+    """一次模擬執行:全新 conftest;tests/test_x.py 的 S_A / S_B 全收集;版本事實固定為 3.11 / 9.1.1。"""
+    c = _chain_conftest(root, monkeypatch)
+    monkeypatch.setattr(c, "sys", _e_sys(optimize=0, version_info=_EVersion(3, 11, 0, "final", 0)), raising=False)
+    monkeypatch.setattr(pytest, "__version__", "9.1.1")
+    _t_drive(c, root, {u"tests/test_x.py": [S_A, S_B]}, [S_A, S_B], outcomes,
+             exitstatus=exitstatus, option=option if option is not None else _e_option(usepdb=False))
+
+
+def _g_red_then(root, monkeypatch, option=None):
+    """R1 固定全套:S_A failed、S_B passed(exit 1)⇒ S_A 為已知紅;R2:S_A、S_B 皆 passed(exit 0,`option`)。
+    回傳兩筆 run 事實(各自用全新 conftest)。"""
+    _g_drive(root, monkeypatch, {S_A: "failed", S_B: "passed"}, 1)
+    _g_drive(root, monkeypatch, {S_A: "passed", S_B: "passed"}, 0, option=option)
+    runs = redlight.load_runs(root)
+    assert len(runs) == 2, runs
+    return runs
+
+
+def _g_assert_scenario(runs):
+    """情境斷言:R1 為 B;R2 schema 合格且為 A(紅留著,是因為 coverage 不是 "true",不是因為 run 本身不合格)。"""
+    assert redlight.run_state(runs[0]) == u"B", runs[0]
+    assert redlight.validate_session(runs[1]) == [], runs[1]
+    assert redlight.run_state(runs[1]) == u"A", runs[1]
+
+
+class TestEvidencePolicyChain:
+
+    def test_g3_no_policy_does_not_retire_a_known_red(self, tmp_path, monkeypatch):
+        """#28(〈四十六〉46.4 第 3 點、第 4 點 正一的鏈條面:未初始化 ⇒ unknown ⇒ 不得退紅)。分類:behavior-red。
+
+        repo 已提交設定與 conftest,但從未有 policy。R1 固定全套:test_a failed ⇒ 已知紅。
+        R2 固定全套:全 passed ⇒ 不得退紅、不得 green。
+        BASELINE 上失敗的原因:R2 在 `<BASELINE>:.claude/hooks/redlight.py:833` 判 `"true"` ⇒
+        `<BASELINE>:.claude/portable/status.py:456-474` 退掉 test_a ⇒ green。
+        """
+        root = _root_with_redlight(tmp_path)
+        _g_committed(root)
+        runs = _g_red_then(root, monkeypatch)
+        _g_assert_scenario(runs)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+    @pytest.mark.parametrize("state", ["worktree-only", "worktree-differs"])
+    def test_g3_an_uncommitted_policy_does_not_retire_a_known_red(self, tmp_path, monkeypatch, state):
+        """#29–#30(〈四十六〉46.4 第 4 點 負三 / 負二 的鏈條版)。分類:behavior-red。
+
+        `[worktree-only]`:合法 policy 只在工作樹,HEAD 從未有它(負三)。
+        `[worktree-differs]`:HEAD 有合法 policy,工作樹內容不同、未 commit(負二)。
+        R1 固定全套:test_a failed ⇒ 已知紅。R2 固定全套:全 passed ⇒ 不得退紅、不得 green。
+        BASELINE 上失敗的原因:同 #28(`<BASELINE>:.claude/hooks/redlight.py:833`;`<BASELINE>:.claude/portable/status.py:456-474`)。
+        """
+        root = _root_with_redlight(tmp_path)
+        if state == "worktree-only":
+            _g_committed(root, policy=_g_policy(), commit_policy=False)
+        else:
+            _g_committed(root, policy=_g_policy())
+            _g_write(root, _G_POLICY_FILE,
+                     json.dumps(_g_policy(), ensure_ascii=False, indent=2) + u"\n\n")
+        runs = _g_red_then(root, monkeypatch)
+        _g_assert_scenario(runs)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+    def test_g3_a_policy_environment_mismatch_does_not_retire_a_known_red(self, tmp_path, monkeypatch):
+        """#31(〈四十六〉46.4 第 4 點 負一的鏈條版)。分類:behavior-red。
+
+        已提交 addopts `-ra`、policy `committed_overrides: []`(兩者自洽)並已提交。R1 固定全套:test_a failed ⇒ 已知紅。
+        R2:經 `PYTEST_ADDOPTS` 帶入 `--strict-markers` ⇒ `override_ini == ["strict_markers=true"]`(policy 未列),
+        全 passed ⇒ 不得退紅、不得 green。
+        BASELINE 上失敗的原因:`<BASELINE>:.claude/hooks/redlight.py:795` 的比較對象是框架常數 ⇒ `:833` 判 `"true"` ⇒
+        `<BASELINE>:.claude/portable/status.py:456-474` 退紅。
+        """
+        root = _root_with_redlight(tmp_path)
+        _g_committed(root, policy=_g_policy(committed_overrides=[]), addopts=u"-ra")
+        runs = _g_red_then(root, monkeypatch)
+        _g_assert_scenario(runs)
+        assert runs[1]["completeness"]["override_ini"] == [u"strict_markers=true"], runs[1]["completeness"]
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"red"], got
+        assert u"tests/test_x.py" not in got[u"green"], got
+
+    def test_g3_a_matching_committed_policy_retires_the_red(self, tmp_path, monkeypatch):
+        """#32(〈四十六〉46.4 第 4 點 正二的鏈條版:提交合法 policy → 製造 red → 固定全套 → true → red 合法退休)。
+        分類:regression-lock。
+
+        提交合法 policy(值 = 現行常數)、工作樹 = HEAD。R1 固定全套:test_a failed ⇒ 已知紅。
+        R2 固定全套:全 passed ⇒ X 退紅、在 green。
+        """
+        root = _root_with_redlight(tmp_path)
+        _g_committed(root, policy=_g_policy())
+        runs = _g_red_then(root, monkeypatch)
+        _g_assert_scenario(runs)
+        got = _lines_of(root)
+        assert u"tests/test_x.py" in got[u"green"], got
+        assert u"tests/test_x.py" not in got[u"red"], got

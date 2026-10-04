@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3g 紅燈規劃已寫(待 Jeff 裁);未寫測試。
+**狀態**:動工 —— Station 3g 紅燈已提交;待固定全套驗證。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -124,6 +124,9 @@
 >
 > - 狀態(舊,第三十八代):~~`動工 —— Station 6 FAIL(淨室驗證);待 Station 3g 紅燈規劃。`~~
 >   —— 2026-10-03 Station 3g 紅燈規劃寫完後由第 3 行取代(見〈四十七〉)。
+>
+> - 狀態(舊,第三十九代):~~`動工 —— Station 3g 紅燈規劃已寫(待 Jeff 裁);未寫測試。`~~
+>   —— 2026-10-03 Station 3g 紅燈提交後由第 3 行取代(見〈四十八〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -505,15 +508,20 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 4f — Implementation(修正) | PASS / COMPLETED（待 5f 審查） |
 | Station 5f — Review | PASS |
 | Station 6 — Acceptance | FAIL(淨室驗證;依 Jeff 裁決) |
-| Station 3g — Red-light(補) | 規劃已寫(待 Jeff 裁),未寫測試 |
+| Station 3g — Red-light(補) | 紅燈已提交,待固定全套驗證 |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g 紅燈規劃已寫(待 Jeff 裁);未寫測試(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g 紅燈已提交;待固定全套驗證(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第三十代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3g 紅燈規劃已寫(待 Jeff 裁);未寫測試(與票頭第 3 行一致)。~~
+> 2026-10-03 Station 3g 紅燈提交後隨第 3 行同步更新(見〈四十八〉)。
+>
+> **〈十〉表格舊值(F-036)**:Station 3g 列 ~~`規劃已寫(待 Jeff 裁),未寫測試`~~ → `紅燈已提交,待固定全套驗證`(2026-10-03,S3g-1)。
+>
 > **舊句(F-036,保留不刪,第二十九代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 6 FAIL(淨室驗證);待 Station 3g 紅燈規劃(與票頭第 3 行一致)。~~
 > 2026-10-03 Station 3g 紅燈規劃寫完後隨第 3 行同步更新(見〈四十七〉)。
 >
@@ -1689,6 +1697,8 @@ tests orphaned under ticket 145: (無)
    - git 不可用或讀取失敗 ⇒ 測試失敗（不得 skip、不得靜默通過）。
    - 唯讀：不得寫入任何檔案、不得改動 repo 狀態。
 
+適用位置已由〈四十八〉48.1 第 4 點修訂(語意不變)。
+
 - 報告:`docs/audits/2026-10-02-m1a-station4d-fix.md`。
 - S4d-1 `889fbd8f666ea522ff6af172979a8d020e50b86b`;固定全套(只跑一次)`1987 passed, 3 skipped, 3 xfailed in 149.54s (0:02:29)`,exit 0(collected 1993 = 1992 + 1 支鎖步測試)。
 - 四項完成判定:
@@ -2367,6 +2377,72 @@ Error: Process completed with exit code 1.
   4. test_d4 處置 —— 建議 C:框架推導測試 + verdict 時機器鎖步 + 宿主專用檔保留 agent-gates 自身鎖步(〈三十一〉裁決 3 只改適用位置)。
   5. 環境相依正控 —— 建議 A:在共用 driver 固定版本事實。
   6. 初始化 —— 建議 A:安裝器只寫非 canonical 範本 + decisions-pending + status 顯示 policy 狀態。
+
+---
+
+## 四十八、Station 3g 裁決與紅燈集合（2026-10-03，Jeff）
+
+### 48.1 裁決(照錄;針對 S3g-0 560f618560ddac1a34e0e835b99a1e3a5cc7eda5 規劃檔 P8)
+
+1. policy 載體:甲 —— 獨立檔 .agents/evidence-policy.json(JSON,schema "monkeyleash.evidence-policy" v1)。
+2. 誰解析:A —— producer 依 I-3 從 HEAD committed blob 解析並記入 session 的 evidence_policy 欄;consumer 驗型別、identity、schema / version 後判定。
+3. 界外值:A —— policy 任一欄位超出 framework capability boundary ⇒ 整份不合格 ⇒ unknown(不取交集、不靜默忽略)。
+4. test_d4:C —— 框架推導規則以 fixture 測(TestAddoptsDerivation)+ verdict 時機器鎖步;agent-gates 自身「policy ↔ pyproject」鎖步移到宿主專用檔
+   tests/test_host_evidence_policy.py(manifest 標 skip)。
+   〈三十一〉裁決 3 修訂(Jeff 明文):語意不變(git show HEAD、不得以 tmp repo / 寫死字串代替、讀取失敗 ⇒ 失敗、不得 skip、唯讀),
+   適用位置由「出貨的 tests/test_redlight.py」改為「宿主專用、不出貨的 tests/test_host_evidence_policy.py」。原 test_d4 於 4g 刪除。
+5. 環境相依正控(P2-B):A —— 3g / 4g 一併在共用 driver 固定版本事實(授權於 4g)。
+6. 初始化:A —— 安裝器只在非 canonical 路徑 .agents/evidence-policy.template.json 寫範本(內容 = B 常數)+ decisions-pending + status 顯示 policy 狀態;
+   不做從本機觀察值產草稿的指令。
+7. 補充(裁決助手):
+   - 4g 驗收須在本機實跑一次 python .claude/portable/verify_gates.py <session scratchpad>/verify-gates,照錄五情境(正一、正二、負一、負二、負三)各一行結果,
+     並證明本 repo .dev/ 兩本帳本前後 bytes 與 sha256 不變。規劃檔 #33 只證明情境有接線,不證明情境結果。
+   - 3g-1 須把 tests/test_host_evidence_policy.py 登記進 .agents/portable-manifest.txt(skip),否則 test_upstream_manifest 會多紅一支、紅燈集合不準。
+   - 其餘未裁事項照規劃檔「不需裁、已依原則定案」段。
+
+### 48.2 預期集合(33 支,完整 nodeid)
+
+預期紅集合(behavior-red,26 支,在 S3G1 上必須失敗):
+
+- tests/test_redlight.py::TestEvidencePolicyBootstrap::test_g3_a_repo_without_a_policy_is_not_full_coverage
+- tests/test_redlight.py::TestEvidencePolicyBootstrap::test_g3_an_uncommitted_policy_state_is_not_full_coverage[worktree-only]
+- tests/test_redlight.py::TestEvidencePolicyBootstrap::test_g3_an_uncommitted_policy_state_is_not_full_coverage[worktree-differs]
+- tests/test_redlight.py::TestEvidencePolicyBootstrap::test_g3_an_uncommitted_policy_state_is_not_full_coverage[staged-only]
+- tests/test_redlight.py::TestEvidencePolicyBootstrap::test_g3_an_uncommitted_policy_state_is_not_full_coverage[deleted-in-worktree]
+- tests/test_redlight.py::TestEvidencePolicyBootstrap::test_g3_an_unknown_policy_document_is_not_full_coverage[malformed-json]
+- tests/test_redlight.py::TestEvidencePolicyBootstrap::test_g3_an_unknown_policy_document_is_not_full_coverage[unknown-schema]
+- tests/test_redlight.py::TestEvidencePolicyBootstrap::test_g3_an_unknown_policy_document_is_not_full_coverage[unknown-version]
+- tests/test_redlight.py::TestEvidencePolicyBootstrap::test_g3_an_unknown_policy_document_is_not_full_coverage[unknown-key]
+- tests/test_redlight.py::TestEvidencePolicyBootstrap::test_g3_an_unknown_policy_document_is_not_full_coverage[missing-field]
+- tests/test_redlight.py::TestEvidencePolicyBootstrap::test_g3_a_policy_outside_the_canonical_path_is_not_full_coverage
+- tests/test_redlight.py::TestEvidencePolicyBootstrap::test_g3_the_producer_records_the_policy_identity
+- tests/test_redlight.py::TestEvidencePolicyBoundary::test_g3_a_policy_environment_mismatch_is_not_full_coverage[override]
+- tests/test_redlight.py::TestEvidencePolicyBoundary::test_g3_a_policy_environment_mismatch_is_not_full_coverage[narrowed-dist]
+- tests/test_redlight.py::TestAddoptsDerivation::test_g3_overrides_are_derived_from_committed_addopts[strict-markers]
+- tests/test_redlight.py::TestAddoptsDerivation::test_g3_overrides_are_derived_from_committed_addopts[strict-config]
+- tests/test_redlight.py::TestAddoptsDerivation::test_g3_overrides_are_derived_from_committed_addopts[o-flag]
+- tests/test_redlight.py::TestAddoptsDerivation::test_g3_overrides_are_derived_from_committed_addopts[override-ini-eq]
+- tests/test_redlight.py::TestAddoptsDerivation::test_g3_overrides_are_derived_from_committed_addopts[no-addopts]
+- tests/test_redlight.py::TestAddoptsDerivation::test_g3_a_policy_disagreeing_with_the_committed_addopts_is_not_full_coverage
+- tests/test_host_evidence_policy.py::test_the_committed_policy_matches_the_committed_pyproject
+- tests/test_status.py::TestEvidencePolicyChain::test_g3_no_policy_does_not_retire_a_known_red
+- tests/test_status.py::TestEvidencePolicyChain::test_g3_an_uncommitted_policy_does_not_retire_a_known_red[worktree-only]
+- tests/test_status.py::TestEvidencePolicyChain::test_g3_an_uncommitted_policy_does_not_retire_a_known_red[worktree-differs]
+- tests/test_status.py::TestEvidencePolicyChain::test_g3_a_policy_environment_mismatch_does_not_retire_a_known_red
+- tests/test_verify_gates.py::test_every_evidence_policy_scenario_is_wired
+
+預期綠集合(regression-lock,7 支,在 S3G1 上必須通過):
+
+- tests/test_redlight.py::TestEvidencePolicyBootstrap::test_g3_policy_content_is_not_read_from_the_worktree
+- tests/test_redlight.py::TestEvidencePolicyBootstrap::test_g3_a_matching_committed_policy_is_full_coverage
+- tests/test_redlight.py::TestEvidencePolicyBoundary::test_g3_a_policy_cannot_widen_the_capability_boundary[python]
+- tests/test_redlight.py::TestEvidencePolicyBoundary::test_g3_a_policy_cannot_widen_the_capability_boundary[pytest]
+- tests/test_redlight.py::TestEvidencePolicyBoundary::test_g3_a_policy_cannot_widen_the_capability_boundary[dist]
+- tests/test_redlight.py::TestEvidencePolicyBoundary::test_g3_a_policy_cannot_widen_the_capability_boundary[config-file]
+- tests/test_status.py::TestEvidencePolicyChain::test_g3_a_matching_committed_policy_retires_the_red
+
+- 預期固定全套:collected 2090(以 S4F1 實測的 collected 2057 為底;S5f-0 到 S3G0 都沒有改測試)。
+- 本機 Windows 預期:26 failed、2058 passed、3 skipped、3 xfailed。
 
 ---
 
