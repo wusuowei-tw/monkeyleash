@@ -10,7 +10,7 @@
   - 票 145〈四十八〉48.1 裁決 1–7、〈五十〉50.1;
   - 4g 續作裁決:R3 擋下後的還原與編輯規矩、第 7 鍵 `committed_addopts` 與 `addopts_overrides` 輸入合約、修法 B 與 T1 / T2;
   - 規劃檔 `docs/audits/2026-10-03-m1a-station3g-redlight-plan.md` P3 / P4 / P5 / P6。
-- 範圍:**本機(Windows)驗收**。POSIX 外部 clean-room 驗收尚未執行(第 9 節)。**本報告不宣稱 4g 完成。**
+- 範圍:**本機(Windows)驗收**。POSIX 外部 clean-room 驗收尚未執行(第 9 節)。**本報告不宣稱 4g 完成。**（S4G4 b127ae016ce6a7a7d096742e5771f1e6d328f52a 後更新：POSIX 外部 clean-room 驗收已 PASS，見第 9 節；Station 4g = PASS / COMPLETED。）
 
 ## 【給裁決者】
 
@@ -18,7 +18,7 @@
 2. 本機全套 2094 passed、0 failed。原本的 35 支紅加上補的 1 支紅全部轉綠。status 顯示 policy 有效,票 145 底下沒有紅。
 3. 淨室(全新安裝的乾淨 repo)第一次驗收時「正二」失敗:沒有 `-o` 類旗標的 repo 退不了紅。依裁決改在記錄端分清「沒有」與「取不到」之後,同一次淨室執行裡兩正三負全部成立。
 4. 本 repo 的測試帳本只往後加,淨室驗收前後完全沒動。
-5. 下一步是 POSIX 外部淨室驗收(由裁決助手執行)。通過後才升級狀態。
+5. 下一步是 POSIX 外部淨室驗收(由裁決助手執行)。通過後才升級狀態。（S4G4 後更新：POSIX 外部 clean-room 驗收已執行並 PASS，狀態已升級，見第 9 節。）
 
 ## 【給裁決助手】
 
@@ -395,7 +395,7 @@ $ git status --porcelain
    - TOCTOU 與未 pin 版本;policy 改了但未 commit 的期間無法退紅。
 6. **G3 的殘餘**:driver 固定的是 `_isolated_conftest` / `_chain_conftest` 預設所見的版本。測試事後以 `_e_sys(version_info=None)` 換掉 `sys` 的那些(例:3e 的 optimize 對照組),仍讀真實 Python 版本。在 3.11 以外的直譯器上,它們的正控是否仍綠:**未證明**。
 7. **`addopts_overrides` 推導不了的寫法**(合併短旗標 `-qo x`、長旗標縮寫):方向是 unknown(fail-closed),不是假綠。
-8. **本機只驗 Windows**。POSIX 的淨室結果目前只有裁決助手的原型驗證(第 3 節),不是本樹的實測。
+8. **本機只驗 Windows**。POSIX 的淨室結果目前只有裁決助手的原型驗證(第 3 節),不是本樹的實測。（S4G4 後更新：POSIX 已於本樹內容實測——裁決助手於隔離 Linux 環境以 S4G3 時點的 12 個程式 / 測試 / 設定檔跑 verify_gates 與宿主全套，見第 9 節；屬外部驗證，非本 repo 帳本證據。）
 
 ### 9. POSIX 外部 clean-room 驗收
 
