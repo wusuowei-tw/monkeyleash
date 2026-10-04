@@ -342,6 +342,25 @@ def _flag(session, name):
     return bool(getattr(session, name))
 
 
+# 「屬性不存在」的 sentinel(票 145 Station 4g 修法 B):與「屬性存在、值為 None」分開。
+_MISSING = object()
+
+
+def _override_ini_of(option):
+    """交給 `normalize_overrides` 的 `override_ini` 原值。**先判欄位是否存在,再解讀值;只讀一次。**
+
+    pytest 9.1.1 的 `-o` 為 `action="append"`、沒有 default(`_pytest/helpconfig.py:112-119`),
+    未給任何 `-o` / OverrideIniAction 旗標時值為 None —— 語意是「沒有 override」,與「屬性取不到」不同:
+      - 屬性不存在 ⇒ None(事實取不到;consumer 判 unknown);
+      - 值為 None ⇒ 以 `[]` 交給 `normalize_overrides`,落帳 `[]`(事實取得成功:pytest 明確表示沒有 -o);
+      - 其他 ⇒ `normalize_overrides` 照舊(非 list ⇒ None)。
+    """
+    raw = getattr(option, "override_ini", _MISSING)
+    if raw is _MISSING:
+        return None
+    return raw if raw is not None else []
+
+
 def _completeness_of(session):
     """本次 session 的完整性事實。任何一步出錯 ⇒ None(寧可多紅,不讓 pytest 失敗)。
 
@@ -351,6 +370,8 @@ def _completeness_of(session):
     pyproject.toml 與本檔的工作樹 blob vs HEAD blob(git 子程序,失敗 ⇒ None);`pytest_version`
     取自本檔 import 的 `pytest`;`blocked` 是 `list_name_plugin()` 中值為 None 的名稱(`-p no:`)。
     路徑型事實一律轉成 root 相對路徑,不落帳絕對路徑。
+    `override_ini` 先判屬性是否存在(`_override_ini_of`):pytest 9.1.1 的 -o 為 action="append" 無 default,
+    未給時為 None,語意是「沒有 override」(落帳 `[]`),與「屬性取不到」(落帳 None ⇒ unknown)不同。
 
     票 145 Station 4e(〈三十五〉3 (xiv)–(xviii)、4)另記 pass 有效性的事實:`optimize` 與 `python_version`
     在此刻經模組層 `sys` 讀;`runxfail` / `pythonwarnings` / `trace` 隨 `COMPLETENESS_OPTIONS` 記在 `options`。
@@ -382,8 +403,7 @@ def _completeness_of(session):
             "plugins": _redlight.classify_plugins(_ROOT, name_plugins,
                                                   pm.list_plugin_distinfo()),
             "blocked": _redlight.blocked_plugins(name_plugins, _ROOT),
-            "override_ini": _redlight.normalize_overrides(getattr(option, "override_ini", None),
-                                                          _ROOT, inv_dir),
+            "override_ini": _redlight.normalize_overrides(_override_ini_of(option), _ROOT, inv_dir),
             "inifilename": _redlight.normalize_config_path(getattr(option, "inifilename", None),
                                                            _ROOT, inv_dir),
             "inipath": _redlight.normalize_config_path(getattr(cfg, "inipath", None), _ROOT),
