@@ -4,7 +4,7 @@
 - 對象:S4J1 `d4b6fafd4afdd70121278527194aeef4097bff33`(只改 `.claude/hooks/redlight.py` 的 `_root_is_toplevel()`)。
 - 上一個 commit:S3J1B-2 `dccc4bfc9b390aad9687384fba9db374b7da67af`;紅燈 S3J1 `9990fd654275a0af25fa51ce374dea3e812ef54e`(J1 / J2)、S3J1B `35d100a3841486e2d75ba39aea71bda601e18075`(J1b)。
 - 合約:票 145〈六十一〉61.3 裁決 3;Jeff 裁決:第一次 4j = BLOCKED BY R3(閘門照設計;不視為 FAIL、不繞過);Station 3j-1b = APPROVED;4j 只改 `_root_is_toplevel()`,恢復完整 stdout contract;J1 / J1b / J2 / I1–I3 / H1 / H2 不准修改。
-- 範圍:**本機(Windows)驗收**。POSIX 外部 clean-room 驗收尚未執行(第 9 節)。本報告只宣稱:本機驗收通過;待 POSIX 外部驗收。
+- 範圍:**本機(Windows)驗收**。POSIX 外部 clean-room 驗收尚未執行(第 9 節)。本報告只宣稱:本機驗收通過;~~待 POSIX 外部驗收~~。（S4J4 後更新：POSIX 外部 clean-room 驗收已 PASS，見第 9 節；Station 4j = PASS / COMPLETED；待 Station 5j 獨立審查。刪除線為 F-036 保存的舊狀態字樣，2026-10-05 由 S4J4 取代。）
 
 ## 【給裁決者】
 
@@ -12,7 +12,7 @@
 2. 修正:判「root 是不是工作樹最上層」改成 Git 的輸出必須**整段**剛好是 `true` 加兩個換行,多一個位元組都不算;舊寫法只看前兩行,會被名稱以換行開頭的子目錄騙過。
 3. 本機全套 2104 passed、0 failed;J1b 由紅轉綠;J1 在 Windows 照設計跳過(要靠 POSIX 驗收證明)。
 4. 淨室兩正三負全部成立,正二仍可退紅;本 repo 測試帳本只往後加,淨室前後完全沒動。
-5. 下一步是 POSIX 外部淨室驗收(裁決助手執行,須含 J1 由紅轉綠)。
+5. 下一步是 POSIX 外部淨室驗收(裁決助手執行,須含 J1 由紅轉綠)。（S4J4 後更新：POSIX 已 PASS，J1 於 Linux 實跑並轉綠，見第 9 節；狀態已升級。）
 
 ## 【給裁決助手】
 
@@ -215,6 +215,18 @@ $ git status --porcelain
 - 外來 3 檔以 `git stash push -u -m jeff-mods-recon-20261004-s4j -- <3 檔>` 收起,本輪結束後 `git stash pop` 放回。
 - 本輪重送沒有閘門擋下(第一次 4j 的 R3 攔截見第 0 節);沒有改測試、`.dev/pipeline.json`;沒有 push / fetch。
 - **程序偏差**:3d 事後的 5 條唯讀檢查(`wc -c` ×2、`sha256sum` ×2、`git status --porcelain`)在同一則訊息中並行送出,違反「Bash 逐條單獨送出、不並行」;皆為唯讀指令,輸出各自獨立取得(第 5 節)。未重跑。
+- **程序偏差(b)(S4J4 補記)**:以 grep 讀取本 session 對話紀錄檔以找回 S5i-F2 補準措辭，違反「不得讀取本機對話紀錄」規則。兩者皆唯讀、未寫入 repo，證據不受影響；S5i-F2 finding 本身已在已提交的 5i 審查報告與本票〈六十一〉內，對話紀錄不是唯一來源。Jeff 裁決記錄為程序偏差、不重做，後續各站不得再犯；5j 審查須自行核對最終措辭與已提交的 S5i-F2 finding 相符。
 - 本 session 自 3h 起為實作 session;5j 審查須開第五個全新對話,4g 實作 session、本 session、5g / 5h / 5i 審查 session 皆不得擔任。
 
-### 9. POSIX 外部 clean-room 驗收:待執行(裁決助手)
+### 9. POSIX 外部 clean-room 驗收
+
+> **舊文字(F-036,保留不刪)**:本節標題原為 ~~`### 9. POSIX 外部 clean-room 驗收:待執行(裁決助手)`~~,沒有內文。
+> 2026-10-05 S4J4 依 Jeff 裁決改為下方照錄段落。
+
+- 來源：Jeff 轉述裁決助手 2026-10-05 Linux 證據（隔離沙盒；git 2.43.0；Python 3.11.16 + pytest 9.1.1 + anyio 4.15.0；非本 repo 帳本證據；本 repo 兩本帳本未動）。
+- 受測物：S4J1 的 `.claude/hooks/redlight.py` 原檔（blob `d4d208af69340e369f1e263bc620217c66e7a683`，sha256 `1fd20bc3b02669f7e0f779a00cbf6d420d8e12474b327cdba74affa5f6ef2782`，與本機 S4J2 run 紀錄的 impl_hash 相同）；`tests/test_redlight.py` = S3J1B 原檔（blob `c284bc8c56e005b334595185c5d54a6bc11ae6b9`）。置於全新 clone、提交後工作樹乾淨。
+- evidence 相關 5 檔（test_redlight / test_host_evidence_policy / test_evidence_isolation / test_status / test_gate）：`1 failed, 961 passed`；唯一 failed 為已知環境性 `tests/test_gate.py::TestAuthorityLayerIsWired::test_this_repo_itself_is_wired`。J1 於 Linux 實際執行（非 skip）且 passed —— 由 3j 證據（對 S4I1 failed）轉綠；J1b、J2 四案、I1–I3、H1 / H2、T1 / T2 共 13 支全 passed。
+- `verify_gates.py` 淨室：R1–R9 各擋下一次、權威層偵測三項成立、框架測試 `1958 passed, 4 skipped, 3 xfailed`；兩正三負全部成立，正二 `file_coverage=true`、`green=tests/test_evidence_probe.py`。
+- 固定全套 `python -X utf8 -m pytest -q`：`13 failed, 2095 passed, 3 xfailed`（collected 2111；0 skipped，Linux 可建 symlink 且 J1 實跑）。依 Jeff 轉述，13 個 failed 與 4i POSIX 驗收那次逐字相同（test_gate 1 支 + test_known_items_regression 12 支）；推測為環境性、未新增 4j 回歸，尚未獨立核驗或 machine-enforced。Jeff 據此外部證據裁決 Station 4j = PASS / COMPLETED。
+- Jeff 裁決（2026-10-05）：Station 4j = PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5j 獨立審查（第五個全新對話）。
+- 程序偏差（S4J2/S4J3 期間）：(a) 3d 後 5 條唯讀檢查並行送出；(b) 以 grep 讀取本 session 對話紀錄檔以找回 S5i-F2 補準措辭，違反「不得讀取本機對話紀錄」規則。兩者皆唯讀、未寫入 repo，證據不受影響；S5i-F2 finding 本身已在已提交的 5i 審查報告與本票〈六十一〉內，對話紀錄不是唯一來源。Jeff 裁決記錄為程序偏差、不重做，後續各站不得再犯；5j 審查須自行核對最終措辭與已提交的 S5i-F2 finding 相符。
