@@ -2646,3 +2646,69 @@ class TestEvidenceRootIsInsideWorkTree:
         assert all(v == {"worktree": None, "head": None} for v in blobs.values()), blobs
         control = redlight.committed_blobs(str(parent))
         assert all(v["worktree"] and v["worktree"] == v["head"] for v in control.values()), control
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145 Station 3j 補紅燈 —— S5i-F1 / S5i-F3:`_root_is_toplevel` 的 stdout contract(〈六十一〉61.3 裁決 2、3)
+#
+# `git rev-parse --is-inside-work-tree --show-prefix` 的 stdout 須**完整**等於 `b"true\n\n"`;不得拆行只看前兩行。
+# `--show-prefix` 輸出未跳脫的原始路徑位元組 —— POSIX 上名稱以 LF 開頭的子目錄,prefix 的第一行為空,
+# 拆行只看 `lines[1]` 的解析會把它誤判為最上層 ⇒ 重新打開 S5g-F2 的 identity 錯位(S5i-F1)。
+# 既有 helper(`_g_default_root` / `_g_coverage` / `_G_POLICY_FILE` / `_d_git` / `redlight._root_is_toplevel`)
+# 只呼叫、不修改。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRootIsToplevelContract:
+
+    import sys
+
+    @staticmethod
+    def _copy_into(parent, root, rels):
+        """把 `parent` 底下的 `rels` 逐一以位元組複製到 `root` 底下(只寫工作樹,不 git add / commit)。"""
+        for rel in rels:
+            dst = root / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes((parent / rel).read_bytes())
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="Windows 檔名不得含 LF;本案例由 POSIX 驗收證明(〈六十一〉61.3 裁決 2)")
+    def test_j3_a_lf_prefixed_subdirectory_root_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """J1。分類:behavior-red(POSIX-only;在 S5i-1 上於 POSIX 必須失敗)。Windows 以 skipif 跳過
+        (Jeff 特別核准:Windows 檔名模型無法合法建立該輸入,紅燈由裁決助手的 POSIX 驗收證明)。
+
+        Git 最上層 `parent` 已提交合法 policy、`pyproject.toml`、`tests/conftest.py`;root = `parent/"\\nsub"`
+        (名稱以 LF 開頭的子目錄),三份位元組相同的副本只在 root 下、從未提交 ⇒ 不得為 `"true"`。
+        S5i-1 上失敗的原因:`--show-prefix` 輸出未跳脫的原始路徑位元組,stdout 為 `true\\n\\nsub/\\n`;
+        4i 拆行後只看 `lines[1]`(為空)⇒ 誤判為最上層 ⇒ identity 錯位即可取得 `"true"`(S5i-F1)。
+        """
+        parent = _g_default_root(tmp_path / "parent")
+        root = parent / "\nsub"
+        self._copy_into(parent, root, (_G_POLICY_FILE, "pyproject.toml", "tests/conftest.py"))
+        got = _g_coverage(root, monkeypatch)
+        assert got != "true", got
+
+    @pytest.mark.parametrize("layout, expected", [
+        pytest.param("toplevel", True, id="toplevel"),
+        pytest.param("subdir", False, id="subdir"),
+        pytest.param("gitdir", False, id="gitdir"),
+        pytest.param("bare", False, id="bare"),
+    ])
+    def test_j3_root_is_toplevel_follows_the_stdout_contract(self, tmp_path, layout, expected):
+        """J2。分類:regression-lock(在 S5i-1 上必須通過)。直接鎖 `redlight._root_is_toplevel` 的 parser contract
+        (S5i-F3 轉機器鎖):git 最上層 ⇒ True;普通子目錄 ⇒ False;`<最上層>/.git` ⇒ False;
+        `<bare clone>/proj` ⇒ False。
+        """
+        parent = _g_default_root(tmp_path / "parent")
+        if layout == "toplevel":
+            root = parent
+        elif layout == "subdir":
+            root = parent / "sub"
+            root.mkdir()
+        elif layout == "gitdir":
+            root = parent / ".git"
+        else:
+            bare = tmp_path / "bare.git"
+            _d_git(tmp_path, "clone", "-q", "--bare", str(parent), str(bare))
+            root = bare / "proj"
+            root.mkdir()
+        assert redlight._root_is_toplevel(str(root)) is expected
