@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3j 紅燈完成（J1 POSIX-only red 由裁決助手證明；J2 lock 綠）；待 Station 4j 實作。
+**狀態**:動工 —— Station 3j 紅燈完成（J1 POSIX-only；J1b Windows 解析層 red；J2 lock 綠）；待 Station 4j 實作。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -181,6 +181,9 @@
 >
 > - 狀態(舊,第五十七代):~~`動工 —— Station 5i 獨立審查 FAIL（S5i-F1 major；4i 引入）；待 Station 3j 紅燈。`~~
 >   —— 2026-10-05 Station 3j 紅燈全套驗證成立後由第 3 行取代(見〈六十二〉)。
+>
+> - 狀態(舊,第五十八代):~~`動工 —— Station 3j 紅燈完成（J1 POSIX-only red 由裁決助手證明；J2 lock 綠）；待 Station 4j 實作。`~~
+>   —— 2026-10-05 4j R3 攔截後補 3j-1b(J1b Windows 解析層紅燈)後由第 3 行取代(見〈六十二〉62.1)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -572,15 +575,19 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3i — Red-light(補) | PASS / ACCEPTED（I1 / I2 behavior-red + I3 regression-lock；S3I2） |
 | Station 4i — Implementation(修正) | PASS / COMPLETED（Windows/local acceptance PASS；POSIX clean-room PASS） |
 | Station 5i — Review | FAIL（S5i-F1 major；F2/F3 nit） |
-| Station 3j — Red-light(補) | 紅燈完成（J1 POSIX-only behavior-red + J2 regression-lock），待 Station 4j |
+| Station 3j — Red-light(補) | 紅燈完成（J1 POSIX-only behavior-red + J1b Windows 解析層 behavior-red + J2 regression-lock），待 Station 4j |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3j 紅燈完成（J1 POSIX-only red 由裁決助手證明；J2 lock 綠）；待 Station 4j 實作(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3j 紅燈完成（J1 POSIX-only；J1b Windows 解析層 red；J2 lock 綠）；待 Station 4j 實作(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第四十九代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3j 紅燈完成（J1 POSIX-only red 由裁決助手證明；J2 lock 綠）；待 Station 4j 實作(與票頭第 3 行一致)。~~
+> 2026-10-05 3j-1b 補 J1b 後隨第 3 行同步更新(見〈六十二〉62.1)。
+> Station 3j 列舊值(F-036,保留不刪):~~`紅燈完成（J1 POSIX-only behavior-red + J2 regression-lock），待 Station 4j`~~;2026-10-05 依〈六十二〉62.1 更新。
+>
 > **舊句(F-036,保留不刪,第四十八代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5i 獨立審查 FAIL（S5i-F1 major；4i 引入）；待 Station 3j 紅燈(與票頭第 3 行一致)。~~
 > 2026-10-05 Station 3j 紅燈全套驗證成立後隨第 3 行同步更新(見〈六十二〉)。
 > Station 3j 列舊值(F-036,保留不刪):~~`NOT STARTED`~~;2026-10-05 依〈六十二〉更新。
@@ -3087,6 +3094,8 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
 4. S5i-F2（gitdir ⇒ unknown 寫成無條件，與「GIT_DIR / core.worktree 重新對應佈局會被接受」重疊）於 4j 文件補準。S5i-F3 由 J2 機器鎖處理，不另列追蹤項。
 5. 流程：5i-1 記錄 → Jeff 切 tickets → 3j 紅燈（Windows 全套：J1 skip、J2 綠；裁決助手 POSIX：J1 red）→ Jeff 切 implement → 4j（Windows 全套、本機 clean-room、裁決助手 POSIX 含 J1 green）→ 5j 增量審查（第五個全新對話；4g 實作、本實作、5g / 5h / 5i 審查 session 皆不得擔任）→ Station 6。
 
+> **裁決註記(Jeff,2026-10-05;3j-1b)**:R3 只認本機帳本紅燈;POSIX-only 紅燈不能單獨作為實作的 R3 前提,須另補本機可紅的解析層紅燈(3j-1b)。此為流程教訓,寫入追蹤項。(見〈六十二〉62.1;追蹤項見「相關」。)
+
 ### 61.4 commit
 
 - S5i-1(本節與審查報告入庫)`ff859253ec74ee778ffc868307a4d66d452e4040`。
@@ -3110,7 +3119,25 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
   跑後全檔記為 B19:test-runs 868808 bytes、`9abb70439a21bc07c60c3f413f619b9851080dfe265ecd2faf2eeca5303ef7b1`;
   test-sessions 15868084 bytes、`767488b978c7a8ef84da1da57733455f361dd30c44970bd3b78e79708d92159d`。
 - 裁決助手 Linux 預演(來源:Jeff 的 Station 3j 指令;隔離環境;非本 repo 帳本證據;**J1 修前 red 的證據**):以 S4I1 的 redlight.py,J1 原型失敗於 got == "true"、J2 原型四案全過;套用 4j 修法原型(stdout 正規化後 == b"true\n\n")後 J1 轉綠、J2 維持綠、I1–I3 / H1–H2 綠,evidence 相關 5 檔 283 支全過。
-- commit:S3J1 `9990fd654275a0af25fa51ce374dea3e812ef54e`;S3J2(本節與證據報告)於下一次提交回填。
+- commit:S3J1 `9990fd654275a0af25fa51ce374dea3e812ef54e`;S3J2(本節與證據報告)`ee33e2d46c3efd44225e335e7b6158e467d07a18`。
+  (F-036:本行原文為「S3J2(本節與證據報告)於下一次提交回填。」;2026-10-05 於 S3J1B-2 回填。)
+
+### 62.1 3j-1b:R3 攔截與 Windows 可紅的解析層紅燈
+
+- 起因:4j S4J1 對 `.claude/hooks/redlight.py` 的 Edit 被 R3 前哨擋下(原文照錄於報告第 6.1 節與 `.dev/reports/2026-10-05T184454Z-ticket145-station4j-blocked-r3.md`):本機帳本對 S4I1 版 `redlight.py` 沒有任何 `tests/test_redlight.py` 紅燈 —— J1 在 Windows 被跳過、J2 本來就綠,J1 的紅只在裁決助手的 Linux 證據裡。
+- 裁決(Jeff):R3 擋下 = 照設計;選 A(補 Windows 可紅的解析層紅燈);不走豁免、不換環境。
+- 報告:`docs/audits/2026-10-05-m1a-station3j-redlight.md` 第 6 節。
+- S3J1B `35d100a3841486e2d75ba39aea71bda601e18075`:`tests/test_redlight.py` 檔尾一個 hunk `@@ -2714,0 +2715,36 @@`,只有 + 行;新增 `class TestRootIsToplevelParser`;以 monkeypatch 替身讓 `subprocess.run` 回傳 stdout `b"true\n\nsub/\n"`,不依賴檔案系統。commit 前只跑 py_compile。
+- 新增 1 支(完整 nodeid):J1b behavior-red(在 S3J2 上必須失敗):`tests/test_redlight.py::TestRootIsToplevelParser::test_j3_a_lf_prefixed_show_prefix_stdout_is_not_toplevel`
+- 紅燈全套(在 S3J1B 上只跑一次;Windows;外來 3 檔已 stash,跑前跑後 `git status --porcelain` 皆無輸出):exit 1;
+  摘要行原文 `1 failed, 2103 passed, 4 skipped, 3 xfailed in 238.90s (0:03:58)`(collected 2111)。
+  唯一的 FAILED 為 J1b,失敗行 `tests\test_redlight.py:2749: AssertionError`(`assert True is False`);J1 skipped;J2 四案、I1–I3、H1–H2 在 passed 之內。
+  status:`tests red under ticket 145: tests/test_redlight.py`(R3 要的本機紅燈)。
+- 帳本只追加:兩本前段 sha256 = B19(`9abb7043…` / `767488b9…`);test-runs 3250 → 3297 行(+47)、test-sessions 32 → 33 行(+1)。
+  跑後全檔記為 B21:test-runs 880409 bytes、`670237025036aeef8fd427aaccb6c9d2fae9ed624d1f38b2f8b23d2c16fc6ee5`;
+  test-sessions 16609700 bytes、`2badaee4cc130d1ec9fed57ffbac1c093ccee20c9c5547189caf576d5cbcad0b`。
+- 裁決助手 Linux 預演(來源:Jeff 的 Station 3j-1b 指令;隔離環境;非本 repo 帳本證據):J1b 以 monkeypatch 替身在 S4I1 的 redlight.py 上失敗(assert True is False),在 4j 修法原型上通過。
+- commit:S3J1B `35d100a3841486e2d75ba39aea71bda601e18075`;S3J1B-2(本小節與證據報告第 6 節)於下一次提交回填。
 
 ---
 
@@ -3150,3 +3177,6 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
   Git 把 sub 解析成同一 repository 的工作樹最上層;依判準不構成 F2,只是措辭涵蓋面不足。於 4i 文件補準。
 - **追蹤項(2026-10-05 登記,〈五十七〉57.3 第 4 點)S5h-F4(目前尚未 machine-enforced;與 S5g-F1 同類的 operator / status 訊號)** ——
   非最上層 root 沒有專屬 status 狀態字:monorepo 子專案的 policy 已提交於上層 repo 時 status 顯示「未提交」,照字面再提交也不會變、紅燈也不退(fail-closed)。
+- **追蹤項(2026-10-05 登記,〈六十一〉61.3 裁決註記;流程教訓)R3 與 POSIX-only 紅燈(目前尚未 machine-enforced)** ——
+  R3 只認本機帳本紅燈;POSIX-only 紅燈(Windows 以 skipif 跳過)不能單獨作為實作的 R3 前提,須另補本機可紅的解析層紅燈(本票為 3j-1b 的 J1b)。
+  規劃紅燈時若有平台限定案例,應同時規劃本機可紅的對應案例,否則實作站會被 R3 擋下。
