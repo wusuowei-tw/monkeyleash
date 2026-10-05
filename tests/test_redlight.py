@@ -2532,3 +2532,45 @@ class TestEvidencePolicyNoOverride:
                            usepdb=False)
         got = _g_coverage(root, monkeypatch, option=option)
         assert got != "true", got
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145 Station 3h 補紅燈 —— S5g-F2:evidence root 必須就是 Git 最上層(〈五十三〉53.3 裁決 2、3)
+#
+# 成因:`git -C <root> rev-parse HEAD:<path>` 的 `<path>` 以 **Git 最上層**(tree 根)為基準,
+# `git -C <root> hash-object <path>` 以 **root(cwd)** 為基準。root 不是最上層時,被驗證的 HEAD 物件與
+# 實際使用的工作樹物件不是同一個邏輯路徑(identity 錯位),內容相同即可取得 `"true"`。
+# 框架目前只支援「一個 host evidence root = 一個 Git 最上層」;monorepo 子專案作為 evidence root 屬另案,
+# 巢狀獨立 repo 的情境不在本輪。
+# 既有 helper(`_g_default_root` / `_g_coverage` / `_G_POLICY_FILE`)只呼叫、不修改。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestEvidenceRootIsGitToplevel:
+
+    def test_h3_a_parent_committed_policy_does_not_authorize_a_subdirectory_root(self, tmp_path, monkeypatch):
+        """H1。分類:behavior-red(在 S5g-1 上必須失敗)。
+
+        Git 最上層 `parent` 已提交合法 policy、`pyproject.toml`、`tests/conftest.py`;root = `parent/sub`,
+        三份位元組相同的副本只在工作樹、從未提交於 `sub/` 底下。`sub` 的 canonical policy 從未提交
+        ⇒ 不得為 `"true"`(〈四十六〉46.4 第 6 點、I-3:canonical policy 必須是 evidence root 對應路徑上、
+        已提交的 HEAD blob)。
+        S5g-1 上失敗的原因:`git rev-parse HEAD:<path>` 以最上層為基準、`git hash-object <path>` 以 root 為基準
+        ⇒ 兩者指向 `parent/<path>` 與 `sub/<path>`,內容相同即 head == worktree ⇒ identity 錯位即可取得 `"true"`。
+        """
+        parent = _g_default_root(tmp_path / "parent")
+        sub = parent / "sub"
+        for rel in (_G_POLICY_FILE, "pyproject.toml", "tests/conftest.py"):
+            dst = sub / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes((parent / rel).read_bytes())
+        got = _g_coverage(sub, monkeypatch)
+        assert got != "true", got
+
+    def test_h3_a_git_toplevel_root_with_a_committed_policy_is_full_coverage(self, tmp_path, monkeypatch):
+        """H2。分類:regression-lock(在 S5g-1 上必須通過)。
+
+        root 本身就是 Git 最上層,policy 正常提交、worktree = HEAD ⇒ 仍為 `"true"`。
+        鎖住 4h 的修正不得封死正常的最上層 host。
+        """
+        got = _g_coverage(_g_default_root(tmp_path / "root"), monkeypatch)
+        assert got == "true", got
