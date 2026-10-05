@@ -723,6 +723,19 @@ def _git_bytes(root, args):
     return proc.stdout if proc.returncode == 0 else None
 
 
+def _root_is_toplevel(root):
+    """root 是否就是 git 工作樹的最上層(`git rev-parse --show-prefix` 為空)。失敗 ⇒ False。"""
+    import subprocess
+    try:
+        proc = subprocess.run(["git", "-C", os.fspath(root), "rev-parse", "--show-prefix"],
+                              capture_output=True, timeout=30)
+    except Exception:
+        return False
+    if proc.returncode != 0:
+        return False
+    return proc.stdout.strip() == b""
+
+
 def committed_blobs(root, paths=BLOB_FILES):
     """`{path: {"worktree": blob, "head": blob}}` —— 工作樹檔案(`git hash-object`,依
     .gitattributes 正規化)與 `HEAD:<path>` 的 blob。〈二十九〉2 (xi)。
@@ -731,10 +744,17 @@ def committed_blobs(root, paths=BLOB_FILES):
     **逐路徑各呼叫一次 git**(票 145 Station 4g;規劃檔 P3 遷移第 3 點):一次處理全部路徑的話,
     缺一個檔整次失敗、所有路徑都成 None —— 淨室 repo 沒有 pyproject 時,conftest 的 blob 也一起遺失。
     **不拋例外**:這是 producer 在 sessionfinish 呼叫的,不得讓 pytest 失敗。
+    root 必須是 git 最上層(I-3 位置不變式;票 145 Station 4h,S5g-F2):HEAD:<path> 以最上層為基準、
+    hash-object 以 root 為基準,root 不是最上層時兩者不是同一邏輯路徑 ⇒ 事實一律 None ⇒ unknown。
+    框架目前只支援一個 host evidence root = 一個 Git 最上層。
     """
     out = {}
+    top = _root_is_toplevel(root)
     for p in list(paths):
         entry = {"worktree": None, "head": None}
+        if not top:
+            out[p] = entry
+            continue
         try:
             worktree = _git_lines(root, ["hash-object", p], 1)
             head = _git_lines(root, ["rev-parse", "HEAD:" + p], 1)
@@ -838,10 +858,15 @@ def evidence_policy_facts(root):
     回傳 7 鍵 `{"path", "head", "worktree", "schema", "version", "policy", "committed_addopts"}`
     (〈五十一〉裁決 3);走不下去的那一步之後的欄位都是 None。
     **只擷取事實,不判定** —— 型別、schema、邊界、鎖步都由 consumer 驗。不拋例外(sessionfinish 呼叫)。
+    root 必須是 git 最上層(I-3 位置不變式;票 145 Station 4h,S5g-F2):HEAD:<path> 以最上層為基準、
+    hash-object 以 root 為基準,root 不是最上層時兩者不是同一邏輯路徑 ⇒ 事實一律 None ⇒ unknown。
+    框架目前只支援一個 host evidence root = 一個 Git 最上層。
     """
     out = {"path": POLICY_FILE, "head": None, "worktree": None, "schema": None,
            "version": None, "policy": None, "committed_addopts": None}
     try:
+        if not _root_is_toplevel(root):
+            return out
         head = _git_lines(root, ["rev-parse", "HEAD:" + POLICY_FILE], 1)
         if not head:
             return out
