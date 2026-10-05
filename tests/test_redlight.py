@@ -2574,3 +2574,75 @@ class TestEvidenceRootIsGitToplevel:
         """
         got = _g_coverage(_g_default_root(tmp_path / "root"), monkeypatch)
         assert got == "true", got
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145 Station 3i 補紅燈 —— S5h-F1 / S5h-F2:root 必須是 Git **工作樹**的最上層(〈五十七〉57.3 裁決 2、3)
+#
+# 4h 的 `_root_is_toplevel` 只看 `git rev-parse --show-prefix` 為空。但 `.git/` 內部或 bare repository 內
+# 同樣滿足此條件,而該處並非工作樹:`HEAD:<path>` 證明的是 repository 內某個 tree 路徑,`hash-object <path>`
+# 讀的是另一個 filesystem root 底下、Git 不對應任何 tree 路徑的檔 ⇒ identity 錯位 ⇒ 內容相同即可取得 `"true"`。
+# root 必須是 Git 工作樹的最上層,不只是 repository context 中 prefix 恰為空的位置。
+# 既有 helper(`_g_default_root` / `_g_coverage` / `_G_POLICY_FILE` / `_d_git` / `redlight.committed_blobs` /
+# `redlight.BLOB_FILES`)只呼叫、不修改。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestEvidenceRootIsInsideWorkTree:
+
+    @staticmethod
+    def _copy_into(parent, root, rels):
+        """把 `parent` 底下的 `rels` 逐一以位元組複製到 `root` 底下(只寫工作樹,不 git add / commit)。"""
+        for rel in rels:
+            dst = root / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes((parent / rel).read_bytes())
+
+    def test_i3_a_root_inside_the_gitdir_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """I1。分類:behavior-red(在 S5h-1 上必須失敗)。
+
+        Git 最上層 `parent` 已提交合法 policy、`pyproject.toml`、`tests/conftest.py`;root = `parent/.git`
+        (gitdir 內部),三份位元組相同的副本只在 root 下、從未提交 ⇒ 不得為 `"true"`。
+        S5h-1 上失敗的原因:在 `.git/` 內 `git rev-parse --show-prefix` 以 exit 0 輸出空行 ⇒ `_root_is_toplevel`
+        True;但該處不是工作樹(`--is-inside-work-tree` 為 false),`HEAD:<path>` 與 `hash-object <path>`
+        對應的不是同一邏輯路徑 ⇒ head == worktree ⇒ identity 錯位即可取得 `"true"`(S5h-F1)。
+        """
+        parent = _g_default_root(tmp_path / "parent")
+        root = parent / ".git"
+        self._copy_into(parent, root, (_G_POLICY_FILE, "pyproject.toml", "tests/conftest.py"))
+        got = _g_coverage(root, monkeypatch)
+        assert got != "true", got
+
+    def test_i3_a_root_inside_a_bare_repository_is_not_full_coverage(self, tmp_path, monkeypatch):
+        """I2。分類:behavior-red(在 S5h-1 上必須失敗)。
+
+        以 `parent` 建 bare clone `bare.git`;root = `bare.git/proj`(bare repository 底下的普通子目錄,
+        隱式 bare 探索),三份位元組相同的副本只在 root 下、從未提交 ⇒ 不得為 `"true"`。
+        S5h-1 上失敗的原因:同 I1 —— bare 內 `--show-prefix` 為空但非工作樹,`HEAD:<path>` 與
+        `hash-object <path>` 對應的不是同一邏輯路徑(S5h-F1)。
+        """
+        parent = _g_default_root(tmp_path / "parent")
+        bare = tmp_path / "bare.git"
+        _d_git(tmp_path, "clone", "-q", "--bare", str(parent), str(bare))
+        root = bare / "proj"
+        self._copy_into(parent, root, (_G_POLICY_FILE, "pyproject.toml", "tests/conftest.py"))
+        got = _g_coverage(root, monkeypatch)
+        assert got != "true", got
+
+    def test_i3_committed_blobs_alone_is_fail_closed_for_a_subdirectory_root(self, tmp_path, monkeypatch):
+        """I3。分類:regression-lock(在 S5h-1 上必須通過)。**不經 `evidence_policy_facts`**,直接呼叫
+        `redlight.committed_blobs`。
+
+        非法 root(`parent/sub`,只有 `pyproject.toml` 與 `tests/conftest.py` 的未提交副本):`BLOB_FILES`
+        每一路徑皆 `{"worktree": None, "head": None}`;對照組 `committed_blobs(parent)`:每一路徑 worktree
+        非空且 == head。
+        目的:獨立證明 `committed_blobs` 那一半 fail-closed,不被 `evidence_policy_facts` 的 guard 間接遮蔽
+        (S5h-F2:H1 只斷言 `!= "true"`,policy 那一半先回 None 就擋住了,(xi) 那一半有沒有擋看不出來)。
+        """
+        parent = _g_default_root(tmp_path / "parent")
+        sub = parent / "sub"
+        self._copy_into(parent, sub, ("pyproject.toml", "tests/conftest.py"))
+        blobs = redlight.committed_blobs(str(sub))
+        assert set(blobs) == set(redlight.BLOB_FILES), blobs
+        assert all(v == {"worktree": None, "head": None} for v in blobs.values()), blobs
+        control = redlight.committed_blobs(str(parent))
+        assert all(v["worktree"] and v["worktree"] == v["head"] for v in control.values()), control
