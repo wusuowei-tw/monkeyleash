@@ -2712,3 +2712,39 @@ class TestRootIsToplevelContract:
             root = bare / "proj"
             root.mkdir()
         assert redlight._root_is_toplevel(str(root)) is expected
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145 Station 3j-1b 補紅燈 —— S5i-F1 解析層(Windows 可紅)
+#
+# 以 monkeypatch 替身供給「LF 開頭 prefix」的 stdout,不依賴檔案系統 —— Windows 檔名不得含 LF,
+# J1(POSIX 端到端)在 Windows 被跳過,本機帳本因此沒有 R3 要的紅燈。J1b 與 J1 互補:J1 證明端到端形狀,
+# J1b 在任何平台證明解析層。既有 helper(`redlight._root_is_toplevel`)只呼叫、不修改。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRootIsToplevelParser:
+
+    def test_j3_a_lf_prefixed_show_prefix_stdout_is_not_toplevel(self, tmp_path, monkeypatch):
+        """J1b。分類:behavior-red(在 S3J2 上必須失敗)。
+
+        stdout `b"true\\n\\nsub/\\n"` 即 POSIX 上名稱以 LF 開頭的子目錄(`"\\nsub"`)所得:`--show-prefix`
+        輸出未跳脫的原始路徑位元組。拆行只看前兩行(`lines[0] == b"true"`、`lines[1]` 為空)會誤判 True;
+        修正後 stdout 須完整等於 `b"true\\n\\n"`(\\r\\n 正規化後)才為 True ⇒ 這裡必須是 False。
+        另斷言呼叫的確是 `rev-parse --is-inside-work-tree --show-prefix`,替身沒有被別的指令吃掉。
+        """
+        import subprocess as _sp
+
+        class _Proc:
+            returncode = 0
+            stdout = b"true\n\nsub/\n"
+            stderr = b""
+
+        calls = []
+
+        def fake_run(args, **kw):
+            calls.append(list(args))
+            return _Proc()
+
+        monkeypatch.setattr(_sp, "run", fake_run)
+        assert redlight._root_is_toplevel(str(tmp_path)) is False
+        assert calls and calls[0][-2:] == ["--is-inside-work-tree", "--show-prefix"], calls
