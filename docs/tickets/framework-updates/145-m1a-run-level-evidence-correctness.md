@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5h 審查包已建立；待獨立審查。
+**狀態**:動工 —— Station 5h 獨立審查 FAIL（S5h-F1 major）；待 Station 3i 紅燈。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -160,6 +160,9 @@
 >
 > - 狀態(舊,第五十代):~~`動工 —— Station 4h PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5h 獨立審查。`~~
 >   —— 2026-10-05 Station 5h 審查包建立後由第 3 行取代(見〈五十六〉)。
+>
+> - 狀態(舊,第五十一代):~~`動工 —— Station 5h 審查包已建立；待獨立審查。`~~
+>   —— 2026-10-05 Station 5h 獨立審查 FAIL(S5h-F1 major)後由第 3 行取代(見〈五十七〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -547,15 +550,21 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5g — Review | 審查者 PASS；依 Jeff 裁決 FAIL（S5g-F2） |
 | Station 3h — Red-light(補) | PASS / ACCEPTED（H1 behavior-red + H2 regression-lock；S3H2） |
 | Station 4h — Implementation(修正) | PASS / COMPLETED（Windows/local acceptance PASS；POSIX clean-room PASS） |
-| Station 5h — Review | 審查包已建立，待審 |
+| Station 5h — Review | FAIL（S5h-F1 major；S5h-F2 minor；F3/F4 nit） |
+| Station 3i — Red-light(補) | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5h 審查包已建立；待獨立審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5h 獨立審查 FAIL（S5h-F1 major）；待 Station 3i 紅燈(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第四十二代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5h 審查包已建立；待獨立審查(與票頭第 3 行一致)。~~
+> 2026-10-05 Station 5h 獨立審查 FAIL(S5h-F1 major)後隨第 3 行同步更新(見〈五十七〉)。
+> Station 5h 列舊值(F-036,保留不刪):~~`審查包已建立，待審`~~;2026-10-05 依〈五十七〉更新。
+> Station 3i 列為新增列,沒有舊值(2026-10-05,S5h-1)。
+>
 > **舊句(F-036,保留不刪,第四十一代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4h PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5h 獨立審查(與票頭第 3 行一致)。~~
 > 2026-10-05 Station 5h 審查包建立後隨第 3 行同步更新(見〈五十六〉)。
 > Station 5h 列為新增列,沒有舊值(2026-10-05,S5h-0)。
@@ -2852,7 +2861,48 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
 
 - CODE_FILES(TARGET_G..TARGET 的非 docs 檔):`.claude/hooks/redlight.py`、`tests/test_redlight.py`。
 - 審查包 `git diff --cached --check` 的 4 行行尾空白全部來自 E.1 / E.3 原樣 diff 的單空格 context 行(包內第 323、324、495、496 行),未修改。
-- S5h-0(審查包 commit):記錄 5h 結果時回填。
+- S5h-0(審查包 commit)`300b42a520b0a62fec0931d895200ea8817e47aa`。
+  (F-036:本行原文為「S5h-0(審查包 commit):記錄 5h 結果時回填。」;2026-10-05 於 S5h-1 回填。)
+
+---
+
+## 五十七、Station 5h 獨立審查（FAIL）與 Station 3i 裁決（2026-10-05，Jeff）
+
+### 57.1 審查報告
+
+- 路徑 `docs/audits/2026-10-05-m1a-station5h-review.md`;raw = repo 副本(與審查者原檔 `.scratch/m1a-s5h/review-report.md` 以 `cmp` 逐位元組相同,無任何改動);
+  sha256 `7dac1d2a145ac576ab8958d0c9fd9eb1275333ab79f70f07639c6f32e02ed8d0`;33480 bytes。
+- 審查對象 TARGET `ea6aba6452668982fee56f7a2f0faf2cd720ca6d`;審查包所在 commit S5h-0 `300b42a520b0a62fec0931d895200ea8817e47aa`。
+- **審查者判決:FAIL**(blocker 0、major 1、minor 1、nit 2)。
+- Findings(報告第 2 節;一行摘要,不改寫結論):
+  - S5h-F1【major;G9 / G1 / G7;需要重現(端到端)】`_root_is_toplevel` 只看 `--show-prefix` 為空;root 位於 gitdir 內(bare repo 目錄、bare 底下子目錄、非 bare 的 `.git/`)時 `--show-prefix` 同樣 exit 0 輸出空行,`HEAD:<path>` 取 tree 根的已提交 blob、`hash-object <path>` 讀 root 底下 Git 不對應任何 tree 路徑的副本 ⇒ head == worktree ⇒ 預期 `file_coverage == "true"`;同一 root 的 `--show-toplevel` exit 128,53.3 裁決 2 的等價式不成立。
+  - S5h-F2【minor;G2 / G5;需要重現(突變測試)】刪掉 `committed_blobs` 的非最上層分支(`:755-757`)H1 仍會綠 —— `evidence_policy_facts` 已先回全 None;全樹沒有測試直接呼叫 `committed_blobs` 或 `_root_is_toplevel`,「不得留 (xi) 半套」只由程式碼保證、沒有測試鎖住。
+  - S5h-F3【nit;G7】殘餘措辭漏列「被接受但不是獨立 repo」的佈局(`sub/.git` 檔指向上層 gitdir、只設 `GIT_DIR`、`core.worktree` 指向 sub):Git 把 sub 解析成同一 repository 的工作樹最上層;依 G9 判準不構成 F2,只是措辭涵蓋面不足。
+  - S5h-F4【nit;G3 / G7】非最上層 root 沒有專屬 status 狀態字:monorepo 子專案的 policy 已提交於上層 repo 時 status 顯示「未提交」,照字面再提交也不會變;fail-closed,與 S5g-F1 同型;非本輪引入。
+- 5g 結論:報告第 5 節逐條判定 5g 的 G1–G13 與 S5g-F1 / F3 / F4 / F5 仍成立(G1 / G6 / G13 的「例外形狀」更新為:普通子目錄已封住,gitdir / bare 內仍存在 = S5h-F1)。
+
+### 57.2 裁決助手外部重現(隔離 Linux 環境;git 2.43.0;Python 3.11 + pytest 9.1.1;非獨立審查 finding;非本 repo 帳本證據)
+
+來源:Jeff 的 Station 5h-1 指令,照錄。
+
+- 端到端：以 S4H1 ea6aba6452668982fee56f7a2f0faf2cd720ca6d 的 redlight.py 與 tests/test_redlight.py 既有 helper（_g_default_root、_g_coverage），分別把 root 設為 <parent>/.git（parent 為已提交合法 policy 的最上層）與 <bare.git>/proj（bare clone 底下子目錄），三份未提交副本放在 root 下 ⇒ 兩者皆得 file_coverage == "true"。S5h-F1 由「需要重現」升為已確認。
+- 修法原型：_root_is_toplevel 改為一次 git rev-parse --is-inside-work-tree --show-prefix，須第一行為 true 且第二行為空；指令失敗 / 非零 / 任一條件不符 ⇒ False。套用後上述兩個原型轉為非 true；H1 / H2 維持綠；evidence 相關 5 檔共 281 支全過。
+- I3 原型：直接呼叫 redlight.committed_blobs(<parent>/sub)（不經 evidence_policy_facts），要求 BLOB_FILES 每一路徑都為 {"worktree": None, "head": None}，且 committed_blobs(<parent>) 每一路徑 worktree 非空且 == head；在 S4H1 與修法原型上皆通過（regression-lock）。
+
+### 57.3 裁決(照錄)
+
+1. Station 5h 獨立審查 = FAIL；S5h-F1 = major / confirmed end-to-end。4h 的 _root_is_toplevel 以 rev-parse --show-prefix 為空當作「root 是工作樹最上層」，但 .git/ 內部或 bare repository 內同樣滿足此條件，而該處並非工作樹 ⇒ HEAD 證明的是 repository 內某個 path、工作樹實際讀的是另一個 filesystem root ⇒ identity mismatch ⇒ 仍可能 file_coverage == "true"。與 S5g-F2 同一條 I-3 位置不變式，不得列追蹤項。〈五十三〉53.3 裁決 2 所稱「與 resolved root == git rev-parse --show-toplevel 等價」實測不成立，於此更正。
+2. 回 Station 3i，紅燈三支（皆經真實 conftest producer 或直接呼叫 producer helper，真 git repo）：
+   I1 behavior-red：root = <最上層>/.git，三份副本只在 root 下、未提交 ⇒ 不得為 "true"。
+   I2 behavior-red：root = <bare clone>/proj，同上 ⇒ 不得為 "true"。
+   I3 regression-lock：直接呼叫 committed_blobs 對非法 root（<最上層>/sub）：BLOB_FILES 每一路徑皆 {"worktree": None, "head": None}；對照組 committed_blobs(<最上層>) 每一路徑 worktree 非空且 == head。目的：獨立證明 committed_blobs 那一半 fail-closed，不被 evidence_policy_facts 的 guard 間接遮蔽（S5h-F2）。
+3. Station 4i 最小修正方向：_root_is_toplevel 須同時滿足 rev-parse --show-prefix 為空 且 rev-parse --is-inside-work-tree 為 true；任一查詢失敗、非零、或條件不符 ⇒ False ⇒ policy facts / committed_blobs facts 全 None ⇒ unknown ⇒ 不得退紅。對應的 invariant：root 必須是 Git 工作樹的最上層，不只是 Git repository context 中 prefix 恰為空的位置。
+4. S5h-F3（殘餘措辭漏列「被接受但非獨立 repo」的重新對應佈局）於 4i 文件補準；S5h-F4（非最上層 root 的 status 無專屬狀態字）併入 S5g-F1 類的 operator / status 追蹤項。兩者不阻擋本輪，目前尚未 machine-enforced。
+5. 流程：5h-1 記錄 → Jeff 切 tickets → 3i 紅燈 → Jeff 切 implement → 4i（含 Windows 全套、本機 clean-room、裁決助手 POSIX）→ 5i 增量審查（全新對話；4g 實作 session、5g 與 5h 審查 session 皆不得擔任）→ Station 6。
+
+### 57.4 commit
+
+- S5h-1(本節與審查報告入庫)於下一次提交回填。
 
 ---
 
@@ -2887,3 +2937,8 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
   `.gitattributes` 的 clean filter 可讓設定檔 / conftest 工作樹 ≠ HEAD 但 `hash-object` 相等 ⇒ (xi) 誤判一致;policy 本身不受影響;BASE 已存在。
 - **追蹤項(2026-10-04 登記,〈五十三〉53.3 第 4 點)S5g-F5(目前尚未 machine-enforced)** ——
   verify_gates 在正二不成立時,負一~負三仍印「成立 ✓」;負情境的判別力來自同次執行中正二成立的差分,程式沒有把這個耦合寫進輸出。
+- **追蹤項(2026-10-05 登記,〈五十七〉57.3 第 4 點)S5h-F3(目前尚未 machine-enforced)** ——
+  殘餘措辭漏列「被接受但不是獨立 repo」的重新對應佈局(`sub/.git` 檔指向上層 gitdir、只設 `GIT_DIR`、`core.worktree` 指向 sub):
+  Git 把 sub 解析成同一 repository 的工作樹最上層;依判準不構成 F2,只是措辭涵蓋面不足。於 4i 文件補準。
+- **追蹤項(2026-10-05 登記,〈五十七〉57.3 第 4 點)S5h-F4(目前尚未 machine-enforced;與 S5g-F1 同類的 operator / status 訊號)** ——
+  非最上層 root 沒有專屬 status 狀態字:monorepo 子專案的 policy 已提交於上層 repo 時 status 顯示「未提交」,照字面再提交也不會變、紅燈也不退(fail-closed)。
