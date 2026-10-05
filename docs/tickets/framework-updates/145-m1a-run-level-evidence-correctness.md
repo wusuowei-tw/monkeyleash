@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5i 審查包已建立；待獨立審查。
+**狀態**:動工 —— Station 5i 獨立審查 FAIL（S5i-F1 major；4i 引入）；待 Station 3j 紅燈。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -175,6 +175,9 @@
 >
 > - 狀態(舊,第五十五代):~~`動工 —— Station 4i PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5i 獨立審查。`~~
 >   —— 2026-10-05 Station 5i 審查包建立後由第 3 行取代(見〈六十〉)。
+>
+> - 狀態(舊,第五十六代):~~`動工 —— Station 5i 審查包已建立；待獨立審查。`~~
+>   —— 2026-10-05 Station 5i 獨立審查 FAIL(S5i-F1 major)後由第 3 行取代(見〈六十一〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -565,15 +568,21 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5h — Review | FAIL（S5h-F1 major；S5h-F2 minor；F3/F4 nit） |
 | Station 3i — Red-light(補) | PASS / ACCEPTED（I1 / I2 behavior-red + I3 regression-lock；S3I2） |
 | Station 4i — Implementation(修正) | PASS / COMPLETED（Windows/local acceptance PASS；POSIX clean-room PASS） |
-| Station 5i — Review | 審查包已建立，待審 |
+| Station 5i — Review | FAIL（S5i-F1 major；F2/F3 nit） |
+| Station 3j — Red-light(補) | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5i 審查包已建立；待獨立審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5i 獨立審查 FAIL（S5i-F1 major；4i 引入）；待 Station 3j 紅燈(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第四十七代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5i 審查包已建立；待獨立審查(與票頭第 3 行一致)。~~
+> 2026-10-05 Station 5i 獨立審查 FAIL(S5i-F1 major)後隨第 3 行同步更新(見〈六十一〉)。
+> Station 5i 列舊值(F-036,保留不刪):~~`審查包已建立，待審`~~;2026-10-05 依〈六十一〉更新。
+> Station 3j 列為新增列,沒有舊值(2026-10-05,S5i-1)。
+>
 > **舊句(F-036,保留不刪,第四十六代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4i PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5i 獨立審查(與票頭第 3 行一致)。~~
 > 2026-10-05 Station 5i 審查包建立後隨第 3 行同步更新(見〈六十〉)。
 > Station 5i 列為新增列,沒有舊值(2026-10-05,S5i-0)。
@@ -3031,7 +3040,49 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
 - CODE_FILES(TARGET_H..TARGET 的非 docs 檔):`.claude/hooks/redlight.py`、`tests/test_redlight.py`。
 - 審查包 `git diff --cached --check` 的 8 行行尾空白全部來自 E.1 / E.3 原樣 diff 的單空格 context 行(包內第 427、428、449、450、631、632、653、654 行),未修改。
 - 審查報告位置(包 A.2 第 2 點):`.scratch/m1a-s5i/review-report.md`。
-- S5i-0(審查包 commit):記錄 5i 結果時回填。
+- S5i-0(審查包 commit)`55147ca78576a2eef8472b6761f50ff5b9c42b5c`。
+  (F-036:本行原文為「S5i-0(審查包 commit):記錄 5i 結果時回填。」;2026-10-05 於 S5i-1 回填。)
+
+---
+
+## 六十一、Station 5i 獨立審查（FAIL）與 Station 3j 裁決（2026-10-05，Jeff）
+
+### 61.1 審查報告
+
+- 路徑 `docs/audits/2026-10-05-m1a-station5i-review.md`;raw = repo 副本(與審查者原檔 `.scratch/m1a-s5i/review-report.md` 以 `cmp` 逐位元組相同,無任何改動);
+  sha256 `c0b6dd87096c97070e860c100f61750eef614b9f07dc070dce741f49d8c91f71`;34640 bytes。
+- 審查對象 TARGET `8154a1acb9ccd4dac87bbbd37aa2aca8b0348fe8`;審查包所在 commit S5i-0 `55147ca78576a2eef8472b6761f50ff5b9c42b5c`。
+- **審查者判決:FAIL**(blocker 0、major 1、minor 0、nit 2)。
+- Findings(報告第 2 節;一行摘要,不改寫結論):
+  - S5i-F1【major;G9 / G2 / G1 / G8;需要重現】4i 以 `split(b"\n")` 只比 `lines[0]` / `lines[1]`(`redlight.py:739-742`),而 `--show-prefix` 輸出未跳脫的原始路徑位元組;POSIX 上名稱以 LF 開頭的子目錄 `parent/"\nsub"` 使輸出為 `true\n\nsub/\n` ⇒ `lines[1].strip() == b""` ⇒ True ⇒ 回到 S5g-F2 原形狀 ⇒ 預期 `file_coverage == "true"`;TARGET_H 整段 strip 對同一輸入為 False ⇒ 本輪引入的回歸。
+  - S5i-F2【nit;G7 / G9】殘餘措辭把「位於 gitdir 或 bare repository 內的 root ⇒ unknown」寫成無條件;實測只設 `GIT_DIR`(cwd 在 gitdir)或 `core.worktree` 指向自己的 gitdir 時,Git 回報 `true` + 空 prefix 而被接受;依 G9 判準不構成 F2,只是與措辭後半的重新對應佈局重疊。
+  - S5i-F3【nit;G5】I1 / I2 只斷言 `!= "true"`、區分不出是哪個條件擋下;I2 依賴隱式 bare 探索(`safe.bareRepository=explicit` 時會空洞通過);沒有測試直接鎖住 `:739-742` 的解析,所以 S5i-F1 這種解析層回歸現有測試看不到。
+- 5h 總表 #3–#6(gitdir / bare 內)在 TARGET 已封住(X4–X7:第一行 `false`)。
+- 5g / 5h 其餘結論:報告第 5 節逐條判定仍成立(G1 / G6 / G13 的「例外形狀」更新為:普通 ASCII 子目錄與 gitdir / bare 已封住;POSIX 上 LF 開頭的子目錄名仍存在 = S5i-F1)。
+- 審查中一次 R7 攔截(scratchpad 內以 Bash 重導向寫假 policy 檔);審查者停手、未繞過,改以不寫檔內容的 `git init` / `mkdir` / `git config` / `git rev-parse` 實驗替代,合規(報告第 0 節照錄)。
+
+### 61.2 裁決助手外部重現(隔離 Linux 環境;git 2.43.0;Python 3.11 + pytest 9.1.1;非獨立審查 finding;非本 repo 帳本證據)
+
+來源:Jeff 的 Station 5i-1 指令,照錄。
+
+- git 原語：於 git 最上層建名稱為 "\nsub"（LF 開頭）的子目錄，git -C <該目錄> rev-parse --is-inside-work-tree --show-prefix 的原始輸出為 t r u e \n \n s u b / \n（od -c）。--show-prefix 不跳脫 LF，與 5i 審查者由 X3 外推的結論一致。
+- 端到端：以 S4I1 8154a1acb9ccd4dac87bbbd37aa2aca8b0348fe8 的 redlight.py 與既有 helper（_g_default_root、_g_coverage），root = <parent>/"\nsub"、三份未提交副本放在 root 下 ⇒ file_coverage == "true"。S5i-F1 由「需要重現」升為已確認；同一輸入在 S4H1（整段 strip 比對）為非 true ⇒ 4i 引入的回歸。
+- 修法原型：_root_is_toplevel 改為 proc.stdout.replace(b"\r\n", b"\n") == b"true\n\n"（完整 stdout 相等；不拆行）。套用後上述原型轉為非 true；I1 / I2 / I3 / H1 / H2 維持綠；evidence 相關 5 檔共 283 支全過。
+- J2 原型：直接呼叫 redlight._root_is_toplevel 對 toplevel / subdir / gitdir / bare 四種佈置，預期 True / False / False / False；在 S4I1 與修法原型上皆通過（regression-lock）。
+
+### 61.3 裁決(照錄)
+
+1. Station 5i 獨立審查 = FAIL；S5i-F1 = major / confirmed end-to-end / 4i-introduced regression。4i 以 split(b"\n") 只比對前兩行，而 --show-prefix 輸出未跳脫的原始路徑位元組；POSIX 上名稱以 LF 開頭的子目錄使 prefix 第一行為空 ⇒ 誤判為最上層 ⇒ 重新打開 S5g-F2 的 identity 錯位 ⇒ 仍可 file_coverage == "true"。S4H1 的整段 strip 比對對同一輸入為 False，故屬本輪引入。責任歸屬：4i 指令中的解析方式由裁決助手指定。
+2. 回 Station 3j，紅燈兩支：
+   J1 behavior-red（POSIX-only）：root = <最上層>/"\nsub"，三份副本只在 root 下、未提交 ⇒ 不得為 "true"。以 pytest.mark.skipif(sys.platform == "win32", reason=...) 標為 Windows skip；Jeff 特別核准：Windows 檔名模型無法合法建立該輸入，紅燈由裁決助手的 POSIX 驗收證明，且 3j POSIX 證據須保留「修前 J1 red、修後 green」，不得只看 4j 最終全綠。
+   J2 regression-lock：直接呼叫 _root_is_toplevel，參數化四種佈置：git 最上層 ⇒ True；普通子目錄 ⇒ False；<最上層>/.git ⇒ False；<bare clone>/proj ⇒ False。鎖住 parser contract（S5i-F3 轉為機器鎖）。
+3. Station 4j 最小修正：_root_is_toplevel 恢復完整 stdout contract —— stdout 先把 \r\n 正規化為 \n，再與 b"true\n\n" 完整相等；不拆行、不 strip。任何多餘位元組（含 prefix 首位元組為 LF）⇒ False ⇒ fail-closed。
+4. S5i-F2（gitdir ⇒ unknown 寫成無條件，與「GIT_DIR / core.worktree 重新對應佈局會被接受」重疊）於 4j 文件補準。S5i-F3 由 J2 機器鎖處理，不另列追蹤項。
+5. 流程：5i-1 記錄 → Jeff 切 tickets → 3j 紅燈（Windows 全套：J1 skip、J2 綠；裁決助手 POSIX：J1 red）→ Jeff 切 implement → 4j（Windows 全套、本機 clean-room、裁決助手 POSIX 含 J1 green）→ 5j 增量審查（第五個全新對話；4g 實作、本實作、5g / 5h / 5i 審查 session 皆不得擔任）→ Station 6。
+
+### 61.4 commit
+
+- S5i-1(本節與審查報告入庫)於下一次提交回填。
 
 ---
 
