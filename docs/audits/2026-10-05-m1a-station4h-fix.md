@@ -4,7 +4,7 @@
 - 對象:S4H1 `ea6aba6452668982fee56f7a2f0faf2cd720ca6d`(只改 `.claude/hooks/redlight.py`)。
 - 上一個 commit:S3H2 `66140896d03f32c4df73be01b2aaeb48353e0510`;紅燈 S3H1 `7621e3ce8604ab72ab2f3fb3257cb1181b8a126e`。
 - 合約:票 145〈五十三〉53.3 裁決 2;Jeff 裁決 Station 3h = PASS / ACCEPTED、Station 4h plan = APPROVED、H1 / H2 不准修改、最小修正只動 redlight.py。
-- 範圍:**本機(Windows)驗收**。POSIX 外部 clean-room 驗收尚未執行(第 7 節)。**本報告不宣稱 4h 完成。**
+- 範圍:**本機(Windows)驗收**。POSIX 外部 clean-room 驗收尚未執行(第 7 節)。**本報告不宣稱 4h 完成。**（S4H4 後更新：POSIX 已 PASS，見第 9 節；Station 4h = PASS / COMPLETED。另：本句原文「第 7 節」指向有誤，POSIX 驗收實為第 9 節，原文保留不改。）
 
 ## 【給裁決者】
 
@@ -12,7 +12,7 @@
 2. 本機全套 2096 passed、0 failed;3h 那支紅(H1)轉綠,H2 維持綠。
 3. 淨室(全新安裝的乾淨 repo)兩正三負全部成立,正二仍可退紅。
 4. 本 repo 的測試帳本只往後加,淨室驗收前後完全沒動。
-5. 下一步是 POSIX 外部淨室驗收(裁決助手執行),通過後才升級狀態。
+5. 下一步是 POSIX 外部淨室驗收(裁決助手執行),通過後才升級狀態。（S4H4 後更新：POSIX 已 PASS，見第 9 節；狀態已升級。）
 
 ## 【給裁決助手】
 
@@ -230,7 +230,7 @@ $ git status --porcelain
 2. 5g 追蹤項:S5g-F1(下一張票優先;status「有效」不含 addopts 鎖步)、S5g-F3(原生 `[tool.pytest]` 永遠 unknown)、S5g-F4(clean filter 讓 (xi) 誤判)、S5g-F5(正二不成立時負情境仍印成立)。
 3. 本輪新增(照錄):
    「本輪檢查的語意是 git rev-parse --show-prefix 為空，即 root 必須是 Git 認定的該 repository 最上層。monorepo 中、非 Git 最上層的普通子專案，本輪明確不支援作為 evidence root（H1 鎖住）。巢狀獨立 Git repo / submodule 若自身被 Git 視為最上層，--show-prefix 同樣為空、會被接受；其行為本輪未納入 acceptance，屬未證明範圍，不得宣稱已拒絕或已支援。」
-4. 本機只驗 Windows。
+4. 本機只驗 Windows。（S4H4 後更新：POSIX 已 PASS，見第 9 節；屬裁決助手外部驗證，非本 repo 帳本證據。）
 
 ### 8. 程序紀錄
 
@@ -238,4 +238,20 @@ $ git status --porcelain
 - 沒有閘門擋下;沒有改測試、`.dev/pipeline.json`;沒有 push / fetch。
 - 本輪與 5g 審查、5g-1、3h 由同一 session 執行(依 Jeff 程序註記,該 session 不得擔任 5h 審查者)。
 
-### 9. POSIX 外部 clean-room 驗收:待執行(裁決助手)
+### 9. POSIX 外部 clean-room 驗收
+
+> **舊文字(F-036,保留不刪)**:本節標題原為 ~~`### 9. POSIX 外部 clean-room 驗收:待執行(裁決助手)`~~,沒有內文。
+> 2026-10-05 S4H4 依 Jeff 裁決改為下方照錄段落。
+
+POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳本證據）——2026-10-05 約 09:45 ET
+- 環境：Linux，Python 3.11.16，pytest 9.1.1，anyio 4.15.0。
+- 受測樹：4g POSIX 驗收所用的樹（BASE de36ebcbab284ef11064a9943b5191750482dd93 + S4G3 時點 12 檔）再覆蓋 S3H1 的 tests/test_redlight.py 與 S4H1 ea6aba6452668982fee56f7a2f0faf2cd720ca6d 的 .claude/hooks/redlight.py 原檔（CRLF→LF）。
+- 修正前（S3H1 tests + 4g 程式）：H1 失敗於 got == "true"、H2 通過，與 Windows 3h 一致。
+- 修正後：verify_gates.py R1–R9 各擋下一次；權威層偵測三項成立；淨室框架測試 0 failed；evidence policy 兩正三負全部成立：
+    正一 未初始化 成立（35 個框架測試檔皆 unknown；evidence policy: 未初始化）
+    正二 已初始化且相符 成立（rc 1→0；file_coverage=true；green=tests/test_evidence_probe.py；evidence policy: 有效）
+    負一 policy / 環境不符 成立（file_coverage=unknown；紅仍在）
+    負二 HEAD 有、工作樹不同 成立（file_coverage=unknown；evidence policy: 工作樹與 HEAD 不同）
+    負三 工作樹有、HEAD 沒有 成立（file_coverage=unknown；evidence policy: 未提交）
+- 宿主固定全套（Linux）：collected 2102；2086 passed、13 failed、3 xfailed。13 支與 4g POSIX 驗收及 de36ebc 基準在同一沙盒的失敗集合完全相同（tests/test_gate.py::TestAuthorityLayerIsWired::test_this_repo_itself_is_wired 與 tests/test_known_items_regression.py 的 12 支）⇒ 沙盒環境因素（推測：clone 未設 hooksPath、缺本機私有資料），與 3h/4h 無關。evidence 相關 5 檔全過。
+- 結論：POSIX 外部 clean-room 驗收 PASS。
