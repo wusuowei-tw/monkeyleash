@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 4i 本機固定全套與 clean-room 驗收通過；待 POSIX 外部驗收。
+**狀態**:動工 —— Station 4i PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5i 獨立審查。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -169,6 +169,9 @@
 >
 > - 狀態(舊,第五十三代):~~`動工 —— Station 3i 紅燈完成；待 Station 4i 實作。`~~
 >   —— 2026-10-05 Station 4i 本機固定全套與 clean-room 驗收通過後由第 3 行取代(見〈五十九〉)。
+>
+> - 狀態(舊,第五十四代):~~`動工 —— Station 4i 本機固定全套與 clean-room 驗收通過；待 POSIX 外部驗收。`~~
+>   —— 2026-10-05 POSIX 外部 clean-room 驗收通過、Jeff 裁決 Station 4i = PASS / COMPLETED 後由第 3 行取代(見〈五十九〉59.3)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -558,15 +561,19 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 4h — Implementation(修正) | PASS / COMPLETED（Windows/local acceptance PASS；POSIX clean-room PASS） |
 | Station 5h — Review | FAIL（S5h-F1 major；S5h-F2 minor；F3/F4 nit） |
 | Station 3i — Red-light(補) | PASS / ACCEPTED（I1 / I2 behavior-red + I3 regression-lock；S3I2） |
-| Station 4i — Implementation(修正) | Windows/local acceptance PASS；POSIX clean-room pending |
+| Station 4i — Implementation(修正) | PASS / COMPLETED（Windows/local acceptance PASS；POSIX clean-room PASS） |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4i 本機固定全套與 clean-room 驗收通過；待 POSIX 外部驗收(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4i PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5i 獨立審查(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第四十五代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4i 本機固定全套與 clean-room 驗收通過；待 POSIX 外部驗收(與票頭第 3 行一致)。~~
+> 2026-10-05 POSIX 外部 clean-room 驗收通過、Station 4i = PASS / COMPLETED 後隨第 3 行同步更新(見〈五十九〉59.3)。
+> Station 4i 列舊值(F-036,保留不刪):~~`Windows/local acceptance PASS；POSIX clean-room pending`~~;2026-10-05 依〈五十九〉59.3 更新。
+>
 > **舊句(F-036,保留不刪,第四十四代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3i 紅燈完成；待 Station 4i 實作(與票頭第 3 行一致)。~~
 > 2026-10-05 Station 4i 本機固定全套與 clean-room 驗收通過後隨第 3 行同步更新(見〈五十九〉)。
 > Station 3i 列舊值(F-036,保留不刪):~~`紅燈完成（I1 / I2 behavior-red + I3 regression-lock），待 Station 4i`~~;2026-10-05 依 Jeff 裁決(3i = PASS / ACCEPTED)更新。
@@ -2967,11 +2974,27 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
 - 裁決助手 Linux 預演(來源:Jeff 的 Station 4i 指令;隔離環境;非本 repo 帳本證據):以 S3I1 的 tests 與 S4H1 的程式,I1 / I2 失敗於 got == "true"、I3 通過;套用本修正形狀後 I1 / I2 / I3 / H1 / H2 全綠,evidence 相關 5 檔 282 支全過。
 - 殘餘與未證明(目前尚未 machine-enforced):沿用 4h 證據報告第 7 節 + S5g-F1 / F3 / F4 / F5、S5h-F3 / F4 追蹤項;本輪依 S5h-F3 補準措辭(照錄於報告第 7 節第 3 點):
   「本輪檢查的語意是 git rev-parse --is-inside-work-tree 為 true 且 --show-prefix 為空，即 root 必須是 Git 對該 root 解析出的工作樹的最上層。明確不支援（⇒ unknown）：monorepo 中非最上層的普通子目錄（H1）、位於 gitdir 或 bare repository 內的 root（I1 / I2）。會被接受但本輪未納入 acceptance、屬未證明：巢狀獨立 Git repo、submodule、linked worktree（git worktree add）、.git 為檔案且 gitdir 指向他處、GIT_DIR / GIT_WORK_TREE / core.worktree 等重新對應佈局。上述佈局若 Git 對該 root 實際回報 --is-inside-work-tree=true 且 --show-prefix 為空，即會被本檢查接受；其 HEAD 與工作樹是否符合既定 identity invariant，本輪未完整 acceptance，不得宣稱已拒絕或已支援。」
-- commit:S4I1 `8154a1acb9ccd4dac87bbbd37aa2aca8b0348fe8`;S4I3(本節與證據報告)於下一次提交回填。
+- commit:S4I1 `8154a1acb9ccd4dac87bbbd37aa2aca8b0348fe8`;S4I3(本節與證據報告)`64da2ec2b78b64b6eb23822c7a0e018b82e2500a`。
+  (F-036:本行原文為「S4I3(本節與證據報告)於下一次提交回填。」;2026-10-05 於 S4I4 回填。)
+  - S4I4(POSIX 驗收記錄與狀態升級)於下一次提交回填。
 
 ### 59.3 POSIX 外部 clean-room 驗收
 
-待執行(裁決助手)。
+> **舊文字(F-036,保留不刪)**:本節原文為 ~~`待執行(裁決助手)。`~~;2026-10-05 S4I4 依 Jeff 裁決改為下方照錄段落。
+> Jeff 裁決(2026-10-05):Station 4i 本機驗收(S4I2,見 S4I3 `64da2ec2b78b64b6eb23822c7a0e018b82e2500a`)與裁決助手 POSIX 外部驗收皆 PASS ⇒ Station 4i = PASS / COMPLETED;下一站 5i 增量獨立審查(只審 3i/4i 增量;須開全新對話;4g 實作 session、本實作 session、5g 與 5h 審查 session 皆不得擔任)。
+
+POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳本證據）——2026-10-05 約 13:20 ET
+- 環境：Linux，Python 3.11.16，pytest 9.1.1，anyio 4.15.0，git 2.43.0。
+- 受測樹：4h POSIX 驗收所用的樹再覆蓋 S3I1 的 tests/test_redlight.py 與 S4I1 8154a1acb9ccd4dac87bbbd37aa2aca8b0348fe8 的 .claude/hooks/redlight.py 原檔（CRLF→LF）。
+- 修正前（S3I1 tests + S4H1 程式）：I1 / I2 失敗於 got == "true"、I3 通過，與 Windows 3i 一致。
+- 修正後：verify_gates.py R1–R9 各擋下一次；權威層偵測三項成立；淨室框架測試 0 failed；evidence policy 兩正三負全部成立：
+    正一 未初始化 成立（35 個框架測試檔皆 unknown；evidence policy: 未初始化）
+    正二 已初始化且相符 成立（rc 1→0；file_coverage=true；green=tests/test_evidence_probe.py；evidence policy: 有效）
+    負一 policy / 環境不符 成立（file_coverage=unknown；紅仍在）
+    負二 HEAD 有、工作樹不同 成立（file_coverage=unknown；evidence policy: 工作樹與 HEAD 不同）
+    負三 工作樹有、HEAD 沒有 成立（file_coverage=unknown；evidence policy: 未提交）
+- 宿主固定全套（Linux）：collected 2105；2089 passed、13 failed、3 xfailed。13 支與 4g / 4h POSIX 驗收及 de36ebc 基準在同一沙盒的失敗集合完全相同（tests/test_gate.py::TestAuthorityLayerIsWired::test_this_repo_itself_is_wired 與 tests/test_known_items_regression.py 的 12 支）⇒ 沙盒環境因素（推測：clone 未設 hooksPath、缺本機私有資料），與 3i/4i 無關。evidence 相關 5 檔（含 I1–I3 / H1–H2）全過。
+- 結論：POSIX 外部 clean-room 驗收 PASS。
 
 ---
 
