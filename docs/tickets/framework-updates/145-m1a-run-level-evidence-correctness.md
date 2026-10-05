@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5g 審查包已建立；待獨立審查。
+**狀態**:動工 —— Station 5g 獨立審查（審查者 PASS；依 Jeff 裁決 FAIL：S5g-F2）；待 Station 3h 紅燈。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -145,6 +145,9 @@
 >
 > - 狀態(舊,第四十五代):~~`動工 —— Station 4g PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5g 獨立審查。`~~
 >   —— 2026-10-04 Station 5g 審查包建立後由第 3 行取代(見〈五十二〉)。
+>
+> - 狀態(舊,第四十六代):~~`動工 —— Station 5g 審查包已建立；待獨立審查。`~~
+>   —— 2026-10-04 Station 5g 獨立審查完成(審查者 PASS)、Jeff 裁決 FAIL(S5g-F2)後由第 3 行取代(見〈五十三〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -529,15 +532,21 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3g — Red-light(補) | PASS / ACCEPTED(26 behavior-red + 7 regression-lock;S3G2) |
 | Station 3g-1b — Red-light(補) | PASS / ACCEPTED(9 behavior-red;S3G1B-2) |
 | Station 4g — Implementation(修正) | PASS / COMPLETED（Windows/local acceptance PASS；POSIX clean-room PASS） |
-| Station 5g — Review | 審查包已建立，待審 |
+| Station 5g — Review | 審查者 PASS；依 Jeff 裁決 FAIL（S5g-F2） |
+| Station 3h — Red-light(補) | NOT STARTED |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5g 審查包已建立；待獨立審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5g 獨立審查（審查者 PASS；依 Jeff 裁決 FAIL：S5g-F2）；待 Station 3h 紅燈(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第三十七代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5g 審查包已建立；待獨立審查(與票頭第 3 行一致)。~~
+> 2026-10-04 Station 5g 獨立審查完成、Jeff 裁決 FAIL(S5g-F2)後隨第 3 行同步更新(見〈五十三〉)。
+> Station 5g 列舊值(F-036,保留不刪):~~`審查包已建立，待審`~~;2026-10-04 依〈五十三〉更新。
+> Station 3h 列為新增列,沒有舊值(2026-10-04,S5g-1)。
+>
 > **舊句(F-036,保留不刪,第三十六代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4g PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5g 獨立審查(與票頭第 3 行一致)。~~
 > 2026-10-04 Station 5g 審查包建立後隨第 3 行同步更新(見〈五十二〉)。
 > Station 5g 列為新增列,沒有舊值(2026-10-04,S5g-0)。
@@ -2671,7 +2680,48 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
   - 3g-1b(S3G1B)再新增 9 支 behavior-red;
   - 3g / 3g-1b 合計 42 支 = 35 behavior-red + 7 regression-lock;這 42 支在 4g 都不得被改動;
   - 4g 另合法新增 T1(behavior-red)+ T2(regression-lock)於 S4G1B。
-- S5g-0(審查包 commit):記錄 5g 結果時回填。
+- S5g-0(審查包 commit)`5e096acb899b3370f16018199627784af71b788e`。
+  (F-036:本行原文為「S5g-0(審查包 commit):記錄 5g 結果時回填。」;2026-10-04 於 S5g-1 回填。)
+
+---
+
+## 五十三、Station 5g 獨立審查（審查者 PASS；依 Jeff 裁決 FAIL）與 Station 3h 裁決（2026-10-04，Jeff）
+
+### 53.1 審查報告
+
+- 路徑 `docs/audits/2026-10-04-m1a-station5g-review.md`;raw = repo 副本(與審查者原檔 `.scratch/m1a-s5g/review-report.md` 以 `cmp` 逐位元組相同,無任何改動);
+  sha256 `8399be264fafa82d62bb3294762d17835b4429850aca68c57c545883adfd0a49`;28223 bytes。
+- 審查對象 TARGET `8e7775526e462d984abb0992ed74c1e1aa3648dd`;審查包所在 commit S5g-0 `5e096acb899b3370f16018199627784af71b788e`。
+- **審查者原始判決:PASS**(blocker 0、major 0、minor 2、nit 3)。
+- Findings(報告第 2 節;一行摘要,不改寫結論):
+  - S5g-F1【minor;G7(+G8)】`policy_state` 不查 addopts 鎖步;框架 pyproject 範本(addopts 帶 `--strict-markers`)+ policy 範本(`committed_overrides: []`)原樣採用 ⇒ status 顯示「有效」但每次固定全套都是 unknown,紅燈永遠不退且無訊號(fail-closed)。
+  - S5g-F2【minor;G13 / G1 / G6;需要重現】`_ROOT` 不是 git toplevel 時,`rev-parse HEAD:<path>` 以 tree 根為基準、`hash-object <path>` 以 cwd 為基準;toplevel 已提交同內容 policy、子目錄放未提交副本 ⇒ 可得 `"true"`(內容等於某個已提交 blob;完整性成立,位置不成立)。
+  - S5g-F3【nit;G3】pytest 9 原生 `[tool.pytest]`(無 `ini_options`)⇒ `_committed_addopts` 回 None ⇒ 永遠 unknown;status 仍顯示「有效」;fail-closed,H 段殘餘清單未列。
+  - S5g-F4【nit;G12;需要重現】`.gitattributes` 的 clean filter 可讓 `pyproject.toml` / `tests/conftest.py` 工作樹 ≠ HEAD 但 `hash-object` 相等 ⇒ (xi) 誤判一致;policy 本身不受影響;BASE 已存在。
+  - S5g-F5【nit;G9】正二不成立時負一~負三仍印「成立 ✓」;負情境的判別力完全來自同次執行中正二成立的差分,程式沒有把這個耦合寫進輸出。
+
+### 53.2 裁決助手外部重現(隔離 Linux 環境;Python 3.11 + pytest 9.1.1;非獨立審查 finding;非本 repo 帳本證據)
+
+來源:Jeff 的 Station 5g-1 指令,照錄。
+
+- 事實層：建 git repo R，於 R 最上層提交合法 policy、pyproject.toml、tests/conftest.py；於 R/sub 放三份位元組相同、從未提交的副本（git ls-files 在 sub 下為空）。以 TARGET 的 redlight 讀 R/sub：evidence_policy_facts 的 head == worktree 成立、committed_addopts 取得、committed_blobs 兩檔 head == worktree、policy_state 顯示「有效」。
+- 端到端：以 tests/test_redlight.py 的既有 helper（_g_default_root、_g_coverage）在 TARGET 上模擬固定全套，root = parent/sub ⇒ file_coverage == "true"（原型測試失敗於 assert got != "true"）。S5g-F2 為真，且可取得 true authority。
+- 修法原型：redlight 新增「root 必須是 git 最上層」檢查（git -C <root> rev-parse --show-prefix 為空；不是 ⇒ evidence_policy_facts 與 committed_blobs 全記 None）。套用後上述原型轉為非 true；「root 為最上層、policy 正常提交」原型仍為 true；evidence 相關 5 檔共 279 支全過。
+
+### 53.3 裁決(照錄)
+
+1. Station 5g：獨立審查者判決 PASS（blocker 0、major 0、minor 2、nit 3）；Jeff acceptance = FAIL。理由：S5g-F2 違反〈四十六〉46.4 第 6 點與 I-3 —— canonical policy 必須是宿主 evidence root 對應路徑上、已提交的 HEAD blob；未提交 ⇒ unknown。現行 git rev-parse HEAD:<path> 以 git 最上層為基準、git hash-object <path> 以 root 為基準；root 不是 git 最上層時，被驗證的 HEAD 物件與實際使用的工作樹物件不是同一個邏輯路徑（identity 錯位），內容相同即可取得 true。
+2. 修法方向：evidence root 必須就是 git 最上層（git -C <root> rev-parse --show-prefix 為空；與「resolved root == git rev-parse --show-toplevel」等價，但不需比對路徑字串）；不是 ⇒ policy 事實與 (xi) 的 blob 事實皆記 None ⇒ unknown ⇒ 不得退紅。框架目前明確只支援「一個 host evidence root = 一個 Git 最上層」；monorepo 子專案作為 evidence root 屬另案設計，不在本票。
+3. Station 3h 紅燈至少兩支（皆經真實 conftest producer、真 git repo）：
+   H1 behavior-red：git 最上層已提交合法 policy、pyproject.toml、tests/conftest.py；root = <最上層>/sub，三份位元組相同的副本只在工作樹、從未提交 ⇒ file_coverage 不得為 "true"。
+   H2 regression-lock：root 本身就是 git 最上層，policy 正常提交、worktree = HEAD ⇒ 仍為 "true"。
+   巢狀獨立 repo 的情境不在本輪。
+4. S5g-F1、S5g-F3、S5g-F4、S5g-F5 列追蹤項（目前尚未 machine-enforced），不阻擋本輪；S5g-F1 列下一張票優先，須以機制處理 status 訊號（例：status 多一狀態，重用 verdict 的鎖步），不只改文字。
+5. 流程：5g-1 記錄 → Jeff 切 tickets → 3h 紅燈 → Jeff 切 implement → 4h 最小修正（含 Windows 全套、本機 clean-room、裁決助手 POSIX）→ 5h 獨立審查（只審 3h/4h 增量）→ Station 6。
+
+### 53.4 commit
+
+- S5g-1(本節與審查報告入庫)於下一次提交回填。
 
 ---
 
@@ -2697,3 +2747,12 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
   **root 路徑本身含 `\` 時,受影響的是固定全套本身**((vii)、(x) 判 unknown),不是只有 `-c` / override。
 - **追蹤項(2026-10-03 登記,〈四十五〉45.3 第 3 點)S5f-F3** —— `normalize_overrides` docstring 對 pytest 解析基準的敘述過度概括
   (`log_file` 以 cwd 解析);屬文件準確度,不改 authority 語意。
+- **追蹤項(2026-10-04 登記,〈五十三〉53.3 第 4 點;下一張票優先)S5g-F1(目前尚未 machine-enforced)** ——
+  `policy_state` 不查 addopts 鎖步;框架 pyproject 範本 + policy 範本原樣採用時 status 顯示「有效」,但每次固定全套都是 unknown,
+  紅燈永遠不退且無訊號。須以機制處理 status 訊號(例:status 多一狀態,重用 verdict 的鎖步),不只改文字。
+- **追蹤項(2026-10-04 登記,〈五十三〉53.3 第 4 點)S5g-F3(目前尚未 machine-enforced)** ——
+  pytest 9 原生 `[tool.pytest]`(無 `ini_options`)⇒ `_committed_addopts` 回 None ⇒ 永遠 unknown;status 仍顯示「有效」(fail-closed)。
+- **追蹤項(2026-10-04 登記,〈五十三〉53.3 第 4 點)S5g-F4(目前尚未 machine-enforced)** ——
+  `.gitattributes` 的 clean filter 可讓設定檔 / conftest 工作樹 ≠ HEAD 但 `hash-object` 相等 ⇒ (xi) 誤判一致;policy 本身不受影響;BASE 已存在。
+- **追蹤項(2026-10-04 登記,〈五十三〉53.3 第 4 點)S5g-F5(目前尚未 machine-enforced)** ——
+  verify_gates 在正二不成立時,負一~負三仍印「成立 ✓」;負情境的判別力來自同次執行中正二成立的差分,程式沒有把這個耦合寫進輸出。
