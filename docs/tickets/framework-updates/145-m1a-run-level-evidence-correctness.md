@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5i 獨立審查 FAIL（S5i-F1 major；4i 引入）；待 Station 3j 紅燈。
+**狀態**:動工 —— Station 3j 紅燈完成（J1 POSIX-only red 由裁決助手證明；J2 lock 綠）；待 Station 4j 實作。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -178,6 +178,9 @@
 >
 > - 狀態(舊,第五十六代):~~`動工 —— Station 5i 審查包已建立；待獨立審查。`~~
 >   —— 2026-10-05 Station 5i 獨立審查 FAIL(S5i-F1 major)後由第 3 行取代(見〈六十一〉)。
+>
+> - 狀態(舊,第五十七代):~~`動工 —— Station 5i 獨立審查 FAIL（S5i-F1 major；4i 引入）；待 Station 3j 紅燈。`~~
+>   —— 2026-10-05 Station 3j 紅燈全套驗證成立後由第 3 行取代(見〈六十二〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -569,15 +572,19 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3i — Red-light(補) | PASS / ACCEPTED（I1 / I2 behavior-red + I3 regression-lock；S3I2） |
 | Station 4i — Implementation(修正) | PASS / COMPLETED（Windows/local acceptance PASS；POSIX clean-room PASS） |
 | Station 5i — Review | FAIL（S5i-F1 major；F2/F3 nit） |
-| Station 3j — Red-light(補) | NOT STARTED |
+| Station 3j — Red-light(補) | 紅燈完成（J1 POSIX-only behavior-red + J2 regression-lock），待 Station 4j |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5i 獨立審查 FAIL（S5i-F1 major；4i 引入）；待 Station 3j 紅燈(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3j 紅燈完成（J1 POSIX-only red 由裁決助手證明；J2 lock 綠）；待 Station 4j 實作(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第四十八代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5i 獨立審查 FAIL（S5i-F1 major；4i 引入）；待 Station 3j 紅燈(與票頭第 3 行一致)。~~
+> 2026-10-05 Station 3j 紅燈全套驗證成立後隨第 3 行同步更新(見〈六十二〉)。
+> Station 3j 列舊值(F-036,保留不刪):~~`NOT STARTED`~~;2026-10-05 依〈六十二〉更新。
+>
 > **舊句(F-036,保留不刪,第四十七代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5i 審查包已建立；待獨立審查(與票頭第 3 行一致)。~~
 > 2026-10-05 Station 5i 獨立審查 FAIL(S5i-F1 major)後隨第 3 行同步更新(見〈六十一〉)。
 > Station 5i 列舊值(F-036,保留不刪):~~`審查包已建立，待審`~~;2026-10-05 依〈六十一〉更新。
@@ -3082,7 +3089,28 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
 
 ### 61.4 commit
 
-- S5i-1(本節與審查報告入庫)於下一次提交回填。
+- S5i-1(本節與審查報告入庫)`ff859253ec74ee778ffc868307a4d66d452e4040`。
+  (F-036:本行原文為「S5i-1(本節與審查報告入庫)於下一次提交回填。」;2026-10-05 於 S3J2 回填。)
+
+---
+
+## 六十二、Station 3j 紅燈證據
+
+- 合約:〈六十一〉61.3 裁決 2;Jeff 特別核准 J1 為 POSIX-only behavior-red,Windows 以 `skipif(sys.platform == "win32")` 跳過(Windows 檔名模型無法合法建立該輸入),紅燈由裁決助手 POSIX 驗收證明。
+- 報告:`docs/audits/2026-10-05-m1a-station3j-redlight.md`。
+- S3J1 `9990fd654275a0af25fa51ce374dea3e812ef54e`:`tests/test_redlight.py` 檔尾一個 hunk `@@ -2648,0 +2649,66 @@`,只有 + 行;新增 `class TestRootIsToplevelContract`,既有 helper 只呼叫、不修改;`sys` 於 class 內 import(未動檔頭)。commit 前只跑 py_compile。
+- 新增 2 支(J2 參數化 4 案;完整 nodeid):
+  - J1 behavior-red(POSIX-only;在 S5i-1 上於 POSIX 必須失敗):`tests/test_redlight.py::TestRootIsToplevelContract::test_j3_a_lf_prefixed_subdirectory_root_is_not_full_coverage`
+  - J2 regression-lock(在 S5i-1 上必須通過):`tests/test_redlight.py::TestRootIsToplevelContract::test_j3_root_is_toplevel_follows_the_stdout_contract[toplevel]` / `[subdir]` / `[gitdir]` / `[bare]`
+- Windows 全套(在 S3J1 上只跑一次;外來 3 檔已 stash,跑前跑後 `git status --porcelain` 皆無輸出):exit 0;
+  摘要行原文 `2103 passed, 4 skipped, 3 xfailed in 253.83s (0:04:13)`(collected 2110、0 failed)。
+  4 skipped = 既有 3 + J1(`SKIPPED [1] tests\test_redlight.py:2673: Windows 檔名不得含 LF;本案例由 POSIX 驗收證明(〈六十一〉61.3 裁決 2)`);J2 四案、I1–I3、H1–H2 在 passed 之內。
+  Windows 全套不是 J1 的紅燈證據。
+- 帳本只追加:兩本前段 sha256 = Step 0 基準(`9e909520…` / `440406f6…`);test-runs 3203 → 3250 行(+47)、test-sessions 31 → 32 行(+1)。
+  跑後全檔記為 B19:test-runs 868808 bytes、`9abb70439a21bc07c60c3f413f619b9851080dfe265ecd2faf2eeca5303ef7b1`;
+  test-sessions 15868084 bytes、`767488b978c7a8ef84da1da57733455f361dd30c44970bd3b78e79708d92159d`。
+- 裁決助手 Linux 預演(來源:Jeff 的 Station 3j 指令;隔離環境;非本 repo 帳本證據;**J1 修前 red 的證據**):以 S4I1 的 redlight.py,J1 原型失敗於 got == "true"、J2 原型四案全過;套用 4j 修法原型(stdout 正規化後 == b"true\n\n")後 J1 轉綠、J2 維持綠、I1–I3 / H1–H2 綠,evidence 相關 5 檔 283 支全過。
+- commit:S3J1 `9990fd654275a0af25fa51ce374dea3e812ef54e`;S3J2(本節與證據報告)於下一次提交回填。
 
 ---
 
