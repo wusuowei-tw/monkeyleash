@@ -726,7 +726,9 @@ def _git_bytes(root, args):
 def _root_is_toplevel(root):
     """root 是否就是 git 工作樹的最上層:須同時 `--is-inside-work-tree` 為 true 且 `--show-prefix` 為空
     (票 145 Station 4i,S5h-F1:gitdir / bare repository 內 `--show-prefix` 同樣為空,但不是工作樹)。
-    任一查詢失敗或條件不符 ⇒ False。"""
+    任一查詢失敗或條件不符 ⇒ False。
+    stdout 須完整等於 b"true\n\n"(\r\n 正規化後):--show-prefix 輸出未跳脫的原始路徑位元組,
+    拆行只看前兩行會把 LF 開頭的子目錄名誤判為空 prefix(票 145 Station 4j,S5i-F1)。"""
     import subprocess
     try:
         proc = subprocess.run(["git", "-C", os.fspath(root), "rev-parse",
@@ -736,10 +738,7 @@ def _root_is_toplevel(root):
         return False
     if proc.returncode != 0:
         return False
-    lines = proc.stdout.split(b"\n")
-    if len(lines) < 2:
-        return False
-    return lines[0].strip() == b"true" and lines[1].strip() == b""
+    return proc.stdout.replace(b"\r\n", b"\n") == b"true\n\n"
 
 
 def committed_blobs(root, paths=BLOB_FILES):
