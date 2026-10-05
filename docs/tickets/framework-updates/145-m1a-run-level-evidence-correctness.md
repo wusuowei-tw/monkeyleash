@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 4h PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5h 獨立審查。
+**狀態**:動工 —— Station 5h 審查包已建立；待獨立審查。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -157,6 +157,9 @@
 >
 > - 狀態(舊,第四十九代):~~`動工 —— Station 4h 本機固定全套與 clean-room 驗收通過；待 POSIX 外部驗收。`~~
 >   —— 2026-10-05 POSIX 外部 clean-room 驗收通過、Jeff 裁決 Station 4h = PASS / COMPLETED 後由第 3 行取代(見〈五十五〉55.3)。
+>
+> - 狀態(舊,第五十代):~~`動工 —— Station 4h PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5h 獨立審查。`~~
+>   —— 2026-10-05 Station 5h 審查包建立後由第 3 行取代(見〈五十六〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -544,14 +547,19 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5g — Review | 審查者 PASS；依 Jeff 裁決 FAIL（S5g-F2） |
 | Station 3h — Red-light(補) | PASS / ACCEPTED（H1 behavior-red + H2 regression-lock；S3H2） |
 | Station 4h — Implementation(修正) | PASS / COMPLETED（Windows/local acceptance PASS；POSIX clean-room PASS） |
+| Station 5h — Review | 審查包已建立，待審 |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4h PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5h 獨立審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5h 審查包已建立；待獨立審查(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第四十一代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4h PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5h 獨立審查(與票頭第 3 行一致)。~~
+> 2026-10-05 Station 5h 審查包建立後隨第 3 行同步更新(見〈五十六〉)。
+> Station 5h 列為新增列,沒有舊值(2026-10-05,S5h-0)。
+>
 > **舊句(F-036,保留不刪,第四十代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4h 本機固定全套與 clean-room 驗收通過；待 POSIX 外部驗收(與票頭第 3 行一致)。~~
 > 2026-10-05 POSIX 外部 clean-room 驗收通過、Station 4h = PASS / COMPLETED 後隨第 3 行同步更新(見〈五十五〉55.3)。
 > Station 3h 列舊值(F-036,保留不刪):~~`紅燈完成（H1 behavior-red + H2 regression-lock），待 Station 4h`~~;2026-10-05 依 Jeff 前裁(選 A)更新。
@@ -2798,7 +2806,8 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
   「本輪檢查的語意是 git rev-parse --show-prefix 為空，即 root 必須是 Git 認定的該 repository 最上層。monorepo 中、非 Git 最上層的普通子專案，本輪明確不支援作為 evidence root（H1 鎖住）。巢狀獨立 Git repo / submodule 若自身被 Git 視為最上層，--show-prefix 同樣為空、會被接受；其行為本輪未納入 acceptance，屬未證明範圍，不得宣稱已拒絕或已支援。」
 - commit:S4H1 `ea6aba6452668982fee56f7a2f0faf2cd720ca6d`;S4H3(本節與證據報告)`569b57d2dd048d3317d51970757f3b41a7f28891`。
   (F-036:本行原文為「S4H3(本節與證據報告)於下一次提交回填。」;2026-10-05 於 S4H4 回填。)
-  - S4H4(POSIX 驗收記錄與狀態升級)於下一次提交回填。
+  - S4H4(POSIX 驗收記錄與狀態升級)`2f496b9d0a71d88995b2338c6b4440d693c9a879`。
+    (F-036:本行原文為「S4H4(POSIX 驗收記錄與狀態升級)於下一次提交回填。」;2026-10-05 於 S5h-0 回填。)
 
 ### 55.3 POSIX 外部 clean-room 驗收
 
@@ -2817,6 +2826,33 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
     負三 工作樹有、HEAD 沒有 成立（file_coverage=unknown；evidence policy: 未提交）
 - 宿主固定全套（Linux）：collected 2102；2086 passed、13 failed、3 xfailed。13 支與 4g POSIX 驗收及 de36ebc 基準在同一沙盒的失敗集合完全相同（tests/test_gate.py::TestAuthorityLayerIsWired::test_this_repo_itself_is_wired 與 tests/test_known_items_regression.py 的 12 支）⇒ 沙盒環境因素（推測：clone 未設 hooksPath、缺本機私有資料），與 3h/4h 無關。evidence 相關 5 檔全過。
 - 結論：POSIX 外部 clean-room 驗收 PASS。
+
+---
+
+## 五十六、Station 5h 審查包
+
+- Jeff 裁決(2026-10-05):S4H4 = accepted;Station 4h = PASS / COMPLETED(S4H4 `2f496b9d0a71d88995b2338c6b4440d693c9a879`);Station 5h-0 = APPROVED TO BUILD REVIEW PACKAGE;
+  5h 獨立審查須在全新對話進行,5g 審查 session 不得擔任 5h 審查者。
+- 審查包:`docs/audits/2026-10-05-m1a-station5h-review-package.md`(只審 3h / 4h 增量)。
+  - 69609 bytes / 1085 行;SHA-256 `f37743fb9e358ba33b07cb2ebe08f33e42092fb0a1525032de0089d4d13093cb`;
+  - staged blob `d0260d087ccfac00376c4ac624c36b261eeb8fde`。
+- 身分(9 個完整 SHA):
+
+| 代號 | 完整 SHA |
+|---|---|
+| BASE_G(5g 審查 HEAD;S4G5) | `b5db3734f6795d8a371e4f58b172e0a8ffb066eb` |
+| TARGET_G(5g 審過的最後程式 commit;S4G1C) | `8e7775526e462d984abb0992ed74c1e1aa3648dd` |
+| S5g-0 | `5e096acb899b3370f16018199627784af71b788e` |
+| S5g-1 | `3a9200c03bb8493ab5a789d4c4157a7b38392e79` |
+| S3H1(H1/H2 紅燈) | `7621e3ce8604ab72ab2f3fb3257cb1181b8a126e` |
+| S3H2 | `66140896d03f32c4df73be01b2aaeb48353e0510` |
+| TARGET(S4H1;本輪最後程式 commit) | `ea6aba6452668982fee56f7a2f0faf2cd720ca6d` |
+| S4H3 | `569b57d2dd048d3317d51970757f3b41a7f28891` |
+| REVIEW_HEAD(S4H4) | `2f496b9d0a71d88995b2338c6b4440d693c9a879` |
+
+- CODE_FILES(TARGET_G..TARGET 的非 docs 檔):`.claude/hooks/redlight.py`、`tests/test_redlight.py`。
+- 審查包 `git diff --cached --check` 的 4 行行尾空白全部來自 E.1 / E.3 原樣 diff 的單空格 context 行(包內第 323、324、495、496 行),未修改。
+- S5h-0(審查包 commit):記錄 5h 結果時回填。
 
 ---
 
