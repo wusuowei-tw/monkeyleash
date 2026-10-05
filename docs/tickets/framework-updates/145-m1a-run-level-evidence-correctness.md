@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 3h 紅燈完成；待 Station 4h 實作。
+**狀態**:動工 —— Station 4h 本機固定全套與 clean-room 驗收通過；待 POSIX 外部驗收。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -151,6 +151,9 @@
 >
 > - 狀態(舊,第四十七代):~~`動工 —— Station 5g 獨立審查（審查者 PASS；依 Jeff 裁決 FAIL：S5g-F2）；待 Station 3h 紅燈。`~~
 >   —— 2026-10-04 Station 3h 紅燈全套驗證成立後由第 3 行取代(見〈五十四〉)。
+>
+> - 狀態(舊,第四十八代):~~`動工 —— Station 3h 紅燈完成；待 Station 4h 實作。`~~
+>   —— 2026-10-05 Station 4h 本機固定全套與 clean-room 驗收通過後由第 3 行取代(見〈五十五〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -537,14 +540,19 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 4g — Implementation(修正) | PASS / COMPLETED（Windows/local acceptance PASS；POSIX clean-room PASS） |
 | Station 5g — Review | 審查者 PASS；依 Jeff 裁決 FAIL（S5g-F2） |
 | Station 3h — Red-light(補) | 紅燈完成（H1 behavior-red + H2 regression-lock），待 Station 4h |
+| Station 4h — Implementation(修正) | Windows/local acceptance PASS；POSIX clean-room pending |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3h 紅燈完成；待 Station 4h 實作(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4h 本機固定全套與 clean-room 驗收通過；待 POSIX 外部驗收(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第三十九代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3h 紅燈完成；待 Station 4h 實作(與票頭第 3 行一致)。~~
+> 2026-10-05 Station 4h 本機固定全套與 clean-room 驗收通過後隨第 3 行同步更新(見〈五十五〉)。
+> Station 4h 列為新增列,沒有舊值(2026-10-05,S4H3)。
+>
 > **舊句(F-036,保留不刪,第三十八代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5g 獨立審查（審查者 PASS；依 Jeff 裁決 FAIL：S5g-F2）；待 Station 3h 紅燈(與票頭第 3 行一致)。~~
 > 2026-10-04 Station 3h 紅燈全套驗證成立後隨第 3 行同步更新(見〈五十四〉)。
 > Station 3h 列舊值(F-036,保留不刪):~~`NOT STARTED`~~;2026-10-04 依〈五十四〉更新。
@@ -2750,7 +2758,41 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
 - 程序紀錄(Jeff 程序註記,照錄要點):S5g-1 由 5g 審查 session 執行(審查報告在 S5g-1 前已完成,RR = `8399be264fafa82d62bb3294762d17835b4429850aca68c57c545883adfd0a49`),
   不影響已凍結的 5g 審查結果,但該 session 不得擔任 5h 審查者;S5g-1 回報檔名的時間戳與實際提交時間不符,之後 `.dev/reports/` 檔名一律用實際 UTC 時間。
   本輪 3h 亦由同一 session 執行。
-- commit:S3H1 `7621e3ce8604ab72ab2f3fb3257cb1181b8a126e`;S3H2(本節與證據報告)於下一次提交回填。
+- commit:S3H1 `7621e3ce8604ab72ab2f3fb3257cb1181b8a126e`;S3H2(本節與證據報告)`66140896d03f32c4df73be01b2aaeb48353e0510`。
+  (F-036:本行原文為「S3H2(本節與證據報告)於下一次提交回填。」;2026-10-05 於 S4H3 回填。)
+
+---
+
+## 五十五、Station 4h 修正
+
+### 55.1 裁決(照錄要點;Jeff,2026-10-05)
+
+- Station 3h = PASS / ACCEPTED;Station 4h plan = APPROVED;H1 / H2 不准修改;最小修正只動 redlight.py。
+- 三段式:S4H1 實作 → S4H2 本機驗收 → S4H3 docs-only(只能宣稱本機驗收通過;待 POSIX 外部驗收)。POSIX 由裁決助手執行,通過後另以 S4H4 升級。
+
+### 55.2 證據
+
+- 報告:`docs/audits/2026-10-05-m1a-station4h-fix.md`。
+- S4H1 `ea6aba6452668982fee56f7a2f0faf2cd720ca6d`:只改 `.claude/hooks/redlight.py`(+25 行,0 刪除)。
+  - `:726` 新增 `_root_is_toplevel(root)`(`git -C <root> rev-parse --show-prefix` 為空才 True;失敗 ⇒ False);
+  - `:752` / `:755` `committed_blobs`:不是最上層 ⇒ 每個路徑記 `{"worktree": None, "head": None}`;
+  - `:868` `evidence_policy_facts`:不是最上層 ⇒ 全 None;
+  - 兩個函式 docstring 補 I-3 位置不變式。
+  - 未改 consumer、`policy_state` 判定字串、conftest、status / install / verify_gates、任何測試;`content_hash` 未動。
+  - 兩刀,每刀後 status.py 探針;皆無「redlight.py 無 run 事實讀取」。
+- S4H2 本機固定全套(S4H1 上只跑一次;外來 3 檔已 stash):exit 0;`2096 passed, 3 skipped, 3 xfailed in 380.00s (0:06:19)`(collected 2102、0 failed)。H1 由紅轉綠,H2 維持綠。
+- 帳本只追加:前段 sha256 = B15;test-runs 3062 → 3109(+47)、test-sessions 28 → 29(+1)。
+- status:`evidence policy: 有效`;`tests red under ticket 145: (無)`;run 事實未知 0;`tests/test_redlight.py` 在 green。
+- 淨室(verify_gates;同一次執行):R1–R9 各擋下一次、權威層偵測三項成立、淨室框架測試 `1946 passed, 7 skipped, 3 xfailed`;兩正三負全部成立,正二 `file_coverage=true`、`green=tests/test_evidence_probe.py`。
+  本 repo 兩本帳本前後 bytes 與 sha256 都等於 V0(test-runs 834066 / `5f0ffa92…`;test-sessions 13647838 / `74757aa6…`)。
+- 裁決助手 Linux 預演(來源:Jeff 的 Station 4h 指令;隔離環境;非本 repo 帳本證據):H1 紅轉綠、H2 維持綠;evidence 相關 5 檔共 279 支全過;verify_gates 兩正三負全部成立、正二 file_coverage=true。
+- 殘餘與未證明(目前尚未 machine-enforced):沿用 4g 證據報告第 8 節 + S5g-F1 / F3 / F4 / F5 追蹤項;本輪新增(照錄):
+  「本輪檢查的語意是 git rev-parse --show-prefix 為空，即 root 必須是 Git 認定的該 repository 最上層。monorepo 中、非 Git 最上層的普通子專案，本輪明確不支援作為 evidence root（H1 鎖住）。巢狀獨立 Git repo / submodule 若自身被 Git 視為最上層，--show-prefix 同樣為空、會被接受；其行為本輪未納入 acceptance，屬未證明範圍，不得宣稱已拒絕或已支援。」
+- commit:S4H1 `ea6aba6452668982fee56f7a2f0faf2cd720ca6d`;S4H3(本節與證據報告)於下一次提交回填。
+
+### 55.3 POSIX 外部 clean-room 驗收
+
+待執行(裁決助手)。
 
 ---
 
