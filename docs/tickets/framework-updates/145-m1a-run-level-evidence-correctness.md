@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5g 獨立審查（審查者 PASS；依 Jeff 裁決 FAIL：S5g-F2）；待 Station 3h 紅燈。
+**狀態**:動工 —— Station 3h 紅燈完成；待 Station 4h 實作。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -148,6 +148,9 @@
 >
 > - 狀態(舊,第四十六代):~~`動工 —— Station 5g 審查包已建立；待獨立審查。`~~
 >   —— 2026-10-04 Station 5g 獨立審查完成(審查者 PASS)、Jeff 裁決 FAIL(S5g-F2)後由第 3 行取代(見〈五十三〉)。
+>
+> - 狀態(舊,第四十七代):~~`動工 —— Station 5g 獨立審查（審查者 PASS；依 Jeff 裁決 FAIL：S5g-F2）；待 Station 3h 紅燈。`~~
+>   —— 2026-10-04 Station 3h 紅燈全套驗證成立後由第 3 行取代(見〈五十四〉)。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -533,15 +536,19 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3g-1b — Red-light(補) | PASS / ACCEPTED(9 behavior-red;S3G1B-2) |
 | Station 4g — Implementation(修正) | PASS / COMPLETED（Windows/local acceptance PASS；POSIX clean-room PASS） |
 | Station 5g — Review | 審查者 PASS；依 Jeff 裁決 FAIL（S5g-F2） |
-| Station 3h — Red-light(補) | NOT STARTED |
+| Station 3h — Red-light(補) | 紅燈完成（H1 behavior-red + H2 regression-lock），待 Station 4h |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5g 獨立審查（審查者 PASS；依 Jeff 裁決 FAIL：S5g-F2）；待 Station 3h 紅燈(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3h 紅燈完成；待 Station 4h 實作(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第三十八代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5g 獨立審查（審查者 PASS；依 Jeff 裁決 FAIL：S5g-F2）；待 Station 3h 紅燈(與票頭第 3 行一致)。~~
+> 2026-10-04 Station 3h 紅燈全套驗證成立後隨第 3 行同步更新(見〈五十四〉)。
+> Station 3h 列舊值(F-036,保留不刪):~~`NOT STARTED`~~;2026-10-04 依〈五十四〉更新。
+>
 > **舊句(F-036,保留不刪,第三十七代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5g 審查包已建立；待獨立審查(與票頭第 3 行一致)。~~
 > 2026-10-04 Station 5g 獨立審查完成、Jeff 裁決 FAIL(S5g-F2)後隨第 3 行同步更新(見〈五十三〉)。
 > Station 5g 列舊值(F-036,保留不刪):~~`審查包已建立，待審`~~;2026-10-04 依〈五十三〉更新。
@@ -2721,7 +2728,29 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
 
 ### 53.4 commit
 
-- S5g-1(本節與審查報告入庫)於下一次提交回填。
+- S5g-1(本節與審查報告入庫)`3a9200c03bb8493ab5a789d4c4157a7b38392e79`。
+  (F-036:本行原文為「S5g-1(本節與審查報告入庫)於下一次提交回填。」;2026-10-04 於 S3H2 回填。)
+
+---
+
+## 五十四、Station 3h 紅燈證據
+
+- Jeff 裁決(2026-10-04):S5g-1 = accepted;Station 3h plan = APPROVED。
+- 報告:`docs/audits/2026-10-04-m1a-station3h-redlight.md`。
+- S3H1 `7621e3ce8604ab72ab2f3fb3257cb1181b8a126e`:`tests/test_redlight.py` 檔尾一個 hunk `@@ -2534,0 +2535,42 @@`,只有 + 行;新增 `class TestEvidenceRootIsGitToplevel`,既有 helper 只呼叫、不修改。commit 前只跑 py_compile。
+- 新增 2 支(完整 nodeid):
+  - H1 behavior-red(在 S5g-1 上必須失敗):`tests/test_redlight.py::TestEvidenceRootIsGitToplevel::test_h3_a_parent_committed_policy_does_not_authorize_a_subdirectory_root`
+  - H2 regression-lock(在 S5g-1 上必須通過):`tests/test_redlight.py::TestEvidenceRootIsGitToplevel::test_h3_a_git_toplevel_root_with_a_committed_policy_is_full_coverage`
+- 紅燈全套(在 S3H1 上只跑一次;外來 3 檔已 stash,跑前跑後 `git status --porcelain` 皆無輸出):exit 1;
+  摘要行原文 `1 failed, 2095 passed, 3 skipped, 3 xfailed in 409.36s (0:06:49)`(collected 2102)。
+  唯一的 FAILED 為 H1,失敗行 `tests\test_redlight.py:2567: AssertionError`(`assert 'true' != 'true'`);H2 在 2095 passed 之內。
+- 帳本只追加:兩本前段 sha256 = Step 0 基準(`9fa98cc7…` / `27cccd2c…`);test-runs 3015 → 3062 行(+47)、test-sessions 27 → 28 行(+1)。
+  跑後全檔記為 B15:test-runs 822547 bytes、`49fc32bc88ad7eb93840e070154953980fa40122388c2fce49645b411a254789`;
+  test-sessions 12909484 bytes、`0539883a5548a9032ed0877aab4614bdde6fd748103a3db2524de99e9c589674`。
+- 程序紀錄(Jeff 程序註記,照錄要點):S5g-1 由 5g 審查 session 執行(審查報告在 S5g-1 前已完成,RR = `8399be264fafa82d62bb3294762d17835b4429850aca68c57c545883adfd0a49`),
+  不影響已凍結的 5g 審查結果,但該 session 不得擔任 5h 審查者;S5g-1 回報檔名的時間戳與實際提交時間不符,之後 `.dev/reports/` 檔名一律用實際 UTC 時間。
+  本輪 3h 亦由同一 session 執行。
+- commit:S3H1 `7621e3ce8604ab72ab2f3fb3257cb1181b8a126e`;S3H2(本節與證據報告)於下一次提交回填。
 
 ---
 
