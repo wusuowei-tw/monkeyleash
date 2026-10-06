@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5k 獨立審查 PASS（low 1：S5k-F1 外部補充分析已提供、待核對；nit 2：S5k-F2 文件補準、S5k-F3 追蹤項）；待 Station 6 第三次 push／CI。
+**狀態**:完成 —— 2026-10-06 Station 6（第三次）push（遠端 master = S5k-1）+ CI 綠（run 37470122749）；收票。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -208,6 +208,9 @@
 >
 > - 狀態(舊,第六十六代):~~`動工 —— Station 4k PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room，真裝 anyio 4.15.1）；待 Station 5k 獨立審查。`~~
 >   —— 2026-10-06 Station 5k 獨立審查 PASS、Jeff 裁決後由第 3 行取代（見〈六十八〉）。
+>
+> - 狀態(舊,第六十七代):~~`動工 —— Station 5k 獨立審查 PASS（low 1：S5k-F1 外部補充分析已提供、待核對；nit 2：S5k-F2 文件補準、S5k-F3 追蹤項）；待 Station 6 第三次 push／CI。`~~
+>   —— 2026-10-06 Station 6 第三次 push 與 CI 綠後由第 3 行取代（見〈六十九〉）。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -606,14 +609,19 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3k — Red-light(補) | 紅燈完成（K-a constant-lock + K-b / K-e[4.15.0] / K-e[4.15.1] behavior-red + K-c / K-d negative-lock 綠；S3K1 b0849792ff3e69df70cdd8a5d77d26af78d79021），待 Station 4k |
 | Station 4k — Implementation(修正) | PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room，真裝 anyio 4.15.1；S4K1 492b5de438ef9a306b112ac1fbc402729e219879；S4K1B c1eebd97ed197d7f653fbc1c680a0feca1837c6a；待 5k 審查） |
 | Station 5k — Review（增量） | PASS（low 1 / nit 2 / info 1；S5k-0 264e629c1899a04760f212362940f2e4a3526007；報告 sha256 fe336c03579c151b47ce76c6b18300d2a93c9487fb2dbea2e7c7d37bab45553c；待 Station 6） |
+| Station 6 — Acceptance／CI（第三次） | PASS（push 9 commits；遠端 master 84f6f9a5a8d66a5d28db40f7fa496616143ac5cd；CI run 37470122749 succeeded）；收票 |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5k 獨立審查 PASS（low 1：S5k-F1 外部補充分析已提供、待核對；nit 2：S5k-F2 文件補準、S5k-F3 追蹤項）；待 Station 6 第三次 push／CI(與票頭第 3 行一致)。
+票 145 lifecycle = 完成（與票頭第 3 行一致）
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第五十八代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5k 獨立審查 PASS（low 1：S5k-F1 外部補充分析已提供、待核對；nit 2：S5k-F2 文件補準、S5k-F3 追蹤項）；待 Station 6 第三次 push／CI(與票頭第 3 行一致)。~~
+> 2026-10-06 Station 6 第三次 push 與 CI 綠、收票後改為上方句(見〈六十九〉)。
+> Station 6(第三次)列:2026-10-06 依〈六十九〉新增(無舊值;第一次、第二次 Station 6 列保持原值不動)。
+>
 > **舊句(F-036,保留不刪,第五十七代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4k PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room，真裝 anyio 4.15.1）；待 Station 5k 獨立審查(與票頭第 3 行一致)。~~
 > 2026-10-06 Station 5k 獨立審查 PASS、Jeff 裁決後隨第 3 行同步更新(見〈六十八〉)。
 > Station 5k 列:2026-10-06 依〈六十八〉新增(無舊值)。
@@ -3631,7 +3639,124 @@ $ sha256sum <session scratchpad>/m1a-s5k-package.md
 
 ### 68.5 commit
 
-- S5k-1(本節、審查報告入庫與 S5k-F2 補準)於下一次提交回填。
+- S5k-1(本節、審查報告入庫與 S5k-F2 補準)`84f6f9a5a8d66a5d28db40f7fa496616143ac5cd`。
+  (F-036:原文「~~S5k-1(本節、審查報告入庫與 S5k-F2 補準)於下一次提交回填。~~」;2026-10-06 於 S6c 回填,理由:S5k-1 SHA 於提交後才確定。)
+
+---
+
+## 六十九、Station 6（第三次）push 紀錄、CI 綠與收票（2026-10-06，Jeff）
+
+### 69.1 push
+
+- 2026-10-06(美東)Jeff 說「推」;`git push origin master` 一次(`774e735..84f6f9a`)、未被攔截(無 pre-push hook 輸出,僅能確認未被擋,不宣稱 hook 已執行)。
+- `git ls-remote origin refs/heads/master` = `84f6f9a5a8d66a5d28db40f7fa496616143ac5cd`。
+- 證據報告:`.dev/reports/2026-10-06T132139Z-ticket145-station6b3-push.md`(未入庫)。
+
+### 69.2 CI(外部證據;來源:裁決助手讀取公開 checks 頁,Jeff 亦親自於瀏覽器確認綠燈;本機無 `gh`)
+
+- workflow `tests` / job `pytest`。
+- run:https://github.com/wusuowei-tw/monkeyleash/actions/runs/37470122749
+- job:https://github.com/wusuowei-tw/monkeyleash/actions/runs/37470122749/job/112291127594
+- headSha `84f6f9a5a8d66a5d28db40f7fa496616143ac5cd`;結果 **succeeded**(1m 42s)。
+- 步驟:Set up job ✓ / checkout ✓ / setup-python ✓ / 安裝相依 ✓ / 接上權威層 ✓ / 跑測試 ✓ / 收集清單（票 85）✓ / 淨室驗證（每條規則各擋一次 + 安裝後形態）✓ / Complete job ✓。
+- Annotation:1 notice(ubuntu-latest 將於 2026-10-19 遷移 Ubuntu 26 的公告),0 error。
+- 本次 commit 僅此一個 workflow。
+- 完整 log 需登入,未取得;**CI 實際安裝版本仍未直接核驗**(與 65.3 口徑一致)。同一步驟由紅轉綠,與 4k 的外部重現推定一致。
+
+### 69.3 Jeff 裁決(2026-10-06)
+
+- Station 6(第三次)= PASS;票 145 = 完成。
+- M1-a 四輪修法(4g evidence policy、4h / 4i / 4j root 身分、4k 能力邊界)皆經獨立審查與 CI;殘餘與追蹤項見「相關」區(全部「目前尚未 machine-enforced」)。
+- S5k-F1 維持「外部補充分析已提供、待核對」,不因 CI 綠改為已關閉。
+
+### 69.4 收票清單
+
+追蹤項總表(照抄「相關」區現有條目的編號與一句話,不新增內容):
+
+| 編號 | 一句話(出自「相關」區) |
+|---|---|
+| S5g-F1 | `policy_state` 不查 addopts 鎖步;框架 pyproject 範本 + policy 範本原樣採用時 status 顯示「有效」,但每次固定全套都是 unknown |
+| S5g-F3 | pytest 9 原生 `[tool.pytest]`(無 `ini_options`)⇒ `_committed_addopts` 回 None ⇒ 永遠 unknown;status 仍顯示「有效」(fail-closed) |
+| S5g-F4 | `.gitattributes` 的 clean filter 可讓設定檔 / conftest 工作樹 ≠ HEAD 但 `hash-object` 相等 ⇒ (xi) 誤判一致 |
+| S5g-F5 | verify_gates 在正二不成立時,負一~負三仍印「成立 ✓」 |
+| S5h-F4 | 非最上層 root 沒有專屬 status 狀態字 |
+| S5i-F3(b)(= S5j-F2) | J2[bare] 在 `safe.bareRepository=explicit` 下空洞通過 |
+| S5j 第 6 節 1 | 舊版 git 的最上層輸出:2.43.0 以前是否一定輸出 `true\n\n`,本審查沒有版本證據 |
+| S5j 第 6 節 2 | GIT_DIR / GIT_WORK_TREE / core.worktree 重新對應佈局:會被接受,依判準不構成 F2 |
+| S5j 第 6 節 3 | linked worktree / submodule / gitfile 佈局:接受,沒有 acceptance 測試 |
+| S5j 第 6 節 4 | S5i-F3(b) 殘留(S5j-F2);同上方 S5i-F3(b) 列 |
+| S5j 第 6 節 5 | TOCTOU:`_root_is_toplevel` 與後續 `hash-object` / `rev-parse HEAD:` 之間的佈局競態 |
+| S5j 第 6 節 6 | 4i 報告 §7.3 指向(S5j-F1):在 4i 報告該點加一行「已由 4j 報告 §7 第 4 點取代」 |
+| S5j 第 6 節 7 | 流程教訓「R3 與 POSIX-only 紅燈」—— 5j 確認那條路徑沒有繞過 R3,不另加 |
+| R3 與 POSIX-only 紅燈 | R3 只認本機帳本紅燈;POSIX-only 紅燈不能單獨作為實作的 R3 前提 |
+| 相依漂移 | 候選機制:CI 在淨室前印出實際安裝版本並與 `KNOWN_DISTS` 比對、或 pip constraints 檔 |
+| S5k-F1 | 〈六十八〉68.2 的 anyio 4.15.0 / 4.15.1 差異與判讀為外部來源、非本 repo 帳本證據,標「已提供、待核對」 |
+| S5k-F3 | `.claude/hooks/redlight.py:487` 的註解寫於 S4K1,早於 POSIX 驗收;下一張程式票修正 |
+| S5k-F4 | K-c 修前修後同綠、判定路徑不同;policy 層在本輪沒有先紅後綠的示範 |
+
+(「相關」區另有票 139 / 137 / 93、待建追蹤票與〈四十五〉45.3 登記的 logging 鎖步、一般化研究、S5f-F2、S5f-F3,以及 S5h-F3 等條目,不在本次指定的總表範圍內,原文未動。)
+
+下一張程式票候選(不立案,只登記):
+
+- (a) 相依漂移機制化(CI 淨室前印出實際安裝版本並與 KNOWN_DISTS 比對、或 constraints 檔);
+- (b) S5k-F3 註解修正;
+- (c) S5i-F3(b) bare 案例固定 `safe.bareRepository=all`。
+
+票 146 / 147 維持暫停;待本收票 commit push 完成、對應 CI 通過並經 Jeff 裁決後解除。
+
+### 69.5 `.scratch/` 留物清單(探針當票清;只列不刪)
+
+來源:`ls -R .scratch > <session scratchpad>/m1a-s6c-scratch.txt`(S6c 寫 commit 訊息之前)。下列 `m1a-*` 目錄供 Jeff 以檔案總管自行刪除。
+
+| 路徑 | 用途 |
+|---|---|
+| `.scratch/m1a-s3-baseline/` | Station 3 baseline 的 commit 訊息(`commit-msg.txt`) |
+| `.scratch/m1a-s3-plan/` | Station 3 紅燈規劃的 commit 訊息(`commit-msg.txt`) |
+| `.scratch/m1a-s3-prep/` | Station 3 前置的 commit 訊息(`commit-msg.txt`) |
+| `.scratch/m1a-s3-red/` | Station 3 紅燈三刀的 commit 訊息(`cut1`–`cut3-msg.txt`) |
+| `.scratch/m1a-s3b/` | Station 3b 紅燈三刀的 commit 訊息(`cut1`–`cut3-msg.txt`) |
+| `.scratch/m1a-s3b-add/` | Station 3b 補件的 commit 訊息(`a1`–`a3-msg.txt`) |
+| `.scratch/m1a-s3c/` | Station 3c 的 commit 訊息(`s3c-0` / `-1` / `-1b` / `-2-msg.txt`) |
+| `.scratch/m1a-s3d/` | Station 3d 的 commit 訊息(`s3d-0`–`-2-msg.txt`) |
+| `.scratch/m1a-s3e/` | Station 3e 的 commit 訊息(`s3e-0`–`-2-msg.txt`) |
+| `.scratch/m1a-s3f/` | Station 3f 的 commit 訊息(`s3f-0`–`-2-msg.txt`) |
+| `.scratch/m1a-s3g/` | Station 3g / 3g-1b 的 commit 訊息(`s3g-0` / `-1` / `-1b` / `-1b-2` / `-2-msg.txt`) |
+| `.scratch/m1a-s3h/` | Station 3h 的 commit 訊息(`s3h-1` / `-2-msg.txt`) |
+| `.scratch/m1a-s3i/` | Station 3i 的 commit 訊息(`s3i-1` / `-2-msg.txt`) |
+| `.scratch/m1a-s3j/` | Station 3j / 3j-1b 的 commit 訊息(`s3j-1` / `-1b` / `-1b-2` / `-2-msg.txt`) |
+| `.scratch/m1a-s3k/` | Station 3k 的 commit 訊息(`s3k-1` / `-2-msg.txt`) |
+| `.scratch/m1a-s4/` | Station 4 的 commit 訊息(`s4-1` / `-2-msg.txt`) |
+| `.scratch/m1a-s4b/` | Station 4b 的 commit 訊息(`s4b-1` / `-2-msg.txt`) |
+| `.scratch/m1a-s4c/` | Station 4c 的 commit 訊息(`s4c-1` / `-2-msg.txt`) |
+| `.scratch/m1a-s4d/` | Station 4d 的 commit 訊息(`s4d-1` / `-2-msg.txt`) |
+| `.scratch/m1a-s4e/` | Station 4e 的 commit 訊息(`s4e-1` / `-2-msg.txt`) |
+| `.scratch/m1a-s4f/` | Station 4f 的 commit 訊息(`s4f-1`–`-3-msg.txt`) |
+| `.scratch/m1a-s4g/` | Station 4g 的 commit 訊息(`s4g-1` / `-1b` / `-1c` / `-3` / `-4` / `-5-msg.txt`) |
+| `.scratch/m1a-s4h/` | Station 4h 的 commit 訊息(`s4h-1` / `-3` / `-4-msg.txt`) |
+| `.scratch/m1a-s4i/` | Station 4i 的 commit 訊息(`s4i-1` / `-3` / `-4-msg.txt`) |
+| `.scratch/m1a-s4j/` | Station 4j 的 commit 訊息(`s4j-1` / `-3` / `-4-msg.txt`) |
+| `.scratch/m1a-s4k/` | Station 4k 的 commit 訊息(`s4k-1` / `-1b` / `-3` / `-4-msg.txt`) |
+| `.scratch/m1a-s5-review/` | Station 5 審查包與審查報告原稿(`M1a-Station5-review-package.md`、`M1a-Station5-independent-review-FAIL.md`) |
+| `.scratch/m1a-s5b/` | Station 5b 審查者原檔(`review-report.md`)與 commit 訊息 |
+| `.scratch/m1a-s5c/` | Station 5c 審查者原檔與 commit 訊息 |
+| `.scratch/m1a-s5d/` | Station 5d 審查者原檔與 commit 訊息 |
+| `.scratch/m1a-s5e/` | Station 5e 審查者原檔、建包比對暫存(`cmp-C3-header.txt`、`cmp-G.txt`、`cmp-H.txt`)與 commit 訊息 |
+| `.scratch/m1a-s5f/` | Station 5f 審查者原檔、建包比對暫存(`cmp-G.txt`、`cmp-H.txt`、`cmp-src-header.txt`)與 commit 訊息 |
+| `.scratch/m1a-s5g/` | Station 5g 審查者原檔與 commit 訊息 |
+| `.scratch/m1a-s5h/` | Station 5h 審查者原檔與 commit 訊息 |
+| `.scratch/m1a-s5i/` | Station 5i 審查者原檔與 commit 訊息 |
+| `.scratch/m1a-s5j/` | Station 5j 審查者原檔與 commit 訊息 |
+| `.scratch/m1a-s5k/` | Station 5k 審查者原檔與 commit 訊息 |
+| `.scratch/m1a-s6/` | Station 6 的 commit 訊息(`s6-1` / `s6-2-msg.txt`;S6c 另新增 `s6c-msg.txt`) |
+| `.scratch/m1a-transition/` | Station 3→4 轉場的 commit 訊息(`t1` / `t2-msg.txt`) |
+
+- 用途欄依目錄名與檔名判讀,本站沒有開啟檔案內容。
+- 5i / 5j / 5k 的 `review-report.md` 入庫時都以 `cmp` 與 `docs/audits/` 的入庫版逐位元組核對(〈六十一〉61.1、〈六十四〉64.1、〈六十八〉68.1)。更早各站的入庫核對,以各站紀錄為準,本站未重驗。
+- `.scratch/arch-9-13-raw.md.txt` 不屬 M1-a,未列入。
+
+### 69.6 commit
+
+- S6c(本節與收票)於下一次提交回填。
 
 ---
 
