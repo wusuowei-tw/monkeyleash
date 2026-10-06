@@ -3686,73 +3686,9 @@ def _should_renotice():
 def skill_mirror_violations(canon_dir, mirror_dirs):
     """R4 —— **一條規則,依當下佈局分支**。
 
-    不寫成兩個檢查並排:並排會讓其中一個分支在當下佈局永遠不跑,
-    那正是這條規則改寫前的處境(佈局改成 symlink 後,內容比對永遠不可能觸發,
-    全輪唯一一次觸發還是人工製造的負向測試)。
-    單一規則每次執行都必須回答「現在是哪種佈局」,沒有假裝在守的死路徑。
-
-      鏡像是 symlink   -> 驗完整性(斷裂、指向不存在、指向正典之外)
-      鏡像是實體目錄   -> 驗內容一致
+    本體已下沉 redlight.py(票 146 方向 B)。
     """
-    import hashlib
-    if not os.path.isdir(canon_dir):
-        return []
-    canon_real = os.path.realpath(canon_dir)
-
-    # 迭代來源必須是**正典與鏡像的聯集**,不能只用正典 ——
-    # 只走正典的話,正典項目消失時鏡像那個斷掉的 symlink 永遠不會被走訪,
-    # 而那正是「斷裂」最典型的成因。迭代來源本身就會決定涵蓋範圍(維度 4 的同一個形狀)。
-    names = set(os.listdir(canon_dir))
-    for mirror in mirror_dirs:
-        if os.path.isdir(mirror):
-            names.update(os.listdir(mirror))
-
-    out = []
-    for name in sorted(names):
-        src = os.path.join(canon_dir, name, "SKILL.md")
-        for mirror in mirror_dirs:
-            # 鏡像整個沒建起來不是 drift,是還沒裝 —— 那由安裝流程負責,不是 R4。
-            if not os.path.isdir(mirror):
-                continue
-            entry = os.path.join(mirror, name)
-            rel_entry = rel(entry)
-            if not os.path.lexists(entry):
-                # **少了東西是 R4 最典型的破法**,原本卻被靜默跳過:
-                # 舊碼只驗得出「內容不同」,而硬連結/symlink 佈局下內容不可能不同,
-                # 兩層疊起來 R4 在實務上是空的(票 02 的機器列舉實測抓到)。
-                out.append("[R4] 鏡像缺少 %s —— 正典有而鏡像沒有。\n"
-                           "     重建:bash scripts/skills-update.sh" % rel_entry)
-                continue
-
-            if os.path.islink(entry):
-                # 分支一:symlink 佈局 —— 內容由構造保證,要守的是連結本身
-                target = os.path.realpath(entry)
-                if not os.path.exists(entry):
-                    out.append("[R4] symlink 斷裂:%s 指向已不存在的目標。\n"
-                               "     重建:npx skills experimental_sync" % rel_entry)
-                elif os.path.commonpath([target, canon_real]) != canon_real:
-                    out.append("[R4] symlink 指向正典之外:%s -> %s。\n"
-                               "     正典是 %s;內容一樣不代表來源正確,"
-                               "上游更新不會傳播到別處的副本。" % (rel_entry, target, rel(canon_dir)))
-                continue
-
-            # 分支二:實體副本佈局 —— 兩份各自獨立,會 drift,要守的是內容
-            m = os.path.join(entry, "SKILL.md")
-            if not os.path.exists(src):
-                out.append("[R4] 正典缺少 %s/SKILL.md,鏡像 %s 卻還留著。\n"
-                           "     正典被刪而鏡像留著舊的,一樣是不一致。"
-                           % (rel(os.path.join(canon_dir, name)), rel_entry))
-                continue
-            if not os.path.exists(m):
-                out.append("[R4] 鏡像缺少 %s/SKILL.md —— 正典有而鏡像沒有。\n"
-                           "     重建:bash scripts/skills-update.sh" % rel_entry)
-                continue
-            if (hashlib.md5(io.open(m, "rb").read()).hexdigest()
-                    != hashlib.md5(io.open(src, "rb").read()).hexdigest()):
-                out.append("[R4] 實體副本內容不一致:%s/SKILL.md 與正典不同。\n"
-                           "     鏡像目錄應為 symlink;重建:npx skills experimental_sync"
-                           % rel_entry)
-    return out
+    return _redlight().skill_mirror_violations(canon_dir, mirror_dirs)
 
 
 def _skills_mtime():

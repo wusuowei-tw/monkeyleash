@@ -1016,6 +1016,336 @@ def _is_str_list(v):
     return isinstance(v, list) and all(isinstance(n, str) for n in v)
 
 
+# ── 票 146 Extension Integrity v0(宣告層;runtime 未證明)────────────────────
+# 只證明「已知靜態載入入口符合已提交的 allowlist」;不證明本 session 實際載入了什麼。
+# allowlist 的讀取沿用 145 的 authority 模式(只認 HEAD blob,工作樹只做一次 identity 比對)。
+# R4 的樹比對純函式自閘門下沉到這裡(方向 B);本模組不載入任何專案模組。
+EXT_ALLOWLIST_FILE = ".agents/extension-allowlist.json"
+EXT_ALLOWLIST_SCHEMA = "monkeyleash.extension-allowlist"
+EXT_ALLOWLIST_VERSION = 1
+EXT_ALLOWLIST_FIELDS = ("schema", "version", "dev_mod_files", "user_skill_plugins", "user_commands",
+                        "project_settings_hook_commands", "mcp_json_servers")
+EXT_VIOLATION = "VIOLATION"
+EXT_UNKNOWN = "UNKNOWN"
+EXT_DECLARED_OK = "DECLARED_OK"
+EXT_VERIFIED = "VERIFIED"
+EXT_SURFACE_KEYS = frozenset(("dev_mod_files", "synced_files", "r4_violations", "project_hook_commands",
+                              "mcp_json_servers", "user_skill_plugins", "user_commands"))
+
+# 檔案型欄位(policy 與 surfaces 同名)與它在訊息裡的入口名,順序即判定順序。
+_EXT_FILE_FIELDS = (("dev_mod_files", "dev-mods"), ("user_skill_plugins", "user-skills"),
+                    ("user_commands", "user-commands"))
+_EXT_ENTRY_KEYS = frozenset(("path", "sha256", "note"))
+_EXT_STATE_TEXT = {
+    "uninitialized": u"allowlist 未初始化（HEAD 無 .agents/extension-allowlist.json）；靜態入口無法判定",
+    "uncommitted": u"allowlist 未提交；工作樹的版本不被採用",
+    "worktree_differs": u"allowlist 工作樹與 HEAD 不同；只採用 HEAD，本次無法判定",
+    "identity_mismatch": u"allowlist 工作樹與 HEAD 身分不符；本次無法判定",
+    "malformed": u"allowlist 格式不明；本次無法判定",
+}
+_EXT_RUNTIME_LINE = u"runtime loaded set: 未證明（沒有獨立 runtime authority source）"
+
+
+def _rel(path):
+    try:
+        return os.path.relpath(os.path.abspath(path), ROOT).replace("\\", "/")
+    except ValueError:
+        return path.replace("\\", "/")
+
+
+def _walk_regular(root_dir, exclude_top=None):
+    """`root_dir` 底下每個檔 → `(posix 相對路徑, sha256 或 None)`,依路徑排序。不存在 ⇒ []。
+
+    symlink(檔或目錄)記 None 且不追;symlink 目錄從走訪中移除(3d 裁決 (n))。讀不到 ⇒ None。
+    `exclude_top` 只排除 `root_dir` 這一層同名的子目錄(及其整棵),更深層同名的不排除。
+    """
+    if not os.path.isdir(root_dir):
+        return []
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root_dir, followlinks=False):
+        if exclude_top is not None and os.path.normcase(dirpath) == os.path.normcase(root_dir):
+            dirnames[:] = [d for d in dirnames if d != exclude_top]
+        keep = []
+        for d in dirnames:
+            full = os.path.join(dirpath, d)
+            if os.path.islink(full):
+                out.append((os.path.relpath(full, root_dir).replace("\\", "/"), None))
+            else:
+                keep.append(d)
+        dirnames[:] = keep
+        for f in filenames:
+            full = os.path.join(dirpath, f)
+            relp = os.path.relpath(full, root_dir).replace("\\", "/")
+            if os.path.islink(full):
+                out.append((relp, None))
+                continue
+            try:
+                with io.open(full, "rb") as fh:
+                    out.append((relp, hashlib.sha256(fh.read()).hexdigest()))
+            except Exception:
+                out.append((relp, None))
+    return sorted(out, key=lambda item: item[0])
+
+
+def skill_mirror_violations(canon_dir, mirror_dirs):
+    """R4 —— **一條規則,依當下佈局分支**。
+
+    不寫成兩個檢查並排:並排會讓其中一個分支在當下佈局永遠不跑,
+    那正是這條規則改寫前的處境(佈局改成 symlink 後,內容比對永遠不可能觸發,
+    全輪唯一一次觸發還是人工製造的負向測試)。
+    單一規則每次執行都必須回答「現在是哪種佈局」,沒有假裝在守的死路徑。
+    """
+    if not os.path.isdir(canon_dir):
+        return []
+    canon_real = os.path.realpath(canon_dir)
+
+    # 迭代來源必須是**正典與鏡像的聯集**,不能只用正典 ——
+    # 只走正典的話,正典項目消失時鏡像那個斷掉的 symlink 永遠不會被走訪,
+    # 而那正是「斷裂」最典型的成因。迭代來源本身就會決定涵蓋範圍(維度 4 的同一個形狀)。
+    names = set(os.listdir(canon_dir))
+    for mirror in mirror_dirs:
+        if os.path.isdir(mirror):
+            names.update(os.listdir(mirror))
+
+    out = []
+    for name in sorted(names):
+        src = os.path.join(canon_dir, name, "SKILL.md")
+        for mirror in mirror_dirs:
+            # 鏡像整個沒建起來不是 drift,是還沒裝 —— 那由安裝流程負責,不是 R4。
+            if not os.path.isdir(mirror):
+                continue
+            entry = os.path.join(mirror, name)
+            rel_entry = _rel(entry)
+            if not os.path.lexists(entry):
+                out.append("[R4] 鏡像缺少 %s —— 正典有而鏡像沒有。\n"
+                           "     重建:bash scripts/skills-update.sh" % rel_entry)
+                continue
+
+            if os.path.islink(entry):
+                # 分支一:symlink 佈局 —— 內容由構造保證,要守的是連結本身
+                target = os.path.realpath(entry)
+                if not os.path.exists(entry):
+                    out.append("[R4] symlink 斷裂:%s 指向已不存在的目標。\n"
+                               "     重建:npx skills experimental_sync" % rel_entry)
+                elif os.path.commonpath([target, canon_real]) != canon_real:
+                    out.append("[R4] symlink 指向正典之外:%s -> %s。\n"
+                               "     正典是 %s;內容一樣不代表來源正確,"
+                               "上游更新不會傳播到別處的副本。" % (rel_entry, target, _rel(canon_dir)))
+                continue
+
+            # 分支二:實體副本佈局 —— 兩份各自獨立,會 drift;遞迴 tree parity(票 146)
+            if not os.path.exists(src):
+                out.append("[R4] 正典缺少 %s/SKILL.md,鏡像 %s 卻還留著。\n"
+                           "     正典被刪而鏡像留著舊的,一樣是不一致。"
+                           % (_rel(os.path.join(canon_dir, name)), rel_entry))
+                continue
+            canon_entry = os.path.join(canon_dir, name)
+            canon_files = set(p for p, _ in _walk_regular(canon_entry))
+            mirror_files = set()
+            for p, _ in _walk_regular(entry):
+                if os.path.islink(os.path.join(entry, *p.split("/"))):
+                    out.append(u"[R4] 鏡像內含 symlink：%s/%s（第一版不追連結）" % (rel_entry, p))
+                else:
+                    mirror_files.add(p)
+            for p in sorted(mirror_files - canon_files):
+                out.append(u"[R4] 鏡像多出正典沒有的檔：%s/%s" % (rel_entry, p))
+            for p in sorted(canon_files - mirror_files):
+                out.append(u"[R4] 鏡像缺少 %s/%s —— 正典有而鏡像沒有。" % (rel_entry, p))
+            for p in sorted(canon_files & mirror_files):
+                try:
+                    with io.open(os.path.join(entry, *p.split("/")), "rb") as fm:
+                        mirror_md5 = hashlib.md5(fm.read()).hexdigest()
+                    with io.open(os.path.join(canon_entry, *p.split("/")), "rb") as fc:
+                        canon_md5 = hashlib.md5(fc.read()).hexdigest()
+                    same = mirror_md5 == canon_md5
+                except Exception:
+                    same = False
+                if not same:
+                    out.append(u"[R4] 實體副本內容不一致：%s/%s 與正典不同。" % (rel_entry, p))
+    return out
+
+
+def _canonical_relpath_ok(p):
+    """policy 內 path 是否已是 canonical POSIX 相對檔案路徑(3c 裁決 (k))。只判定,不修正。"""
+    if not isinstance(p, str) or not p:
+        return False
+    if "\\" in p or p.startswith("/") or p.endswith("/"):
+        return False
+    if (len(p) >= 2 and p[1] == ":") or "://" in p or p.startswith("file:"):
+        return False
+    return all(seg not in ("", ".", "..") for seg in p.split("/"))
+
+
+def _is_sha256_hex(v):
+    return isinstance(v, str) and len(v) == 64 and all(c in "0123456789abcdef" for c in v)
+
+
+def _extension_allowlist_ok(doc):
+    """allowlist 文件是否合格(schema / 鍵集合 / 型別 / 檔案型項目 / path 唯一)。"""
+    if not isinstance(doc, dict):
+        return False
+    version = doc.get("version")
+    if doc.get("schema") != EXT_ALLOWLIST_SCHEMA or type(version) is not int \
+            or version != EXT_ALLOWLIST_VERSION:
+        return False
+    if set(doc) != set(EXT_ALLOWLIST_FIELDS):
+        return False
+    for field, _label in _EXT_FILE_FIELDS:
+        items = doc[field]
+        if not isinstance(items, list):
+            return False
+        seen = set()
+        for item in items:
+            if not isinstance(item, dict) or set(item) != _EXT_ENTRY_KEYS:
+                return False
+            if not (_is_sha256_hex(item["sha256"]) and isinstance(item["note"], str)
+                    and _canonical_relpath_ok(item["path"])):
+                return False
+            if item["path"] in seen:
+                return False
+            seen.add(item["path"])
+    return _is_str_list(doc["project_settings_hook_commands"]) and _is_str_list(doc["mcp_json_servers"])
+
+
+def extension_allowlist_facts(root):
+    """`<root>` 的 allowlist 事實:`{"path", "state", "blob", "worktree", "policy"}`。
+
+    流程同 `evidence_policy_facts` 第 1–5 步:只認 HEAD blob;工作樹只做一次 hash-object 比對,
+    之後只讀 HEAD blob。state ∈ uninitialized / uncommitted / identity_mismatch /
+    worktree_differs / malformed / ok;非 ok 時 policy 為 None。不拋例外。
+    root 不是 git 最上層 ⇒ HEAD:<path> 與工作樹不是同一邏輯路徑 ⇒ identity_mismatch。
+    """
+    out = {"path": EXT_ALLOWLIST_FILE, "state": "identity_mismatch", "blob": None,
+           "worktree": None, "policy": None}
+    try:
+        exists = os.path.exists(os.path.join(os.fspath(root), *EXT_ALLOWLIST_FILE.split("/")))
+        if not _root_is_toplevel(root):
+            return out
+        head = _git_lines(root, ["rev-parse", "HEAD:" + EXT_ALLOWLIST_FILE], 1)
+        if not head:
+            out["state"] = "uncommitted" if exists else "uninitialized"
+            return out
+        out["blob"] = head[0]
+        worktree = _git_lines(root, ["hash-object", EXT_ALLOWLIST_FILE], 1) if exists else None
+        if not worktree:
+            return out
+        out["worktree"] = worktree[0]
+        if worktree[0] != head[0]:
+            out["state"] = "worktree_differs"
+            return out
+        raw = _git_bytes(root, ["cat-file", "blob", head[0]])
+        if raw is None:
+            return out
+        try:
+            doc = json.loads(raw.decode("utf-8"))
+        except Exception:
+            doc = None
+        if not _extension_allowlist_ok(doc):
+            out["state"] = "malformed"
+            return out
+        out["policy"] = doc
+        out["state"] = "ok"
+    except Exception:
+        pass
+    return out
+
+
+def _hook_commands(node, acc):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "command" and isinstance(value, str):
+                acc.append(value)
+            else:
+                _hook_commands(value, acc)
+    elif isinstance(node, list):
+        for value in node:
+            _hook_commands(value, acc)
+
+
+def extension_surface_facts(dev_mods_dir, synced_dirs, canon_dir, mirror_dirs, project_settings_paths,
+                            mcp_json_path, user_skills_dir, user_commands_dir):
+    """已知靜態載入入口的事實(恰好七鍵)。純讀、無副作用、所有路徑由參數注入,不讀任何快取。"""
+    synced_files = []
+    for d in synced_dirs:
+        synced_files.extend(p for p, _ in _walk_regular(d))
+    hook_commands = []
+    for path in project_settings_paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            with io.open(path, encoding="utf-8") as f:
+                doc = json.load(f)
+            if not isinstance(doc, dict):
+                raise ValueError("not an object")
+            _hook_commands(doc.get("hooks"), hook_commands)
+        except Exception:
+            hook_commands.append(u"%s: unreadable" % path)
+    mcp_servers = []
+    if os.path.exists(mcp_json_path):
+        try:
+            with io.open(mcp_json_path, encoding="utf-8") as f:
+                doc = json.load(f)
+            servers = doc.get("mcpServers", {}) if isinstance(doc, dict) else None
+            if not isinstance(servers, dict):
+                raise ValueError("mcpServers is not an object")
+            mcp_servers = list(servers)
+        except Exception:
+            mcp_servers = [u"%s: unreadable" % mcp_json_path]
+    return {
+        "dev_mod_files": _walk_regular(dev_mods_dir),
+        "synced_files": synced_files,
+        "r4_violations": skill_mirror_violations(canon_dir, mirror_dirs),
+        "project_hook_commands": hook_commands,
+        "mcp_json_servers": mcp_servers,
+        "user_skill_plugins": _walk_regular(user_skills_dir, exclude_top="synced"),
+        "user_commands": _walk_regular(user_commands_dir),
+    }
+
+
+def _extension_first_reason(facts, surfaces):
+    """`(狀態, 原因文字或 None)`。extension_state 與 extension_status_lines 共用(3d 裁決 (o))。"""
+    keys = set(surfaces) if isinstance(surfaces, dict) else set()
+    if keys != EXT_SURFACE_KEYS:
+        return (EXT_UNKNOWN, u"surfaces 不完整：缺 %s / 多 %s；fail-closed"
+                % (sorted(EXT_SURFACE_KEYS - keys), sorted(keys - EXT_SURFACE_KEYS)))
+    state = facts.get("state") if isinstance(facts, dict) else None
+    if state != "ok":
+        return (EXT_VIOLATION, _EXT_STATE_TEXT.get(state, _EXT_STATE_TEXT["malformed"]))
+    policy = facts["policy"]
+    for field, label in _EXT_FILE_FIELDS:
+        allowed = set((item["path"], item["sha256"]) for item in policy[field])
+        bad = [relp for relp, sha in surfaces[field] if sha is None or (relp, sha) not in allowed]
+        if bad:
+            return (EXT_VIOLATION, u"%s 未登記（path, sha256）：%s（共 %d 筆）" % (label, bad[0], len(bad)))
+    r4 = surfaces["r4_violations"]
+    if r4:
+        return (EXT_VIOLATION, u"%s（共 %d 筆）" % (str(r4[0]).splitlines()[0], len(r4)))
+    bad = [c for c in surfaces["project_hook_commands"] if c not in policy["project_settings_hook_commands"]]
+    if bad:
+        return (EXT_VIOLATION, u"專案 settings hook 未登記：%s（共 %d 筆）" % (bad[0], len(bad)))
+    bad = [s for s in surfaces["mcp_json_servers"] if s not in policy["mcp_json_servers"]]
+    if bad:
+        return (EXT_VIOLATION, u".mcp.json server 未登記：%s（共 %d 筆）" % (bad[0], len(bad)))
+    if surfaces["synced_files"]:
+        return (EXT_UNKNOWN, u"未受管入口有內容：synced %d 檔；不得視為乾淨" % len(surfaces["synced_files"]))
+    return (EXT_DECLARED_OK, None)
+
+
+def extension_state(facts, surfaces):
+    """四態之一(實際可回的只有 VIOLATION / UNKNOWN / DECLARED_OK)。"""
+    return _extension_first_reason(facts, surfaces)[0]
+
+
+def extension_status_lines(facts, surfaces):
+    """恰好兩行:static surfaces 與 runtime loaded set 分欄;runtime 欄固定未證明。"""
+    state, reason = _extension_first_reason(facts, surfaces)
+    if state == EXT_DECLARED_OK:
+        first = u"static surfaces: 已知靜態入口符合已提交的 allowlist（%s）" % (facts.get("blob") or "")[:12]
+    else:
+        first = u"static surfaces: %s —— %s" % (state, reason)
+    return [first, _EXT_RUNTIME_LINE]
+
+
 def _completeness_problems(comp):
     """completeness 的型別問題清單(空 = 型別正確)。〈二十三〉7 (i)。"""
     if not isinstance(comp, dict):
