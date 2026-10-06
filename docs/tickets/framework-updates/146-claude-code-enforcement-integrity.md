@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:立案 —— 設計 v0 + Q1–Q6 已裁;進入第三站紅燈
+**狀態**:第三站紅燈已提交(S3-146-1);待第四站實作
+~~**狀態**:立案 —— 設計 v0 + Q1–Q6 已裁;進入第三站紅燈~~(F-036 體例:舊行不刪)—— 2026-10-06 第三站紅燈提交時更新:S3-146-1 已提交、已證紅。
 ~~**狀態**:立案 —— 設計 v0 已產出(2026-10-06T144009Z-ticket146-design-v0.md);待審~~(F-036 體例:舊行不刪)—— 2026-10-06 Q1–Q6 裁決入票時更新:設計 v0 已審、Q1–Q6 已裁。
 ~~**狀態**:立案 —— 第一步唯讀盤點已完成(2026-10-04 報告 2026-10-04T124314Z-ticket146-step1-inventory.md / 2026-10-04T130149Z-ticket146-step1-closeout.md,於 Claude Code 2.1.289 執行;門檻 ≥ 2.1.287 已滿足);可進入設計。~~(F-036 體例:舊行不刪)—— 2026-10-06 設計 v0 產出時更新:已進入設計。
 ~~**狀態**:**candidate。只登記。** 第一步**必須等升級之後才做**(見〈第一步〉)。~~(F-036 體例:舊行不刪)—— 2026-10-06 立案 commit 時更新:升級前提已於 10/4 滿足。
@@ -298,3 +299,12 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 4. EXT_VERIFIED 不可達,只有 regression lock(行為鎖 + 結構鎖),**不是形式證明**。
 
 第三站停點報告:.dev/reports/2026-10-06T145908Z-ticket146-s3-halted-before-B.md;三選一裁 C。
+
+---
+
+## 第三站紅燈(S3-146-1)
+
+- 審計:`docs/audits/2026-10-06-146-station3a-redlight.md`
+- 紅燈:`tests/test_redlight.py::TestTicket146ExtensionIntegrity`,14 個(T146-0a、1、2、2b、2c、3、3b、4、4b、5、6、7、8、9)。
+- 證紅(S3-146-1 `0993d217a27bce8119587bf1553df49a3521e79e`,乾淨工作樹,Windows):**13 failed**(全部屬於本 class),T146-9 依規格 skip;其餘 2110 passed,沒有 collection / setup / teardown ERROR。
+- 待第四站:實作 `redlight.py` 的契約名稱與 `gate.py` R4 的遞迴 tree parity;改名必須回本票記一筆。
