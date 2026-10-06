@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 5j 獨立審查 PASS（nit 3：S5j-F1 / F2 / F3，文件補準於 S5j-1）；待 Station 6 驗收／CI。
+**狀態**:動工 —— Station 6 push 完成（遠端 master = S5j-1）；CI 淨室驗證 FAIL（推定：anyio 4.15.1 超出能力邊界 KNOWN_DISTS）；待 Station 3k 紅燈。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -193,6 +193,9 @@
 >
 > - 狀態(舊,第六十一代):~~`動工 —— Station 4j PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5j 獨立審查。`~~
 >   —— 2026-10-05 Station 5j 獨立審查 PASS、Jeff 裁決後由第 3 行取代（見〈六十四〉）。
+>
+> - 狀態(舊,第六十二代):~~`動工 —— Station 5j 獨立審查 PASS（nit 3：S5j-F1 / F2 / F3，文件補準於 S5j-1）；待 Station 6 驗收／CI。`~~
+>   —— 2026-10-05 Station 6 CI 紅、Jeff 裁決回 3k 後由第 3 行取代（見〈六十五〉）。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -587,14 +590,19 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 3j — Red-light(補) | PASS / ACCEPTED（J1 POSIX-only + J1b Windows 解析層 behavior-red + J2 regression-lock；S3J1B-2） |
 | Station 4j — Implementation(修正) | PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room；S4J1 d4b6fafd4afdd70121278527194aeef4097bff33；待 5j 審查） |
 | Station 5j — Review（增量） | PASS（nit 3；S5j-0 69e1fe2271fa2af66c0c4330b48eef8bbbc6db18；報告 sha256 8805322db93989bbe85c72cc1483db11fa9ebb15cfe9bc520d1719957b9afd2e；待 Station 6） |
+| Station 6 — Acceptance／CI（第二次） | push PASS（37 commits；遠端 master 774e7351e07ebdfc267a37b58bc09579e1de5646）；CI FAIL（淨室驗證步驟；run 37393958765）；回 Station 3k |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5j 獨立審查 PASS（nit 3：S5j-F1 / F2 / F3，文件補準於 S5j-1）；待 Station 6 驗收／CI(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 6 push 完成（遠端 master = S5j-1）；CI 淨室驗證 FAIL（推定：anyio 4.15.1 超出能力邊界 KNOWN_DISTS）；待 Station 3k 紅燈(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第五十三代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5j 獨立審查 PASS（nit 3：S5j-F1 / F2 / F3，文件補準於 S5j-1）；待 Station 6 驗收／CI(與票頭第 3 行一致)。~~
+> 2026-10-05 Station 6 CI 紅、Jeff 裁決回 3k 後隨第 3 行同步更新(見〈六十五〉)。
+> Station 6（第二次）列:2026-10-05 依〈六十五〉新增(無舊值;第一次 Station 6 列保持原值不動)。
+>
 > **舊句(F-036,保留不刪,第五十二代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4j PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room）；待 Station 5j 獨立審查(與票頭第 3 行一致)。~~
 > 2026-10-05 Station 5j 獨立審查 PASS、Jeff 裁決後隨第 3 行同步更新(見〈六十四〉)。
 > Station 5j 列:2026-10-05 依〈六十四〉新增(無舊值)。
@@ -3253,7 +3261,55 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
 
 ### 64.5 commit
 
-- S5j-1(本節、審查報告入庫與 S5j-F1 / F2 / F3 文件補準)於下一次提交回填。
+- S5j-1(本節、審查報告入庫與 S5j-F1 / F2 / F3 文件補準)`774e7351e07ebdfc267a37b58bc09579e1de5646`。
+  (F-036:本行原文為「~~S5j-1(本節、審查報告入庫與 S5j-F1 / F2 / F3 文件補準)於下一次提交回填。~~」;2026-10-05 於 S6-2 回填。)
+
+---
+
+## 六十五、Station 6（第二次）push 紀錄、CI 淨室驗證 FAIL 與 Station 3k 裁決（2026-10-05，Jeff）
+
+### 65.1 push
+
+- 2026-10-05(美東)Jeff 說「推」;`git push origin master` 一次、未被擋。
+- `git ls-remote origin refs/heads/master` = `774e7351e07ebdfc267a37b58bc09579e1de5646`(= S5j-1)。
+- 證據報告:`.dev/reports/2026-10-06T002652Z-ticket145-station6b-push-ci.md`(未入庫)。
+- 本機無 `gh`,CI 由裁決助手以瀏覽器讀取公開 checks 頁取得。
+
+### 65.2 CI(外部證據;來源:Jeff 轉述裁決助手讀取公開 checks 頁)
+
+- workflow `tests` / job `pytest`。
+- run:https://github.com/wusuowei-tw/monkeyleash/actions/runs/37393958765
+- job:https://github.com/wusuowei-tw/monkeyleash/actions/runs/37393958765/job/112045357993
+- headSha `774e7351e07ebdfc267a37b58bc09579e1de5646`;結果 **failed**(1m 34s)。
+- 步驟:Set up job ✓ / checkout ✓ / setup-python ✓ / 安裝相依 ✓ / 接上權威層 ✓ / 跑測試 ✓ / 收集清單（票 85）✓ / **淨室驗證（每條規則各擋一次 + 安裝後形態）✗** / Complete job ✓。
+- Annotation:`Process completed with exit code 1`。
+- 完整 log 需登入,未取得;**CI 實際安裝的套件版本尚未取得 log 直接核驗**。
+
+### 65.3 根因推定(來源:Jeff 轉述裁決助手隔離 Linux 重現;非本 repo 帳本證據)
+
+- 公開 checks 顯示 CI「跑測試」通過、「淨室驗證」失敗。
+- 隔離 Linux 環境以全新 venv 依 CI 方式 `pip install -e ".[dev]"`,實際安裝 anyio 4.15.1(PyPI 2026-09-05 發布;anyio 為 mcp / httpx 的間接相依,未釘版),可重現 verify_gates 正二「已初始化且相符」不成立(`file_coverage=unknown`、exit 1);同一 commit 在 anyio 4.15.0 對照環境下正二成立、exit 0。
+- 機制:`redlight.py` 的 `KNOWN_DISTS` 與 `.agents/evidence-policy.json` 的 `dists` 只有 `("anyio","4.15.0")` ⇒ 4.15.1 的 anyio plugin 判為未盤點(other)⇒ unknown。
+- 據此**推定** CI 失敗與 anyio 版本超出邊界有關;CI 實際安裝版本尚未取得 log 直接核驗。
+- wheel 比對(外部來源):anyio-4.15.0 sha256 `7ecd9937369ffce8bba0b5ccb9b3a9507b101b0ed50256aecfbab27e6c2acb99`、anyio-4.15.1 sha256 `6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101`;`anyio/pytest_plugin.py` 與 `entry_points.txt` 逐位元組相同,差異僅 `anyio/__init__.py`、`anyio/_lazyimport.py`(檔案相同不等於行為等價;真實 4.15.1 環境的行為驗收於 4k 另行記錄)。
+
+### 65.4 分類
+
+- 精確版本能力邊界與乾淨環境相依漂移(`KNOWN_DISTS` 為精確版本 pin;乾淨環境自動取得新版即落在邊界外)。
+- 不是 3j / 4j 的回歸;亦非 S5g-F3(pytest 9 設定格式)或 S5g-F4(Git clean filter)。
+- 本輪為外部重現確認的第一個邊界外案例;追蹤項:相依漂移的機制化(目前尚未 machine-enforced;見「相關」)。
+
+### 65.5 Jeff 裁決(2026-10-05)
+
+1. Station 6(第二次)= push PASS、CI FAIL。
+2. 選 A(擴大能力邊界,邊界跟著證據長);B(釘 `anyio==4.15.0`)保留為環境重現策略、不採用;C(削弱正二)不採用。
+3. 回 Station 3k:紅燈分「能力」與「policy」兩層,保留負控(負控直接斷言 unknown)。
+4. 4k 須在真裝 anyio 4.15.1 的乾淨環境證明正二成立(裁決助手 POSIX,另行記錄)。
+5. 5k 增量審查;再回 Station 6 第三次 push / CI。
+
+### 65.6 commit
+
+- S6-2(本節)於下一次提交回填。
 
 ---
 
@@ -3313,3 +3369,5 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
 - **追蹤項(2026-10-05 登記,〈六十四〉64.3 第 5 點;5j 報告第 6 節第 7 項)流程教訓「R3 與 POSIX-only 紅燈」(目前尚未 machine-enforced)** ——
   (照錄)流程教訓「R3 與 POSIX-only 紅燈」(4j §7.3 已列)—— 本審查確認那條路徑沒有繞過 R3(G4),不另加。
   (同上方 2026-10-05〈六十一〉61.3 裁決註記登記的同名追蹤項;本條只記錄 5j 的確認,不另開。)
+- **追蹤項(2026-10-05 登記,〈六十五〉65.4)相依漂移(精確版本能力邊界 vs 乾淨環境自動升版)(目前尚未 machine-enforced)** ——
+  候選機制:CI 在淨室前印出實際安裝版本並與 `KNOWN_DISTS` 比對、或 pip constraints 檔。
