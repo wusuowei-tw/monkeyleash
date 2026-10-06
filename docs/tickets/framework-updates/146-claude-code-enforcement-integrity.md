@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:立案 —— 第三站補強中(3c-146);尚未實作
+**狀態**:第三站紅燈已補強(S3c-146-1,blob 3c75d69a142a);待第四站核心實作;146 尚未生效
+~~**狀態**:立案 —— 第三站補強中(3c-146);尚未實作~~(F-036 體例:舊行不刪)—— 2026-10-06 第三站補強提交時更新:S3c-146-1 已提交、已在乾淨 HEAD 證紅。
 ~~**狀態**:第三站紅燈已補完(S3b-146-1);待第四站核心實作;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3c 裁決入票時更新:T146-9 / T146-13 修正、path + sha256 綁定,第三站重開補強。
 ~~**狀態**:立案 —— 第三站紅燈補完中(3b-146);尚未實作~~(F-036 體例:舊行不刪)—— 2026-10-06 第三站紅燈補完提交時更新:S3b-146-1 已提交、已證紅。
 ~~**狀態**:第三站紅燈已提交(S3-146-1);待第四站實作~~(F-036 體例:舊行不刪)—— 2026-10-06 契約增補 3b 入票時更新:4-146 暫緩,第三站契約漏掃 ~/.claude/skills 與 ~/.claude/commands,先補紅燈(裁決 (a))。
@@ -376,3 +377,12 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 | `safe.md/` | ❌ |
 
 停點:.dev/reports/2026-10-06T162625Z-ticket146-s3c-halted-before-B.md;三題裁決:A / 劃線 / 不疊入口
+
+---
+
+## 第三站補強(S3c-146-1)
+
+- 審計:`docs/audits/2026-10-06-146-station3c-redlight.md`
+- 紅燈總數:**36 個 node**(既有 20 + 新增 16:T146-15 三入口、15b 三入口、15c 正向三入口 + malformed 七案);T146-9 依規格在 Windows skip。
+- 證紅(S3c-146-1 `e79c393d800c7c68fbf7afe6f5d9082afbaa6a03`,乾淨工作樹,Windows):36 failed(全部屬於 `TestTicket146ExtensionIntegrity`)、2110 passed、5 skipped、3 xfailed;collected 2154;沒有 ERROR。
+- **test blob**(第四站要變綠的精確版本,裁決 (j)):`tests/test_redlight.py` = `3c75d69a142aa34ecf8ea29a667969d1cb673c08`(sha256 `e3aa12419e3daca9f0e303b3011e672f7c8f17a1f854f64ac3994bfd9346332a`)。
