@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:立案 —— 第三站紅燈補完中(3b-146);尚未實作
+**狀態**:第三站紅燈已補完(S3b-146-1);待第四站核心實作;146 尚未生效
+~~**狀態**:立案 —— 第三站紅燈補完中(3b-146);尚未實作~~(F-036 體例:舊行不刪)—— 2026-10-06 第三站紅燈補完提交時更新:S3b-146-1 已提交、已證紅。
 ~~**狀態**:第三站紅燈已提交(S3-146-1);待第四站實作~~(F-036 體例:舊行不刪)—— 2026-10-06 契約增補 3b 入票時更新:4-146 暫緩,第三站契約漏掃 ~/.claude/skills 與 ~/.claude/commands,先補紅燈(裁決 (a))。
 ~~**狀態**:立案 —— 設計 v0 + Q1–Q6 已裁;進入第三站紅燈~~(F-036 體例:舊行不刪)—— 2026-10-06 第三站紅燈提交時更新:S3-146-1 已提交、已證紅。
 ~~**狀態**:立案 —— 設計 v0 已產出(2026-10-06T144009Z-ticket146-design-v0.md);待審~~(F-036 體例:舊行不刪)—— 2026-10-06 Q1–Q6 裁決入票時更新:設計 v0 已審、Q1–Q6 已裁。
@@ -333,3 +334,12 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 - surfaces 七鍵:`"dev_mod_files"`、`"synced_files"`、`"r4_violations"`、`"project_hook_commands"`、`"mcp_json_servers"`、`"user_skill_plugins"`、`"user_commands"`。
 - policy 形狀:allowlist 的 `dev_mod_files` / `user_skill_plugins` / `user_commands` 每項恰為 `{"sha256": <64 碼小寫十六進位>, "note": <字串>}`,鍵集合恰好這兩個。
 - surfaces 形狀:回傳的 `dev_mod_files` / `user_skill_plugins` / `user_commands` 每項恰為 tuple `(relpath, sha256 或 None)`。
+
+---
+
+## 第三站紅燈補完(S3b-146-1)
+
+- 審計:`docs/audits/2026-10-06-146-station3b-redlight.md`
+- 紅燈總數:**20**(新增 T146-11、11b、11c、12、12b、13、14);T146-9 依規格在 Windows skip。
+- 證紅(S3b-146-1 `8727882f9643f3aa386b546fd2bac0b99438972c`,乾淨工作樹,Windows):20 failed(全部屬於 `TestTicket146ExtensionIntegrity`)、2110 passed、5 skipped、3 xfailed;沒有 ERROR。
+- 交給第四站的兩個已知問題(見審計):T146-9 仍以 6 參數呼叫 `extension_surface_facts`;T146-13 的禁字會命中 `redlight.py:18`、`:27` 的現有註解。
