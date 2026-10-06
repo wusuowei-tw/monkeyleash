@@ -483,7 +483,9 @@ KNOWN_PYTHON_VERSIONS = ("3.11",)
 #   未知 plugin ⇒ fail-closed。
 
 # (vii′) 已知第三方 plugin:(dist 名稱, 精確版本)。只看名稱不算(名稱可被冒用),版本不同也不算。
-KNOWN_DISTS = (("anyio", "4.15.0"),)
+# 票 145 Station 4k:anyio 4.15.1(PyPI 2026-09-05)納入;pytest_plugin.py 與 4.15.0 逐位元組相同(wheel 比對,外部來源),
+# 真實 4.15.1 環境的淨室正二由 4k POSIX 驗收證明。
+KNOWN_DISTS = (("anyio", "4.15.0"), ("anyio", "4.15.1"))
 
 # (xiii) P1 的盤點只對這些 pytest 版本成立;換版後非 ini 的 CLI 選項要重新盤點。
 KNOWN_PYTEST_VERSIONS = ("9.1.1",)
