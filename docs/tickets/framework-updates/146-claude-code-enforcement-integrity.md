@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:第三站紅燈已補強(S3d-146-1,blob 20cb16da3635);待第四站核心實作;146 尚未生效
+**狀態**:第四站 4a 核心判定已提交(S4-146-1f);尚未接 status / pre-commit,146 尚未生效;待 3e/4b integration 紅→綠
+~~**狀態**:第三站紅燈已補強(S3d-146-1,blob 20cb16da3635);待第四站核心實作;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 第四站 4a 核心判定提交、全套 0 紅時更新。
 ~~**狀態**:立案 —— 第三站補強中(3d-146);尚未實作~~(F-036 體例:舊行不刪)—— 2026-10-06 3d 紅燈提交並證紅時更新。
 ~~**狀態**:第三站紅燈已補強(S3c-146-1,blob 3c75d69a142a);待第四站核心實作;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3d 裁決入票時更新:補「同欄位 path 重複 ⇒ malformed」紅燈。
 ~~**狀態**:立案 —— 第三站補強中(3c-146);尚未實作~~(F-036 體例:舊行不刪)—— 2026-10-06 第三站補強提交時更新:S3c-146-1 已提交、已在乾淨 HEAD 證紅。
@@ -408,3 +409,22 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 - 紅燈總數:**39 個 node**(既有 36 + `test_t146_16` 三欄位 3);T146-9 依規格在 Windows skip。
 - 證紅(S3d-146-1 `449a2e67c6e95f783a46216c64f166f667d0111e`,乾淨工作樹,Windows):39 failed、2110 passed、5 skipped、3 xfailed;collected 2157;沒有 ERROR。
 - **BLOB-3d**(第四站要變綠的精確版本):`tests/test_redlight.py` = `20cb16da363547daf233de2aca94e525cb7f4a0c`。
+
+---
+
+## 第四站 4a 核心判定(S4-146-1 … S4-146-1f)
+
+### 裁決(Jeff,2026-10-06;逐字)
+
+(q) rule_codes() 改為掃 gate.py 與同目錄 redlight.py 的聯集（方向 B：規則本體搬家，列舉跟著搬）。source_path 參數語意不變：給定時掃該檔與其同目錄的 redlight.py（存在才掃）。
+(r) _extension_first_reason 的優先序改為：1 facts["state"] != "ok" ⇒ VIOLATION；2 surfaces 鍵集合不符 ⇒ UNKNOWN；3 之後不變。對應裁決 (o)：較高優先級的 VIOLATION 不得被完整性 UNKNOWN 遮蔽。
+(s) gate 自我修改豁免紀錄不得刪改。進入某次 code commit 前已存在的未提交紀錄，必須隨該次 code commit 進版；若該次 commit 的 pre-commit 執行期間新追加 at_commit: true 紀錄，因其產生於 index 建立之後，照實留在工作樹，隨下一個允許的 commit 進版，不得為了工作樹乾淨而刪除、回滾或改寫。
+(t) S4-146-1 的四個實作判斷全部接受並列入票 146 契約附註：root 非 git 最上層或 HEAD blob 讀不到 ⇒ "identity_mismatch"；exclude_top 以 normcase 比對 dirpath == root_dir；「鏡像整個缺 <name>」沿用舊訊息含第二行；.mcp.json 非物件或 mcpServers 非物件 ⇒ ["<path>: unreadable"]，無 mcpServers 鍵 ⇒ []。
+
+### 結果
+
+- 審計:`docs/audits/2026-10-06-146-station4a-core-implementation.md`
+- commit:S4-146-1 `44e9c87c9f4db56cfc9b838d9e2d832332a4a6fc` → S4-146-1r `ff7f2bbf74dc4a51c17a5247e626c07765dc5024` → S4-146-1f `6d45a7adb7453ff87a76b44255d7448036bbf483`。
+- 證綠(S4-146-1f,Windows):**2150 passed**、5 skipped、3 xfailed、0 failed;collected 2158;T146 class 40 個 node 全綠(T146-9 在 Windows skip)。
+- **BLOB-4a2**:`tests/test_redlight.py` = `39bae1f38e56c44974dbfa1328a0439c1737b0be`。
+- 本站未接 status / pre-commit;146 尚未生效。
