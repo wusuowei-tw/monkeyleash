@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 4k PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room，真裝 anyio 4.15.1）；待 Station 5k 獨立審查。
+**狀態**:動工 —— Station 5k 獨立審查 PASS（low 1：S5k-F1 外部補充分析已提供、待核對；nit 2：S5k-F2 文件補準、S5k-F3 追蹤項）；待 Station 6 第三次 push／CI。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -205,6 +205,9 @@
 >
 > - 狀態(舊,第六十五代):~~`動工 —— Station 4k 本機固定全套與 clean-room 驗收通過（anyio 4.15.0 環境）；待 POSIX 外部驗收（真裝 anyio 4.15.1）。`~~
 >   —— 2026-10-06 POSIX 外部 clean-room（真裝 anyio 4.15.1）驗收通過、Jeff 裁決 Station 4k = PASS / COMPLETED 後由第 3 行取代（見〈六十七〉67.3）。
+>
+> - 狀態(舊,第六十六代):~~`動工 —— Station 4k PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room，真裝 anyio 4.15.1）；待 Station 5k 獨立審查。`~~
+>   —— 2026-10-06 Station 5k 獨立審查 PASS、Jeff 裁決後由第 3 行取代（見〈六十八〉）。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -602,14 +605,19 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 6 — Acceptance／CI（第二次） | push PASS（37 commits；遠端 master 774e7351e07ebdfc267a37b58bc09579e1de5646）；CI FAIL（淨室驗證步驟；run 37393958765）；回 Station 3k |
 | Station 3k — Red-light(補) | 紅燈完成（K-a constant-lock + K-b / K-e[4.15.0] / K-e[4.15.1] behavior-red + K-c / K-d negative-lock 綠；S3K1 b0849792ff3e69df70cdd8a5d77d26af78d79021），待 Station 4k |
 | Station 4k — Implementation(修正) | PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room，真裝 anyio 4.15.1；S4K1 492b5de438ef9a306b112ac1fbc402729e219879；S4K1B c1eebd97ed197d7f653fbc1c680a0feca1837c6a；待 5k 審查） |
+| Station 5k — Review（增量） | PASS（low 1 / nit 2 / info 1；S5k-0 264e629c1899a04760f212362940f2e4a3526007；報告 sha256 fe336c03579c151b47ce76c6b18300d2a93c9487fb2dbea2e7c7d37bab45553c；待 Station 6） |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4k PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room，真裝 anyio 4.15.1）；待 Station 5k 獨立審查(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5k 獨立審查 PASS（low 1：S5k-F1 外部補充分析已提供、待核對；nit 2：S5k-F2 文件補準、S5k-F3 追蹤項）；待 Station 6 第三次 push／CI(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第五十七代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4k PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room，真裝 anyio 4.15.1）；待 Station 5k 獨立審查(與票頭第 3 行一致)。~~
+> 2026-10-06 Station 5k 獨立審查 PASS、Jeff 裁決後隨第 3 行同步更新(見〈六十八〉)。
+> Station 5k 列:2026-10-06 依〈六十八〉新增(無舊值)。
+>
 > **舊句(F-036,保留不刪,第五十六代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4k 本機固定全套與 clean-room 驗收通過（anyio 4.15.0 環境）；待 POSIX 外部驗收（真裝 anyio 4.15.1）(與票頭第 3 行一致)。~~
 > 2026-10-06 POSIX 外部 clean-room(真裝 anyio 4.15.1)驗收通過、Jeff 裁決 Station 4k = PASS / COMPLETED 後隨第 3 行同步更新(見〈六十七〉67.3)。
 > Station 4k 列舊值(F-036,保留不刪):~~`Windows/local acceptance PASS；POSIX（anyio 4.15.1）pending`~~;2026-10-06 依〈六十七〉67.3 更新。
@@ -3313,6 +3321,7 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
 - 公開 checks 顯示 CI「跑測試」通過、「淨室驗證」失敗。
 - 隔離 Linux 環境以全新 venv 依 CI 方式 `pip install -e ".[dev]"`,實際安裝 anyio 4.15.1(PyPI 2026-09-05 發布;anyio 為 mcp / httpx 的間接相依,未釘版),可重現 verify_gates 正二「已初始化且相符」不成立(`file_coverage=unknown`、exit 1);同一 commit 在 anyio 4.15.0 對照環境下正二成立、exit 0。
 - 機制:`redlight.py` 的 `KNOWN_DISTS` 與 `.agents/evidence-policy.json` 的 `dists` 只有 `("anyio","4.15.0")` ⇒ 4.15.1 的 anyio plugin 判為未盤點(other)⇒ unknown。
+  （S5k-F2 補準，2026-10-06：verify_gates 淨室的 policy 由 _ev_matching_policy 依當下環境 ∩ KNOWN_DISTS 重新產生並覆寫，宿主 .agents/evidence-policy.json 的 dists 不參與淨室正二的判定。外部重現中，正二失敗的直接機制是 KNOWN_DISTS 不含 4.15.1；CI 是否同因仍屬推定，實際安裝版本尚未取得 log 核驗。宿主 dists 影響的是本 repo 自身的 status／帳本 file_coverage 判定，S4K1B 仍屬必要。）
 - 據此**推定** CI 失敗與 anyio 版本超出邊界有關;CI 實際安裝版本尚未取得 log 直接核驗。
 - wheel 比對(外部來源):anyio-4.15.0 sha256 `7ecd9937369ffce8bba0b5ccb9b3a9507b101b0ed50256aecfbab27e6c2acb99`、anyio-4.15.1 sha256 `6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101`;`anyio/pytest_plugin.py` 與 `entry_points.txt` 逐位元組相同,差異僅 `anyio/__init__.py`、`anyio/_lazyimport.py`(檔案相同不等於行為等價;真實 4.15.1 環境的行為驗收於 4k 另行記錄)。
 
@@ -3405,6 +3414,227 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
 
 ---
 
+## 六十八、Station 5k 獨立審查（PASS）與 Station 6 第三次裁決（2026-10-06，Jeff）
+
+### 68.1 審查報告
+
+- 路徑 `docs/audits/2026-10-06-m1a-station5k-review.md`;sha256 `fe336c03579c151b47ce76c6b18300d2a93c9487fb2dbea2e7c7d37bab45553c`;
+  來源 `.scratch/m1a-s5k/review-report.md`,以 `cmp` 逐位元組相同(無任何改動)。
+- 審查對象 TARGET(S4K1B)`c1eebd97ed197d7f653fbc1c680a0feca1837c6a`;審查包所在 commit S5k-0 `264e629c1899a04760f212362940f2e4a3526007`。
+- 第 1 節判決(照錄報告第 13 行):
+
+**PASS** —— G9 在列出的全部路徑上都找不到讓「邊界外 dist」或「邊界內 dist + 未接受它的宿主 policy」得到 `file_coverage == "true"` 的路徑;G1 / G3 / G4 皆成立。其餘發現(G5 / G7 / G8)都不到 FAIL 門檻,列為 finding 與追蹤項。
+
+- 第 2 節 Findings 表(照錄報告第 19–24 行,含表頭與四列):
+
+| 編號 | 嚴重度 | G 題 | 證據 | 描述 | 需要重現 |
+|---|---|---|---|---|---|
+| S5k-F1 | Low | G8 | `c1eebd97ed197d7f653fbc1c680a0feca1837c6a:.claude/hooks/redlight.py:486-488`;anyio 原始碼 `anyio/pytest_plugin.py:16`、`:224`、`:305`;`anyio/__init__.py:5`、`:21`;`anyio/_lazyimport.py:33-56`(本機 4.15.0) | 納入 4.15.1 的「檔案逐位元組相同」只涵蓋 `pytest_plugin.py` 與 `entry_points.txt`;但 plugin 在 import 期就經 `from . import get_available_backends` 走 `anyio/__init__.py` → `_lazyimport.__getattr__`,而這**正是 4.15.1 唯二變動的兩個檔**,且 `get_available_backends()` 在收集期決定 anyio 測試的參數化。兩檔差異的**內容**不在任何證據裡;正二淨室證明的是「能退紅」(活性),不是「plugin 行為與已盤點的 4.15.0 等價」。 | **是**(見 G8 最小重現) |
+| S5k-F2 | Nit | G7 | `c1eebd97ed197d7f653fbc1c680a0feca1837c6a:.claude/portable/verify_gates.py:335`、`:363`、`:366` | 票〈六十五〉65.3「機制」一句把 CI 淨室 FAIL 歸因於 `KNOWN_DISTS` **與** `.agents/evidence-policy.json` 的 `dists`;但淨室正二的 policy 是 `_ev_matching_policy` 依 `rl.KNOWN_DISTS ∩ 當下環境` 重新產生、覆寫到目標 repo 的 `POLICY_FILE`,宿主 policy 不參與淨室判定。淨室 FAIL 的機制只有 `KNOWN_DISTS`;S4K1B 的作用面是本 repo 自己的 run 與 status,不是 CI 淨室。程式行為無誤,只是措辭把兩個作用面併在一起。 | 否 |
+| S5k-F3 | Nit | G7 | `c1eebd97ed197d7f653fbc1c680a0feca1837c6a:.claude/hooks/redlight.py:487` | 程式註解「真實 4.15.1 環境的淨室正二由 4k POSIX 驗收證明」在 S4K1 提交時,POSIX 驗收還沒發生(S4K4 才記錄),且證據是外部、非本 repo 帳本。以 REVIEW_HEAD 而言內容已成立(67.3),但它是一句寫在產品碼裡、指向不可機器重驗之來源的完成式宣稱。 | 否 |
+| S5k-F4 | Info | G5 | `c1eebd97ed197d7f653fbc1c680a0feca1837c6a:.claude/hooks/redlight.py:1110`、`:1112`;`c1eebd97ed197d7f653fbc1c680a0feca1837c6a:tests/test_redlight.py:2775-2779` | K-c 在 S3K1 上是經 `:644` 判成 `other` → `:1110` 得 unknown;在 TARGET 上是 `known_dist` → `:1112` 的 `_known_dists_accepted` 得 unknown。斷言相同(`== "unknown"`),走的路徑不同 —— 「B ∩ H 拒絕邊界內但未被宿主接受的版本」這一層,在本輪沒有一個先紅後綠的示範。負控的性質本來就如此,不構成缺陷,記錄以供日後判讀。 | 否 |
+
+- G 題結論一行(由報告第 3 節各題標題的結論字樣串成;報告內沒有單一一行的總表):G1 成立;G2 成立;G3 成立;G4 成立;G5 成立(附 S5k-F4 Info);G6 成立;G7 部分成立(S5k-F2、S5k-F3 皆 Nit);G8 部分成立(S5k-F1,需要重現);G9 找不到同級漏洞;G10 不影響。
+
+### 68.2 S5k-F1 外部補充分析(來源:Jeff 轉述裁決助手;隔離 Linux;外部來源、非本 repo 帳本證據;待 5k 審查者或後續審查核對)
+
+依報告 G8「需要重現」四步:
+
+(1) wheel sha256:anyio-4.15.0-py3-none-any.whl `7ecd9937369ffce8bba0b5ccb9b3a9507b101b0ed50256aecfbab27e6c2acb99`;anyio-4.15.1-py3-none-any.whl `6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101`。
+
+(2) 完整差異(diff -u,去除 ---/+++ 兩行時間戳;其餘逐字;兩段各自放進 ``` 圍籬,圍籬內空白 context 行是單一空格,原樣保留)。
+
+anyio/__init__.py:
+
+```
+@@ -120,6 +120,32 @@
+     from ._core._typedattr import TypedAttributeSet as TypedAttributeSet
+     from ._core._typedattr import typed_attribute as typed_attribute
+ 
++    # ruff: isort: off
++    from . import (
++        abc as abc,
++    )
++    from . import (
++        from_thread as from_thread,
++    )
++    from . import (
++        functools as functools,
++    )
++    from . import (
++        itertools as itertools,
++    )
++    from . import (
++        lowlevel as lowlevel,
++    )
++    from . import (
++        to_interpreter as to_interpreter,
++    )
++    from . import (
++        to_process as to_process,
++    )
++    from . import (
++        to_thread as to_thread,
++    )
++
+     fix_package_names()
+     set_deprecated_aliases(
+         {
+```
+
+anyio/_lazyimport.py:
+
+```
+@@ -20,7 +20,7 @@
+     module_name = module_globals["__name__"]
+     module_prefix = module_name + "."
+     module = sys.modules[module_name]
+-    lazy_map, deprecated_aliases = _build_lazy_map(module)
++    lazy_map, deprecated_aliases, submodule_names = _build_lazy_map(module)
+     names = sorted(lazy_map)
+ 
+     # Delete symbols that are not part of the API
+@@ -34,6 +34,8 @@
+         if new_name := deprecated_aliases.get(name):
+             emit_deprecation_warning(module_name, name, new_name)
+             target_mod, target_attr = new_name.rsplit(".", 1)
++        elif name in submodule_names:
++            target_mod, target_attr = "." + name, ""
+         else:
+             try:
+                 target_mod, target_attr = lazy_map[name]
+@@ -43,7 +45,7 @@
+                 ) from None
+ 
+         imported = import_module(target_mod, module_name)
+-        value = getattr(imported, target_attr)
++        value = getattr(imported, target_attr) if target_attr else imported
+ 
+         # patch the module name to match
+         if (
+@@ -109,16 +111,17 @@
+ 
+ def _build_lazy_map(
+     module: ModuleType,
+-) -> tuple[dict[str, tuple[str, str]], dict[str, str]]:
++) -> tuple[dict[str, tuple[str, str]], dict[str, str], list[str]]:
+     try:
+         source = inspect.getsource(module)
+     except OSError:
+-        return {}, {}
++        return {}, {}, []
+ 
+     tree = compile(source, module.__file__ or "", "exec", ast.PyCF_ONLY_AST)
+     assert isinstance(tree, ast.Module)
+     out: dict[str, tuple[str, str]] = {}
+     deprecated_aliases: dict[str, str] = {}
++    submodule_names: list[str] = []
+ 
+     for node in tree.body:
+         if not isinstance(node, ast.If) or not _is_type_checking_block(node.test):
+@@ -127,13 +130,16 @@
+         for stmt in node.body:
+             match stmt:
+                 case ast.ImportFrom():
+-                    base = "." * stmt.level + (stmt.module or "")
+-                    for alias in stmt.names:
+-                        if alias.name == "*":
+-                            raise RuntimeError("star imports not supported")
++                    if stmt.module is None:
++                        submodule_names.extend(alias.name for alias in stmt.names)
++                    else:
++                        base = "." * stmt.level + (stmt.module or "")
++                        for alias in stmt.names:
++                            if alias.name == "*":
++                                raise RuntimeError("star imports not supported")
+ 
+-                        exported = alias.asname or alias.name
+-                        out[exported] = (base, alias.name)
++                            exported = alias.asname or alias.name
++                            out[exported] = (base, alias.name)
+                 case ast.Expr() if isinstance(stmt.value, ast.Call):
+                     call = stmt.value
+                     if (
+@@ -149,7 +155,7 @@
+                             assert isinstance(value.value, str)
+                             deprecated_aliases[key.value] = value.value
+ 
+-    return out, deprecated_aliases
++    return out, deprecated_aliases, submodule_names
+ 
+ 
+ def _is_type_checking_block(test: ast.AST) -> bool:
+```
+
+(3) 判讀:pytest_plugin.py:16 的 get_available_backends 在兩版 __init__.py:21 皆宣告自 ._core._eventloop,不在新增的 submodule_names(abc、from_thread、functools、itertools、lowlevel、to_interpreter、to_process、to_thread)內,仍走原 lazy_map 路徑;pytest_plugin.py:17-23 直接匯入的 ._core._eventloop 與 ._core._exceptions 兩檔在兩版逐位元組相同(cmp);set_deprecated_aliases({...}) 區塊兩版相同,未新增 deprecated alias,plugin import 期不新增警告。
+
+(4) 選做:最小 repo(含 @pytest.mark.anyio 測試與使用 anyio_backend fixture 的測試各一)於各裝一版的全新 venv 執行 pytest --collect-only -q -W error:兩版 nodeid 清單逐字相同(tests/test_m.py::test_a[asyncio]、tests/test_m.py::test_b[asyncio];2 collected),-W error 下無警告。
+
+補充:〈六十七〉67.3 的 collected 2117 相同僅為輔助證據,不單獨證明 backend 集合、nodeid 或 plugin 行為等價。
+
+### 68.3 Jeff 裁決(2026-10-06,照錄)
+
+1. Station 5k 獨立審查 = PASS；S5k-F1 以 68.2 外部補充分析回應，標「已提供、待核對」，不延後 push；S5k-F2 於本站補準 65.3；S5k-F3（redlight.py:487 註解時序）為 .py 註解改動，依 R3 流程成本不於本票處理，列追蹤項併入下一張程式票；S5k-F4 照錄為觀察。
+2. 下一站：Station 6 第三次（6a 乾淨樹 pre-push 驗收 → Jeff 說「推」→ 6b push + CI → 收票）。本站不授權 push。
+
+### 68.4 5k 審查者程序紀錄(照錄報告第 7 節)
+
+### 7.1 Step 0 原文(各自單獨送出)
+
+```
+$ cat .dev/pipeline.json
+{
+  "current_stage": "review",
+  "feature": "framework-updates",
+  "ticket_id": "145",
+  "updated": "2026-10-05"
+}
+$ git rev-parse HEAD
+264e629c1899a04760f212362940f2e4a3526007
+$ git ls-tree 264e629c1899a04760f212362940f2e4a3526007 docs/audits/2026-10-06-m1a-station5k-review-package.md
+100644 blob 6ecd9b1f6406a45254703d0822ba3b0be067271a	docs/audits/2026-10-06-m1a-station5k-review-package.md
+$ git status --porcelain
+ M docs/agents/friction-log.md
+?? docs/tickets/framework-updates/146-claude-code-enforcement-integrity.md
+?? docs/tickets/framework-updates/147-turn-end-check-via-settings-stop-hook.md
+$ sha256sum .dev/test-runs.jsonl
+3637077aea4d2bdaa3138bf9b2aa28b5306ab9e9bc317d04df78ddfee3382778 *.dev/test-runs.jsonl
+$ sha256sum .dev/test-sessions.jsonl
+6d18a5c6567054da5f2d09d7655b8aa29129c34cbf948be69e8a9c58d09dddcd *.dev/test-sessions.jsonl
+$ python -m pip show anyio
+Version: 4.15.0   (其餘見 4.1)
+```
+
+全部符合預期。
+
+### 7.2 包檔 sha256 核對
+
+```
+$ git show 264e629c1899a04760f212362940f2e4a3526007:docs/audits/2026-10-06-m1a-station5k-review-package.md > <session scratchpad>/m1a-s5k-package.md
+(無輸出)
+$ sha256sum <session scratchpad>/m1a-s5k-package.md
+43a3f34a39d37a07871e119ac6c7737e844286483f96c774205ea03c4b9ccdb1 *<session scratchpad>/m1a-s5k-package.md
+```
+
+= 預期值。
+
+### 7.3 其他
+
+- 閘門攔截:**無**。
+- 寫入:只有本報告 `.scratch/m1a-s5k/review-report.md`(Write);scratchpad 內的扁平暫存檔 `m1a-s5k-package.md`、`m1a-s5k-redlight.py.txt`、`m1a-s5k-verify_gates.py.txt`、`m1a-s5k-test_redlight.py.txt`。未改任何 repo 檔、未 commit / push / fetch / stash、未改 `.dev/pipeline.json`。
+- 未執行 pytest、verify_gates.py、status.py 或任何本 repo 的 Python;未用 `python -c` / heredoc。
+- 未讀取 AI 對話紀錄檔;兩本帳本只做 `sha256sum` / `wc -l` / `wc -c`。
+- 讀了 `.dev/reports/2026-10-06T002652Z-ticket145-station6b-push-ci.md` 的 sha256(只算雜湊,未開啟內容):`969f6729e99d91ef24f6f6b8142109efc9ff681e6ede3bb26960aa04f28d02aa`。
+- 兩本帳本 sha256:審查前 `3637077a…2778` / `6d18a5c6…dcd`;`wc -l` 3438 / 36;`wc -c` 915335 / 18838751。審查後見 Step 4(回報於對話)。
+
+另:5k-0 回報「22 段」為筆誤,實際 23 個切片,不影響凍結。
+
+### 68.5 commit
+
+- S5k-1(本節、審查報告入庫與 S5k-F2 補準)於下一次提交回填。
+
+---
+
 ## 相關
 
 - **票 139** —— 原始 finding。本票承接;其證據與未查邊界不改寫。
@@ -3463,3 +3693,9 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
   (同上方 2026-10-05〈六十一〉61.3 裁決註記登記的同名追蹤項;本條只記錄 5j 的確認,不另開。)
 - **追蹤項(2026-10-05 登記,〈六十五〉65.4)相依漂移(精確版本能力邊界 vs 乾淨環境自動升版)(目前尚未 machine-enforced)** ——
   候選機制:CI 在淨室前印出實際安裝版本並與 `KNOWN_DISTS` 比對、或 pip constraints 檔。
+- **追蹤項(2026-10-06 登記,〈六十八〉68.3 第 1 點;S5k-F3;併入下一張程式票)redlight.py:487 註解時序(目前尚未 machine-enforced)** ——
+  `.claude/hooks/redlight.py:487` 的註解「真實 4.15.1 環境的淨室正二由 4k POSIX 驗收證明」寫於 S4K1,早於 POSIX 驗收(S4K4 才記錄),且指向非本 repo 帳本的外部證據。修法(例:改為指向「票 145〈六十七〉67.3」)屬 .py 改動,依 R3 流程成本不於本票處理;下一張程式票修正。
+- **追蹤項(2026-10-06 登記,〈六十八〉68.3 第 1 點;S5k-F4;觀察)K-c 判定路徑(目前尚未 machine-enforced)** ——
+  K-c 修前(S3K1)經 `:644` 判 `other` → `:1110` 得 unknown;修後(S4K1B)判 `known_dist` → `:1112` 的 `_known_dists_accepted` 得 unknown。斷言與結論相同、路徑不同;「B ∩ H 拒絕邊界內但未被宿主接受的版本」這一層(policy 層)在本輪沒有先紅後綠的示範。
+- **追蹤項(2026-10-06 登記,〈六十八〉68.3 第 1 點;S5k-F1)外部補充分析待核對(目前尚未 machine-enforced)** ——
+  〈六十八〉68.2 的 anyio 4.15.0 / 4.15.1 差異與判讀為外部來源、非本 repo 帳本證據,標「已提供、待核對」;待 5k 審查者或後續審查核對。
