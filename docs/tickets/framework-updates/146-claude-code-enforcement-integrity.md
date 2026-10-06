@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:第四站 4a 已提交(S4-146-1f);3e-0 設計待裁;146 尚未生效
+**狀態**:3e 紅燈撰寫中;146 尚未生效
+~~**狀態**:第四站 4a 已提交(S4-146-1f);3e-0 設計待裁;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3e-0 已裁、進入 3e 紅燈時更新。
 ~~**狀態**:第四站 4a 核心判定已提交(S4-146-1f);尚未接 status / pre-commit,146 尚未生效;待 3e/4b integration 紅→綠~~(F-036 體例:舊行不刪)—— 2026-10-06 3e-0 偵查報告產出時更新:進入 3e 設計待裁。
 ~~**狀態**:第三站紅燈已補強(S3d-146-1,blob 20cb16da3635);待第四站核心實作;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 第四站 4a 核心判定提交、全套 0 紅時更新。
 ~~**狀態**:立案 —— 第三站補強中(3d-146);尚未實作~~(F-036 體例:舊行不刪)—— 2026-10-06 3d 紅燈提交並證紅時更新。
@@ -338,7 +339,8 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 ### 增補後的契約
 
 - `extension_surface_facts` 完整簽名:`(dev_mods_dir, synced_dirs, canon_dir, mirror_dirs, project_settings_paths, mcp_json_path, user_skills_dir, user_commands_dir)`。
-- surfaces 七鍵:`"dev_mod_files"`、`"synced_files"`、`"r4_violations"`、`"project_hook_commands"`、`"mcp_json_servers"`、`"user_skill_plugins"`、`"user_commands"`。
+- ~~surfaces 七鍵:`"dev_mod_files"`、`"synced_files"`、`"r4_violations"`、`"project_hook_commands"`、`"mcp_json_servers"`、`"user_skill_plugins"`、`"user_commands"`。~~(F-036 體例:舊行不刪)—— 2026-10-06 被 3e v1 接線契約取代。
+- 3e 修訂:八鍵(+errors)
 - ~~policy 形狀:allowlist 的 `dev_mod_files` / `user_skill_plugins` / `user_commands` 每項恰為 `{"sha256": <64 碼小寫十六進位>, "note": <字串>}`,鍵集合恰好這兩個。~~(F-036 體例:舊行不刪)—— 2026-10-06 被 3c 裁決 (k) 取代。
 - surfaces 形狀:回傳的 `dev_mod_files` / `user_skill_plugins` / `user_commands` 每項恰為 tuple `(relpath, sha256 或 None)`。
 
@@ -444,3 +446,55 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 
 - 設計報告:`.dev/reports/2026-10-06T180516Z-ticket146-3e-0-integration-design.md`(本機證據,不在 git 內)。
 - **狀態:3e-0 設計報告已產出,待裁;146 尚未生效。**
+
+---
+
+## 3e 裁決與 v1 接線契約(2026-10-06)
+
+### Jeff 裁決(2026-10-06;逐字)
+
+1 EXT_UNKNOWN 分 observation_missing / unmanaged_entry，以結構化 category 欄位承載：接受。
+2 observation_missing 擋 pre-commit：擋。
+3 unmanaged_entry（synced 有檔）擋 pre-commit：甲，擋。synced 是已知存在的未受管靜態入口，不是 runtime 未證明；v0 放行只是留下紀錄，沒有完成入口完整性的 enforcement。這台機器在 synced 納管前無法 commit 是已知成本；不為了接線後能提交而默認例外。
+4 DECLARED_OK + runtime_assurance=UNPROVEN：放行；第二行維持固定原句；不得降級 static state。
+5 規則代號：B，新代號 R10。
+6 home 來源：只有 明確參數 → expanduser("~")/.claude；不納環境變數。
+7 status.py:36 修訂字句接受，並同時修 :16「只呼叫 gate」與 :19「不重跑任何規則」。
+8 surface 個別讀取失敗：維持 VIOLATION。
+9 rule_codes 降級可見：另開 rule_sources()。
+z1 判定一次、顯示消費同一結果：extension_report 只呼叫 _extension_first_reason 一次，渲染不再呼叫它；production 不得經 extension_status_lines wrapper 再判一次。
+z2 authority 缺失走獨立硬擋，不受影子豁免。
+z3 目錄列舉失敗 ⇒ observation_missing，不得洗成空集合。
+z4 參數正名 claude_root（= ~/.claude），來源鏈唯一。
+補鎖 1 所有 observation_missing 都走獨立硬擋，不受 shadow 豁免，包含 claude_root 無法確定、目錄列舉失敗；判定器缺失／載入失敗直接走 authority failure。unmanaged_entry 宣稱「擋」即不受 shadow 豁免。
+補鎖 2 z3 保留既有違規優先序：有列舉錯誤 ⇒ 不得 DECLARED_OK；若已觀測到確定違規仍先回 VIOLATION；沒有確定違規時才回 UNKNOWN + observation_missing。gate 另外依結構化觀測結果硬擋：surfaces["errors"] 非空即硬擋，不論 state。
+補鎖 3 明確注入失敗不得 fallback：claude_root=None 才使用 fallback；明確提供不存在、不可讀或無效路徑 ⇒ 前置觀測失敗，判定器呼叫 0 次，gate 直接硬擋。確認不存在的可選入口可以是空；無法確認是否存在或無法列舉不能是空。
+補鎖 4 rule_sources() 必須在 redlight 缺失時仍可用，放在 gate 可直接使用的位置，以結構化欄位呈現來源的存在、可讀與完整性；列舉成功不代表模組可執行，import authority 仍由 enforcement 路徑判斷。
+補鎖 5 146 authority 檢查必須在 R4（check_skill_copies）之前執行；缺 redlight 的測試不得停掉 check_skill_copies。
+補鎖 6 gate 對 surfaces["synced_files"] 非空一律硬擋，不論 static state（static state 仍保留既有 VIOLATION 優先序）；硬擋訊息必須指出未受管入口，不能只重述未登記檔。
+3e-0 報告修正（入票，不另開輪）：步驟 0 的明文是 allows_src_write 與 docs 不屬原始碼，不是 docs-write 授權欄位；Q-A 改為「未找到直接鎖定該契約的測試」；Q-G 列出檔名屬偏離；「接線後第一次 commit 一定被擋」標為推論。
+
+### v1 接線契約(逐字;4b 只能實作,不能改名;改名須回票)
+
+redlight.py：
+  EXT_CAT_ALLOWLIST = "allowlist_state"、EXT_CAT_UNREGISTERED = "unregistered"、EXT_CAT_R4 = "r4"、EXT_CAT_HOOK = "hook"、EXT_CAT_MCP = "mcp"、EXT_CAT_OBSERVATION = "observation_missing"、EXT_CAT_UNMANAGED = "unmanaged_entry"；EXT_CATEGORIES = 七個的 frozenset。EXT_RUNTIME_UNPROVEN = "UNPROVEN"。
+  EXT_SURFACE_KEYS 改為八鍵：原七鍵 + "errors"。surfaces["errors"] 是 list，每項 (surface_name, path, error_text)；無錯誤為 []。
+  _walk_regular(root_dir, exclude_top=None, walk=None, lstat=None) → (entries, errors)；errors 每項 (path, error_text)。存在性用 lstat（預設 os.lstat）：FileNotFoundError ⇒ 確認不存在 ⇒ ([], [])；其他 OSError ⇒ ([], [(root_dir, err)])；存在但不是目錄 ⇒ ([], [(root_dir, "not a directory")])。列舉用 walk（預設 os.walk）並以 onerror 收集例外進 errors；列舉第一層就失敗 ⇒ entries 可為空但 errors 非空。
+  extension_surface_facts(…八個必填…, walk=None, lstat=None)：對三個檔案型入口與 synced_dirs 各呼叫 _walk_regular，把 errors 加上 surface 名（"dev-mods" / "user-skills" / "user-commands" / "synced"）成 (surface_name, path, error_text) 併入 surfaces["errors"]。
+  _extension_first_reason(facts, surfaces) → (state, category, reason)。順序：1 facts["state"] != "ok" ⇒ (VIOLATION, allowlist_state)；2 鍵集合 ≠ 八鍵 ⇒ (UNKNOWN, observation_missing)；3 三個檔案型鍵未登記 ⇒ (VIOLATION, unregistered)；4 r4 ⇒ (VIOLATION, r4)；5 hook ⇒ (VIOLATION, hook)；6 mcp ⇒ (VIOLATION, mcp)；7 errors 非空 ⇒ (UNKNOWN, observation_missing, "觀測失敗：<第一筆>（共 N 筆）")；8 synced_files 非空 ⇒ (UNKNOWN, unmanaged_entry)；9 (DECLARED_OK, None, None)。
+  _extension_render_lines(state, category, reason, facts) → 兩行（文字規則不變；facts 可為 None，此時第一行不帶 blob）。
+  extension_status_lines(facts, surfaces)：保留為相容 wrapper = 一次 _extension_first_reason + _extension_render_lines。extension_state 保留，回三元組第一項。
+  extension_report(repo_root, claude_root=None, walk=None, lstat=None) → dict 恰好十一鍵：facts, surfaces, state, category, reason, lines, runtime_assurance, claude_root, claude_root_source, authority, observation。
+    claude_root=None ⇒ os.path.join(os.path.expanduser("~"), ".claude")、claude_root_source="fallback"；給值 ⇒ "param"。
+    前置觀測：claude_root 不存在 / 不是目錄 / lstat 失敗 / expanduser 結果仍含 "~" ⇒ observation="claude_root_invalid"，facts=None、surfaces=None、state=UNKNOWN、category=observation_missing、reason 含「claude_root 無法確定」、lines 由 _extension_render_lines(state, category, reason, None) 產生；_extension_first_reason 呼叫 0 次。
+    有效 ⇒ observation="ok"；facts = extension_allowlist_facts(repo_root)；surfaces = extension_surface_facts(八個路徑, walk, lstat)；_extension_first_reason 恰好 1 次；lines 由 _extension_render_lines 從同一結果產生。
+    authority 固定 "ok"；runtime_assurance 固定 "UNPROVEN"。
+    八個路徑：dev_mods_dir = <claude_root>/dev-mods；synced_dirs = [<claude_root>/skills/synced, <claude_root>/plugins/synced]；canon_dir = <repo_root>/.agents/skills；mirror_dirs = [<repo_root>/.claude/skills, <repo_root>/skills]；project_settings_paths = [<repo_root>/.claude/settings.json, <repo_root>/.claude/settings.local.json]；mcp_json_path = <repo_root>/.mcp.json；user_skills_dir = <claude_root>/skills；user_commands_dir = <claude_root>/commands。
+gate.py：
+  rule_sources(source_path=None) → dict，鍵為兩個絕對路徑字串，值為 {"exists": bool, "readable": bool, "complete": bool, "codes": set}；complete = exists and readable；不存在 ⇒ exists False、readable False、complete False、codes set()；存在但讀不到 ⇒ exists True、readable False、complete False、codes set()。rule_codes() 回傳型別不變。
+  _extension_claude_root() → None（production 固定回 None ⇒ fallback；唯一的測試注入接縫）。
+  check_extension_integrity() → dict，所有分支同一形狀 {"hard_block": str 或 None, "violations": list, "report": dict 或 None}。流程：_redlight() 載入失敗 ⇒ {"hard_block": "[R10/fail-closed] 146 判定器不在或無法載入：<例外類型>；commit 已擋下", "violations": [], "report": None}（不得 traceback）；report = rl.extension_report(ROOT, _extension_claude_root())；硬擋條件（任一成立即硬擋，不論 state）：(a) report["observation"] != "ok"；(b) report["state"] == UNKNOWN；(c) surfaces 非 None 且 surfaces["errors"] 非空；(d) surfaces 非 None 且 surfaces["synced_files"] 非空 ⇒ hard_block = "[R10/fail-closed] <原因類別>：<說明>"，其中 (d) 的說明必須含「未受管入口：synced <N> 檔」，(c) 必須含「觀測失敗」，即使 state 是 VIOLATION 也要把這些寫進訊息（可在同一訊息列出 state 與未登記第一筆）；否則 state VIOLATION ⇒ {"hard_block": None, "violations": ["[R10] <reason>"], "report": report}；DECLARED_OK ⇒ {"hard_block": None, "violations": [], "report": report}。
+  mode_pre_commit：在 staged_paths 取得之後、逐檔 check 之前呼叫 check_extension_integrity()；hard_block 非 None ⇒ _err(hard_block) 並 return 1，在影子分支與 R4 之前；violations 併入既有串列（走既有影子規則）。mode_hook 不呼叫它。
+  verify_gates.SCENARIOS 加 "R10"（4b 實作；3e 只鎖存在）。
+status.py：
+  _extension_claude_root() → None（同 gate，測試注入用）。_enforcement 新增兩行（經 _line）：欄名 "extension integrity (R10)" 值 = report["lines"][0]，來源 "redlight.extension_report(<repo>, <claude_root 遮罩>)"；欄名 "runtime loaded set" 值 = report["lines"][1]，來源同上。redlight 載不到 ⇒ 一行「未記錄（146 判定器不在）」。:16、:19、:36 契約依裁決 7 修訂（4b）。
