@@ -3333,3 +3333,14 @@ class TestTicket146ExtensionIntegrity:
             assert facts["state"] == "malformed", (label, facts)
             state, _lines = self._evaluate(facts, self._surfaces(tmp_path / ("s-" + label.replace(" ", "-"))))
             assert state == self._api("EXT_VIOLATION"), (label, state)
+
+    def test_t146_17(self, tmp_path):
+        """T146-17:allowlist malformed 且 surfaces 少一鍵 ⇒ 仍是 VIOLATION,原因是 allowlist(4a-2 裁決 (r));對應 invariant 前半。"""
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist(extra=[])))
+        facts = self._facts(root)
+        assert facts["state"] == "malformed", facts
+        surfaces = dict(self._surfaces(tmp_path / "s"))
+        surfaces.pop("synced_files")
+        state, lines = self._evaluate(facts, surfaces)
+        assert state == self._api("EXT_VIOLATION"), (state, lines)
+        assert u"allowlist 格式不明" in lines[0], lines
