@@ -2790,3 +2790,292 @@ class TestKnownDistBoundaryAnyio4151:
         pol = _g_policy(dists=[["anyio", "4.15.0"], ["anyio", "4.15.1"]])
         got = _g_coverage(_g_root(tmp_path / "r", policy_text=_g_policy_text(pol)), monkeypatch, anyio_version=version)
         assert got == "true", got
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 146 第三站紅燈(S3-146-1)—— Claude Code Enforcement Integrity v0 介面契約
+#
+# 契約在票 146〈設計決策 Q1–Q6〉;落點 = redlight.py。新 API 一律在測試內 getattr 取得,
+# 缺 API ⇒ 測試內 AssertionError("v0 contract not implemented: <name>"),不得 collection error。
+# 檔頂 import 不新增;標準庫在各測試內 import。既有 helper(`_d_git` / `_g_write`)只呼叫、不修改。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestTicket146ExtensionIntegrity:
+    """票 146 第三站紅燈。
+
+    Invariant(逐字):146 可以證明「所有已知靜態載入入口符合 committed policy」，但在沒有獨立 runtime authority source 前，不得把這件事升格成「本 session 實際載入集合已驗證」。
+
+    全部在 S3-146-1 預期各自失敗;缺 API 以測試內 AssertionError 呈現。
+    """
+
+    _ALLOWLIST_REL = ".agents/extension-allowlist.json"
+
+    @staticmethod
+    def _api(name):
+        value = getattr(redlight, name, None)
+        assert value is not None, "v0 contract not implemented: %s" % name
+        return value
+
+    @staticmethod
+    def _allowlist(dev_mod_sha=(), **extra):
+        doc = {"schema": "monkeyleash.extension-allowlist", "version": 1,
+               "dev_mod_files": [{"sha256": h, "note": "t146"} for h in dev_mod_sha],
+               "user_skill_plugins": [], "user_commands": [],
+               "project_settings_hook_commands": [], "mcp_json_servers": []}
+        doc.update(extra)
+        return doc
+
+    @staticmethod
+    def _text(doc):
+        return json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
+
+    def _repo(self, root, allowlist_text=None, commit_allowlist=True):
+        """真的 git repo:提交 README;`allowlist_text` 不為 None ⇒ 寫到 allowlist 位置,`commit_allowlist` 為真才一起提交。"""
+        root = pathlib.Path(str(root))
+        root.mkdir(parents=True, exist_ok=True)
+        _g_write(root, "README.md", u"t146\n")
+        tracked = ["README.md"]
+        if allowlist_text is not None:
+            _g_write(root, self._ALLOWLIST_REL, allowlist_text)
+            if commit_allowlist:
+                tracked.append(self._ALLOWLIST_REL)
+        _d_git(root, "init", "-q")
+        _d_git(root, "config", "user.email", "t@example.invalid")
+        _d_git(root, "config", "user.name", "t")
+        _d_git(root, "add", *tracked)
+        _d_git(root, "commit", "-q", "-m", "baseline")
+        return root
+
+    def _surfaces(self, base, dev_mod_files=None, dev_mod_dirs=(), synced_files=None):
+        """乾淨的 surface 佈置(全部在 tmp,路徑注入)+ 指定的 dev-mods / synced 內容 → `extension_surface_facts`。
+        `synced_files` 為 None ⇒ synced 目錄不存在。"""
+        base = pathlib.Path(str(base))
+        dev = base / "dev-mods"
+        dev.mkdir(parents=True, exist_ok=True)
+        for d in dev_mod_dirs:
+            (dev / d).mkdir(parents=True, exist_ok=True)
+        for rel, data in (dev_mod_files or {}).items():
+            p = dev / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data)
+        synced = base / "synced"
+        for rel, data in (synced_files or {}).items():
+            p = synced / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data)
+        canon = base / "canon"
+        _g_write(canon, "s/SKILL.md", u"skill\n")
+        fn = self._api("extension_surface_facts")
+        return fn(str(dev), [str(synced)], str(canon), [], [], str(base / "absent.mcp.json"))
+
+    def _facts(self, root):
+        return self._api("extension_allowlist_facts")(str(root))
+
+    def _evaluate(self, facts, surfaces):
+        state = self._api("extension_state")(facts, surfaces)
+        lines = self._api("extension_status_lines")(facts, surfaces)
+        return state, lines
+
+    @staticmethod
+    def _gate():
+        spec = importlib.util.spec_from_file_location(
+            "gate_for_t146", ROOT / ".claude" / "hooks" / "gate.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _scenarios(self, tmp_path):
+        """T146-1 到 T146-4b 的輸入組合:[(標籤, facts, surfaces)]。T146-8 用。"""
+        import hashlib
+        text = self._text(self._allowlist())
+        note = b"not code\n"
+        note_sha = hashlib.sha256(note).hexdigest()
+        out = []
+
+        r = self._repo(tmp_path / "r1", allowlist_text=text)
+        _g_write(r, self._ALLOWLIST_REL, text + "\n")
+        out.append(("T146-1", self._facts(r), self._surfaces(tmp_path / "s1")))
+
+        r = self._repo(tmp_path / "r2", allowlist_text=text, commit_allowlist=False)
+        out.append(("T146-2", self._facts(r), self._surfaces(tmp_path / "s2")))
+
+        r = self._repo(tmp_path / "r2b")
+        out.append(("T146-2b", self._facts(r), self._surfaces(tmp_path / "s2b")))
+
+        r = self._repo(tmp_path / "r2c", allowlist_text=self._text(self._allowlist(extra=[])))
+        out.append(("T146-2c", self._facts(r), self._surfaces(tmp_path / "s2c")))
+
+        r = self._repo(tmp_path / "r3", allowlist_text=text)
+        out.append(("T146-3", self._facts(r),
+                    self._surfaces(tmp_path / "s3", dev_mod_files={"note.txt": note})))
+
+        r = self._repo(tmp_path / "r3b", allowlist_text=self._text(self._allowlist(dev_mod_sha=[note_sha])))
+        out.append(("T146-3b", self._facts(r),
+                    self._surfaces(tmp_path / "s3b", dev_mod_files={"note.txt": note})))
+
+        r = self._repo(tmp_path / "r4", allowlist_text=text)
+        out.append(("T146-4", self._facts(r),
+                    self._surfaces(tmp_path / "s4", dev_mod_dirs=("session-id-shell",))))
+
+        r = self._repo(tmp_path / "r4b", allowlist_text=text)
+        out.append(("T146-4b", self._facts(r),
+                    self._surfaces(tmp_path / "s4b", dev_mod_dirs=("session-id-shell",),
+                                   synced_files={"manifest.json": b"{}\n"})))
+        return out
+
+    def test_t146_0a(self):
+        """T146-0a:常數鎖 —— allowlist 位置 / schema / 欄位與四態常數的值如契約;對應 invariant 前半。"""
+        expected = {
+            "EXT_ALLOWLIST_FILE": ".agents/extension-allowlist.json",
+            "EXT_ALLOWLIST_SCHEMA": "monkeyleash.extension-allowlist",
+            "EXT_ALLOWLIST_FIELDS": ("schema", "version", "dev_mod_files", "user_skill_plugins",
+                                     "user_commands", "project_settings_hook_commands", "mcp_json_servers"),
+            "EXT_VIOLATION": "VIOLATION",
+            "EXT_UNKNOWN": "UNKNOWN",
+            "EXT_DECLARED_OK": "DECLARED_OK",
+            "EXT_VERIFIED": "VERIFIED",
+        }
+        for name, value in expected.items():
+            assert self._api(name) == value, (name, getattr(redlight, name, None))
+
+    def test_t146_1(self, tmp_path):
+        """T146-1:allowlist 已提交後工作樹多一行 ⇒ worktree_differs、VIOLATION;對應 invariant 前半。"""
+        text = self._text(self._allowlist())
+        root = self._repo(tmp_path / "r", allowlist_text=text)
+        _g_write(root, self._ALLOWLIST_REL, text + "\n")
+        facts = self._facts(root)
+        assert {"state", "blob", "policy"} <= set(facts), sorted(facts)
+        assert facts["state"] == "worktree_differs", facts
+        state, lines = self._evaluate(facts, self._surfaces(tmp_path / "s"))
+        assert state == self._api("EXT_VIOLATION"), state
+        assert u"allowlist 工作樹與 HEAD 不同" in lines[0], lines
+
+    def test_t146_2(self, tmp_path):
+        """T146-2:allowlist 只在工作樹、從未提交 ⇒ uncommitted、VIOLATION;對應 invariant 前半。"""
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist()), commit_allowlist=False)
+        facts = self._facts(root)
+        assert facts["state"] == "uncommitted", facts
+        state, lines = self._evaluate(facts, self._surfaces(tmp_path / "s"))
+        assert state == self._api("EXT_VIOLATION"), state
+        assert u"allowlist 未提交" in lines[0], lines
+
+    def test_t146_2b(self, tmp_path):
+        """T146-2b:HEAD 與工作樹都沒有 allowlist ⇒ uninitialized、VIOLATION;對應 invariant 前半。"""
+        root = self._repo(tmp_path / "r")
+        facts = self._facts(root)
+        assert facts["state"] == "uninitialized", facts
+        state, lines = self._evaluate(facts, self._surfaces(tmp_path / "s"))
+        assert state == self._api("EXT_VIOLATION"), state
+        assert u"allowlist 未初始化" in lines[0], lines
+
+    def test_t146_2c(self, tmp_path):
+        """T146-2c:已提交但鍵集合多一個鍵 ⇒ malformed、VIOLATION;對應 invariant 前半。"""
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist(extra=[])))
+        facts = self._facts(root)
+        assert facts["state"] == "malformed", facts
+        state, _lines = self._evaluate(facts, self._surfaces(tmp_path / "s"))
+        assert state == self._api("EXT_VIOLATION"), state
+
+    def test_t146_3(self, tmp_path):
+        """T146-3:dev-mods 根目錄有未登記的 note.txt(副檔名刻意非程式碼)⇒ VIOLATION;對應 invariant 前半。"""
+        import hashlib
+        data = b"not code\n"
+        sha = hashlib.sha256(data).hexdigest()
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist()))
+        surfaces = self._surfaces(tmp_path / "s", dev_mod_files={"note.txt": data})
+        assert ("note.txt", sha) in [tuple(x) for x in surfaces["dev_mod_files"]], surfaces["dev_mod_files"]
+        state, lines = self._evaluate(self._facts(root), surfaces)
+        assert state == self._api("EXT_VIOLATION"), state
+        assert "note.txt" in lines[0], lines
+
+    def test_t146_3b(self, tmp_path):
+        """T146-3b:同 T146-3 但 allowlist 的 dev_mod_files 登記了該檔 sha256 ⇒ 不是 VIOLATION(Q6 指紋模型);對應 invariant 前半。"""
+        import hashlib
+        data = b"not code\n"
+        sha = hashlib.sha256(data).hexdigest()
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist(dev_mod_sha=[sha])))
+        surfaces = self._surfaces(tmp_path / "s", dev_mod_files={"note.txt": data})
+        state, _lines = self._evaluate(self._facts(root), surfaces)
+        assert state != self._api("EXT_VIOLATION"), state
+
+    def test_t146_4(self, tmp_path):
+        """T146-4:dev-mods 只有 <id> 空殼子目錄、synced 不存在 ⇒ DECLARED_OK,runtime 欄含「未證明」;對應 invariant 前半(負控)。"""
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist()))
+        surfaces = self._surfaces(tmp_path / "s", dev_mod_dirs=("session-id-shell",))
+        state, lines = self._evaluate(self._facts(root), surfaces)
+        assert state == self._api("EXT_DECLARED_OK"), state
+        assert u"未證明" in lines[1], lines
+
+    def test_t146_4b(self, tmp_path):
+        """T146-4b:同 T146-4 但 synced 目錄有一個 manifest.json ⇒ UNKNOWN(Q2:未受管入口不算 static clean);對應 invariant 前半。"""
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist()))
+        surfaces = self._surfaces(tmp_path / "s", dev_mod_dirs=("session-id-shell",),
+                                  synced_files={"manifest.json": b"{}\n"})
+        state, lines = self._evaluate(self._facts(root), surfaces)
+        assert state == self._api("EXT_UNKNOWN"), state
+        assert "UNKNOWN" in lines[0], lines
+
+    def test_t146_5(self, tmp_path):
+        """T146-5:實體鏡像多出正典沒有的 .claude-plugin/plugin.json ⇒ R4 違規;對應 invariant 前半。"""
+        canon = tmp_path / "canon"
+        mirror = tmp_path / "mirror"
+        _g_write(canon, "s/SKILL.md", u"skill\n")
+        _g_write(mirror, "s/SKILL.md", u"skill\n")
+        _g_write(mirror, "s/.claude-plugin/plugin.json", u'{"name": "s"}\n')
+        out = self._gate().skill_mirror_violations(str(canon), [str(mirror)])
+        assert any(u"鏡像多出正典沒有的檔" in v for v in out), out
+
+    def test_t146_6(self, tmp_path):
+        """T146-6:鏡像輔助檔 references/a.md 內容與正典不同(SKILL.md 相同)⇒ R4 違規;對應 invariant 前半。"""
+        canon = tmp_path / "canon"
+        mirror = tmp_path / "mirror"
+        _g_write(canon, "s/SKILL.md", u"skill\n")
+        _g_write(canon, "s/references/a.md", u"canon\n")
+        _g_write(mirror, "s/SKILL.md", u"skill\n")
+        _g_write(mirror, "s/references/a.md", u"drifted\n")
+        out = self._gate().skill_mirror_violations(str(canon), [str(mirror)])
+        assert any(u"實體副本內容不一致" in v and "references/a.md" in v for v in out), out
+
+    def test_t146_7(self, tmp_path):
+        """T146-7:全乾淨 ⇒ 恰好兩行、兩欄分開、只掃這兩行不含 pass / 有效 / verified;對應 invariant 後半。"""
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist()))
+        _state, lines = self._evaluate(self._facts(root), self._surfaces(tmp_path / "s"))
+        assert isinstance(lines, list) and len(lines) == 2, lines
+        assert lines[0].startswith("static surfaces: "), lines
+        assert lines[1].startswith("runtime loaded set: "), lines
+        assert u"未證明" in lines[1], lines
+        joined = u"\n".join(lines).lower()
+        for word in (u"pass", u"有效", u"verified"):
+            assert word not in joined, (word, lines)
+
+    def test_t146_8(self, tmp_path):
+        """T146-8:EXT_VERIFIED 不可達 —— 已知輸入空間的行為鎖 + 結構性 regression lock;對應 invariant 後半。
+
+        結構性 regression lock + 已知輸入空間的行為鎖;不是不可達性的形式證明。
+        """
+        import inspect
+        allowed = {self._api("EXT_VIOLATION"), self._api("EXT_UNKNOWN"), self._api("EXT_DECLARED_OK")}
+        fn = self._api("extension_state")
+        got = dict((label, fn(facts, surfaces)) for label, facts, surfaces in self._scenarios(tmp_path))
+        assert set(got.values()) <= allowed, got
+        forbidden = "return " + "EXT_VERIFIED"
+        assert forbidden not in inspect.getsource(fn), "extension_state 原始碼含 %s" % forbidden
+
+    @pytest.mark.skipif("os.name == 'nt'", reason="Windows 建 symlink 需要額外權限;POSIX 才產得出來")
+    def test_t146_9(self, tmp_path):
+        """T146-9:鏡像 symlink 指向正典之外 ⇒ R4 違規,且同一筆出現在 extension_surface_facts 的 r4_violations;對應 invariant 前半(保留分支回歸)。"""
+        import os
+        canon = tmp_path / "canon"
+        outside = tmp_path / "outside"
+        mirror = tmp_path / "mirror"
+        _g_write(canon, "s/SKILL.md", u"skill\n")
+        _g_write(outside, "s/SKILL.md", u"skill\n")
+        mirror.mkdir()
+        os.symlink(str(outside / "s"), str(mirror / "s"))
+        out = self._gate().skill_mirror_violations(str(canon), [str(mirror)])
+        assert any(u"symlink 指向正典之外" in v for v in out), out
+        fn = self._api("extension_surface_facts")
+        surfaces = fn(str(tmp_path / "no-dev-mods"), [], str(canon), [str(mirror)], [],
+                      str(tmp_path / "absent.mcp.json"))
+        assert any(u"symlink 指向正典之外" in v for v in surfaces["r4_violations"]), surfaces["r4_violations"]
