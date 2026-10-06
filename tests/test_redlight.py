@@ -3406,7 +3406,7 @@ class TestTicket146ExtensionIntegrity:
         expected = {"T146-1": "allowlist_state", "T146-3": "unregistered",
                     "T146-4": None, "T146-4b": "unmanaged_entry"}
         for label, category in expected.items():
-            res = fn(*scen[label])
+            res = fn(*(scen[label] + (self._api("EXT_INVENTORY_UNCHECKED"),)))
             assert isinstance(res, tuple) and len(res) == 3, \
                 "v0 contract not implemented: _extension_first_reason 三元組(%s → %r)" % (label, res)
             assert res[1] == category, (label, res)
@@ -3418,8 +3418,8 @@ class TestTicket146ExtensionIntegrity:
         orig = self._api("_extension_first_reason")
         calls = []
 
-        def counting(facts, surfaces):
-            res = orig(facts, surfaces)
+        def counting(facts, surfaces, *inventory):
+            res = orig(facts, surfaces, *inventory)
             calls.append(res)
             return res
         monkeypatch.setattr(redlight, "_extension_first_reason", counting)
@@ -3520,7 +3520,9 @@ class TestTicket146ExtensionIntegrity:
 
     def test_t146_24(self, tmp_path):
         """T146-24:DECLARED_OK 佈置 ⇒ category None、runtime_assurance UNPROVEN、第二行含「未證明」(runtime 未證明不得降級 static state);對應 invariant 後半。"""
-        root, claude = self._t3e_clean(tmp_path)
+        root = self._repo_with_policies(tmp_path / "r", self._text(self._allowlist()), self._text(self._inventory()))
+        claude = tmp_path / "claude"
+        claude.mkdir()
         rep = self._t3e_report(root, claude)
         assert rep["observation"] == "ok", rep
         assert rep["state"] == self._api("EXT_DECLARED_OK"), rep
@@ -3529,9 +3531,367 @@ class TestTicket146ExtensionIntegrity:
         assert u"未證明" in rep["lines"][1], rep["lines"]
 
     def test_t146_36(self, tmp_path):
-        """T146-36:extension_report 回傳恰好十一鍵;對應 invariant 前半。"""
+        """T146-36:extension_report 回傳恰好十三鍵(3f:+inventory、+synced);對應 invariant 前半。"""
         root, claude = self._t3e_clean(tmp_path)
         rep = self._t3e_report(root, claude)
         assert set(rep) == {"facts", "surfaces", "state", "category", "reason", "lines",
                             "runtime_assurance", "claude_root", "claude_root_source",
-                            "authority", "observation"}, sorted(rep)
+                            "authority", "observation", "inventory", "synced"}, sorted(rep)
+
+    # ── 3f(S3f-146-1):synced 納管 —— inventory、匿名邏輯路徑、逐檔驗證 ─────────
+    #
+    # 契約在票 146〈3f 裁決與 v2 synced 契約〉。claude_root 一律 tmp;bucket 真名只出現在磁碟佈置,
+    # 期望值一律寫邏輯路徑("<bucket>" 字面值;常數本身由 T146-40 鎖)。「synced 空」= 兩個根都不存在。
+
+    _INVENTORY_REL = ".agents/extension-inventory.json"
+    _T3F_D = "d0d0-skills-bucket"
+    _T3F_E = "e0e0-plugins-bucket"
+    _T3F_SHA = "a" * 64
+
+    @staticmethod
+    def _inventory(pairs=(), **extra):
+        """inventory 文件:pairs 為 (邏輯路徑, sha256),產生 {"path","sha256","note"}(v2 synced 契約)。"""
+        doc = {"schema": "monkeyleash.extension-inventory", "version": 1,
+               "entries": [{"path": p, "sha256": s, "note": "t146"} for p, s in pairs]}
+        doc.update(extra)
+        return doc
+
+    def _repo_with_policies(self, root, allowlist_text, inventory_text, commit=True):
+        """真的 git repo:README + allowlist(不為 None ⇒ 寫入並提交)+ inventory(不為 None ⇒ 寫入;
+        `commit` 為真才一起提交,為假 ⇒ 只在工作樹)。不改 `_repo`。"""
+        root = pathlib.Path(str(root))
+        root.mkdir(parents=True, exist_ok=True)
+        _g_write(root, "README.md", u"t146\n")
+        tracked = ["README.md"]
+        if allowlist_text is not None:
+            _g_write(root, self._ALLOWLIST_REL, allowlist_text)
+            tracked.append(self._ALLOWLIST_REL)
+        if inventory_text is not None:
+            _g_write(root, self._INVENTORY_REL, inventory_text)
+            if commit:
+                tracked.append(self._INVENTORY_REL)
+        _d_git(root, "init", "-q")
+        _d_git(root, "config", "user.email", "t@example.invalid")
+        _d_git(root, "config", "user.name", "t")
+        _d_git(root, "add", *tracked)
+        _d_git(root, "commit", "-q", "-m", "baseline")
+        return root
+
+    @staticmethod
+    def _t3f_bucket(claude, root_name, bucket, files, marker=b"marker\n"):
+        """<claude>/<root_name>/synced/ 佈置唯一 bucket(目錄 + 同名 marker);回 {邏輯路徑: sha256}。"""
+        import hashlib
+        base = pathlib.Path(str(claude)) / root_name / "synced"
+        (base / bucket).mkdir(parents=True, exist_ok=True)
+        (base / (".bucket-" + bucket)).write_bytes(marker)
+        out = {root_name + "/.bucket-<bucket>": hashlib.sha256(marker).hexdigest()}
+        for rel, data in files.items():
+            p = base / bucket / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data)
+            out[root_name + "/<bucket>/" + rel] = hashlib.sha256(data).hexdigest()
+        return out
+
+    def _t3f_layout(self, claude):
+        """兩個 synced 根各一個 bucket;回 {邏輯路徑: sha256}(四筆)。"""
+        exp = self._t3f_bucket(claude, "skills", self._T3F_D, {"foo/SKILL.md": b"skill\n"})
+        exp.update(self._t3f_bucket(claude, "plugins", self._T3F_E, {".marketplaces.json": b"{}\n"}))
+        return exp
+
+    def _t3f_report(self, repo_root, claude_root, **kw):
+        """extension_report;注入參數不在簽名上 ⇒ 測試內紅。"""
+        import inspect
+        fn = self._api("extension_report")
+        for name in kw:
+            assert name in inspect.signature(fn).parameters, \
+                "v0 contract not implemented: extension_report(%s=)" % name
+        return fn(str(repo_root), str(claude_root), **kw)
+
+    def _t3f_governed(self, tmp_path, extra_pairs=(), commit=True):
+        """claude 佈兩根;inventory = 實際集合(+ extra_pairs);allowlist 空白。回 (repo, claude, 期望 mapping)。"""
+        claude = tmp_path / "claude"
+        claude.mkdir()
+        exp = self._t3f_layout(claude)
+        pairs = sorted(exp.items()) + list(extra_pairs)
+        root = self._repo_with_policies(tmp_path / "r", self._text(self._allowlist()),
+                                        self._text(self._inventory(pairs)), commit=commit)
+        return root, claude, exp
+
+    @pytest.mark.parametrize("case", [
+        "constants", "uninitialized", "uncommitted", "worktree_differs", "identity_mismatch",
+        "malformed-missing-note", "malformed-null-sha256",
+        "malformed-path-skills-x", "malformed-path-other-root", "malformed-path-no-R",
+        "malformed-path-token-twice", "malformed-path-dotbucket-in-R",
+        "malformed-duplicate-path", "malformed-dotdot", "ok-empty", "ok-four-forms"])
+    def test_t146_40(self, tmp_path, case):
+        """T146-40:inventory 常數鎖 + extension_inventory_facts 六態(malformed 子案;合法含空 entries ⇒ ok);對應裁決 (gg)(hh)(tt)。"""
+        if case == "constants":
+            expected = {"EXT_INVENTORY_FILE": ".agents/extension-inventory.json",
+                        "EXT_INVENTORY_SCHEMA": "monkeyleash.extension-inventory",
+                        "EXT_INVENTORY_FIELDS": ("schema", "version", "entries"),
+                        "EXT_SYNCED_ROOTS": ("skills", "plugins"),
+                        "EXT_BUCKET_TOKEN": "<bucket>"}
+            for name, value in expected.items():
+                assert self._api(name) == value, (name, getattr(redlight, name, None))
+            version = self._api("EXT_INVENTORY_VERSION")
+            assert type(version) is int and version == 1, version
+            sentinel = self._api("EXT_INVENTORY_UNCHECKED")
+            assert not isinstance(sentinel, (str, bytes, bool, int, dict, list, tuple)), sentinel
+            assert sentinel is getattr(redlight, "EXT_INVENTORY_UNCHECKED"), sentinel
+            return
+        fn = self._api("extension_inventory_facts")
+        allow = self._text(self._allowlist())
+        sha = self._T3F_SHA
+        good = [("skills/<bucket>/a.md", sha)]
+        docs = {
+            "malformed-missing-note": {"schema": "monkeyleash.extension-inventory", "version": 1,
+                                       "entries": [{"path": "skills/<bucket>/a.md", "sha256": sha}]},
+            "malformed-null-sha256": {"schema": "monkeyleash.extension-inventory", "version": 1,
+                                      "entries": [{"path": "skills/<bucket>/a.md", "sha256": None, "note": "t146"}]},
+            "malformed-path-skills-x": self._inventory([("skills/x.md", sha)]),
+            "malformed-path-other-root": self._inventory([("other/<bucket>/x", sha)]),
+            "malformed-path-no-R": self._inventory([("skills/<bucket>", sha)]),
+            "malformed-path-token-twice": self._inventory([("skills/<bucket>/a/<bucket>/b", sha)]),
+            "malformed-path-dotbucket-in-R": self._inventory([("skills/<bucket>/.bucket-x", sha)]),
+            "malformed-duplicate-path": self._inventory(good + [("skills/<bucket>/a.md", "b" * 64)]),
+            "malformed-dotdot": self._inventory([("skills/<bucket>/a/../b.md", sha)]),
+            "ok-empty": self._inventory(),
+            "ok-four-forms": self._inventory([("skills/<bucket>/a.md", sha), ("plugins/<bucket>/b.json", sha),
+                                              ("skills/.bucket-<bucket>", sha), ("plugins/.bucket-<bucket>", sha)]),
+        }
+        if case == "uninitialized":
+            root = self._repo_with_policies(tmp_path / "r", allow, None)
+        elif case == "uncommitted":
+            root = self._repo_with_policies(tmp_path / "r", allow, self._text(self._inventory(good)), commit=False)
+        elif case == "worktree_differs":
+            text = self._text(self._inventory(good))
+            root = self._repo_with_policies(tmp_path / "r", allow, text)
+            _g_write(root, self._INVENTORY_REL, text + "\n")
+        elif case == "identity_mismatch":
+            root = self._repo_with_policies(tmp_path / "r", allow, self._text(self._inventory(good)))
+            (root / ".agents" / "extension-inventory.json").unlink()
+        else:
+            root = self._repo_with_policies(tmp_path / "r", allow, self._text(docs[case]))
+        facts = fn(str(root))
+        if case.startswith("ok-"):
+            want = "ok"
+        elif case.startswith("malformed-"):
+            want = "malformed"
+        else:
+            want = case
+        assert facts["state"] == want, (case, facts)
+        if want == "ok":
+            assert facts["policy"] is not None, facts
+        else:
+            assert facts["policy"] is None, facts
+
+    def test_t146_41(self, tmp_path):
+        """T146-41:匿名邏輯路徑 —— 兩根各一個 bucket ⇒ synced_files 恰為四筆 (邏輯路徑, sha256),不含 bucket 真名,errors 為空;對應裁決 (ii)(mm)(tt)。"""
+        claude = tmp_path / "claude"
+        claude.mkdir()
+        exp = self._t3f_layout(claude)
+        root = self._repo_with_policies(tmp_path / "r", self._text(self._allowlist()), None)
+        rep = self._t3f_report(root, claude)
+        surfaces = rep["surfaces"]
+        got = dict(tuple(x) for x in surfaces["synced_files"])
+        assert got == exp, (got, exp)
+        assert not [p for p in got if self._T3F_D in p or self._T3F_E in p], sorted(got)
+        assert list(surfaces["errors"]) == [], surfaces["errors"]
+
+    @pytest.mark.parametrize("case", [
+        "two-dirs", "marker-mismatch", "extra-root-file",
+        pytest.param("root-child-symlink", marks=pytest.mark.skipif(
+            "os.name == 'nt'", reason="Windows 建 symlink 需要額外權限;POSIX 才產得出來")),
+        pytest.param("marker-symlink", marks=pytest.mark.skipif(
+            "os.name == 'nt'", reason="Windows 建 symlink 需要額外權限;POSIX 才產得出來")),
+        pytest.param("root-is-symlink", marks=pytest.mark.skipif(
+            "os.name == 'nt'", reason="Windows 建 symlink 需要額外權限;POSIX 才產得出來")),
+        "root-is-file"])
+    def test_t146_42(self, tmp_path, case):
+        """T146-42:bucket 結構錯誤 ⇒ errors 含 ("synced", <path>, "bucket structure: …"),該根不走訪,synced_verification 不通過;對應裁決 (ii)(tt)。"""
+        import os
+        claude = tmp_path / "claude"
+        claude.mkdir()
+        base = claude / "skills" / "synced"
+        bucket = self._T3F_D
+        if case == "root-is-file":
+            base.parent.mkdir(parents=True)
+            base.write_bytes(b"not a directory\n")
+        elif case == "root-is-symlink":
+            elsewhere = tmp_path / "elsewhere"
+            self._t3f_bucket(elsewhere, "skills", bucket, {"foo/SKILL.md": b"skill\n"})
+            base.parent.mkdir(parents=True)
+            os.symlink(str(elsewhere / "skills" / "synced"), str(base))
+        else:
+            self._t3f_bucket(claude, "skills", bucket, {"foo/SKILL.md": b"skill\n"})
+            marker = base / (".bucket-" + bucket)
+            if case == "two-dirs":
+                (base / "second-bucket").mkdir()
+            elif case == "marker-mismatch":
+                os.rename(str(marker), str(base / ".bucket-someone-else"))
+            elif case == "extra-root-file":
+                (base / "stray.txt").write_bytes(b"stray\n")
+            elif case == "root-child-symlink":
+                os.symlink(str(base / bucket / "foo" / "SKILL.md"), str(base / "link"))
+            elif case == "marker-symlink":
+                target = tmp_path / "marker-target"
+                target.write_bytes(marker.read_bytes())
+                marker.unlink()
+                os.symlink(str(target), str(marker))
+        root = self._repo_with_policies(tmp_path / "r", self._text(self._allowlist()), self._text(self._inventory()))
+        rep = self._t3f_report(root, claude)
+        errors = [tuple(e) for e in rep["surfaces"]["errors"]]
+        hits = [e for e in errors if len(e) == 3 and e[0] == "synced" and str(e[2]).startswith("bucket structure:")]
+        assert hits, (case, errors)
+        walked = [tuple(x)[0] for x in rep["surfaces"]["synced_files"] if tuple(x)[0].startswith("skills/")]
+        assert walked == [], (case, walked)
+        v = rep["synced"]
+        assert v["verified"] is False and v["structure_errors"] >= 1, (case, v)
+
+    @pytest.mark.parametrize("case", [
+        "i-match", "ii-extra", "iii-missing", "iv-content",
+        pytest.param("v-symlink", marks=pytest.mark.skipif(
+            "os.name == 'nt'", reason="Windows 建 symlink 需要額外權限;POSIX 才產得出來")),
+        "vi-worktree-only", "vii-none-nonempty", "viii-none-empty", "ix-malformed-empty",
+        "x-empty-empty", "xi-read-failure"])
+    def test_t146_43(self, tmp_path, case):
+        """T146-43:逐檔驗證 —— 集合與內容完全一致才通過;額外 / 缺少 / 內容不符 / symlink / 讀取失敗 / 未納管都不通過且不得 DECLARED_OK;對應裁決 (jj)(kk)(rr)(ss)。"""
+        import os
+        ok = self._api("EXT_DECLARED_OK")
+        unknown = self._api("EXT_UNKNOWN")
+        unmanaged = self._api("EXT_CAT_UNMANAGED")
+        verify = self._api("synced_verification")
+        first = self._api("_extension_first_reason")
+        if case in ("i-match", "x-empty-empty"):
+            if case == "i-match":
+                root, claude, _exp = self._t3f_governed(tmp_path)
+            else:
+                claude = tmp_path / "claude"
+                claude.mkdir()
+                root = self._repo_with_policies(tmp_path / "r", self._text(self._allowlist()),
+                                                self._text(self._inventory()))
+            rep = self._t3f_report(root, claude)
+            assert rep["synced"]["verified"] is True, rep["synced"]
+            assert rep["state"] == ok, rep
+            return
+        if case in ("vii-none-nonempty", "viii-none-empty", "ix-malformed-empty"):
+            claude = tmp_path / "claude"
+            claude.mkdir()
+            if case == "vii-none-nonempty":
+                self._t3f_layout(claude)
+            inventory_text = None
+            if case == "ix-malformed-empty":
+                inventory_text = self._text(self._inventory(entries=None))
+            root = self._repo_with_policies(tmp_path / "r", self._text(self._allowlist()), inventory_text)
+            rep = self._t3f_report(root, claude)
+            inv = None
+            if case == "ix-malformed-empty":
+                inv = self._api("extension_inventory_facts")(str(root))
+                assert inv["state"] == "malformed", inv
+            v = verify(inv, rep["surfaces"])
+            assert v["verified"] is False and u"未納管" in v["reason"], (case, v)
+            if case == "vii-none-nonempty":
+                assert u"未納管：inventory absent" in v["reason"], v
+            res = first(rep["facts"], rep["surfaces"], inv)
+            assert res[0] != ok, (case, res)
+            return
+        extra = []
+        if case == "iii-missing":
+            extra = [("skills/<bucket>/gone.md", self._T3F_SHA)]
+        elif case == "v-symlink":
+            extra = [("skills/<bucket>/link.md", self._T3F_SHA)]
+        root, claude, _exp = self._t3f_governed(tmp_path, extra_pairs=extra, commit=(case != "vi-worktree-only"))
+        bucket = claude / "skills" / "synced" / self._T3F_D
+        kw = {}
+        if case == "ii-extra":
+            (bucket / "extra.md").write_bytes(b"extra\n")
+        elif case == "iv-content":
+            (bucket / "foo" / "SKILL.md").write_bytes(b"skilL\n")
+        elif case == "v-symlink":
+            os.symlink(str(bucket / "foo" / "SKILL.md"), str(bucket / "link.md"))
+        elif case == "xi-read-failure":
+            target = os.path.normcase(os.path.abspath(str(bucket / "foo" / "SKILL.md")))
+
+            def read_bytes(p):
+                if os.path.normcase(os.path.abspath(str(p))) == target:
+                    raise PermissionError(13, "injected read failure", str(p))
+                with open(str(p), "rb") as f:
+                    return f.read()
+            kw["read_bytes"] = read_bytes
+        rep = self._t3f_report(root, claude, **kw)
+        v = rep["synced"]
+        assert v["verified"] is False, (case, v)
+        if case == "ii-extra":
+            assert v["extra"] == 1 and u"額外" in v["reason"], v
+        elif case == "iii-missing":
+            assert v["missing"] == 1 and u"缺少" in v["reason"], v
+        elif case == "iv-content":
+            assert v["mismatch"] == 1 and u"內容不符" in v["reason"], v
+        elif case == "v-symlink":
+            assert v["mismatch"] >= 1, v
+        elif case == "vi-worktree-only":
+            assert u"未納管" in v["reason"], v
+        elif case == "xi-read-failure":
+            assert ("skills/<bucket>/foo/SKILL.md", None) in [tuple(x) for x in rep["surfaces"]["synced_files"]], \
+                rep["surfaces"]["synced_files"]
+            assert v["mismatch"] >= 1 and u"內容不符" in v["reason"], v
+        assert (rep["state"], rep["category"]) == (unknown, unmanaged), (case, rep["state"], rep["category"])
+        assert u"未受管入口：synced" in (rep["reason"] or u""), (case, rep["reason"])
+
+    def test_t146_44(self, tmp_path, monkeypatch):
+        """T146-44:extension_report 十三鍵、synced 六鍵、inventory 與 extension_inventory_facts 同態;沒有 inventory ⇒ uninitialized 且 UNKNOWN;前置觀測失敗 ⇒ inventory / synced 為 None;判定恰好 1 次並收到 report["inventory"];對應裁決 (rr)、z1。"""
+        keys = {"facts", "surfaces", "state", "category", "reason", "lines", "runtime_assurance",
+                "claude_root", "claude_root_source", "authority", "observation", "inventory", "synced"}
+        six = {"verified", "reason", "missing", "extra", "mismatch", "structure_errors"}
+        inventory_facts = self._api("extension_inventory_facts")
+        orig = self._api("_extension_first_reason")
+        root, claude, _exp = self._t3f_governed(tmp_path)
+        calls = []
+
+        def counting(*a, **k):
+            calls.append((a, k))
+            return orig(*a, **k)
+        monkeypatch.setattr(redlight, "_extension_first_reason", counting)
+        rep = self._t3f_report(root, claude)
+        assert set(rep) == keys, sorted(rep)
+        assert set(rep["synced"]) == six, sorted(rep["synced"])
+        assert rep["inventory"]["state"] == inventory_facts(str(root))["state"], rep["inventory"]
+        assert len(calls) == 1, calls
+        a, k = calls[0]
+        passed = a[2] if len(a) > 2 else k.get("inventory")
+        assert passed == rep["inventory"], (passed, rep["inventory"])
+        bare = self._repo_with_policies(tmp_path / "bare", self._text(self._allowlist()), None)
+        rep2 = self._t3f_report(bare, claude)
+        assert rep2["inventory"] is not None and rep2["inventory"]["state"] == "uninitialized", rep2["inventory"]
+        assert rep2["state"] == self._api("EXT_UNKNOWN"), rep2
+        del calls[:]
+        bad = self._api("extension_report")(str(root), str(tmp_path / "missing-claude-root"))
+        assert bad["inventory"] is None and bad["synced"] is None, bad
+        assert calls == [], calls
+
+    def test_t146_45(self, tmp_path):
+        """T146-45:兩參數相容 wrapper 傳 EXT_INVENTORY_UNCHECKED —— synced 非空 ⇒ UNKNOWN「未評估」;synced 空 ⇒ 不因 synced 變 UNKNOWN;與三參數直接呼叫一致;對應 v2 契約第 8 步。"""
+        lines_fn = self._api("extension_status_lines")
+        state_fn = self._api("extension_state")
+        first = self._api("_extension_first_reason")
+        render = self._api("_extension_render_lines")
+        unchecked = self._api("EXT_INVENTORY_UNCHECKED")
+        ok = self._api("EXT_DECLARED_OK")
+        claude = tmp_path / "claude"
+        claude.mkdir()
+        self._t3f_layout(claude)
+        root = self._repo_with_policies(tmp_path / "r", self._text(self._allowlist()), None)
+        rep = self._t3f_report(root, claude)
+        facts, surfaces = rep["facts"], rep["surfaces"]
+        lines = lines_fn(facts, surfaces)
+        assert "UNKNOWN" in lines[0] and u"未評估" in lines[0], lines
+        res = first(facts, surfaces, unchecked)
+        assert res[0] == state_fn(facts, surfaces), (res, state_fn(facts, surfaces))
+        assert list(lines) == list(render(res[0], res[1], res[2], facts)), (lines, res)
+        empty = tmp_path / "claude-empty"
+        empty.mkdir()
+        rep2 = self._t3f_report(root, empty)
+        lines2 = lines_fn(rep2["facts"], rep2["surfaces"])
+        assert state_fn(rep2["facts"], rep2["surfaces"]) == ok, lines2
+        assert "UNKNOWN" not in lines2[0], lines2
+        assert first(rep2["facts"], rep2["surfaces"], unchecked)[0] == ok

@@ -6724,6 +6724,11 @@ class TestTicket146Integration:
     def test_t146_24b(self, tmp_path, monkeypatch, capsys):
         """T146-24b:DECLARED_OK 佈置 ⇒ rc 0(runtime 未證明不擋;裁決 4);對應 invariant 後半。"""
         root, claude = self._root(tmp_path)
+        with io.open(str(root / ".agents" / "extension-inventory.json"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"schema": "monkeyleash.extension-inventory", "version": 1, "entries": []},
+                               ensure_ascii=False, indent=2) + "\n")
+        self._git(root, "add", ".agents/extension-inventory.json")
+        self._git(root, "commit", "-q", "-m", "inventory")
         mod = self._load(root, "24b")
         self._wire(monkeypatch, mod, claude)
         rc, err = self._run(mod, capsys)
@@ -6768,3 +6773,177 @@ class TestTicket146Integration:
         vg = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(vg)
         assert "R10" in vg.SCENARIOS, sorted(vg.SCENARIOS)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 票 146 第三站 3f 紅燈(S3f-146-1)—— synced 納管的 pre-commit 硬擋(補鎖 6 3f 修訂版)
+#
+# 契約在票 146〈3f 裁決與 v2 synced 契約〉。臨時 root 複製 gate.py + redlight.py,
+# 提交空白 allowlist 與(依案)inventory;claude_root 一律 tmp 注入。
+# 載入 / 停鄰居 / 執行沿用 TestTicket146Integration 的 staticmethod(只呼叫、不修改)。
+# 失敗對照一律開影子:硬擋不受影子豁免。缺 API ⇒ 測試內紅。
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestTicket146SyncedGovernance:
+    """票 146 第三站 3f:synced 未納管或驗證失敗 ⇒ 獨立硬擋;集合與逐檔內容完整驗證通過 ⇒ 不因 synced 擋。"""
+
+    _D = "d0d0-skills-bucket"
+    _E = "e0e0-plugins-bucket"
+    _SHA = "a" * 64
+    _INVENTORY_REL = ".agents/extension-inventory.json"
+
+    @staticmethod
+    def _bucket(claude, root_name, bucket, files, marker=b"marker\n"):
+        """<claude>/<root_name>/synced/ 佈置唯一 bucket(目錄 + 同名 marker);回 {邏輯路徑: sha256}。"""
+        base = pathlib.Path(str(claude)) / root_name / "synced"
+        (base / bucket).mkdir(parents=True, exist_ok=True)
+        (base / (".bucket-" + bucket)).write_bytes(marker)
+        out = {root_name + "/.bucket-<bucket>": hashlib.sha256(marker).hexdigest()}
+        for rel, data in files.items():
+            p = base / bucket / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data)
+            out[root_name + "/<bucket>/" + rel] = hashlib.sha256(data).hexdigest()
+        return out
+
+    def _root(self, tmp_path, synced=True, inventory=True, extra_pairs=(), commit_inventory=True):
+        """臨時 repo(gate + redlight、已提交空白 allowlist)+ claude_root。
+        synced ⇒ 兩根各佈一個 bucket;inventory ⇒ 寫 = 實際集合(+ extra_pairs),commit_inventory 為假只留在工作樹。"""
+        git = TestTicket146Integration._git
+        root = tmp_path / "repo"
+        hooks = root / ".claude" / "hooks"
+        hooks.mkdir(parents=True)
+        (root / ".dev").mkdir()
+        (root / ".agents").mkdir()
+        shutil.copy2(str(ROOT / ".claude" / "hooks" / "gate.py"), str(hooks / "gate.py"))
+        shutil.copy2(str(ROOT / ".claude" / "hooks" / "redlight.py"), str(hooks / "redlight.py"))
+        with io.open(str(root / ".agents" / "extension-allowlist.json"), "w",
+                     encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(TestTicket146Integration._ALLOWLIST, ensure_ascii=False, indent=2) + "\n")
+        claude = tmp_path / "claude"
+        claude.mkdir()
+        exp = {}
+        if synced:
+            exp.update(self._bucket(claude, "skills", self._D, {"foo/SKILL.md": b"skill\n"}))
+            exp.update(self._bucket(claude, "plugins", self._E, {".marketplaces.json": b"{}\n"}))
+        tracked = [".agents/extension-allowlist.json"]
+        if inventory:
+            pairs = sorted(exp.items()) + list(extra_pairs)
+            doc = {"schema": "monkeyleash.extension-inventory", "version": 1,
+                   "entries": [{"path": p, "sha256": s, "note": "t146"} for p, s in pairs]}
+            with io.open(str(root / ".agents" / "extension-inventory.json"), "w",
+                         encoding="utf-8", newline="\n") as f:
+                f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+            if commit_inventory:
+                tracked.append(self._INVENTORY_REL)
+        git(root, "init", "-q")
+        git(root, "config", "user.email", "t@example.invalid")
+        git(root, "config", "user.name", "t")
+        git(root, "add", *tracked)
+        git(root, "commit", "-q", "-m", "baseline")
+        return root, claude
+
+    @staticmethod
+    def _go(monkeypatch, capsys, root, claude, tag, shadow=True):
+        mod = TestTicket146Integration._load(root, "3f_" + tag)
+        TestTicket146Integration._wire(monkeypatch, mod, claude, shadow=shadow)
+        rc, err = TestTicket146Integration._run(mod, capsys)
+        return mod, rc, err
+
+    def _blocked(self, rc, err, *needles):
+        assert rc == 1, err
+        assert "[R10/fail-closed]" in err and u"未受管入口：synced" in err, err
+        for needle in needles:
+            assert needle in err, (needle, err)
+
+    def test_t146_23b(self, tmp_path, monkeypatch, capsys):
+        """T146-23b:已納管且驗證通過、鄰居停掉 ⇒ mode_pre_commit() == 0;對應補鎖 6(3f 修訂版)通過對照。"""
+        root, claude = self._root(tmp_path)
+        _mod, rc, err = self._go(monkeypatch, capsys, root, claude, "23b", shadow=False)
+        assert rc == 0, err
+
+    def test_t146_23c(self, tmp_path, monkeypatch, capsys):
+        """T146-23c:已納管但磁碟多一檔 + 影子開 ⇒ rc 1,[R10/fail-closed] +「未受管入口：synced」+「額外」;對應裁決 (kk)。"""
+        root, claude = self._root(tmp_path)
+        (claude / "skills" / "synced" / self._D / "extra.md").write_bytes(b"extra\n")
+        _mod, rc, err = self._go(monkeypatch, capsys, root, claude, "23c")
+        self._blocked(rc, err, u"額外")
+
+    def test_t146_23d(self, tmp_path, monkeypatch, capsys):
+        """T146-23d:inventory 多一筆(磁碟缺檔)+ 影子開 ⇒ rc 1,含「缺少」;對應裁決 (kk)。"""
+        root, claude = self._root(tmp_path, extra_pairs=[("skills/<bucket>/gone.md", self._SHA)])
+        _mod, rc, err = self._go(monkeypatch, capsys, root, claude, "23d")
+        self._blocked(rc, err, u"缺少")
+
+    def test_t146_23e(self, tmp_path, monkeypatch, capsys):
+        """T146-23e:內容改一字 + 影子開 ⇒ rc 1,含「內容不符」;對應裁決 (kk)。"""
+        root, claude = self._root(tmp_path)
+        (claude / "skills" / "synced" / self._D / "foo" / "SKILL.md").write_bytes(b"skilL\n")
+        _mod, rc, err = self._go(monkeypatch, capsys, root, claude, "23e")
+        self._blocked(rc, err, u"內容不符")
+
+    def test_t146_23f(self, tmp_path, monkeypatch, capsys):
+        """T146-23f:inventory 只在工作樹 + 影子開 ⇒ rc 1,含「未納管」;對應裁決 (gg)(cc)。"""
+        root, claude = self._root(tmp_path, commit_inventory=False)
+        _mod, rc, err = self._go(monkeypatch, capsys, root, claude, "23f")
+        self._blocked(rc, err, u"未納管")
+
+    def test_t146_23g(self, tmp_path, monkeypatch, capsys):
+        """T146-23g:synced 兩根都空(不存在)但 repo 沒有 inventory + 影子開 ⇒ rc 1,含「未納管」;對應裁決 (rr)。"""
+        root, claude = self._root(tmp_path, synced=False, inventory=False)
+        _mod, rc, err = self._go(monkeypatch, capsys, root, claude, "23g")
+        self._blocked(rc, err, u"未納管")
+
+    def test_t146_23h(self, tmp_path, monkeypatch, capsys):
+        """T146-23h:已納管但注入 read_bytes 讀取失敗 + 影子開 ⇒ rc 1,含「內容不符」;對應裁決 (tt)。"""
+        import inspect
+        root, claude = self._root(tmp_path)
+        mod = TestTicket146Integration._load(root, "3f_23h")
+        TestTicket146Integration._wire(monkeypatch, mod, claude, shadow=True)
+        rl = mod._redlight()
+        assert hasattr(rl, "extension_report"), "v0 contract not implemented: redlight.extension_report"
+        assert "read_bytes" in inspect.signature(rl.extension_report).parameters, \
+            "v0 contract not implemented: extension_report(read_bytes=)"
+        orig = rl.extension_report
+        target = os.path.normcase(os.path.abspath(str(claude / "skills" / "synced" / self._D / "foo" / "SKILL.md")))
+
+        def read_bytes(p):
+            if os.path.normcase(os.path.abspath(str(p))) == target:
+                raise PermissionError(13, "injected read failure", str(p))
+            with open(str(p), "rb") as f:
+                return f.read()
+        monkeypatch.setattr(rl, "extension_report",
+                            lambda repo_root, claude_root=None, **k: orig(repo_root, claude_root, read_bytes=read_bytes))
+        rc, err = TestTicket146Integration._run(mod, capsys)
+        self._blocked(rc, err, u"內容不符")
+
+    def test_t146_23i(self, tmp_path, monkeypatch, capsys):
+        """T146-23i:skills/synced 是 regular file(跨平台)+ 影子開 ⇒ rc 1,含「結構錯誤」;對應裁決 (tt)。"""
+        root, claude = self._root(tmp_path, synced=False)
+        (claude / "skills").mkdir()
+        (claude / "skills" / "synced").write_bytes(b"not a directory\n")
+        _mod, rc, err = self._go(monkeypatch, capsys, root, claude, "23i")
+        self._blocked(rc, err, u"結構錯誤")
+
+    def test_t146_38b(self, tmp_path, monkeypatch, capsys):
+        """T146-38b:未登記 dev-mod 檔 + synced 已納管通過、影子關 ⇒ rc 1,含 [R10] 與「dev-mods 未登記」,不含「未受管入口」;對應補鎖 6(3f 修訂版)。"""
+        root, claude = self._root(tmp_path)
+        (claude / "dev-mods").mkdir()
+        (claude / "dev-mods" / "x.txt").write_bytes(b"x\n")
+        _mod, rc, err = self._go(monkeypatch, capsys, root, claude, "38b", shadow=False)
+        assert rc == 1, err
+        assert "[R10]" in err and u"dev-mods 未登記" in err, err
+        assert u"未受管入口" not in err, err
+
+    def test_t146_38c(self, tmp_path, monkeypatch, capsys):
+        """T146-38c:同 38b 但影子開 ⇒ rc 0 且影子帳本有 R10 紀錄(未登記走 violations 路徑,受影子規則);對應補鎖 6(3f 修訂版)。"""
+        root, claude = self._root(tmp_path)
+        (claude / "dev-mods").mkdir()
+        (claude / "dev-mods" / "x.txt").write_bytes(b"x\n")
+        mod, rc, err = self._go(monkeypatch, capsys, root, claude, "38c", shadow=True)
+        assert rc == 0, err
+        log = pathlib.Path(mod.SHADOW_LOG)
+        assert log.exists(), err
+        recs = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        assert any(r.get("rule") == "R10" for r in recs), recs

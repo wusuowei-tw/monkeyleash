@@ -3235,6 +3235,11 @@ class TestTicket146StatusLines:
     def test_t146_20(self, tmp_path, monkeypatch):
         """T146-20:DECLARED_OK 佈置 ⇒ R10 兩行各恰好 1 行,第一行值 == extension_report(...)["lines"][0];對應 Q4、裁決 (w)。"""
         root, claude = self._root(tmp_path)
+        with io.open(os.path.join(root, ".agents", "extension-inventory.json"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"schema": "monkeyleash.extension-inventory", "version": 1, "entries": []},
+                               ensure_ascii=False, indent=2) + "\n")
+        self._git(root, "add", ".agents/extension-inventory.json")
+        self._git(root, "commit", "-q", "-m", "inventory")
         self._inject(monkeypatch, claude)
         out = render(root)
         ext, rt = self._two_lines(out)
@@ -3248,6 +3253,11 @@ class TestTicket146StatusLines:
     def test_t146_28(self, tmp_path, monkeypatch):
         """T146-28:status 實際消費的 report 與 gate.check_extension_integrity 消費的 report 同 state、同第一行;對應裁決 (w)。"""
         root, claude = self._root(tmp_path)
+        with io.open(os.path.join(root, ".agents", "extension-inventory.json"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"schema": "monkeyleash.extension-inventory", "version": 1, "entries": []},
+                               ensure_ascii=False, indent=2) + "\n")
+        self._git(root, "add", ".agents/extension-inventory.json")
+        self._git(root, "commit", "-q", "-m", "inventory")
         self._inject(monkeypatch, claude)
         rl = status.load_redlight(root)
         assert rl is not None and hasattr(rl, "extension_report"), \
@@ -3277,6 +3287,11 @@ class TestTicket146StatusLines:
     def test_t146_30(self, tmp_path, monkeypatch):
         """T146-30:R10 兩行恰好找到,各帶 (source:,值不含 VERDICT_TOKENS;對應 Q4。"""
         root, claude = self._root(tmp_path)
+        with io.open(os.path.join(root, ".agents", "extension-inventory.json"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"schema": "monkeyleash.extension-inventory", "version": 1, "entries": []},
+                               ensure_ascii=False, indent=2) + "\n")
+        self._git(root, "add", ".agents/extension-inventory.json")
+        self._git(root, "commit", "-q", "-m", "inventory")
         self._inject(monkeypatch, claude)
         out = render(root)
         ext, rt = self._two_lines(out)
