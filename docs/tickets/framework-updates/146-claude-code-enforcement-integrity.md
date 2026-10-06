@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:3e 紅燈已提交(S3e-146-1);待 4b 接線;146 尚未生效
+**狀態**:3e 紅燈已提交;3f-0 偵查待裁;146 尚未生效
+~~**狀態**:3e 紅燈已提交(S3e-146-1);待 4b 接線;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f-0 synced 納管偵查產出時更新:4b 前插入 3f-0 → 納管契約裁決 → 3f 紅燈 → policy 進 HEAD(裁決 (cc))。
 ~~**狀態**:3e 紅燈撰寫中;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3e 紅燈提交並證紅時更新。
 ~~**狀態**:第四站 4a 已提交(S4-146-1f);3e-0 設計待裁;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3e-0 已裁、進入 3e 紅燈時更新。
 ~~**狀態**:第四站 4a 核心判定已提交(S4-146-1f);尚未接 status / pre-commit,146 尚未生效;待 3e/4b integration 紅→綠~~(F-036 體例:舊行不刪)—— 2026-10-06 3e-0 偵查報告產出時更新:進入 3e 設計待裁。
@@ -509,3 +510,25 @@ status.py：
 - 證紅(S3e-146-1 `f625c19c10b60c0df5e0818dbc9b0e3b7d84951b`,Windows):25 failed、2149 passed、6 skipped、3 xfailed;collected 2183;與逐 node 預期表一致;ERROR 0。
 - BLOB-3e:`tests/test_redlight.py` `9a5d77d73ddabdf45e52de130ac056ce6edd60bc`;`tests/test_gate.py` `42e0c30e813bab514a77258caedbdb7a226e053e`;`tests/test_status.py` `891ca4db55f2c5edc805e7d49625b5a4a56c5f1a`。
 - 4b 已知衝突(見審計):4b 自己的 commit 會被新接的 pre-commit 擋下(這台機器 allowlist 未建、synced 有檔);status runtime 行會有重複前綴;T146-22 要求訊息含 observation 值。
+
+---
+
+## 3f-0 synced 納管偵查(2026-10-06)
+
+### Jeff 裁決(2026-10-06,逐字)
+
+(aa) 3e 證紅合格。接受 3f-0 唯讀偵查；甲-2（manifest 指紋納管）留作候選，尚未核准。
+(bb) manifest 指紋相符不足以單獨納管：必須證明實際檔案集合與核准清單一致，且逐檔內容雜湊一致；沒有逐檔 hash 就需另產生完整 inventory，不能只驗檔名。額外檔案、內容變更、列舉失敗與 symlink 的處置都須明定。「同步更新只需重新核准一筆」是審核呈現方式，不能省略對整份 inventory 變更的審查。
+(cc) 先讓核准 policy 進 HEAD，再接 enforcement。順序：3f-0 → 納管契約裁決 → 3f 紅燈 → Jeff 核准並提交 policy → 4b 實作接線。policy 須涵蓋本機所有已知入口，不只 synced；沿用 committed-policy 模型，不新增 bootstrap 豁免。allowlist 只認 HEAD blob，同一 commit 內新增的 allowlist 不能替該次 commit 放行。
+(dd) synced 納管須明文修訂補鎖 6：由「synced 非空一律硬擋」改為依結構化納管結果判斷；未納管或驗證失敗仍硬擋，完整驗證通過才可繼續；T146-23 / 38 同步修訂，不得在 4b 偷改語意。
+(ee) 三個小衝突：status 的 runtime 值去掉固定前綴並補斷言只出現一次；前置觀測失敗的原因類別用 observation 值，其餘用 category；4b 須明列允許修改的隔離點、CLAUDE.md 正典與 R10 scenario，隔離測試繼續用 tmp 或 stub。
+(ff) mtime 只能支持變動時間的推論，不能單獨證明同步頻率；manifest 的 authority 能力不代表已獲 Jeff 核准。
+
+### 產出
+
+- 報告:`.dev/reports/2026-10-06T200211Z-ticket146-3f-0-synced-recon.md`(不進 git)。
+- 要點(細節與原始證據見報告):
+  - skills 的 `manifest.json` 只有 skill 層級的 13 項(6 個欄位),**沒有 path 欄位，也沒有逐檔 hash**;13 個 name 與磁碟上的 skill 目錄一一相符。依 (bb),它不能單獨當逐檔權威。
+  - 唯讀列舉(五個根，ERROR 0、symlink 0):file 數為 `skills/synced` 227、`plugins/synced` 3、`commands` 1、`dev-mods` 0、`skills`(排除頂層 synced)0。逐檔登記是 231 筆;metadata 不登記則是 225 筆。
+  - 可載入 / metadata / UNKNOWN(只算 `skills/synced`):13 / 3(推論)/ 211。
+- **狀態:3f-0 已產出，納管形狀待裁;146 尚未生效。**
