@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:第三站紅燈已補完(S3b-146-1);待第四站核心實作;146 尚未生效
+**狀態**:立案 —— 第三站補強中(3c-146);尚未實作
+~~**狀態**:第三站紅燈已補完(S3b-146-1);待第四站核心實作;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3c 裁決入票時更新:T146-9 / T146-13 修正、path + sha256 綁定,第三站重開補強。
 ~~**狀態**:立案 —— 第三站紅燈補完中(3b-146);尚未實作~~(F-036 體例:舊行不刪)—— 2026-10-06 第三站紅燈補完提交時更新:S3b-146-1 已提交、已證紅。
 ~~**狀態**:第三站紅燈已提交(S3-146-1);待第四站實作~~(F-036 體例:舊行不刪)—— 2026-10-06 契約增補 3b 入票時更新:4-146 暫緩,第三站契約漏掃 ~/.claude/skills 與 ~/.claude/commands,先補紅燈(裁決 (a))。
 ~~**狀態**:立案 —— 設計 v0 + Q1–Q6 已裁;進入第三站紅燈~~(F-036 體例:舊行不刪)—— 2026-10-06 第三站紅燈提交時更新:S3-146-1 已提交、已證紅。
@@ -323,8 +324,9 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 (c) 第四站未接 status / pre-commit 前，票面狀態只能寫「核心判定已提交；146 尚未生效」，不得寫「待第五站審查」。
 (d) extension_surface_facts 契約增補兩個參數與兩個回傳鍵：user_skills_dir → "user_skill_plugins"、user_commands_dir → "user_commands"。排除規則：只排除 user_skills_dir 的直接子目錄 synced（即 <user_skills_dir>/synced）及其整棵 subtree；其他層級恰好名為 synced 的目錄不得因此被排除。
 (e) 兩種資料形狀分開鎖：
-    policy（allowlist 檔）裡的 dev_mod_files / user_skill_plugins / user_commands，每項恰為物件 {"sha256": 64 碼小寫十六進位, "note": 字串}，鍵集合恰好這兩個。
+    ~~policy（allowlist 檔）裡的 dev_mod_files / user_skill_plugins / user_commands，每項恰為物件 {"sha256": 64 碼小寫十六進位, "note": 字串}，鍵集合恰好這兩個。~~(F-036 體例:舊行不刪)—— 2026-10-06 被裁決 (k) 取代:只綁 sha256 時,同內容換個檔名也會被授權。
     surfaces（extension_surface_facts 回傳）裡的同名三鍵，每項恰為 tuple (relpath, sha256 或 None)。
+3c 修訂:policy 檔案型項目形狀改為 {"path","sha256","note"},見〈契約補強 3c〉
 (f) extension_state 的完整性前提：surfaces 鍵集合必須恰好等於 {"dev_mod_files","synced_files","r4_violations","project_hook_commands","mcp_json_servers","user_skill_plugins","user_commands"}；少任何一鍵或多任何一鍵 ⇒ 不得回 EXT_DECLARED_OK（回 EXT_UNKNOWN，fail-closed）。
 (g) 已知後果：~/.claude/commands/ 現有的 .md（R-146-1 看到一個）在 allowlist 空時會判 VIOLATION；這是設計內的，要由 Jeff 核准指紋後才合法。
 
@@ -343,3 +345,32 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 - 紅燈總數:**20**(新增 T146-11、11b、11c、12、12b、13、14);T146-9 依規格在 Windows skip。
 - 證紅(S3b-146-1 `8727882f9643f3aa386b546fd2bac0b99438972c`,乾淨工作樹,Windows):20 failed(全部屬於 `TestTicket146ExtensionIntegrity`)、2110 passed、5 skipped、3 xfailed;沒有 ERROR。
 - 交給第四站的兩個已知問題(見審計):T146-9 仍以 6 參數呼叫 `extension_surface_facts`;T146-13 的禁字會命中 `redlight.py:18`、`:27` 的現有註解。
+
+---
+
+## 契約補強 3c(2026-10-06)
+
+### 裁決(Jeff,2026-10-06;逐字)
+
+(h) T146-9 改為 8 參數呼叫（補兩個空的 tmp 目錄）；extension_surface_facts 的新參數不給預設值。
+(i) T146-13 的禁字掃描改為 AST 層級：解析 redlight.py，不得有 import gate / from gate import；不得有 spec_from_file_location 或 import_module 的字串引數含 "gate"；另外 extension_surface_facts 與 redlight.skill_mirror_violations 兩個函式自己的 inspect.getsource 不含 "gate" + ".py"。redlight.py:18、:27 的歷史註解不改。
+(j) 撤回「3c 不另跑 pytest」：測試修改後必須在乾淨 HEAD 跑一次全套，取得修改後精確 test blob 的紅燈帳本；第四站的綠必須對應這個 blob（R3 provenance：推論紅 ≠ 機器紅）。
+(k) allowlist 檔案型欄位 dev_mod_files / user_skill_plugins / user_commands 每項改為 {"path": canonical 相對路徑, "sha256": 64 碼小寫十六進位, "note": 字串}，鍵集合恰好這三個。授權比對是 (path, sha256) 對，兩者都相同才授權；同 hash 不同 path ⇒ VIOLATION；同 path 不同 hash ⇒ VIOLATION。
+    path 的 canonical 規則：必須是非空的 normalized POSIX relative file path —— 以 "/" 分隔；不得含 "\"；不得以 "/" 開頭；不得有 drive 或 URI 類 absolute prefix（例如 "C:/"、"file:"）；以 "/" 切成 segments 後不得有空 segment、"." segment 或 ".." segment；不得以 "/" 結尾。policy 內的 path 必須已經是 canonical form，檢查器不得先 normalize 再接受；不符合即 allowlist 判 "malformed"。
+    例：safe.md ✅、foo/bar.md ✅、foo..bar.md ✅（".." 只是檔名的一部分，不是 segment）；./safe.md ❌、foo/../safe.md ❌、foo//safe.md ❌、foo\safe.md ❌、/safe.md ❌、C:/safe.md ❌、safe.md/ ❌。
+(l) surfaces 的三個同名鍵維持 (relpath, sha256 或 None)，relpath 由檢查器以同一套 canonical 規則產生（os.walk 相對路徑、"\" 換 "/"），與 policy 的 path 逐字比對。
+
+### (k) 的例子表
+
+| path | 判定 |
+|---|---|
+| `safe.md` | ✅ |
+| `foo/bar.md` | ✅ |
+| `foo..bar.md` | ✅(`..` 只是檔名的一部分,不是 segment) |
+| `./safe.md` | ❌ |
+| `foo/../safe.md` | ❌ |
+| `foo//safe.md` | ❌ |
+| `foo\safe.md` | ❌ |
+| `/safe.md` | ❌ |
+| `C:/safe.md` | ❌ |
+| `safe.md/` | ❌ |
