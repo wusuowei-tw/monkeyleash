@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:第四站 4a 核心判定已提交(S4-146-1f);尚未接 status / pre-commit,146 尚未生效;待 3e/4b integration 紅→綠
+**狀態**:第四站 4a 已提交(S4-146-1f);3e-0 設計待裁;146 尚未生效
+~~**狀態**:第四站 4a 核心判定已提交(S4-146-1f);尚未接 status / pre-commit,146 尚未生效;待 3e/4b integration 紅→綠~~(F-036 體例:舊行不刪)—— 2026-10-06 3e-0 偵查報告產出時更新:進入 3e 設計待裁。
 ~~**狀態**:第三站紅燈已補強(S3d-146-1,blob 20cb16da3635);待第四站核心實作;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 第四站 4a 核心判定提交、全套 0 紅時更新。
 ~~**狀態**:立案 —— 第三站補強中(3d-146);尚未實作~~(F-036 體例:舊行不刪)—— 2026-10-06 3d 紅燈提交並證紅時更新。
 ~~**狀態**:第三站紅燈已補強(S3c-146-1,blob 3c75d69a142a);待第四站核心實作;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3d 裁決入票時更新:補「同欄位 path 重複 ⇒ malformed」紅燈。
@@ -428,3 +429,18 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 - 證綠(S4-146-1f,Windows):**2150 passed**、5 skipped、3 xfailed、0 failed;collected 2158;T146 class 40 個 node 全綠(T146-9 在 Windows skip)。
 - **BLOB-4a2**:`tests/test_redlight.py` = `39bae1f38e56c44974dbfa1328a0439c1737b0be`。
 - 本站未接 status / pre-commit;146 尚未生效。
+
+---
+
+## 3e-0 integration 設計偵查(2026-10-06)
+
+### 裁決(Jeff,2026-10-06;逐字)
+
+(u) 4a 合格；現在不 push，3e → 4b 接線完成後再推。
+(v) 3e-0 先偵查不寫紅燈；[R10] 之類新規則代號先不發明，等偵查結果再裁「沿用既有代號 / 新代號 / 獨立 status block」。
+(w) 3e 的核心驗收：status 顯示與 pre-commit enforcement 必須來自同一份 live facts + _extension_first_reason，不得各自重算。
+(x) 兩個已知邊界升格為 3e 的正式設計輸入：rule_codes() 在 redlight.py 不可讀時回空集合；沒有 redlight.py 的臨時 root 裡 R4 載入失敗。3e 必須決定哪些情況是「列舉能力降級」、哪些是「enforcement authority 缺失 ⇒ fail-closed」；檔案不存在不得等同沒有規則。
+(y) UNKNOWN 對 pre-commit 的處置不得在 3e-0 預設放行；由偵查提出 EXT_UNKNOWN 的再分類（至少：authority / observation 缺失型、已知未受管入口型）與各自是否擋 commit 的方案，列為 Jeff 開放裁決。分類依據必須是結構化的 state 或 category 欄位，不得靠 reason 文字判斷。runtime loaded set 未證明不是 EXT_UNKNOWN 的類型，而是與 static state 正交的 runtime-assurance 維度；不得因 runtime 未證明把 EXT_DECLARED_OK 降成 EXT_UNKNOWN。
+
+- 設計報告:`.dev/reports/2026-10-06T180516Z-ticket146-3e-0-integration-design.md`(本機證據,不在 git 內)。
+- **狀態:3e-0 設計報告已產出,待裁;146 尚未生效。**
