@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 6 push 完成（遠端 master = S5j-1）；CI 淨室驗證 FAIL（推定：anyio 4.15.1 超出能力邊界 KNOWN_DISTS）；待 Station 3k 紅燈。
+**狀態**:動工 —— Station 3k 紅燈完成（K-a/K-b/K-e 紅、K-c/K-d 負控綠；S3K1）；待 Station 4k 實作。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -196,6 +196,9 @@
 >
 > - 狀態(舊,第六十二代):~~`動工 —— Station 5j 獨立審查 PASS（nit 3：S5j-F1 / F2 / F3，文件補準於 S5j-1）；待 Station 6 驗收／CI。`~~
 >   —— 2026-10-05 Station 6 CI 紅、Jeff 裁決回 3k 後由第 3 行取代（見〈六十五〉）。
+>
+> - 狀態(舊,第六十三代):~~`動工 —— Station 6 push 完成（遠端 master = S5j-1）；CI 淨室驗證 FAIL（推定：anyio 4.15.1 超出能力邊界 KNOWN_DISTS）；待 Station 3k 紅燈。`~~
+>   —— 2026-10-05 Station 3k 紅燈全套驗證成立後由第 3 行取代（見〈六十六〉）。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -591,14 +594,19 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 4j — Implementation(修正) | PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room；S4J1 d4b6fafd4afdd70121278527194aeef4097bff33；待 5j 審查） |
 | Station 5j — Review（增量） | PASS（nit 3；S5j-0 69e1fe2271fa2af66c0c4330b48eef8bbbc6db18；報告 sha256 8805322db93989bbe85c72cc1483db11fa9ebb15cfe9bc520d1719957b9afd2e；待 Station 6） |
 | Station 6 — Acceptance／CI（第二次） | push PASS（37 commits；遠端 master 774e7351e07ebdfc267a37b58bc09579e1de5646）；CI FAIL（淨室驗證步驟；run 37393958765）；回 Station 3k |
+| Station 3k — Red-light(補) | 紅燈完成（K-a constant-lock + K-b / K-e[4.15.0] / K-e[4.15.1] behavior-red + K-c / K-d negative-lock 綠；S3K1 b0849792ff3e69df70cdd8a5d77d26af78d79021），待 Station 4k |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 6 push 完成（遠端 master = S5j-1）；CI 淨室驗證 FAIL（推定：anyio 4.15.1 超出能力邊界 KNOWN_DISTS）；待 Station 3k 紅燈(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3k 紅燈完成（K-a/K-b/K-e 紅、K-c/K-d 負控綠；S3K1）；待 Station 4k 實作(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第五十四代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 6 push 完成（遠端 master = S5j-1）；CI 淨室驗證 FAIL（推定：anyio 4.15.1 超出能力邊界 KNOWN_DISTS）；待 Station 3k 紅燈(與票頭第 3 行一致)。~~
+> 2026-10-05 Station 3k 紅燈全套驗證成立後隨第 3 行同步更新(見〈六十六〉)。
+> Station 3k 列:2026-10-05 依〈六十六〉新增(無舊值)。
+>
 > **舊句(F-036,保留不刪,第五十三代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 5j 獨立審查 PASS（nit 3：S5j-F1 / F2 / F3，文件補準於 S5j-1）；待 Station 6 驗收／CI(與票頭第 3 行一致)。~~
 > 2026-10-05 Station 6 CI 紅、Jeff 裁決回 3k 後隨第 3 行同步更新(見〈六十五〉)。
 > Station 6（第二次）列:2026-10-05 依〈六十五〉新增(無舊值;第一次 Station 6 列保持原值不動)。
@@ -3309,7 +3317,37 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
 
 ### 65.6 commit
 
-- S6-2(本節)於下一次提交回填。
+- S6-2(本節)`0904cdbc3eafeb71a27c266cdd11ae151f21fb67`。
+  (F-036:本行原文為「S6-2(本節)於下一次提交回填。」;2026-10-05 於 S3K2 回填。)
+
+---
+
+## 六十六、Station 3k 紅燈證據
+
+- 合約:〈六十五〉65.5 裁決 2、3(選 A 擴大能力邊界;紅燈分「能力」與「policy」兩層,保留負控)。
+- 報告:`docs/audits/2026-10-05-m1a-station3k-redlight.md`。
+- S3K1 `b0849792ff3e69df70cdd8a5d77d26af78d79021`:`tests/test_redlight.py` 檔尾一個 hunk `@@ -2750,0 +2751,42 @@`,只有 + 行;新增 `class TestKnownDistBoundaryAnyio4151`,既有 helper(`_g_root` / `_g_policy` / `_g_policy_text` / `_g_coverage`)只呼叫、不修改。commit 前只跑 py_compile。
+- 新增 5 支(K-e 參數化 2 案,共 6 個 nodeid):
+
+| 代號 | nodeid | 分類 | S3K1 全套 |
+|---|---|---|---|
+| K-a | `tests/test_redlight.py::TestKnownDistBoundaryAnyio4151::test_k3_anyio_4151_is_a_known_dist` | constant-lock(red) | failed(`:2767`) |
+| K-b | `tests/test_redlight.py::TestKnownDistBoundaryAnyio4151::test_k3_a_committed_policy_accepting_4151_with_a_4151_plugin_is_full_coverage` | behavior-red | failed(`:2773`) |
+| K-c | `tests/test_redlight.py::TestKnownDistBoundaryAnyio4151::test_k3_a_host_policy_without_4151_is_unknown` | negative-lock | passed |
+| K-d | `tests/test_redlight.py::TestKnownDistBoundaryAnyio4151::test_k3_an_uninventoried_version_is_unknown` | negative-lock | passed |
+| K-e[4.15.0] | `tests/test_redlight.py::TestKnownDistBoundaryAnyio4151::test_k3_a_policy_listing_both_versions_accepts_each[4.15.0]` | behavior-red | failed(`:2792`) |
+| K-e[4.15.1] | `tests/test_redlight.py::TestKnownDistBoundaryAnyio4151::test_k3_a_policy_listing_both_versions_accepts_each[4.15.1]` | behavior-red | failed(`:2792`) |
+
+- 紅燈全套(在 S3K1 上只跑一次;Windows;外來 3 檔已 stash,跑前跑後 `git status --porcelain` 皆無輸出):exit 1;
+  摘要行原文 `4 failed, 2106 passed, 4 skipped, 3 xfailed in 246.14s (0:04:06)`(collected 2117)。FAILED 恰為 K-a、K-b、K-e[4.15.0]、K-e[4.15.1];K-c / K-d 在 passed 之內。
+  K-a 失敗於 `assert ('anyio', '4.15.1') in (('anyio', '4.15.0'),)`;K-b / K-e 失敗於 `assert 'unknown' == 'true'`。
+- 帳本只追加:兩本前段 sha256 = V0(`22148446…` / `3d7cde59…`);test-runs 3344 → 3391 行(+47)、test-sessions 34 → 35 行(+1)。
+  跑後全檔記為 V1:test-runs 903816 bytes、`0edb6cd32349bf5477a5f1adef2e59188d91de8841239565a467b5fc39c56285`;
+  test-sessions 18095023 bytes、`75c4580bc54324b90391ccee222647a4933549872154e2af41c2aaaffe405763`。
+- status:`tests red under ticket 145: tests/test_redlight.py`(4k 過 R3 的本機紅燈);`evidence policy: 有效`。
+- 裁決助手 Linux 預演(外部來源;非本 repo 帳本證據):同一組測試在 S4J1 碼上 4 紅 2 綠,KNOWN_DISTS 加 4.15.1 後 tests/test_redlight.py 153 passed。
+- 程序:S6-2 由 5j 審查視窗提交;本站回原實作視窗。5j 審查視窗不得再擔任任何審查者;5k 須開第六個全新對話。
+- commit:S3K1 `b0849792ff3e69df70cdd8a5d77d26af78d79021`;S3K2(本節與證據報告)於下一次提交回填。
 
 ---
 
