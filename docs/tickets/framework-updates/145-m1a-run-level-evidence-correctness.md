@@ -1,6 +1,6 @@
 # 票 145 —— M1-a:一次 test run 的證據要如實表達它「跑了什麼、結果是什麼」
 
-**狀態**:動工 —— Station 4k 本機固定全套與 clean-room 驗收通過（anyio 4.15.0 環境）；待 POSIX 外部驗收（真裝 anyio 4.15.1）。
+**狀態**:動工 —— Station 4k PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room，真裝 anyio 4.15.1）；待 Station 5k 獨立審查。
 **時鐘**:2026-10-02 —— 自此時點起,任何依 status aggregate 判斷「沒有未解紅燈」的行為,都暴露於已證明的 partial-selection false-green failure mode。此日期為 Jeff 於 2026-10-02 的排程裁決,不是由證據唯一推出;痛點最早的證據為票 139(2026-09-13)。
 **立案**:2026-10-02(寫入當下的事實時間)。
 **性質**:M1-a 的正式 implementation ticket。**票 139 保留為原始 finding / evidence source**,
@@ -202,6 +202,9 @@
 >
 > - 狀態(舊,第六十四代):~~`動工 —— Station 3k 紅燈完成（K-a/K-b/K-e 紅、K-c/K-d 負控綠；S3K1）；待 Station 4k 實作。`~~
 >   —— 2026-10-06 Station 4k 本機固定全套與 clean-room 驗收通過後由第 3 行取代（見〈六十七〉）。
+>
+> - 狀態(舊,第六十五代):~~`動工 —— Station 4k 本機固定全套與 clean-room 驗收通過（anyio 4.15.0 環境）；待 POSIX 外部驗收（真裝 anyio 4.15.1）。`~~
+>   —— 2026-10-06 POSIX 外部 clean-room（真裝 anyio 4.15.1）驗收通過、Jeff 裁決 Station 4k = PASS / COMPLETED 後由第 3 行取代（見〈六十七〉67.3）。
 > 『立案』取自 repo 慣例（票 124 狀態行），docs/agents/issue-tracker.md 未定義有時鐘後的狀態用語；字面由 Jeff 於 2026-10-02 裁定。
 
 ---
@@ -598,15 +601,19 @@ $ grep -n -E "紅轉綠|red.{0,6}green|_latest_per_file|最新一筆|latest" tes
 | Station 5j — Review（增量） | PASS（nit 3；S5j-0 69e1fe2271fa2af66c0c4330b48eef8bbbc6db18；報告 sha256 8805322db93989bbe85c72cc1483db11fa9ebb15cfe9bc520d1719957b9afd2e；待 Station 6） |
 | Station 6 — Acceptance／CI（第二次） | push PASS（37 commits；遠端 master 774e7351e07ebdfc267a37b58bc09579e1de5646）；CI FAIL（淨室驗證步驟；run 37393958765）；回 Station 3k |
 | Station 3k — Red-light(補) | 紅燈完成（K-a constant-lock + K-b / K-e[4.15.0] / K-e[4.15.1] behavior-red + K-c / K-d negative-lock 綠；S3K1 b0849792ff3e69df70cdd8a5d77d26af78d79021），待 Station 4k |
-| Station 4k — Implementation(修正) | Windows/local acceptance PASS；POSIX（anyio 4.15.1）pending |
+| Station 4k — Implementation(修正) | PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room，真裝 anyio 4.15.1；S4K1 492b5de438ef9a306b112ac1fbc402729e219879；S4K1B c1eebd97ed197d7f653fbc1c680a0feca1837c6a；待 5k 審查） |
 
 Transition：redlight.py 豁免已 drain
 
 Station 3b 補件：PASS / ACCEPTED
 
-Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4k 本機固定全套與 clean-room 驗收通過（anyio 4.15.0 環境）；待 POSIX 外部驗收（真裝 anyio 4.15.1）(與票頭第 3 行一致)。
+Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4k PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room，真裝 anyio 4.15.1）；待 Station 5k 獨立審查(與票頭第 3 行一致)。
 (舊的 candidate 語意由票頭的 F-036 區塊保存;本節不是第二份 current status。)
 
+> **舊句(F-036,保留不刪,第五十六代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 4k 本機固定全套與 clean-room 驗收通過（anyio 4.15.0 環境）；待 POSIX 外部驗收（真裝 anyio 4.15.1）(與票頭第 3 行一致)。~~
+> 2026-10-06 POSIX 外部 clean-room(真裝 anyio 4.15.1)驗收通過、Jeff 裁決 Station 4k = PASS / COMPLETED 後隨第 3 行同步更新(見〈六十七〉67.3)。
+> Station 4k 列舊值(F-036,保留不刪):~~`Windows/local acceptance PASS；POSIX（anyio 4.15.1）pending`~~;2026-10-06 依〈六十七〉67.3 更新。
+>
 > **舊句(F-036,保留不刪,第五十五代)**:~~Station 2 = DONE 只表示票已正確建立;票 145 lifecycle = 動工 —— Station 3k 紅燈完成（K-a/K-b/K-e 紅、K-c/K-d 負控綠；S3K1）；待 Station 4k 實作(與票頭第 3 行一致)。~~
 > 2026-10-06 Station 4k 本機驗收通過後隨第 3 行同步更新(見〈六十七〉)。
 > Station 4k 列:2026-10-06 依〈六十七〉新增(無舊值)。
@@ -3381,11 +3388,20 @@ POSIX 外部 clean-room 驗收（裁決助手；隔離環境；非本 repo 帳�
 - status:`evidence policy: 有效`;`tests red under ticket 145: (無)`;最近一次 run A(exit 0;collected 2117 / passed 2110 / failed 0)。
 - 淨室(verify_gates;本機 anyio 4.15.0):R1–R9 各擋下一次、淨室框架測試 `1960 passed, 8 skipped, 3 xfailed`;兩正三負全部成立,正二 `file_coverage=true`;本 repo 兩本帳本前後 = V2。**此淨室不證明真裝 4.15.1 的正二。**
 - 殘餘與未證明(目前尚未 machine-enforced):沿用 4j 證據報告第 7 節;相依漂移(KNOWN_DISTS 仍為精確版本 pin,下一次相依升版會再落在邊界外;見「相關」追蹤項)。
-- commit:S4K1 `492b5de438ef9a306b112ac1fbc402729e219879`;S4K1B `c1eebd97ed197d7f653fbc1c680a0feca1837c6a`;S4K3(本節與證據報告)於下一次提交回填。
+- commit:S4K1 `492b5de438ef9a306b112ac1fbc402729e219879`;S4K1B `c1eebd97ed197d7f653fbc1c680a0feca1837c6a`;S4K3 `9fbfeb9210455f0485365fec7a7125456bc8da7a`(本節與證據報告)。
+  (F-036:原文「~~S4K3(本節與證據報告)於下一次提交回填。~~」;2026-10-06 於 S4K4 回填,理由:S4K3 SHA 於提交後才確定。)
 
 ### 67.3 POSIX 外部 clean-room 驗收(真裝 anyio 4.15.1)
 
-待執行(裁決助手)。
+> **舊文字(F-036,保留不刪)**:~~待執行(裁決助手)。~~
+> —— 2026-10-06 由 S4K4 的 POSIX 驗收紀錄取代。
+
+- 來源：Jeff 轉述裁決助手 2026-10-06 Linux 證據（隔離沙盒；git 2.43.0；Python 3.11.16；全新 venv 依 CI 方式 pip install -e ".[dev]" 實際安裝 anyio 4.15.1、pytest 9.1.1；非本 repo 帳本證據；本 repo 兩本帳本未動）。
+- 受測物：S4K1B 的 .claude/hooks/redlight.py（blob 0fe2f7ab0e600a18db1079462db80eddee6eae13，sha256 30ee60f9e501788ee2e3a065f0bfc4725d9258fd3f2cdb68288719c7382d30ed，與本機 S4K2 run 紀錄 impl_hash 相同）、tests/test_redlight.py（blob e9f4c82e6b879db998f9ebe8289aa458b1475c9f = S3K1）、.agents/evidence-policy.json（blob 82669a8c0f0c59eaf8b507e00639b9700aafb172）。置於全新 clone、提交後工作樹乾淨、歷史完整（unshallow）。
+- verify_gates.py 淨室（anyio 4.15.1 實裝）：R1–R9 各擋下一次、權威層偵測三項成立、框架測試 1964 passed, 4 skipped, 3 xfailed；兩正三負全部成立，正二 file_coverage=true、green=tests/test_evidence_probe.py；exit 0。對照：S4J1 碼在同一 venv 下正二不成立 ✗、exit 1（〈六十五〉65.3 的重現）。
+- 6 支 K 測試（TestKnownDistBoundaryAnyio4151）全 passed；evidence 相關 5 檔 1 failed, 963 passed：唯一 failed 為先前 4g–4j 各次 POSIX 驗收亦出現的 tests/test_gate.py::TestAuthorityLayerIsWired::test_this_repo_itself_is_wired；環境性原因仍屬推定，尚未獨立核驗。淺層 clone 時另有 4 支 R6 相關失敗，git fetch --unshallow 後消失，對應 CI workflow fetch-depth: 0 的既有註解，判為 clone 深度所致而非回歸（同屬推定）。
+- 固定全套：13 failed, 2101 passed, 3 xfailed（collected 2117）；13 個 failed 與 4j POSIX 驗收那次逐字相同（test_gate 1 + test_known_items_regression 12），可支持「未新增該類失敗」，環境性根因仍屬推定、尚未獨立核驗或 machine-enforced。
+- Jeff 裁決（2026-10-06）：Station 4k = PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room，真裝 anyio 4.15.1）；待 Station 5k 獨立審查（第六個全新對話）。CI 是否轉綠仍須 Station 6 第三次 push 後由 CI 本身證明。
 
 ---
 

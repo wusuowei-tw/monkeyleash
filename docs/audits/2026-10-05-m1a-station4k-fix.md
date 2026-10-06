@@ -4,7 +4,7 @@
 - 對象:S4K1 `492b5de438ef9a306b112ac1fbc402729e219879`(只改 `.claude/hooks/redlight.py` 的 `KNOWN_DISTS`);S4K1B `c1eebd97ed197d7f653fbc1c680a0feca1837c6a`(只改 `.agents/evidence-policy.json` 的 `dists`)。
 - 上一個 commit:S3K2 `16d29f7ee84c746f845d071e13dce93b85e26fb2`;紅燈 S3K1 `b0849792ff3e69df70cdd8a5d77d26af78d79021`。
 - 合約:票 145〈六十五〉65.5 裁決 A(擴大能力邊界,邊界跟著證據長);裁決 4:4k 須在真裝 anyio 4.15.1 的乾淨環境證明正二成立(裁決助手 POSIX)。
-- 範圍:**本機(Windows;本機 anyio 為 4.15.0)驗收**。本報告只宣稱:本機驗收通過;待 POSIX 外部驗收(真裝 anyio 4.15.1)。
+- 範圍:**本機(Windows;本機 anyio 為 4.15.0)驗收**。本報告只宣稱:本機驗收通過;~~待 POSIX 外部驗收(真裝 anyio 4.15.1)~~。（S4K4 後更新：POSIX 外部 clean-room（真裝 anyio 4.15.1）驗收已 PASS，見第 9 節；Station 4k = PASS / COMPLETED；待 Station 5k 獨立審查。刪除線為 F-036 保存的舊狀態字樣，2026-10-06 由 S4K4 取代。）
 
 ## 【給裁決者】
 
@@ -186,4 +186,14 @@ $ git status --porcelain
 - 沒有閘門擋下;沒有改測試、`.dev/pipeline.json`;沒有 push / fetch。
 - 本視窗 = 原實作視窗;5k 須開第六個全新對話。
 
-### 9. POSIX 外部 clean-room 驗收(真裝 anyio 4.15.1):待執行(裁決助手)
+### 9. POSIX 外部 clean-room 驗收(真裝 anyio 4.15.1)
+
+> **舊文字(F-036,保留不刪)**:本節標題原為 ~~`### 9. POSIX 外部 clean-room 驗收(真裝 anyio 4.15.1):待執行(裁決助手)`~~,沒有內文。
+> —— 2026-10-06 由 S4K4 的 POSIX 驗收紀錄取代。
+
+- 來源：Jeff 轉述裁決助手 2026-10-06 Linux 證據（隔離沙盒；git 2.43.0；Python 3.11.16；全新 venv 依 CI 方式 pip install -e ".[dev]" 實際安裝 anyio 4.15.1、pytest 9.1.1；非本 repo 帳本證據；本 repo 兩本帳本未動）。
+- 受測物：S4K1B 的 .claude/hooks/redlight.py（blob 0fe2f7ab0e600a18db1079462db80eddee6eae13，sha256 30ee60f9e501788ee2e3a065f0bfc4725d9258fd3f2cdb68288719c7382d30ed，與本機 S4K2 run 紀錄 impl_hash 相同）、tests/test_redlight.py（blob e9f4c82e6b879db998f9ebe8289aa458b1475c9f = S3K1）、.agents/evidence-policy.json（blob 82669a8c0f0c59eaf8b507e00639b9700aafb172）。置於全新 clone、提交後工作樹乾淨、歷史完整（unshallow）。
+- verify_gates.py 淨室（anyio 4.15.1 實裝）：R1–R9 各擋下一次、權威層偵測三項成立、框架測試 1964 passed, 4 skipped, 3 xfailed；兩正三負全部成立，正二 file_coverage=true、green=tests/test_evidence_probe.py；exit 0。對照：S4J1 碼在同一 venv 下正二不成立 ✗、exit 1（〈六十五〉65.3 的重現）。
+- 6 支 K 測試（TestKnownDistBoundaryAnyio4151）全 passed；evidence 相關 5 檔 1 failed, 963 passed：唯一 failed 為先前 4g–4j 各次 POSIX 驗收亦出現的 tests/test_gate.py::TestAuthorityLayerIsWired::test_this_repo_itself_is_wired；環境性原因仍屬推定，尚未獨立核驗。淺層 clone 時另有 4 支 R6 相關失敗，git fetch --unshallow 後消失，對應 CI workflow fetch-depth: 0 的既有註解，判為 clone 深度所致而非回歸（同屬推定）。
+- 固定全套：13 failed, 2101 passed, 3 xfailed（collected 2117）；13 個 failed 與 4j POSIX 驗收那次逐字相同（test_gate 1 + test_known_items_regression 12），可支持「未新增該類失敗」，環境性根因仍屬推定、尚未獨立核驗或 machine-enforced。
+- Jeff 裁決（2026-10-06）：Station 4k = PASS / COMPLETED（Windows 本機 + POSIX 外部 clean-room，真裝 anyio 4.15.1）；待 Station 5k 獨立審查（第六個全新對話）。CI 是否轉綠仍須 Station 6 第三次 push 後由 CI 本身證明。
