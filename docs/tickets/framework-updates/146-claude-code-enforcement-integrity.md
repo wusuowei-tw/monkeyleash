@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:3e 紅燈撰寫中;146 尚未生效
+**狀態**:3e 紅燈已提交(S3e-146-1);待 4b 接線;146 尚未生效
+~~**狀態**:3e 紅燈撰寫中;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3e 紅燈提交並證紅時更新。
 ~~**狀態**:第四站 4a 已提交(S4-146-1f);3e-0 設計待裁;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3e-0 已裁、進入 3e 紅燈時更新。
 ~~**狀態**:第四站 4a 核心判定已提交(S4-146-1f);尚未接 status / pre-commit,146 尚未生效;待 3e/4b integration 紅→綠~~(F-036 體例:舊行不刪)—— 2026-10-06 3e-0 偵查報告產出時更新:進入 3e 設計待裁。
 ~~**狀態**:第三站紅燈已補強(S3d-146-1,blob 20cb16da3635);待第四站核心實作;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 第四站 4a 核心判定提交、全套 0 紅時更新。
@@ -498,3 +499,13 @@ gate.py：
   verify_gates.SCENARIOS 加 "R10"（4b 實作；3e 只鎖存在）。
 status.py：
   _extension_claude_root() → None（同 gate，測試注入用）。_enforcement 新增兩行（經 _line）：欄名 "extension integrity (R10)" 值 = report["lines"][0]，來源 "redlight.extension_report(<repo>, <claude_root 遮罩>)"；欄名 "runtime loaded set" 值 = report["lines"][1]，來源同上。redlight 載不到 ⇒ 一行「未記錄（146 判定器不在）」。:16、:19、:36 契約依裁決 7 修訂（4b）。
+
+---
+
+## 第三站 3e 紅燈(S3e-146-1)
+
+- 審計:`docs/audits/2026-10-06-146-station3e-redlight.md`
+- 紅燈數:**25**(新增 node 24 紅 + `test_t146_14` 改八鍵轉紅);T146-32e 在 Windows skip。
+- 證紅(S3e-146-1 `f625c19c10b60c0df5e0818dbc9b0e3b7d84951b`,Windows):25 failed、2149 passed、6 skipped、3 xfailed;collected 2183;與逐 node 預期表一致;ERROR 0。
+- BLOB-3e:`tests/test_redlight.py` `9a5d77d73ddabdf45e52de130ac056ce6edd60bc`;`tests/test_gate.py` `42e0c30e813bab514a77258caedbdb7a226e053e`;`tests/test_status.py` `891ca4db55f2c5edc805e7d49625b5a4a56c5f1a`。
+- 4b 已知衝突(見審計):4b 自己的 commit 會被新接的 pre-commit 擋下(這台機器 allowlist 未建、synced 有檔);status runtime 行會有重複前綴;T146-22 要求訊息含 observation 值。
