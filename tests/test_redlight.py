@@ -2866,8 +2866,13 @@ class TestTicket146ExtensionIntegrity:
             p.write_bytes(data)
         canon = base / "canon"
         _g_write(canon, "s/SKILL.md", u"skill\n")
+        user_skills = base / "user-skills"
+        user_skills.mkdir(parents=True, exist_ok=True)
+        user_commands = base / "user-commands"
+        user_commands.mkdir(parents=True, exist_ok=True)
         fn = self._api("extension_surface_facts")
-        return fn(str(dev), [str(synced)], str(canon), [], [], str(base / "absent.mcp.json"))
+        return fn(str(dev), [str(synced)], str(canon), [], [], str(base / "absent.mcp.json"),
+                  str(user_skills), str(user_commands))
 
     def _facts(self, root):
         return self._api("extension_allowlist_facts")(str(root))
@@ -3079,3 +3084,131 @@ class TestTicket146ExtensionIntegrity:
         surfaces = fn(str(tmp_path / "no-dev-mods"), [], str(canon), [str(mirror)], [],
                       str(tmp_path / "absent.mcp.json"))
         assert any(u"symlink 指向正典之外" in v for v in surfaces["r4_violations"]), surfaces["r4_violations"]
+
+    def test_t146_11(self, tmp_path):
+        """T146-11:user-skills 目錄有未登記的 foo/SKILL.md ⇒ VIOLATION;對應 invariant 前半。"""
+        import hashlib
+        data = b"user skill\n"
+        sha = hashlib.sha256(data).hexdigest()
+        base = tmp_path / "s"
+        target = base / "user-skills" / "foo" / "SKILL.md"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(data)
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist()))
+        surfaces = self._surfaces(base)
+        got = [tuple(x) for x in surfaces.get("user_skill_plugins", [])]
+        assert ("foo/SKILL.md", sha) in got, got
+        state, lines = self._evaluate(self._facts(root), surfaces)
+        assert state == self._api("EXT_VIOLATION"), state
+        assert "foo/SKILL.md" in lines[0], lines
+
+    def test_t146_11b(self, tmp_path):
+        """T146-11b:同 T146-11 但 allowlist 的 user_skill_plugins 登記了該檔 sha256 ⇒ 不是 VIOLATION;對應 invariant 前半。"""
+        import hashlib
+        data = b"user skill\n"
+        sha = hashlib.sha256(data).hexdigest()
+        base = tmp_path / "s"
+        target = base / "user-skills" / "foo" / "SKILL.md"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(data)
+        policy = self._allowlist(user_skill_plugins=[{"sha256": sha, "note": "t146"}])
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(policy))
+        state, _lines = self._evaluate(self._facts(root), self._surfaces(base))
+        assert state != self._api("EXT_VIOLATION"), state
+
+    def test_t146_11c(self, tmp_path):
+        """T146-11c:只排除 <user_skills_dir>/synced 整棵(頂層 synced ⇒ 交給 synced_dirs、UNKNOWN);非頂層的 synced 不排除;對應 invariant 前半。"""
+        import hashlib
+        base = tmp_path / "s"
+        user_skills = base / "user-skills"
+        manifest = user_skills / "synced" / "session-id" / "manifest.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_bytes(b"{}\n")
+        user_commands = base / "user-commands"
+        user_commands.mkdir(parents=True)
+        dev = base / "dev-mods"
+        dev.mkdir(parents=True)
+        canon = base / "canon"
+        _g_write(canon, "s/SKILL.md", u"skill\n")
+        fn = self._api("extension_surface_facts")
+        args = (str(dev), [str(user_skills / "synced")], str(canon), [], [], str(base / "absent.mcp.json"),
+                str(user_skills), str(user_commands))
+        surfaces = fn(*args)
+        assert list(surfaces.get("user_skill_plugins", ["<missing>"])) == [], surfaces.get("user_skill_plugins")
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist()))
+        state, _lines = self._evaluate(self._facts(root), surfaces)
+        assert state == self._api("EXT_UNKNOWN"), state
+        evil = user_skills / "foo" / "synced" / "evil.md"
+        evil.parent.mkdir(parents=True)
+        evil.write_bytes(b"not excluded\n")
+        sha = hashlib.sha256(b"not excluded\n").hexdigest()
+        got = [tuple(x) for x in fn(*args).get("user_skill_plugins", [])]
+        assert ("foo/synced/evil.md", sha) in got, got
+
+    def test_t146_12(self, tmp_path):
+        """T146-12:user-commands 目錄有未登記的 finmind.md ⇒ VIOLATION;對應 invariant 前半。"""
+        import hashlib
+        data = b"command\n"
+        sha = hashlib.sha256(data).hexdigest()
+        base = tmp_path / "s"
+        target = base / "user-commands" / "finmind.md"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(data)
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist()))
+        surfaces = self._surfaces(base)
+        got = [tuple(x) for x in surfaces.get("user_commands", [])]
+        assert ("finmind.md", sha) in got, got
+        state, lines = self._evaluate(self._facts(root), surfaces)
+        assert state == self._api("EXT_VIOLATION"), state
+        assert "finmind.md" in lines[0], lines
+
+    def test_t146_12b(self, tmp_path):
+        """T146-12b:同 T146-12 但 allowlist 的 user_commands 登記了該檔 sha256 ⇒ 不是 VIOLATION;對應 invariant 前半。"""
+        import hashlib
+        data = b"command\n"
+        sha = hashlib.sha256(data).hexdigest()
+        base = tmp_path / "s"
+        target = base / "user-commands" / "finmind.md"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(data)
+        policy = self._allowlist(user_commands=[{"sha256": sha, "note": "t146"}])
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(policy))
+        state, _lines = self._evaluate(self._facts(root), self._surfaces(base))
+        assert state != self._api("EXT_VIOLATION"), state
+
+    def test_t146_13(self, tmp_path):
+        """T146-13:依賴方向 B —— facts 層住在 redlight.py、不反向載入 gate;R4 純函式下沉且與 gate 薄包裝結果相同;對應 invariant 前半。"""
+        import inspect
+        fn = self._api("extension_surface_facts")
+        src = inspect.getsourcefile(fn)
+        assert pathlib.Path(src).name == "redlight.py", src
+        text = (ROOT / ".claude" / "hooks" / "redlight.py").read_text(encoding="utf-8")
+        for needle in ("gate" + ".py", "import " + "gate", "load_" + "gate"):
+            assert needle not in text, "redlight.py 含 %s" % needle
+        primitive = self._api("skill_mirror_violations")
+        canon = tmp_path / "canon"
+        mirror = tmp_path / "mirror"
+        _g_write(canon, "s/SKILL.md", u"skill\n")
+        _g_write(mirror, "s/SKILL.md", u"skill\n")
+        _g_write(mirror, "s/.claude-plugin/plugin.json", u'{"name": "s"}\n')
+        via_gate = self._gate().skill_mirror_violations(str(canon), [str(mirror)])
+        via_redlight = primitive(str(canon), [str(mirror)])
+        assert via_gate == via_redlight, (via_gate, via_redlight)
+
+    def test_t146_14(self, tmp_path):
+        """T146-14:完整性前提 —— surfaces 鍵集合恰為七鍵才可能 DECLARED_OK;少一鍵或多一鍵都不得 DECLARED_OK;對應 invariant 後半。"""
+        keys = ("dev_mod_files", "synced_files", "r4_violations", "project_hook_commands",
+                "mcp_json_servers", "user_skill_plugins", "user_commands")
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist()))
+        surfaces = self._surfaces(tmp_path / "s")
+        assert set(surfaces) == set(keys), sorted(surfaces)
+        facts = self._facts(root)
+        state_fn = self._api("extension_state")
+        ok = self._api("EXT_DECLARED_OK")
+        assert state_fn(facts, surfaces) == ok
+        for key in keys:
+            partial = dict((k, v) for k, v in surfaces.items() if k != key)
+            assert state_fn(facts, partial) != ok, "少了 %s 仍為 DECLARED_OK" % key
+        extra = dict(surfaces)
+        extra["unexpected"] = []
+        assert state_fn(facts, extra) != ok, "多一個未知鍵仍為 DECLARED_OK"
