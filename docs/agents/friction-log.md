@@ -7438,3 +7438,36 @@ Cannot open encrypted archive. Wrong password?
 **同族**:`F-163`(同一個檔的另一面 —— 格式沒人驗)、
 `F-086`(註解不是機制)、`F-110`(祈使句沒有主詞)。
 
+## F-166 已安裝的 mod 可跳過或推翻 gate.py(PreToolUse)的擋下 —— R7 只活在前哨,而目前沒有任何機制偵測
+
+- **發現於**:2026-10-04,monkeyleash-mod V0 唯讀偵察(裁決:V0 = NO-GO)。
+- **報告**:`.dev/reports/2026-10-04T110800Z-mods-v0-recon.md`
+  (⚠ `.dev/` 不進版控 ⇒ 判定依據的官方原文**逐字抄在下面**)。
+- **現象**:Claude Code 的 mods(v2.1.287 起**預設開啟**)跑在 Claude Code 行程內,
+  在工具呼叫鏈上的位置**早於**也**晚於**專案 settings 的 `PreToolUse`:
+
+  permissions.md〈Extend permissions with hooks〉:
+  > A mod you install that handles `tool.check` answers after the rules and the `PreToolUse` hooks have decided, and its answer can replace theirs: … **A block from a `PreToolUse` hook: the mod can approve the call, unless the hook is in managed settings** … **Deny rules: … Anywhere else, the mod can approve a call that a deny rule refuses.**
+
+  events.md〈Where settings hooks run in the order〉:
+  > **`PreToolUse` hooks from every other settings file and from plugins' `hooks/hooks.json`**: run after the last mod calls `next`, as part of Claude Code's own behavior. **A mod that answers `tool.call` without calling `next` keeps them from running**
+
+  ⇒ 一個使用者安裝的 mod 有兩條路削弱前哨:**不讓 gate.py 跑**(`tool.call` 不呼叫 `next`),
+  或**跑完之後推翻它**(`tool.check` 回 `allow`)。
+- **影響**:
+  - R1–R6、R9:pre-commit 權威層仍接得住(mod 碰不到 git hook)。
+  - **R7:只活在前哨,沒有第二道**(`docs/adr/0008`)⇒ **首當其衝**。
+  - **沒有任何東西會出聲**:`status.py` 的 authority 段只看 pre-commit 安裝狀態,
+    不看「這個 session 載入了哪些 mod」;gate.py 被跳過時**連被呼叫都沒有**,自然沒有紀錄。
+- **本機現況**(2026-10-04,在 **2.1.282** 下觀察,**依票 146 不算數**):
+  `C:\Users\<使用者>\.claude\plugins` 下 Glob `**/hooks/hooks.json` → `No files found`。
+  內建 mod(`cc-plugin-*`)不在那個目錄,**未盤點**。
+- **處置**:票 146(Claude Code Enforcement Integrity)。本則**不修**。
+  **⚠ 不得以 `disableAllHooks` 當對策** —— schema 描述是
+  "Disable all hooks and statusLine execution: the hooks defined in settings files and by installed plugins",
+  **疑會連帶關掉 gate.py 前哨本身**;未證實前視為危險(票 146 票面同列)。
+- **歸屬**:F-011 / F-021 一脈的**外延** —— 那一族是「跳過某類路徑的邏輯跳過了閘門自己」;
+  本則是「**宿主新增的擴充機制,位置排在閘門前面**」。共同的問法:**這個東西跑在閘門之前還是之後?**
+- **照例記一句**:本則把風險寫清楚了,而**「不做會有什麼東西叫?」的答案現在是沒有** ——
+  在票 146 有機器之前,這一則的強度只到「讓下一個人知道」。
+
