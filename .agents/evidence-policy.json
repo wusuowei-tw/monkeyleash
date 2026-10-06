@@ -5,5 +5,5 @@
   "committed_overrides": ["strict_markers=true"],
   "python_versions": ["3.11"],
   "pytest_versions": ["9.1.1"],
-  "dists": [["anyio", "4.15.0"]]
+  "dists": [["anyio", "4.15.0"], ["anyio", "4.15.1"]]
 }
