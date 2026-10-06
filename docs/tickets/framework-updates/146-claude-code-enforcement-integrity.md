@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:3f 紅燈撰寫中;146 尚未生效
+**狀態**:3f 紅燈已提交(S3f-146-1);待 policy 草稿與 Jeff 核准;146 尚未生效
+~~**狀態**:3f 紅燈撰寫中;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f 紅燈提交並證紅時更新。
 ~~**狀態**:3e 紅燈已提交;3f-0 偵查待裁;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f 裁決入票、進入 3f 紅燈時更新。
 ~~**狀態**:3e 紅燈已提交(S3e-146-1);待 4b 接線;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f-0 synced 納管偵查產出時更新:4b 前插入 3f-0 → 納管契約裁決 → 3f 紅燈 → policy 進 HEAD(裁決 (cc))。
 ~~**狀態**:3e 紅燈撰寫中;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3e 紅燈提交並證紅時更新。
@@ -579,3 +580,13 @@ tests/test_redlight.py：T146-36（十一鍵 → 十三鍵）；T146-24、T146-2
 tests/test_gate.py：T146-24b 佈置加空 inventory。
 tests/test_status.py：T146-20 / 28 / 30 的 DECLARED_OK 佈置加空 inventory。
 其他方法一律不動；T146-14 不動。
+
+---
+
+## 第三站 3f 紅燈(S3f-146-1)
+
+- 審計:`docs/audits/2026-10-06-146-station3f-redlight.md`
+- 紅燈數:新增 node **47**(43 紅;T146-42 的 3 個 symlink 案與 T146-43[v-symlink] 在 Windows skip);既有修改 8 支(T146-24 / 31 / 35 / 36 / 24b / 20 / 28 / 30,3e 起即紅，仍紅)。
+- 證紅(S3f-146-1 `0a8a494237db7d50aedefc9f4056bc39c7f421cd`,Windows):68 failed、2149 passed、10 skipped、3 xfailed;collected 2230;與逐 node 預期表一致;ERROR 0;帳本只追加。
+- BLOB-3f:`tests/test_redlight.py` `2a2af9ba1b333942e5a62fa94e7f3342b0377edf`;`tests/test_gate.py` `be0e51d6a6c41e0a4df1f7e2b8cd36cf8d7d32cf`;`tests/test_status.py` `bbfd3758e930b991c6abd0345545e72da5f752cb`。
+- 4b 前待裁(見審計 §9):C-1 T146-35 的 `_scenarios` 佈置在 v2 下是結構錯誤;C-2 T146-21 在沒有 inventory 時被 (d) 硬擋、`[R10]` 斷言不成立;C-3 synced 根為空目錄的處置;C-4 `extension_surface_facts` 的 synced_dirs → `<root>` 對應;C-5 T146-42 對子項層級結構錯誤也鎖「不走訪」。
