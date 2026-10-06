@@ -2748,3 +2748,45 @@ class TestRootIsToplevelParser:
         monkeypatch.setattr(_sp, "run", fake_run)
         assert redlight._root_is_toplevel(str(tmp_path)) is False
         assert calls and calls[0][-2:] == ["--is-inside-work-tree", "--show-prefix"], calls
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 145 Station 3k 紅燈 —— 能力邊界 KNOWN_DISTS 納入 anyio 4.15.1(〈六十五〉65.5 裁決 A)
+#
+# 能力(KNOWN_DISTS)與宿主 policy 分開驗:K-a 鎖常數;K-b 正控 = 已提交、明確接受 4.15.1 的 policy
+# + 4.15.1 的 plugin 事實 ⇒ "true";K-c / K-d 負控 = 宿主 policy 未接受 / 未盤點版本 ⇒ "unknown";
+# K-e = policy 同列兩版時各版各自 ⇒ "true"(參數化,兩案各自獨立執行)。
+# 既有 helper(`_g_root` / `_g_policy` / `_g_policy_text` / `_g_coverage`)只呼叫、不修改。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestKnownDistBoundaryAnyio4151:
+
+    def test_k3_anyio_4151_is_a_known_dist(self):
+        """K-a(constant-lock;S6-2 上必須失敗:KNOWN_DISTS 只有 4.15.0)。"""
+        assert ("anyio", "4.15.1") in redlight.KNOWN_DISTS, redlight.KNOWN_DISTS
+
+    def test_k3_a_committed_policy_accepting_4151_with_a_4151_plugin_is_full_coverage(self, tmp_path, monkeypatch):
+        """K-b(behavior-red;S6-2 上必須失敗:4.15.1 在邊界外 ⇒ policy 無效且 plugin 為 other ⇒ unknown)。"""
+        root = _g_root(tmp_path / "r", policy_text=_g_policy_text(_g_policy(dists=[["anyio", "4.15.1"]])))
+        got = _g_coverage(root, monkeypatch, anyio_version="4.15.1")
+        assert got == "true", got
+
+    def test_k3_a_host_policy_without_4151_is_unknown(self, tmp_path, monkeypatch):
+        """K-c(negative-lock;S6-2 上即綠,修後仍須綠):宿主 policy 只接受 4.15.0,環境是 4.15.1 ⇒ unknown。"""
+        root = _g_root(tmp_path / "r", policy_text=_g_policy_text(_g_policy()))
+        got = _g_coverage(root, monkeypatch, anyio_version="4.15.1")
+        assert got == "unknown", got
+
+    def test_k3_an_uninventoried_version_is_unknown(self, tmp_path, monkeypatch):
+        """K-d(negative-lock;S6-2 上即綠,修後仍須綠):9.9.9 不在 KNOWN_DISTS ⇒ policy 無效 ⇒ unknown。"""
+        root = _g_root(tmp_path / "r", policy_text=_g_policy_text(_g_policy(dists=[["anyio", "9.9.9"]])))
+        got = _g_coverage(root, monkeypatch, anyio_version="9.9.9")
+        assert got == "unknown", got
+
+    @pytest.mark.parametrize("version", ["4.15.0", "4.15.1"])
+    def test_k3_a_policy_listing_both_versions_accepts_each(self, tmp_path, monkeypatch, version):
+        """K-e(behavior-red;S6-2 上兩案皆失敗:policy 含邊界外版本 ⇒ 整份 policy 無效)。"""
+        pol = _g_policy(dists=[["anyio", "4.15.0"], ["anyio", "4.15.1"]])
+        got = _g_coverage(_g_root(tmp_path / "r", policy_text=_g_policy_text(pol)), monkeypatch, anyio_version=version)
+        assert got == "true", got
