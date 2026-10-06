@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:3e 紅燈已提交;3f-0 偵查待裁;146 尚未生效
+**狀態**:3f 紅燈撰寫中;146 尚未生效
+~~**狀態**:3e 紅燈已提交;3f-0 偵查待裁;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f 裁決入票、進入 3f 紅燈時更新。
 ~~**狀態**:3e 紅燈已提交(S3e-146-1);待 4b 接線;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f-0 synced 納管偵查產出時更新:4b 前插入 3f-0 → 納管契約裁決 → 3f 紅燈 → policy 進 HEAD(裁決 (cc))。
 ~~**狀態**:3e 紅燈撰寫中;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3e 紅燈提交並證紅時更新。
 ~~**狀態**:第四站 4a 已提交(S4-146-1f);3e-0 設計待裁;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3e-0 已裁、進入 3e 紅燈時更新。
@@ -289,7 +290,7 @@ EXT_VERIFIED：常數存在，無任何回傳路徑（v0 以行為測試 + 結�
   extension_state(facts, surfaces) → 四常數之一。
   extension_status_lines(facts, surfaces) → list，恰好兩個字串，第一個以 "static surfaces: " 開頭，第二個以 "runtime loaded set: " 開頭且含「未證明」。
 放在「共用唯讀 facts 模組」：
-  extension_surface_facts(dev_mods_dir, synced_dirs, canon_dir, mirror_dirs, project_settings_paths, mcp_json_path) → surfaces dict：{"dev_mod_files": [(relpath, sha256 或 None), ...], "synced_files": [relpath, ...], "r4_violations": [str, ...], "project_hook_commands": [str, ...], "mcp_json_servers": [str, ...]}。純讀、無副作用、所有路徑由參數注入；symlink 以 (relpath, None) 標為不可信。
+  extension_surface_facts(dev_mods_dir, synced_dirs, canon_dir, mirror_dirs, project_settings_paths, mcp_json_path) → surfaces dict：{"dev_mod_files": [(relpath, sha256 或 None), ...], ~~"synced_files": [relpath, ...]~~(2026-10-06 3f 修訂:改為 [(logical_path, sha256 或 None), ...],見 v2 synced 契約), "r4_violations": [str, ...], "project_hook_commands": [str, ...], "mcp_json_servers": [str, ...]}。純讀、無副作用、所有路徑由參數注入；symlink 以 (relpath, None) 標為不可信。
   要求：gate.py 與 status.py 都能直接 import 該模組取得這個函式，呼叫時現場計算，不讀任何 cache 或前一次 pre-commit 的產物。
 gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 tree parity。
 
@@ -473,7 +474,7 @@ z4 參數正名 claude_root（= ~/.claude），來源鏈唯一。
 補鎖 3 明確注入失敗不得 fallback：claude_root=None 才使用 fallback；明確提供不存在、不可讀或無效路徑 ⇒ 前置觀測失敗，判定器呼叫 0 次，gate 直接硬擋。確認不存在的可選入口可以是空；無法確認是否存在或無法列舉不能是空。
 補鎖 4 rule_sources() 必須在 redlight 缺失時仍可用，放在 gate 可直接使用的位置，以結構化欄位呈現來源的存在、可讀與完整性；列舉成功不代表模組可執行，import authority 仍由 enforcement 路徑判斷。
 補鎖 5 146 authority 檢查必須在 R4（check_skill_copies）之前執行；缺 redlight 的測試不得停掉 check_skill_copies。
-補鎖 6 gate 對 surfaces["synced_files"] 非空一律硬擋，不論 static state（static state 仍保留既有 VIOLATION 優先序）；硬擋訊息必須指出未受管入口，不能只重述未登記檔。
+~~補鎖 6 gate 對 surfaces["synced_files"] 非空一律硬擋，不論 static state（static state 仍保留既有 VIOLATION 優先序）；硬擋訊息必須指出未受管入口，不能只重述未登記檔。~~(F-036 體例:舊行不刪)—— 2026-10-06 3f 修訂:改依結構化納管結果判斷，見〈3f 裁決與 v2 synced 契約〉補鎖 6(3f 修訂版)。
 3e-0 報告修正（入票，不另開輪）：步驟 0 的明文是 allows_src_write 與 docs 不屬原始碼，不是 docs-write 授權欄位；Q-A 改為「未找到直接鎖定該契約的測試」；Q-G 列出檔名屬偏離；「接線後第一次 commit 一定被擋」標為推論。
 
 ### v1 接線契約(逐字;4b 只能實作,不能改名;改名須回票)
@@ -481,12 +482,12 @@ z4 參數正名 claude_root（= ~/.claude），來源鏈唯一。
 redlight.py：
   EXT_CAT_ALLOWLIST = "allowlist_state"、EXT_CAT_UNREGISTERED = "unregistered"、EXT_CAT_R4 = "r4"、EXT_CAT_HOOK = "hook"、EXT_CAT_MCP = "mcp"、EXT_CAT_OBSERVATION = "observation_missing"、EXT_CAT_UNMANAGED = "unmanaged_entry"；EXT_CATEGORIES = 七個的 frozenset。EXT_RUNTIME_UNPROVEN = "UNPROVEN"。
   EXT_SURFACE_KEYS 改為八鍵：原七鍵 + "errors"。surfaces["errors"] 是 list，每項 (surface_name, path, error_text)；無錯誤為 []。
-  _walk_regular(root_dir, exclude_top=None, walk=None, lstat=None) → (entries, errors)；errors 每項 (path, error_text)。存在性用 lstat（預設 os.lstat）：FileNotFoundError ⇒ 確認不存在 ⇒ ([], [])；其他 OSError ⇒ ([], [(root_dir, err)])；存在但不是目錄 ⇒ ([], [(root_dir, "not a directory")])。列舉用 walk（預設 os.walk）並以 onerror 收集例外進 errors；列舉第一層就失敗 ⇒ entries 可為空但 errors 非空。
-  extension_surface_facts(…八個必填…, walk=None, lstat=None)：對三個檔案型入口與 synced_dirs 各呼叫 _walk_regular，把 errors 加上 surface 名（"dev-mods" / "user-skills" / "user-commands" / "synced"）成 (surface_name, path, error_text) 併入 surfaces["errors"]。
-  _extension_first_reason(facts, surfaces) → (state, category, reason)。順序：1 facts["state"] != "ok" ⇒ (VIOLATION, allowlist_state)；2 鍵集合 ≠ 八鍵 ⇒ (UNKNOWN, observation_missing)；3 三個檔案型鍵未登記 ⇒ (VIOLATION, unregistered)；4 r4 ⇒ (VIOLATION, r4)；5 hook ⇒ (VIOLATION, hook)；6 mcp ⇒ (VIOLATION, mcp)；7 errors 非空 ⇒ (UNKNOWN, observation_missing, "觀測失敗：<第一筆>（共 N 筆）")；8 synced_files 非空 ⇒ (UNKNOWN, unmanaged_entry)；9 (DECLARED_OK, None, None)。
+  ~~_walk_regular(root_dir, exclude_top=None, walk=None, lstat=None)~~(2026-10-06 3f 修訂:參數列加 read_bytes=None,見 v2 synced 契約) → (entries, errors)；errors 每項 (path, error_text)。存在性用 lstat（預設 os.lstat）：FileNotFoundError ⇒ 確認不存在 ⇒ ([], [])；其他 OSError ⇒ ([], [(root_dir, err)])；存在但不是目錄 ⇒ ([], [(root_dir, "not a directory")])。列舉用 walk（預設 os.walk）並以 onerror 收集例外進 errors；列舉第一層就失敗 ⇒ entries 可為空但 errors 非空。
+  ~~extension_surface_facts(…八個必填…, walk=None, lstat=None)~~(2026-10-06 3f 修訂:參數列加 read_bytes=None,見 v2 synced 契約)：對三個檔案型入口與 synced_dirs 各呼叫 _walk_regular，把 errors 加上 surface 名（"dev-mods" / "user-skills" / "user-commands" / "synced"）成 (surface_name, path, error_text) 併入 surfaces["errors"]。
+  ~~_extension_first_reason(facts, surfaces)~~(2026-10-06 3f 修訂:第三參數 inventory 必填，第 8 步改依 synced_verification,見 v2 synced 契約) → (state, category, reason)。順序：1 facts["state"] != "ok" ⇒ (VIOLATION, allowlist_state)；2 鍵集合 ≠ 八鍵 ⇒ (UNKNOWN, observation_missing)；3 三個檔案型鍵未登記 ⇒ (VIOLATION, unregistered)；4 r4 ⇒ (VIOLATION, r4)；5 hook ⇒ (VIOLATION, hook)；6 mcp ⇒ (VIOLATION, mcp)；7 errors 非空 ⇒ (UNKNOWN, observation_missing, "觀測失敗：<第一筆>（共 N 筆）")；8 synced_files 非空 ⇒ (UNKNOWN, unmanaged_entry)；9 (DECLARED_OK, None, None)。
   _extension_render_lines(state, category, reason, facts) → 兩行（文字規則不變；facts 可為 None，此時第一行不帶 blob）。
   extension_status_lines(facts, surfaces)：保留為相容 wrapper = 一次 _extension_first_reason + _extension_render_lines。extension_state 保留，回三元組第一項。
-  extension_report(repo_root, claude_root=None, walk=None, lstat=None) → dict 恰好十一鍵：facts, surfaces, state, category, reason, lines, runtime_assurance, claude_root, claude_root_source, authority, observation。
+  ~~extension_report(repo_root, claude_root=None, walk=None, lstat=None) → dict 恰好十一鍵~~(2026-10-06 3f 修訂:參數列加 read_bytes=None、十三鍵(+inventory、+synced),見 v2 synced 契約)：facts, surfaces, state, category, reason, lines, runtime_assurance, claude_root, claude_root_source, authority, observation。
     claude_root=None ⇒ os.path.join(os.path.expanduser("~"), ".claude")、claude_root_source="fallback"；給值 ⇒ "param"。
     前置觀測：claude_root 不存在 / 不是目錄 / lstat 失敗 / expanduser 結果仍含 "~" ⇒ observation="claude_root_invalid"，facts=None、surfaces=None、state=UNKNOWN、category=observation_missing、reason 含「claude_root 無法確定」、lines 由 _extension_render_lines(state, category, reason, None) 產生；_extension_first_reason 呼叫 0 次。
     有效 ⇒ observation="ok"；facts = extension_allowlist_facts(repo_root)；surfaces = extension_surface_facts(八個路徑, walk, lstat)；_extension_first_reason 恰好 1 次；lines 由 _extension_render_lines 從同一結果產生。
@@ -495,7 +496,7 @@ redlight.py：
 gate.py：
   rule_sources(source_path=None) → dict，鍵為兩個絕對路徑字串，值為 {"exists": bool, "readable": bool, "complete": bool, "codes": set}；complete = exists and readable；不存在 ⇒ exists False、readable False、complete False、codes set()；存在但讀不到 ⇒ exists True、readable False、complete False、codes set()。rule_codes() 回傳型別不變。
   _extension_claude_root() → None（production 固定回 None ⇒ fallback；唯一的測試注入接縫）。
-  check_extension_integrity() → dict，所有分支同一形狀 {"hard_block": str 或 None, "violations": list, "report": dict 或 None}。流程：_redlight() 載入失敗 ⇒ {"hard_block": "[R10/fail-closed] 146 判定器不在或無法載入：<例外類型>；commit 已擋下", "violations": [], "report": None}（不得 traceback）；report = rl.extension_report(ROOT, _extension_claude_root())；硬擋條件（任一成立即硬擋，不論 state）：(a) report["observation"] != "ok"；(b) report["state"] == UNKNOWN；(c) surfaces 非 None 且 surfaces["errors"] 非空；(d) surfaces 非 None 且 surfaces["synced_files"] 非空 ⇒ hard_block = "[R10/fail-closed] <原因類別>：<說明>"，其中 (d) 的說明必須含「未受管入口：synced <N> 檔」，(c) 必須含「觀測失敗」，即使 state 是 VIOLATION 也要把這些寫進訊息（可在同一訊息列出 state 與未登記第一筆）；否則 state VIOLATION ⇒ {"hard_block": None, "violations": ["[R10] <reason>"], "report": report}；DECLARED_OK ⇒ {"hard_block": None, "violations": [], "report": report}。
+  check_extension_integrity() → dict，所有分支同一形狀 {"hard_block": str 或 None, "violations": list, "report": dict 或 None}。流程：_redlight() 載入失敗 ⇒ {"hard_block": "[R10/fail-closed] 146 判定器不在或無法載入：<例外類型>；commit 已擋下", "violations": [], "report": None}（不得 traceback）；report = rl.extension_report(ROOT, _extension_claude_root())；硬擋條件（任一成立即硬擋，不論 state）：(a) report["observation"] != "ok"；(b) report["state"] == UNKNOWN；(c) surfaces 非 None 且 surfaces["errors"] 非空；~~(d) surfaces 非 None 且 surfaces["synced_files"] 非空~~(2026-10-06 3f 修訂:(d) 改為 report["synced"] 為 None 或 verified 不為 True,見 v2 synced 契約) ⇒ hard_block = "[R10/fail-closed] <原因類別>：<說明>"，其中 ~~(d) 的說明必須含「未受管入口：synced <N> 檔」~~(2026-10-06 3f 修訂:改為「未受管入口：synced（<reason>）」)，(c) 必須含「觀測失敗」，即使 state 是 VIOLATION 也要把這些寫進訊息（可在同一訊息列出 state 與未登記第一筆）；否則 state VIOLATION ⇒ {"hard_block": None, "violations": ["[R10] <reason>"], "report": report}；DECLARED_OK ⇒ {"hard_block": None, "violations": [], "report": report}。
   mode_pre_commit：在 staged_paths 取得之後、逐檔 check 之前呼叫 check_extension_integrity()；hard_block 非 None ⇒ _err(hard_block) 並 return 1，在影子分支與 R4 之前；violations 併入既有串列（走既有影子規則）。mode_hook 不呼叫它。
   verify_gates.SCENARIOS 加 "R10"（4b 實作；3e 只鎖存在）。
 status.py：
@@ -532,3 +533,49 @@ status.py：
   - 唯讀列舉(五個根，ERROR 0、symlink 0):file 數為 `skills/synced` 227、`plugins/synced` 3、`commands` 1、`dev-mods` 0、`skills`(排除頂層 synced)0。逐檔登記是 231 筆;metadata 不登記則是 225 筆。
   - 可載入 / metadata / UNKNOWN(只算 `skills/synced`):13 / 3(推論)/ 211。
 - **狀態:3f-0 已產出，納管形狀待裁;146 尚未生效。**
+
+---
+
+## 3f 裁決與 v2 synced 契約(2026-10-06)
+
+### Jeff 裁決(2026-10-06,逐字)
+
+(gg) 納管形狀：甲-2′，獨立 .agents/extension-inventory.json；與 allowlist 都採 HEAD blob + worktree identity 驗證。
+(hh) 六個 metadata 檔目前全部驗 path + sha256，不准以 null 豁免；若日後有證據支持例外，再明文修訂契約。
+(ii) 不寫 bucket id，但不能只驗唯一子目錄：skills、plugins 分別解析唯一 bucket；根層檔案也須納管，尤其 .bucket-<id>；須定義匿名邏輯路徑、marker 與 bucket 的一致性；禁止寬鬆 wildcard 忽略額外檔案。
+(jj) 211 個 UNKNOWN 檔全部驗 path + sha256。
+(kk) 缺檔算驗證失敗；新增、缺少、內容不符都不得通過。
+(ll) plugins/synced 納入，三個檔同樣驗內容。
+(mm) synced 帶 hash；路徑必須區分 skills／plugins，不能合併成會碰撞的 bucket-relative path；保留結構化列舉錯誤與納管結果；連動修訂範圍明列。
+(nn) 已盤點入口的配置接受，但不稱「全機入口已齊」；CLAUDE_CODE_PLUGIN_DIRS 等盲區繼續揭露；專案 .claude/skills 仍由既有 R4／surface 路徑觀測，不能變成豁免。
+(oo) agent 產草稿、Jeff 審核並親自 commit；票面保留 procedural invariant、尚未 machine-enforced。
+(pp) 數量：inventory 是 synced 兩個根共 230 筆；commands 1 筆放 allowlist，另加 hook command 授權；commands 不算進 inventory。「六個 metadata 每輪都變」證據不足，只支持 mtime 曾變；獨立 inventory 不消除重新核准成本。
+(qq) 順序：3f 紅燈 → 產生草稿與完整差異摘要 → Jeff 核准並提交兩個 policy 檔（獨立 commit，不含程式）→ 4b 接線。policy 核准後同步又改了內容，4b 被擋是預期結果，須重新審核快照，不新增例外。
+(rr) inventory 是必要的 committed policy：即使兩個 synced 根都空，也須有合法的空 inventory；inventory 缺失／無效時不得 DECLARED_OK；仍保留已知 VIOLATION 優先序；gate 獨立硬擋。
+(ss) 無效 inventory 不得讓判定器拋例外：先判 inventory state，再讀 entries；synced_verification 須接受 None 與任何非 ok 的 inventory，回結構化「未納管」。
+(tt) 匿名邏輯路徑只允許四種形式；保留 token 不得出現在實際相對路徑中；synced 根、bucket 目錄與 marker 都以 lstat 確認型別，不跟隨 symlink；根為 symlink 或非目錄 ⇒ 結構錯誤、不走訪；bucket 內 symlink 與檔案讀不到 ⇒ 驗證失敗。
+補鎖 6（3f 修訂版）：synced 未納管或驗證失敗仍獨立硬擋、不受 shadow 豁免；集合與逐檔內容完整驗證通過才可繼續。T146-23／38 同時保留通過與失敗對照情境。
+
+### v2 synced 契約(逐字;測試要鎖的名字;4b 只能實作)
+
+redlight.py：
+  EXT_INVENTORY_FILE = ".agents/extension-inventory.json"；EXT_INVENTORY_SCHEMA = "monkeyleash.extension-inventory"；EXT_INVENTORY_VERSION = 1；EXT_INVENTORY_FIELDS = ("schema","version","entries")；EXT_SYNCED_ROOTS = ("skills","plugins")；EXT_BUCKET_TOKEN = "<bucket>"；EXT_INVENTORY_UNCHECKED：模組層唯一哨兵物件，表示「synced 納管未評估」，只供兩參數相容 wrapper 使用，production 不得傳入。
+  邏輯路徑合法集合（只允許四種）：(1) "skills/<bucket>/<R>"　(2) "plugins/<bucket>/<R>"　(3) "skills/.bucket-<bucket>"　(4) "plugins/.bucket-<bucket>"。<R> 為非空 canonical 相對檔案路徑（沿用 (k) 規則），<R> 的任何 segment 不得等於 "<bucket>"、不得以 ".bucket-" 開頭；"<bucket>" 只能出現在第二個 segment；其他形式一律 malformed。
+  inventory 檔：entries 為物件陣列，每項恰好 {"path","sha256","note"}；path 須屬合法集合；path 在整個 entries 內唯一；sha256 64 碼小寫十六進位，不准 null；entries 可為空陣列（合法的空 inventory）。
+  磁碟結構：對 <claude_root>/<root>/synced/（root ∈ EXT_SYNCED_ROOTS）：先對根本身 lstat：FileNotFoundError ⇒ 該 root 無項目、無錯誤（確認不存在）；根為 symlink 或非目錄 ⇒ errors ("synced", <root 路徑>, "bucket structure: root is symlink/not a directory")，不走訪；其他 lstat 失敗 ⇒ errors。根合法時以 lstat 檢查直接子項：必須恰好一個目錄 D（非 symlink）與恰好一個 regular file 名為 ".bucket-" + D；任何其他直接子項（第二個目錄、多餘檔案、symlink、名稱不符的 marker、marker 是 symlink）⇒ 結構錯誤。D 內 regular file 的邏輯路徑 = "<root>/<bucket>/<D 內相對路徑>"；marker = "<root>/.bucket-<bucket>"。D 內 symlink、lstat 失敗或內容讀取失敗 ⇒ (邏輯路徑, None)。
+  _walk_regular(root_dir, exclude_top=None, walk=None, lstat=None, read_bytes=None) 與 extension_surface_facts(…八個必填…, walk=None, lstat=None, read_bytes=None)：read_bytes 預設為讀整檔 bytes 的函式；注入用；讀取丟任何 OSError ⇒ (relpath, None)。
+  surfaces["synced_files"]：list，每項 (logical_path, sha256 或 None)。結構錯誤進 surfaces["errors"]，形式 ("synced", <path>, "bucket structure: <說明>")。
+  extension_inventory_facts(repo_root) → dict 同 extension_allowlist_facts 形狀（六態；非 ok 時 policy 為 None）。
+  synced_verification(inventory_facts, surfaces) → dict 恰好六鍵 {"verified","reason","missing","extra","mismatch","structure_errors"}。順序：inventory_facts 為 None 或 state != "ok" ⇒ verified False、reason "synced 未納管：inventory <absent|state>"（不讀 entries，不得拋例外）；surfaces["errors"] 內 surface 為 "synced" 的筆數 > 0 ⇒ False、reason "synced 結構錯誤：<第一筆>"、structure_errors = 筆數；否則以 entries 的 {path: sha256} 與 synced_files 比對：磁碟有而 inventory 無 ⇒ extra；inventory 有而磁碟無 ⇒ missing；sha 不同或磁碟 sha 為 None ⇒ mismatch；任一 > 0 ⇒ False，reason "額外 N / 缺少 N / 內容不符 N"；全 0 ⇒ True（含兩邊皆空）。
+  _extension_first_reason(facts, surfaces, inventory)：第三參數必填：extension_inventory_facts 的回傳、None（缺失）、或 EXT_INVENTORY_UNCHECKED。第 8 步：inventory is EXT_INVENTORY_UNCHECKED ⇒ 舊語意（synced_files 非空 ⇒ (UNKNOWN, unmanaged_entry, "未受管入口：synced（未評估）")；為空 ⇒ 跳過）；否則 v = synced_verification(inventory, surfaces)；v["verified"] 不為 True ⇒ (UNKNOWN, unmanaged_entry, "未受管入口：synced（" + v["reason"] + "）")；True ⇒ 跳過。其餘步驟與 VIOLATION 優先序不變。
+  extension_state / extension_status_lines（兩參數）：相容 wrapper，傳 EXT_INVENTORY_UNCHECKED。
+  extension_report(repo_root, claude_root=None, walk=None, lstat=None, read_bytes=None)：新增兩鍵 "inventory"（extension_inventory_facts 的回傳；缺檔時是 uninitialized facts，不是 None）與 "synced"（synced_verification 的回傳），共十三鍵；_extension_first_reason 仍恰好 1 次，傳入 report["inventory"]。前置觀測失敗時 inventory 與 synced 都為 None。
+gate.py：
+  check_extension_integrity() 硬擋條件 (d) 改為：report["synced"] 為 None 或 report["synced"]["verified"] 不為 True ⇒ hard_block "[R10/fail-closed] 未受管入口：synced（<reason>）"。(a)(b)(c) 不變。synced 驗證通過 ⇒ 不因 synced 擋；另有未登記檔 ⇒ 走 VIOLATION 的 violations 路徑，訊息只講未登記。
+
+### 既有測試允許修改清單(逐字;- 行逐行進審計;此外不得改)
+
+tests/test_redlight.py：T146-36（十一鍵 → 十三鍵）；T146-24、T146-27 的「有效 claude_root」佈置若需 DECLARED_OK，改用新 helper 建含 allowlist + 空 inventory 的 tmp repo；T146-31 的計數 wrapper 改為可接收並轉交第三個 inventory 參數，斷言不變（有效 root 恰好 1 次、無效 root 0 次），佈置可加空 inventory；T146-35 若直接呼叫 _extension_first_reason 兩參數，改傳 EXT_INVENTORY_UNCHECKED（用 _api 取得）。
+tests/test_gate.py：T146-24b 佈置加空 inventory。
+tests/test_status.py：T146-20 / 28 / 30 的 DECLARED_OK 佈置加空 inventory。
+其他方法一律不動；T146-14 不動。
