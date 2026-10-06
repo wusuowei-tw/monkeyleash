@@ -324,7 +324,7 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 (c) 第四站未接 status / pre-commit 前，票面狀態只能寫「核心判定已提交；146 尚未生效」，不得寫「待第五站審查」。
 (d) extension_surface_facts 契約增補兩個參數與兩個回傳鍵：user_skills_dir → "user_skill_plugins"、user_commands_dir → "user_commands"。排除規則：只排除 user_skills_dir 的直接子目錄 synced（即 <user_skills_dir>/synced）及其整棵 subtree；其他層級恰好名為 synced 的目錄不得因此被排除。
 (e) 兩種資料形狀分開鎖：
-    ~~policy（allowlist 檔）裡的 dev_mod_files / user_skill_plugins / user_commands，每項恰為物件 {"sha256": 64 碼小寫十六進位, "note": 字串}，鍵集合恰好這兩個。~~(F-036 體例:舊行不刪)—— 2026-10-06 被裁決 (k) 取代:只綁 sha256 時,同內容換個檔名也會被授權。
+    ~~policy（allowlist 檔）裡的 dev_mod_files / user_skill_plugins / user_commands，每項恰為物件 {"sha256": 64 碼小寫十六進位, "note": 字串}，鍵集合恰好這兩個。~~(F-036 體例:舊行不刪)—— 2026-10-06 被裁決 (k) 取代:(裁決助手補述)只綁 sha256 時,同內容換個檔名也會被授權。
     surfaces（extension_surface_facts 回傳）裡的同名三鍵，每項恰為 tuple (relpath, sha256 或 None)。
 3c 修訂:policy 檔案型項目形狀改為 {"path","sha256","note"},見〈契約補強 3c〉
 (f) extension_state 的完整性前提：surfaces 鍵集合必須恰好等於 {"dev_mod_files","synced_files","r4_violations","project_hook_commands","mcp_json_servers","user_skill_plugins","user_commands"}；少任何一鍵或多任何一鍵 ⇒ 不得回 EXT_DECLARED_OK（回 EXT_UNKNOWN，fail-closed）。
@@ -334,7 +334,7 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 
 - `extension_surface_facts` 完整簽名:`(dev_mods_dir, synced_dirs, canon_dir, mirror_dirs, project_settings_paths, mcp_json_path, user_skills_dir, user_commands_dir)`。
 - surfaces 七鍵:`"dev_mod_files"`、`"synced_files"`、`"r4_violations"`、`"project_hook_commands"`、`"mcp_json_servers"`、`"user_skill_plugins"`、`"user_commands"`。
-- policy 形狀:allowlist 的 `dev_mod_files` / `user_skill_plugins` / `user_commands` 每項恰為 `{"sha256": <64 碼小寫十六進位>, "note": <字串>}`,鍵集合恰好這兩個。
+- ~~policy 形狀:allowlist 的 `dev_mod_files` / `user_skill_plugins` / `user_commands` 每項恰為 `{"sha256": <64 碼小寫十六進位>, "note": <字串>}`,鍵集合恰好這兩個。~~(F-036 體例:舊行不刪)—— 2026-10-06 被 3c 裁決 (k) 取代。
 - surfaces 形狀:回傳的 `dev_mod_files` / `user_skill_plugins` / `user_commands` 每項恰為 tuple `(relpath, sha256 或 None)`。
 
 ---
@@ -374,3 +374,5 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 | `/safe.md` | ❌ |
 | `C:/safe.md` | ❌ |
 | `safe.md/` | ❌ |
+
+停點:.dev/reports/2026-10-06T162625Z-ticket146-s3c-halted-before-B.md;三題裁決:A / 劃線 / 不疊入口
