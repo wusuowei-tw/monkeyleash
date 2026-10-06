@@ -288,7 +288,7 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 - `redlight.py` → `gate.py`:**無**。`redlight.py` 的 import 只有標準庫(`:33-40`,以及函式內的 `uuid` / `types` / `subprocess` / `shlex` / `tomllib`);提到 `gate` 的地方(`:18`、`:27`、`:86`、`:89`、`:157`)都是註解。
 - `verify_gates.py` → 兩者:`.claude/portable/verify_gates.py:238` `load_target_gate`、`:295` `load_target_redlight`。
 ⇒ 兩邊都已經引用 `redlight.py`,而且沒有循環 ⇒ 不新建模組,facts 模組本身不需要新的 manifest 登記。
-(⚠ 這句只講模組。**新的測試檔另計**:`tests/test_manifest.py:196-219` 要求 `tests/` 下每個檔都在 `.agents/portable-manifest.txt` 標 copy / skip。)
+~~(⚠ 這句只講模組。**新的測試檔另計**:`tests/test_manifest.py:196-219` 要求 `tests/` 下每個檔都在 `.agents/portable-manifest.txt` 標 copy / skip。)~~(F-036 體例:舊行不刪)—— 2026-10-06:選 C,測試併入 tests/test_redlight.py,無新檔。
 
 ### 已知盲區 / known limitation
 
@@ -296,3 +296,5 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 2. claude.ai connector:沒有本機登記點。
 3. `mcp__` 前綴不證明來源(2.1.289 reference.md:178:mod 註冊的工具也列成 `mcp__<plugin>__<name>`)。**不做成測試**:v0 沒有 provenance API。
 4. EXT_VERIFIED 不可達,只有 regression lock(行為鎖 + 結構鎖),**不是形式證明**。
+
+第三站停點報告:.dev/reports/2026-10-06T145908Z-ticket146-s3-halted-before-B.md;三選一裁 C。
