@@ -2818,10 +2818,14 @@ class TestTicket146ExtensionIntegrity:
         return value
 
     @staticmethod
-    def _allowlist(dev_mod_sha=(), **extra):
+    def _allowlist(dev_mod_files=(), user_skill_plugins=(), user_commands=(), **extra):
+        """檔案型欄位收 (path, sha256) 對,產生 {"path","sha256","note"}(3c 裁決 (k))。"""
+        def entries(pairs):
+            return [{"path": path, "sha256": sha, "note": "t146"} for path, sha in pairs]
         doc = {"schema": "monkeyleash.extension-allowlist", "version": 1,
-               "dev_mod_files": [{"sha256": h, "note": "t146"} for h in dev_mod_sha],
-               "user_skill_plugins": [], "user_commands": [],
+               "dev_mod_files": entries(dev_mod_files),
+               "user_skill_plugins": entries(user_skill_plugins),
+               "user_commands": entries(user_commands),
                "project_settings_hook_commands": [], "mcp_json_servers": []}
         doc.update(extra)
         return doc
@@ -2915,7 +2919,7 @@ class TestTicket146ExtensionIntegrity:
         out.append(("T146-3", self._facts(r),
                     self._surfaces(tmp_path / "s3", dev_mod_files={"note.txt": note})))
 
-        r = self._repo(tmp_path / "r3b", allowlist_text=self._text(self._allowlist(dev_mod_sha=[note_sha])))
+        r = self._repo(tmp_path / "r3b", allowlist_text=self._text(self._allowlist(dev_mod_files=[("note.txt", note_sha)])))
         out.append(("T146-3b", self._facts(r),
                     self._surfaces(tmp_path / "s3b", dev_mod_files={"note.txt": note})))
 
@@ -2999,7 +3003,7 @@ class TestTicket146ExtensionIntegrity:
         import hashlib
         data = b"not code\n"
         sha = hashlib.sha256(data).hexdigest()
-        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist(dev_mod_sha=[sha])))
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist(dev_mod_files=[("note.txt", sha)])))
         surfaces = self._surfaces(tmp_path / "s", dev_mod_files={"note.txt": data})
         state, _lines = self._evaluate(self._facts(root), surfaces)
         assert state != self._api("EXT_VIOLATION"), state
@@ -3080,9 +3084,13 @@ class TestTicket146ExtensionIntegrity:
         os.symlink(str(outside / "s"), str(mirror / "s"))
         out = self._gate().skill_mirror_violations(str(canon), [str(mirror)])
         assert any(u"symlink 指向正典之外" in v for v in out), out
+        user_skills = tmp_path / "user-skills"
+        user_skills.mkdir()
+        user_commands = tmp_path / "user-commands"
+        user_commands.mkdir()
         fn = self._api("extension_surface_facts")
         surfaces = fn(str(tmp_path / "no-dev-mods"), [], str(canon), [str(mirror)], [],
-                      str(tmp_path / "absent.mcp.json"))
+                      str(tmp_path / "absent.mcp.json"), str(user_skills), str(user_commands))
         assert any(u"symlink 指向正典之外" in v for v in surfaces["r4_violations"]), surfaces["r4_violations"]
 
     def test_t146_11(self, tmp_path):
@@ -3111,7 +3119,7 @@ class TestTicket146ExtensionIntegrity:
         target = base / "user-skills" / "foo" / "SKILL.md"
         target.parent.mkdir(parents=True)
         target.write_bytes(data)
-        policy = self._allowlist(user_skill_plugins=[{"sha256": sha, "note": "t146"}])
+        policy = self._allowlist(user_skill_plugins=[("foo/SKILL.md", sha)])
         root = self._repo(tmp_path / "r", allowlist_text=self._text(policy))
         state, _lines = self._evaluate(self._facts(root), self._surfaces(base))
         assert state != self._api("EXT_VIOLATION"), state
@@ -3171,21 +3179,41 @@ class TestTicket146ExtensionIntegrity:
         target = base / "user-commands" / "finmind.md"
         target.parent.mkdir(parents=True)
         target.write_bytes(data)
-        policy = self._allowlist(user_commands=[{"sha256": sha, "note": "t146"}])
+        policy = self._allowlist(user_commands=[("finmind.md", sha)])
         root = self._repo(tmp_path / "r", allowlist_text=self._text(policy))
         state, _lines = self._evaluate(self._facts(root), self._surfaces(base))
         assert state != self._api("EXT_VIOLATION"), state
 
     def test_t146_13(self, tmp_path):
-        """T146-13:依賴方向 B —— facts 層住在 redlight.py、不反向載入 gate;R4 純函式下沉且與 gate 薄包裝結果相同;對應 invariant 前半。"""
+        """T146-13:依賴方向 B —— facts 層住在 redlight.py、不反向載入 gate;R4 純函式下沉且與 gate 薄包裝結果相同;對應 invariant 前半。
+
+        AST 層級,不掃註解(3c 裁決 (i));redlight.py:18、:27 的歷史註解不在掃描範圍。
+        """
+        import ast
         import inspect
         fn = self._api("extension_surface_facts")
         src = inspect.getsourcefile(fn)
         assert pathlib.Path(src).name == "redlight.py", src
-        text = (ROOT / ".claude" / "hooks" / "redlight.py").read_text(encoding="utf-8")
-        for needle in ("gate" + ".py", "import " + "gate", "load_" + "gate"):
-            assert needle not in text, "redlight.py 含 %s" % needle
+        tree = ast.parse((ROOT / ".claude" / "hooks" / "redlight.py").read_text(encoding="utf-8"))
+        bad = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                bad += ["import %s" % a.name for a in node.names if a.name.split(".")[0] == "gate"]
+            elif isinstance(node, ast.ImportFrom):
+                if (node.module or "").split(".")[0] == "gate":
+                    bad.append("from %s import" % node.module)
+            elif isinstance(node, ast.Call):
+                func = node.func
+                name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+                if name in ("spec_from_file_location", "import_module"):
+                    for arg in list(node.args) + [k.value for k in node.keywords]:
+                        for sub in ast.walk(arg):
+                            if isinstance(sub, ast.Constant) and isinstance(sub.value, str) and "gate" in sub.value:
+                                bad.append("%s(%r)" % (name, sub.value))
+        assert not bad, bad
         primitive = self._api("skill_mirror_violations")
+        for f in (fn, primitive):
+            assert ("gate" + ".py") not in inspect.getsource(f), f.__name__
         canon = tmp_path / "canon"
         mirror = tmp_path / "mirror"
         _g_write(canon, "s/SKILL.md", u"skill\n")
@@ -3212,3 +3240,81 @@ class TestTicket146ExtensionIntegrity:
         extra = dict(surfaces)
         extra["unexpected"] = []
         assert state_fn(facts, extra) != ok, "多一個未知鍵仍為 DECLARED_OK"
+
+    _T146_FIELDS = {"dev-mods": "dev_mod_files", "user-skills": "user_skill_plugins",
+                    "user-commands": "user_commands"}
+
+    @pytest.mark.parametrize("entry", ["dev-mods", "user-skills", "user-commands"])
+    def test_t146_15(self, tmp_path, entry):
+        """T146-15:同 hash 不同 path ⇒ VIOLATION(登記 safe.md,目錄放內容相同的 admin.md);對應 invariant 前半。"""
+        import hashlib
+        field = self._T146_FIELDS[entry]
+        data = b"same bytes\n"
+        sha = hashlib.sha256(data).hexdigest()
+        base = tmp_path / "s"
+        target = base / entry / "admin.md"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(data)
+        policy = self._allowlist(**{field: [("safe.md", sha)]})
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(policy))
+        surfaces = self._surfaces(base)
+        got = [tuple(x) for x in surfaces.get(field, [])]
+        assert ("admin.md", sha) in got, got
+        state, lines = self._evaluate(self._facts(root), surfaces)
+        assert state == self._api("EXT_VIOLATION"), state
+        assert "admin.md" in lines[0], lines
+
+    @pytest.mark.parametrize("entry", ["dev-mods", "user-skills", "user-commands"])
+    def test_t146_15b(self, tmp_path, entry):
+        """T146-15b:同 path 不同 hash ⇒ VIOLATION(登記 safe.md 的 sha_X,目錄的 safe.md 內容是 sha_Y);對應 invariant 前半。"""
+        import hashlib
+        field = self._T146_FIELDS[entry]
+        sha_x = hashlib.sha256(b"registered\n").hexdigest()
+        base = tmp_path / "s"
+        target = base / entry / "safe.md"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"tampered\n")
+        policy = self._allowlist(**{field: [("safe.md", sha_x)]})
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(policy))
+        state, lines = self._evaluate(self._facts(root), self._surfaces(base))
+        assert state == self._api("EXT_VIOLATION"), state
+        assert "safe.md" in lines[0], lines
+
+    @pytest.mark.parametrize("kind, value", [
+        ("positive", "dev-mods"),
+        ("positive", "user-skills"),
+        ("positive", "user-commands"),
+        ("malformed", "./safe.md"),
+        ("malformed", "foo/../safe.md"),
+        ("malformed", "foo//safe.md"),
+        ("malformed", "foo\\safe.md"),
+        ("malformed", "/safe.md"),
+        ("malformed", "C:/safe.md"),
+        ("malformed", "safe.md/"),
+    ], ids=["positive-dev-mods", "positive-user-skills", "positive-user-commands",
+            "malformed-dot-segment", "malformed-dotdot-segment", "malformed-empty-segment",
+            "malformed-backslash", "malformed-leading-slash", "malformed-drive-prefix",
+            "malformed-trailing-slash"])
+    def test_t146_15c(self, tmp_path, kind, value):
+        """T146-15c:(path, sha256) 都相同才授權(正向,含 foo..bar.md);policy 的 path 不是 canonical 形式 ⇒ malformed(只對 user-commands);對應 invariant 前半。"""
+        import hashlib
+        if kind == "positive":
+            field = self._T146_FIELDS[value]
+            safe, odd = b"safe\n", b"odd name\n"
+            base = tmp_path / "s"
+            (base / value).mkdir(parents=True)
+            (base / value / "safe.md").write_bytes(safe)
+            (base / value / "foo..bar.md").write_bytes(odd)
+            pairs = [("safe.md", hashlib.sha256(safe).hexdigest()),
+                     ("foo..bar.md", hashlib.sha256(odd).hexdigest())]
+            root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist(**{field: pairs})))
+            state, _lines = self._evaluate(self._facts(root), self._surfaces(base))
+            assert state != self._api("EXT_VIOLATION"), state
+        else:
+            sha = hashlib.sha256(b"x\n").hexdigest()
+            policy = self._allowlist(user_commands=[(value, sha)])
+            root = self._repo(tmp_path / "r", allowlist_text=self._text(policy))
+            facts = self._facts(root)
+            assert facts["state"] == "malformed", (value, facts)
+            state, _lines = self._evaluate(facts, self._surfaces(tmp_path / "s"))
+            assert state == self._api("EXT_VIOLATION"), (value, state)
