@@ -1304,13 +1304,13 @@ def extension_surface_facts(dev_mods_dir, synced_dirs, canon_dir, mirror_dirs, p
 
 def _extension_first_reason(facts, surfaces):
     """`(狀態, 原因文字或 None)`。extension_state 與 extension_status_lines 共用(3d 裁決 (o))。"""
+    state = facts.get("state") if isinstance(facts, dict) else None
+    if state != "ok":
+        return (EXT_VIOLATION, _EXT_STATE_TEXT.get(state, _EXT_STATE_TEXT["malformed"]))
     keys = set(surfaces) if isinstance(surfaces, dict) else set()
     if keys != EXT_SURFACE_KEYS:
         return (EXT_UNKNOWN, u"surfaces 不完整：缺 %s / 多 %s；fail-closed"
                 % (sorted(EXT_SURFACE_KEYS - keys), sorted(keys - EXT_SURFACE_KEYS)))
-    state = facts.get("state") if isinstance(facts, dict) else None
-    if state != "ok":
-        return (EXT_VIOLATION, _EXT_STATE_TEXT.get(state, _EXT_STATE_TEXT["malformed"]))
     policy = facts["policy"]
     for field, label in _EXT_FILE_FIELDS:
         allowed = set((item["path"], item["sha256"]) for item in policy[field])

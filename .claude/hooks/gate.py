@@ -1334,13 +1334,24 @@ def rule_codes(source_path=None):
     那是現場已有的事實,不必另外登記一份。
 
     `[R2/commit]` 這種帶子類的歸到 R2 —— 子類是同一條規則的不同時點,不是新規則。
+
+    票 146 方向 B 之後,規則訊息也住在 redlight.py,列舉掃兩檔聯集。
+    `source_path` 給定時掃該檔與其同目錄的 redlight.py(存在才掃)。
     """
     path = source_path or os.path.abspath(__file__)
     try:
         with io.open(path, encoding="utf-8") as f:
-            return set(RULE_CODE_RE.findall(f.read()))
+            codes = set(RULE_CODE_RE.findall(f.read()))
     except Exception:
         return set()
+    sibling = os.path.join(os.path.dirname(os.path.abspath(path)), "redlight.py")
+    if os.path.exists(sibling):
+        try:
+            with io.open(sibling, encoding="utf-8") as f:
+                codes |= set(RULE_CODE_RE.findall(f.read()))
+        except Exception:
+            return set()
+    return codes
 
 
 def _err(msg):
