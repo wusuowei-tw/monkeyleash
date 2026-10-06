@@ -3318,3 +3318,18 @@ class TestTicket146ExtensionIntegrity:
             assert facts["state"] == "malformed", (value, facts)
             state, _lines = self._evaluate(facts, self._surfaces(tmp_path / "s"))
             assert state == self._api("EXT_VIOLATION"), (value, state)
+
+    @pytest.mark.parametrize("field", ["dev_mod_files", "user_skill_plugins", "user_commands"])
+    def test_t146_16(self, tmp_path, field):
+        """T146-16:同一欄位 path 重複 ⇒ malformed(sha 不同、sha 相同兩子案;3d 裁決 (m));對應 invariant 前半。"""
+        import hashlib
+        sha_a = hashlib.sha256(b"a\n").hexdigest()
+        sha_b = hashlib.sha256(b"b\n").hexdigest()
+        for label, pairs in (("different sha", [("safe.md", sha_a), ("safe.md", sha_b)]),
+                             ("same sha", [("safe.md", sha_a), ("safe.md", sha_a)])):
+            root = self._repo(tmp_path / ("r-" + label.replace(" ", "-")),
+                              allowlist_text=self._text(self._allowlist(**{field: pairs})))
+            facts = self._facts(root)
+            assert facts["state"] == "malformed", (label, facts)
+            state, _lines = self._evaluate(facts, self._surfaces(tmp_path / ("s-" + label.replace(" ", "-"))))
+            assert state == self._api("EXT_VIOLATION"), (label, state)
