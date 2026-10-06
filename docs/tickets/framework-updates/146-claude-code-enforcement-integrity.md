@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:第三站紅燈已提交(S3-146-1);待第四站實作
+**狀態**:立案 —— 第三站紅燈補完中(3b-146);尚未實作
+~~**狀態**:第三站紅燈已提交(S3-146-1);待第四站實作~~(F-036 體例:舊行不刪)—— 2026-10-06 契約增補 3b 入票時更新:4-146 暫緩,第三站契約漏掃 ~/.claude/skills 與 ~/.claude/commands,先補紅燈(裁決 (a))。
 ~~**狀態**:立案 —— 設計 v0 + Q1–Q6 已裁;進入第三站紅燈~~(F-036 體例:舊行不刪)—— 2026-10-06 第三站紅燈提交時更新:S3-146-1 已提交、已證紅。
 ~~**狀態**:立案 —— 設計 v0 已產出(2026-10-06T144009Z-ticket146-design-v0.md);待審~~(F-036 體例:舊行不刪)—— 2026-10-06 Q1–Q6 裁決入票時更新:設計 v0 已審、Q1–Q6 已裁。
 ~~**狀態**:立案 —— 第一步唯讀盤點已完成(2026-10-04 報告 2026-10-04T124314Z-ticket146-step1-inventory.md / 2026-10-04T130149Z-ticket146-step1-closeout.md,於 Claude Code 2.1.289 執行;門檻 ≥ 2.1.287 已滿足);可進入設計。~~(F-036 體例:舊行不刪)—— 2026-10-06 設計 v0 產出時更新:已進入設計。
@@ -283,6 +284,7 @@ EXT_VERIFIED：常數存在，無任何回傳路徑（v0 以行為測試 + 結�
 gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 tree parity。
 
 **「共用唯讀 facts 模組」的落點 = `.claude/hooks/redlight.py`**(第三站步驟 0d 判定)。依據:
+3b:方向 B,R4 primitive 下沉 redlight.py,見〈契約增補 3b〉
 - `gate.py` → `redlight.py`:`gate.py:2051-2065` `_redlight()` 以 `spec_from_file_location` 依路徑載入同目錄的 `redlight.py`(呼叫點 `:2085`、`:2437`、`:2592`)。
 - `status.py` → `redlight.py`:`status.py:355-370` `load_redlight(root)` 依路徑載入 `<root>/.claude/hooks/redlight.py`。
 - `status.py` → `gate.py`:`status.py:98-111` `load_gate(root)`。
@@ -308,3 +310,26 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 - 紅燈:`tests/test_redlight.py::TestTicket146ExtensionIntegrity`,14 個(T146-0a、1、2、2b、2c、3、3b、4、4b、5、6、7、8、9)。
 - 證紅(S3-146-1 `0993d217a27bce8119587bf1553df49a3521e79e`,乾淨工作樹,Windows):**13 failed**(全部屬於本 class),T146-9 依規格 skip;其餘 2110 passed,沒有 collection / setup / teardown ERROR。
 - 待第四站:實作 `redlight.py` 的契約名稱與 `gate.py` R4 的遞迴 tree parity;改名必須回本票記一筆。
+
+---
+
+## 契約增補 3b(2026-10-06)
+
+### 裁決(Jeff,2026-10-06;逐字)
+
+(a) 4-146 暫緩：第三站契約漏掃 ~/.claude/skills 與 ~/.claude/commands，先補紅燈再實作。
+(b) 共用 facts 層不得反向載入 gate.py。架構方向 = B：R4 樹比對純函式下沉到 redlight.py；gate.skill_mirror_violations 改為薄包裝，簽名、訊息、呼叫點不變；依賴方向 gate → redlight、status → redlight，redlight 不依賴任何專案模組。
+(c) 第四站未接 status / pre-commit 前，票面狀態只能寫「核心判定已提交；146 尚未生效」，不得寫「待第五站審查」。
+(d) extension_surface_facts 契約增補兩個參數與兩個回傳鍵：user_skills_dir → "user_skill_plugins"、user_commands_dir → "user_commands"。排除規則：只排除 user_skills_dir 的直接子目錄 synced（即 <user_skills_dir>/synced）及其整棵 subtree；其他層級恰好名為 synced 的目錄不得因此被排除。
+(e) 兩種資料形狀分開鎖：
+    policy（allowlist 檔）裡的 dev_mod_files / user_skill_plugins / user_commands，每項恰為物件 {"sha256": 64 碼小寫十六進位, "note": 字串}，鍵集合恰好這兩個。
+    surfaces（extension_surface_facts 回傳）裡的同名三鍵，每項恰為 tuple (relpath, sha256 或 None)。
+(f) extension_state 的完整性前提：surfaces 鍵集合必須恰好等於 {"dev_mod_files","synced_files","r4_violations","project_hook_commands","mcp_json_servers","user_skill_plugins","user_commands"}；少任何一鍵或多任何一鍵 ⇒ 不得回 EXT_DECLARED_OK（回 EXT_UNKNOWN，fail-closed）。
+(g) 已知後果：~/.claude/commands/ 現有的 .md（R-146-1 看到一個）在 allowlist 空時會判 VIOLATION；這是設計內的，要由 Jeff 核准指紋後才合法。
+
+### 增補後的契約
+
+- `extension_surface_facts` 完整簽名:`(dev_mods_dir, synced_dirs, canon_dir, mirror_dirs, project_settings_paths, mcp_json_path, user_skills_dir, user_commands_dir)`。
+- surfaces 七鍵:`"dev_mod_files"`、`"synced_files"`、`"r4_violations"`、`"project_hook_commands"`、`"mcp_json_servers"`、`"user_skill_plugins"`、`"user_commands"`。
+- policy 形狀:allowlist 的 `dev_mod_files` / `user_skill_plugins` / `user_commands` 每項恰為 `{"sha256": <64 碼小寫十六進位>, "note": <字串>}`,鍵集合恰好這兩個。
+- surfaces 形狀:回傳的 `dev_mod_files` / `user_skill_plugins` / `user_commands` 每項恰為 tuple `(relpath, sha256 或 None)`。
