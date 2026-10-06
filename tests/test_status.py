@@ -3174,3 +3174,123 @@ class TestEvidencePolicyStatusLine:
             return
         root = _g_status_root(tmp_path, state)
         _g_assert_status(_g_policy_status_line(root), expected)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 146 第三站 3e 紅燈(S3e-146-1)—— status 的 R10 兩行
+#
+# 臨時 root 自建(gate.py + redlight.py 真檔複本、已提交空白 allowlist);**不改 `_make_root`**。
+# claude_root 一律以 tmp 注入 `status._extension_claude_root`,不碰真的 ~/.claude。缺 API ⇒ 測試內紅。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_T146_REAL_REDLIGHT = ROOT / ".claude" / "hooks" / "redlight.py"
+_T146_ALLOWLIST = {"schema": "monkeyleash.extension-allowlist", "version": 1,
+                   "dev_mod_files": [], "user_skill_plugins": [], "user_commands": [],
+                   "project_settings_hook_commands": [], "mcp_json_servers": []}
+
+
+class TestTicket146StatusLines:
+    """票 146 第三站 3e:status 顯示與 pre-commit 消費同一份 extension_report。全部在 S3e-146-1 預期各自失敗。"""
+
+    @staticmethod
+    def _git(root, *args):
+        subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True)
+
+    def _root(self, tmp_path, with_redlight=True):
+        root = tmp_path / "repo"
+        (root / ".dev").mkdir(parents=True)
+        (root / ".claude" / "hooks").mkdir(parents=True)
+        (root / ".agents").mkdir(parents=True)
+        with io.open(str(root / ".dev" / "pipeline.json"), "w", encoding="utf-8") as f:
+            json.dump({"current_stage": "implement", "feature": "testfeat",
+                       "ticket_id": "146", "updated": "2026-10-06"}, f)
+        shutil.copy2(str(REAL_GATE), str(root / ".claude" / "hooks" / "gate.py"))
+        shutil.copy2(str(REAL_STAGES), str(root / ".agents" / "pipeline-stages.yaml"))
+        if with_redlight:
+            shutil.copy2(str(_T146_REAL_REDLIGHT), str(root / ".claude" / "hooks" / "redlight.py"))
+        with io.open(str(root / ".agents" / "extension-allowlist.json"), "w",
+                     encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(_T146_ALLOWLIST, ensure_ascii=False, indent=2) + "\n")
+        self._git(root, "init", "-q")
+        self._git(root, "config", "user.email", "t@example.invalid")
+        self._git(root, "config", "user.name", "t")
+        self._git(root, "add", ".agents/extension-allowlist.json")
+        self._git(root, "commit", "-q", "-m", "baseline")
+        claude = tmp_path / "claude"
+        claude.mkdir()
+        return str(root), claude
+
+    @staticmethod
+    def _inject(monkeypatch, claude):
+        assert hasattr(status, "_extension_claude_root"), \
+            "v0 contract not implemented: status._extension_claude_root"
+        monkeypatch.setattr(status, "_extension_claude_root", lambda: str(claude))
+
+    @staticmethod
+    def _two_lines(out):
+        ext = [ln for ln in _lines(out) if ln.startswith(u"extension integrity (R10): ")]
+        rt = [ln for ln in _lines(out) if ln.startswith(u"runtime loaded set: ")]
+        return ext, rt
+
+    def test_t146_20(self, tmp_path, monkeypatch):
+        """T146-20:DECLARED_OK 佈置 ⇒ R10 兩行各恰好 1 行,第一行值 == extension_report(...)["lines"][0];對應 Q4、裁決 (w)。"""
+        root, claude = self._root(tmp_path)
+        self._inject(monkeypatch, claude)
+        out = render(root)
+        ext, rt = self._two_lines(out)
+        assert len(ext) == 1 and len(rt) == 1, (ext, rt)
+        rl = status.load_redlight(root)
+        assert rl is not None and hasattr(rl, "extension_report"), \
+            "v0 contract not implemented: redlight.extension_report"
+        rep = rl.extension_report(root, str(claude))
+        assert _value_of(out, u"extension integrity (R10)") == rep["lines"][0], (ext, rep["lines"])
+
+    def test_t146_28(self, tmp_path, monkeypatch):
+        """T146-28:status 實際消費的 report 與 gate.check_extension_integrity 消費的 report 同 state、同第一行;對應裁決 (w)。"""
+        root, claude = self._root(tmp_path)
+        self._inject(monkeypatch, claude)
+        rl = status.load_redlight(root)
+        assert rl is not None and hasattr(rl, "extension_report"), \
+            "v0 contract not implemented: redlight.extension_report"
+        orig = rl.extension_report
+        seen = []
+
+        def recording(*a, **k):
+            r = orig(*a, **k)
+            seen.append(r)
+            return r
+        monkeypatch.setattr(rl, "extension_report", recording)
+        out = render(root)
+        assert len(seen) == 1, u"status 呼叫 extension_report 的次數:%d" % len(seen)
+        consumed = seen[0]
+        assert _value_of(out, u"extension integrity (R10)") == consumed["lines"][0], (out, consumed["lines"])
+        g = status.load_gate(root)
+        assert hasattr(g, "_extension_claude_root") and hasattr(g, "check_extension_integrity"), \
+            "v0 contract not implemented: gate._extension_claude_root / gate.check_extension_integrity"
+        monkeypatch.setattr(g, "_extension_claude_root", lambda: str(claude))
+        gate_report = g.check_extension_integrity()["report"]
+        assert gate_report["state"] == consumed["state"], (gate_report["state"], consumed["state"])
+        assert gate_report["lines"][0] == consumed["lines"][0], (gate_report["lines"], consumed["lines"])
+        direct = orig(root, str(claude))
+        assert direct["state"] == consumed["state"], (direct["state"], consumed["state"])
+
+    def test_t146_30(self, tmp_path, monkeypatch):
+        """T146-30:R10 兩行恰好找到,各帶 (source:,值不含 VERDICT_TOKENS;對應 Q4。"""
+        root, claude = self._root(tmp_path)
+        self._inject(monkeypatch, claude)
+        out = render(root)
+        ext, rt = self._two_lines(out)
+        assert len(ext) == 1 and len(rt) == 1, (ext, rt)
+        for ln in ext + rt:
+            assert u"(source:" in ln, ln
+            value = ln.split(u":", 1)[1].split(u"(source:")[0]
+            hits = [t for t in VERDICT_TOKENS if t in value]
+            assert hits == [], (hits, ln)
+
+    def test_t146_20b(self, tmp_path, monkeypatch):
+        """T146-20b:臨時 root 只有 gate.py ⇒「未記錄（146 判定器不在）」且不出現 static surfaces;對應裁決 (x)。"""
+        root, claude = self._root(tmp_path, with_redlight=False)
+        self._inject(monkeypatch, claude)
+        out = render(root)
+        assert u"未記錄（146 判定器不在）" in out, out
+        assert u"static surfaces:" not in out, out

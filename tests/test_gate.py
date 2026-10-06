@@ -6545,3 +6545,226 @@ class TestT137TheRealListUnderTheNewRule:
             % v["drained_outside_go_live"])
         assert not v["malformed"], (
             "這些認得出是排水條目但格式不合法 —— 它們不生效:%s" % v["malformed"])
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 票 146 第三站 3e 紅燈(S3e-146-1)—— pre-commit 接線(R10)
+#
+# 契約在票 146〈3e 裁決與 v1 接線契約〉。claude_root 一律以 tmp 注入
+# (`gate._extension_claude_root`),不碰真的 ~/.claude。臨時 root 同時複製
+# gate.py + redlight.py(T146-26 例外:只有 gate.py)。缺 API ⇒ 測試內紅。
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestTicket146Integration:
+    """票 146 第三站 3e:R10 接進 pre-commit。全部在 S3e-146-1 預期各自失敗。"""
+
+    _ALLOWLIST = {"schema": "monkeyleash.extension-allowlist", "version": 1,
+                  "dev_mod_files": [], "user_skill_plugins": [], "user_commands": [],
+                  "project_settings_hook_commands": [], "mcp_json_servers": []}
+
+    @staticmethod
+    def _git(root, *args):
+        subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True)
+
+    def _root(self, tmp_path, with_redlight=True):
+        """臨時 repo(已提交空白 allowlist)+ 存在但空的 claude_root。"""
+        root = tmp_path / "repo"
+        hooks = root / ".claude" / "hooks"
+        hooks.mkdir(parents=True)
+        (root / ".dev").mkdir()
+        (root / ".agents").mkdir()
+        shutil.copy2(str(ROOT / ".claude" / "hooks" / "gate.py"), str(hooks / "gate.py"))
+        if with_redlight:
+            shutil.copy2(str(ROOT / ".claude" / "hooks" / "redlight.py"), str(hooks / "redlight.py"))
+        with io.open(str(root / ".agents" / "extension-allowlist.json"), "w",
+                     encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(self._ALLOWLIST, ensure_ascii=False, indent=2) + "\n")
+        self._git(root, "init", "-q")
+        self._git(root, "config", "user.email", "t@example.invalid")
+        self._git(root, "config", "user.name", "t")
+        self._git(root, "add", ".agents/extension-allowlist.json")
+        self._git(root, "commit", "-q", "-m", "baseline")
+        claude = tmp_path / "claude"
+        claude.mkdir()
+        return root, claude
+
+    @staticmethod
+    def _load(root, tag):
+        spec = importlib.util.spec_from_file_location(
+            "gate_t146_%s" % tag, str(root / ".claude" / "hooks" / "gate.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    @staticmethod
+    def _wire(monkeypatch, mod, claude, stop_r4=True, shadow=False):
+        """停掉 R10 以外的鄰居;claude_root 注入 tmp;影子由參數決定。"""
+        assert hasattr(mod, "_extension_claude_root"), \
+            "v0 contract not implemented: gate._extension_claude_root"
+        monkeypatch.setattr(mod, "_extension_claude_root", lambda: str(claude))
+        monkeypatch.setattr(mod, "upstream_shadow_violation", lambda *a, **k: (None, None))
+        monkeypatch.setattr(mod, "staged_paths", lambda *a, **k: [])
+        for name in ("check_third_axis_mount", "check_to_spec_override",
+                     "check_legacy_list", "check_friction_numbers"):
+            monkeypatch.setattr(mod, name, lambda *a, **k: [])
+        if stop_r4:
+            monkeypatch.setattr(mod, "check_skill_copies", lambda *a, **k: [])
+        monkeypatch.setattr(mod, "shadow_active", lambda *a, **k: shadow)
+
+    @staticmethod
+    def _fake_walk(target):
+        def same(a, b):
+            return os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
+
+        def fake_walk(top, topdown=True, onerror=None, followlinks=False):
+            for item in os.walk(top, topdown=topdown, onerror=onerror, followlinks=followlinks):
+                yield item
+            if same(top, target) and onerror is not None:
+                onerror(OSError(13, "injected walk failure", os.path.join(str(target), "sub")))
+        return fake_walk
+
+    @staticmethod
+    def _run(mod, capsys):
+        try:
+            rc = mod.mode_pre_commit()
+        except Exception as e:
+            pytest.fail("mode_pre_commit 丟出例外(traceback),不是可讀的擋下訊息:%r" % (e,))
+        return rc, capsys.readouterr().err
+
+    def test_t146_25(self):
+        """T146-25:結構 —— check_extension_integrity 不在前哨、在 pre-commit,且排在 check_skill_copies 之前(補鎖 5);對應 Q4。"""
+        import inspect
+        assert "check_extension_integrity" not in gate.mode_hook.__code__.co_names
+        assert "check_extension_integrity" in gate.mode_pre_commit.__code__.co_names
+        src = inspect.getsource(gate.mode_pre_commit)
+        assert src.index("check_extension_integrity") < src.index("check_skill_copies"), src
+
+    def test_t146_21(self, tmp_path, monkeypatch, capsys):
+        """T146-21:未登記 dev-mod 檔、影子關 ⇒ rc 1,訊息含 [R10] 與「dev-mods 未登記」;對應裁決 (w)。"""
+        root, claude = self._root(tmp_path)
+        (claude / "dev-mods").mkdir()
+        (claude / "dev-mods" / "x.txt").write_bytes(b"x\n")
+        mod = self._load(root, "21")
+        self._wire(monkeypatch, mod, claude)
+        rc, err = self._run(mod, capsys)
+        assert rc == 1, err
+        assert "[R10]" in err, err
+        assert u"dev-mods 未登記" in err, err
+
+    def test_t146_22(self, tmp_path, monkeypatch, capsys):
+        """T146-22:claude_root 注入不存在路徑 ⇒ rc 1,[R10/fail-closed] + claude_root_invalid;影子開仍 rc 1(補鎖 1、3);對應裁決 2。"""
+        root, _claude = self._root(tmp_path)
+        mod = self._load(root, "22")
+        self._wire(monkeypatch, mod, tmp_path / "no-such-claude-root")
+        rc, err = self._run(mod, capsys)
+        assert rc == 1, err
+        assert "[R10/fail-closed]" in err and "claude_root_invalid" in err, err
+        self._wire(monkeypatch, mod, tmp_path / "no-such-claude-root", shadow=True)
+        rc, err = self._run(mod, capsys)
+        assert rc == 1, err
+
+    def test_t146_23(self, tmp_path, monkeypatch, capsys):
+        """T146-23:synced 有檔、其他乾淨 ⇒ rc 1,[R10/fail-closed] +「未受管入口：synced」;影子開仍 rc 1;對應裁決 3。"""
+        root, claude = self._root(tmp_path)
+        (claude / "skills" / "synced").mkdir(parents=True)
+        (claude / "skills" / "synced" / "manifest.json").write_bytes(b"{}\n")
+        mod = self._load(root, "23")
+        self._wire(monkeypatch, mod, claude)
+        rc, err = self._run(mod, capsys)
+        assert rc == 1, err
+        assert "[R10/fail-closed]" in err and u"未受管入口：synced" in err, err
+        self._wire(monkeypatch, mod, claude, shadow=True)
+        rc, err = self._run(mod, capsys)
+        assert rc == 1, err
+
+    def test_t146_26(self, tmp_path, monkeypatch, capsys):
+        """T146-26:臨時 root 只有 gate.py、不停 check_skill_copies ⇒ rc 1,fail-closed 可讀、無 Traceback;影子開仍 rc 1(z2、補鎖 5);對應裁決 (x)。"""
+        root, claude = self._root(tmp_path, with_redlight=False)
+        mod = self._load(root, "26")
+        self._wire(monkeypatch, mod, claude, stop_r4=False)
+        rc, err = self._run(mod, capsys)
+        assert rc == 1, err
+        assert "fail-closed" in err and "Traceback" not in err, err
+        self._wire(monkeypatch, mod, claude, stop_r4=False, shadow=True)
+        rc, err = self._run(mod, capsys)
+        assert rc == 1, err
+
+    def test_t146_37(self, tmp_path, monkeypatch, capsys):
+        """T146-37:未登記檔 + 注入列舉錯誤 + 影子開 ⇒ rc 1,[R10/fail-closed] +「觀測失敗」(補鎖 2 的 gate 側);對應裁決 2。"""
+        root, claude = self._root(tmp_path)
+        dev = claude / "dev-mods"
+        (dev / "sub").mkdir(parents=True)
+        (dev / "x.txt").write_bytes(b"x\n")
+        mod = self._load(root, "37")
+        self._wire(monkeypatch, mod, claude, shadow=True)
+        rl = mod._redlight()
+        assert hasattr(rl, "extension_report"), "v0 contract not implemented: redlight.extension_report"
+        orig = rl.extension_report
+        fake = self._fake_walk(dev)
+        monkeypatch.setattr(rl, "extension_report",
+                            lambda repo_root, claude_root=None, **k: orig(repo_root, claude_root, walk=fake))
+        rc, err = self._run(mod, capsys)
+        assert rc == 1, err
+        assert "[R10/fail-closed]" in err and u"觀測失敗" in err, err
+
+    def test_t146_38(self, tmp_path, monkeypatch, capsys):
+        """T146-38:未登記檔 + synced 有檔 + 影子開 ⇒ rc 1,[R10/fail-closed] +「未受管入口：synced」(補鎖 6,不得只重述未登記檔);對應裁決 3。"""
+        root, claude = self._root(tmp_path)
+        (claude / "dev-mods").mkdir()
+        (claude / "dev-mods" / "x.txt").write_bytes(b"x\n")
+        (claude / "skills" / "synced").mkdir(parents=True)
+        (claude / "skills" / "synced" / "manifest.json").write_bytes(b"{}\n")
+        mod = self._load(root, "38")
+        self._wire(monkeypatch, mod, claude, shadow=True)
+        rc, err = self._run(mod, capsys)
+        assert rc == 1, err
+        assert "[R10/fail-closed]" in err and u"未受管入口：synced" in err, err
+
+    def test_t146_24b(self, tmp_path, monkeypatch, capsys):
+        """T146-24b:DECLARED_OK 佈置 ⇒ rc 0(runtime 未證明不擋;裁決 4);對應 invariant 後半。"""
+        root, claude = self._root(tmp_path)
+        mod = self._load(root, "24b")
+        self._wire(monkeypatch, mod, claude)
+        rc, err = self._run(mod, capsys)
+        assert rc == 0, err
+
+    def test_t146_29(self, tmp_path):
+        """T146-29:rule_sources() 以結構化欄位呈現來源存在 / 可讀 / 完整(補鎖 4);對應裁決 (x)。"""
+        assert hasattr(gate, "rule_sources"), "v0 contract not implemented: gate.rule_sources"
+
+        def norm(d):
+            return dict((os.path.normcase(k), v) for k, v in d.items())
+
+        def key(p):
+            return os.path.normcase(os.path.abspath(str(p)))
+
+        hooks = ROOT / ".claude" / "hooks"
+        r = norm(gate.rule_sources())
+        assert set(r) == {key(hooks / "gate.py"), key(hooks / "redlight.py")}, sorted(r)
+        for v in r.values():
+            assert v["exists"] and v["readable"] and v["complete"], v
+        assert "R4" in set().union(*(v["codes"] for v in r.values())), r
+
+        only = tmp_path / "only"
+        only.mkdir()
+        shutil.copy2(str(hooks / "gate.py"), str(only / "gate.py"))
+        rl2 = norm(gate.rule_sources(str(only / "gate.py")))[key(only / "redlight.py")]
+        assert (rl2["exists"], rl2["readable"], rl2["complete"], rl2["codes"]) == (False, False, False, set()), rl2
+
+        dirc = tmp_path / "dircase"
+        dirc.mkdir()
+        shutil.copy2(str(hooks / "gate.py"), str(dirc / "gate.py"))
+        (dirc / "redlight.py").mkdir()
+        rl3 = norm(gate.rule_sources(str(dirc / "gate.py")))[key(dirc / "redlight.py")]
+        assert (rl3["exists"], rl3["readable"], rl3["complete"], rl3["codes"]) == (True, False, False, set()), rl3
+        assert isinstance(gate.rule_codes(str(dirc / "gate.py")), set)
+
+    def test_t146_33(self):
+        """T146-33:R10 在規則列舉與 verify_gates.SCENARIOS 裡;對應裁決 5。"""
+        assert "R10" in gate.rule_codes(), gate.rule_codes()
+        spec = importlib.util.spec_from_file_location(
+            "verify_gates_t146", ROOT / ".claude" / "portable" / "verify_gates.py")
+        vg = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(vg)
+        assert "R10" in vg.SCENARIOS, sorted(vg.SCENARIOS)

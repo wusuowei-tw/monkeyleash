@@ -3226,7 +3226,7 @@ class TestTicket146ExtensionIntegrity:
     def test_t146_14(self, tmp_path):
         """T146-14:完整性前提 —— surfaces 鍵集合恰為七鍵才可能 DECLARED_OK;少一鍵或多一鍵都不得 DECLARED_OK;對應 invariant 後半。"""
         keys = ("dev_mod_files", "synced_files", "r4_violations", "project_hook_commands",
-                "mcp_json_servers", "user_skill_plugins", "user_commands")
+                "mcp_json_servers", "user_skill_plugins", "user_commands", "errors")
         root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist()))
         surfaces = self._surfaces(tmp_path / "s")
         assert set(surfaces) == set(keys), sorted(surfaces)
@@ -3344,3 +3344,194 @@ class TestTicket146ExtensionIntegrity:
         state, lines = self._evaluate(facts, surfaces)
         assert state == self._api("EXT_VIOLATION"), (state, lines)
         assert u"allowlist 格式不明" in lines[0], lines
+
+    # ── 3e(S3e-146-1):category、extension_report、claude_root、errors ─────────
+
+    def _t3e_clean(self, tmp_path):
+        """已提交的空白 allowlist + 一個存在但空的 claude_root(tmp,不碰真的 ~/.claude)。"""
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist()))
+        claude = tmp_path / "claude"
+        claude.mkdir()
+        return root, claude
+
+    def _t3e_report(self, repo_root, claude_root, **kw):
+        fn = self._api("extension_report")
+        return fn(str(repo_root), None if claude_root is None else str(claude_root), **kw)
+
+    def _t3e_kw(self, name):
+        """extension_report 的注入參數;缺 ⇒ 測試內紅。"""
+        import inspect
+        fn = self._api("extension_report")
+        assert name in inspect.signature(fn).parameters, \
+            "v0 contract not implemented: extension_report(%s=)" % name
+        return fn
+
+    @staticmethod
+    def _t3e_fake_walk(target, first_level=False):
+        """包住 os.walk:走到 `target` 時經 onerror 注入一個 OSError(first_level ⇒ 第一層就失敗、不產出任何項目)。"""
+        import os
+
+        def same(a, b):
+            return os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
+
+        def fake_walk(top, topdown=True, onerror=None, followlinks=False):
+            hit = same(top, target)
+            if hit and first_level:
+                if onerror is not None:
+                    onerror(OSError(13, "injected first-level failure", str(target)))
+                return
+            for item in os.walk(top, topdown=topdown, onerror=onerror, followlinks=followlinks):
+                yield item
+            if hit and onerror is not None:
+                onerror(OSError(13, "injected walk failure", os.path.join(str(target), "sub")))
+        return fake_walk
+
+    def test_t146_34(self):
+        """T146-34:常數鎖 —— 七個 EXT_CAT_*、EXT_CATEGORIES、EXT_RUNTIME_UNPROVEN、EXT_SURFACE_KEYS 八鍵;對應 invariant 前半。"""
+        cats = {"EXT_CAT_ALLOWLIST": "allowlist_state", "EXT_CAT_UNREGISTERED": "unregistered",
+                "EXT_CAT_R4": "r4", "EXT_CAT_HOOK": "hook", "EXT_CAT_MCP": "mcp",
+                "EXT_CAT_OBSERVATION": "observation_missing", "EXT_CAT_UNMANAGED": "unmanaged_entry"}
+        for name, value in cats.items():
+            assert self._api(name) == value, (name, getattr(redlight, name, None))
+        assert self._api("EXT_CATEGORIES") == frozenset(cats.values())
+        assert self._api("EXT_RUNTIME_UNPROVEN") == "UNPROVEN"
+        assert self._api("EXT_SURFACE_KEYS") == frozenset((
+            "dev_mod_files", "synced_files", "r4_violations", "project_hook_commands",
+            "mcp_json_servers", "user_skill_plugins", "user_commands", "errors"))
+
+    def test_t146_35(self, tmp_path):
+        """T146-35:_extension_first_reason 回 (state, category, reason);T146-1 / 3 / 4 / 4b 佈置的 category 為 allowlist_state / unregistered / None / unmanaged_entry;對應 invariant 前半。"""
+        fn = self._api("_extension_first_reason")
+        scen = dict((label, (facts, surfaces)) for label, facts, surfaces in self._scenarios(tmp_path))
+        expected = {"T146-1": "allowlist_state", "T146-3": "unregistered",
+                    "T146-4": None, "T146-4b": "unmanaged_entry"}
+        for label, category in expected.items():
+            res = fn(*scen[label])
+            assert isinstance(res, tuple) and len(res) == 3, \
+                "v0 contract not implemented: _extension_first_reason 三元組(%s → %r)" % (label, res)
+            assert res[1] == category, (label, res)
+
+    def test_t146_31(self, tmp_path, monkeypatch):
+        """T146-31:判定一次(z1)—— 有效 claude_root ⇒ _extension_first_reason 恰好 1 次且 lines 由同一結果渲染;無效 ⇒ 0 次;對應 invariant 後半。"""
+        self._api("extension_report")
+        render = self._api("_extension_render_lines")
+        orig = self._api("_extension_first_reason")
+        calls = []
+
+        def counting(facts, surfaces):
+            res = orig(facts, surfaces)
+            calls.append(res)
+            return res
+        monkeypatch.setattr(redlight, "_extension_first_reason", counting)
+        root, claude = self._t3e_clean(tmp_path)
+        report = self._t3e_report(root, claude)
+        assert len(calls) == 1, calls
+        state, category, reason = calls[0]
+        assert list(report["lines"]) == list(render(state, category, reason, report["facts"])), report["lines"]
+        del calls[:]
+        bad = self._t3e_report(root, tmp_path / "missing-claude-root")
+        assert calls == [], calls
+        assert bad["observation"] == "claude_root_invalid", bad
+
+    def test_t146_27(self, tmp_path, monkeypatch):
+        """T146-27:claude_root=None ⇒ fallback = expanduser("~")/.claude;明確給不存在路徑 ⇒ 前置觀測失敗、不 fallback(補鎖 3);對應 invariant 前半。"""
+        import os
+        home = tmp_path / "home"
+        (home / ".claude").mkdir(parents=True)
+        real = os.path.expanduser
+        monkeypatch.setattr(os.path, "expanduser", lambda p: str(home) if p == "~" else real(p))
+        root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist()))
+        rep = self._t3e_report(root, None)
+        assert rep["claude_root_source"] == "fallback", rep
+        assert os.path.normcase(rep["claude_root"]) == os.path.normcase(os.path.join(str(home), ".claude")), rep
+        bad = self._t3e_report(root, tmp_path / "nope")
+        assert bad["claude_root_source"] == "param", bad
+        assert bad["observation"] == "claude_root_invalid", bad
+        assert bad["state"] == self._api("EXT_UNKNOWN"), bad
+        assert bad["category"] == self._api("EXT_CAT_OBSERVATION"), bad
+        assert bad["surfaces"] is None and bad["facts"] is None, bad
+        assert u"claude_root 無法確定" in (bad["reason"] or u""), bad
+
+    def test_t146_32a(self, tmp_path):
+        """T146-32a:列舉中途經 onerror 回 OSError ⇒ errors 非空、UNKNOWN / observation_missing(z3,跨平台必跑);對應 invariant 前半。"""
+        fn = self._t3e_kw("walk")
+        root, claude = self._t3e_clean(tmp_path)
+        dev = claude / "dev-mods"
+        (dev / "sub").mkdir(parents=True)
+        rep = fn(str(root), str(claude), walk=self._t3e_fake_walk(dev))
+        assert rep["surfaces"]["errors"], rep["surfaces"]
+        assert rep["state"] == self._api("EXT_UNKNOWN"), rep
+        assert rep["category"] == self._api("EXT_CAT_OBSERVATION"), rep
+
+    def test_t146_32b(self, tmp_path):
+        """T146-32b:同 32a 再加一個未登記 dev-mod 檔 ⇒ VIOLATION 且 errors 仍非空(補鎖 2,跨平台必跑);對應 invariant 前半。"""
+        fn = self._t3e_kw("walk")
+        root, claude = self._t3e_clean(tmp_path)
+        dev = claude / "dev-mods"
+        (dev / "sub").mkdir(parents=True)
+        (dev / "x.txt").write_bytes(b"x\n")
+        rep = fn(str(root), str(claude), walk=self._t3e_fake_walk(dev))
+        assert rep["state"] == self._api("EXT_VIOLATION"), rep
+        assert rep["surfaces"]["errors"], rep["surfaces"]
+
+    def test_t146_32c(self, tmp_path):
+        """T146-32c:lstat 對 dev-mods 根丟 PermissionError ⇒ errors 含 ("dev-mods", <path>, <error_text>)(跨平台必跑);對應 invariant 前半。"""
+        import os
+        fn = self._t3e_kw("lstat")
+        root, claude = self._t3e_clean(tmp_path)
+        dev = claude / "dev-mods"
+        dev.mkdir()
+        real = os.lstat
+
+        def fake_lstat(p, *a, **k):
+            if os.path.normcase(os.path.abspath(str(p))) == os.path.normcase(os.path.abspath(str(dev))):
+                raise PermissionError(13, "injected lstat failure", str(dev))
+            return real(p, *a, **k)
+        rep = fn(str(root), str(claude), lstat=fake_lstat)
+        errors = rep["surfaces"]["errors"]
+        assert any(e[0] == "dev-mods" and len(e) == 3 for e in errors), errors
+
+    def test_t146_32d(self, tmp_path):
+        """T146-32d:列舉第一層就 onerror ⇒ errors 非空、entries 可空(不得洗成空集合;跨平台必跑);對應 invariant 前半。"""
+        fn = self._t3e_kw("walk")
+        root, claude = self._t3e_clean(tmp_path)
+        dev = claude / "dev-mods"
+        dev.mkdir()
+        rep = fn(str(root), str(claude), walk=self._t3e_fake_walk(dev, first_level=True))
+        assert rep["surfaces"]["errors"], rep["surfaces"]
+        assert rep["state"] != self._api("EXT_DECLARED_OK"), rep
+
+    @pytest.mark.skipif("os.name == 'nt'", reason="chmod 000 在 Windows 不會讓目錄不可列舉;POSIX 才產得出來")
+    def test_t146_32e(self, tmp_path):
+        """T146-32e:POSIX 實體權限 —— chmod 000 的子目錄 ⇒ errors 非空(finally 恢復權限);對應 invariant 前半。"""
+        import os
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            pytest.skip("root 不受 chmod 000 限制")
+        root, claude = self._t3e_clean(tmp_path)
+        sub = claude / "dev-mods" / "sub"
+        sub.mkdir(parents=True)
+        (sub / "x.txt").write_bytes(b"x\n")
+        os.chmod(str(sub), 0)
+        try:
+            rep = self._t3e_report(root, claude)
+            assert rep["surfaces"]["errors"], rep["surfaces"]
+        finally:
+            os.chmod(str(sub), 0o755)
+
+    def test_t146_24(self, tmp_path):
+        """T146-24:DECLARED_OK 佈置 ⇒ category None、runtime_assurance UNPROVEN、第二行含「未證明」(runtime 未證明不得降級 static state);對應 invariant 後半。"""
+        root, claude = self._t3e_clean(tmp_path)
+        rep = self._t3e_report(root, claude)
+        assert rep["observation"] == "ok", rep
+        assert rep["state"] == self._api("EXT_DECLARED_OK"), rep
+        assert rep["category"] is None, rep
+        assert rep["runtime_assurance"] == "UNPROVEN", rep
+        assert u"未證明" in rep["lines"][1], rep["lines"]
+
+    def test_t146_36(self, tmp_path):
+        """T146-36:extension_report 回傳恰好十一鍵;對應 invariant 前半。"""
+        root, claude = self._t3e_clean(tmp_path)
+        rep = self._t3e_report(root, claude)
+        assert set(rep) == {"facts", "surfaces", "state", "category", "reason", "lines",
+                            "runtime_assurance", "claude_root", "claude_root_source",
+                            "authority", "observation"}, sorted(rep)
