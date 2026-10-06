@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:立案 —— 第一步唯讀盤點已完成(2026-10-04 報告 2026-10-04T124314Z-ticket146-step1-inventory.md / 2026-10-04T130149Z-ticket146-step1-closeout.md,於 Claude Code 2.1.289 執行;門檻 ≥ 2.1.287 已滿足);可進入設計。
+**狀態**:立案 —— 設計 v0 已產出(2026-10-06T144009Z-ticket146-design-v0.md);待審
+~~**狀態**:立案 —— 第一步唯讀盤點已完成(2026-10-04 報告 2026-10-04T124314Z-ticket146-step1-inventory.md / 2026-10-04T130149Z-ticket146-step1-closeout.md,於 Claude Code 2.1.289 執行;門檻 ≥ 2.1.287 已滿足);可進入設計。~~(F-036 體例:舊行不刪)—— 2026-10-06 設計 v0 產出時更新:已進入設計。
 ~~**狀態**:**candidate。只登記。** 第一步**必須等升級之後才做**(見〈第一步〉)。~~(F-036 體例:舊行不刪)—— 2026-10-06 立案 commit 時更新:升級前提已於 10/4 滿足。
 **優先度**:**未定。**
 **發現於**:2026-10-04,monkeyleash-mod V0 唯讀偵察(裁決:V0 = NO-GO)。
@@ -219,3 +220,25 @@ reference.md 開頭標的就是 "as of v2.1.289",它的 render sites 表也不�
 
 第一步**完成**(帶已知限制:5 個內建 mod 待補)。**可以進入設計**(白名單 → Enforcement Health → 紅燈測試「未授權擴充 → FAIL」)。
 設計時沿用的禁令不變:**不得以 `disableAllHooks` 當作對策。**
+
+---
+
+## 設計 v0(2026-10-06,D-146-0)
+
+**狀態:設計 v0 已產出,待 Jeff/GPT 審;尚未進第三站。**
+
+**設計報告**:`.dev/reports/2026-10-06T144009Z-ticket146-design-v0.md`(本機證據,**不在 git 內**)。
+
+### 裁決(Jeff,2026-10-06 10:32 美東;逐字)
+
+1 加：新發現的 5 條管道 —— ~/.claude/skills、專案 .claude/skills、CLAUDE_CODE_PLUGIN_DIRS、synced/、~/.claude/commands —— 全部納入 mechanism inventory；各自標 Declared / Discoverable / Loaded UNKNOWN / Trustworthy UNKNOWN 的實際能力邊界。
+2 停在可證明的靜態 enforcement boundary；runtime observer 另開票、登記不排程。狀態至少分 VIOLATION、DECLARED_OK / RUNTIME_UNKNOWN、VERIFIED（目前不可達）。靜態乾淨不得顯示單獨的 PASS、有效 或 runtime verified。
+3 否：不採 mod 監看 mod；正式記為 capability limitation。
+4 repo allowlist：沿用 145 的 authority 模式 —— policy 只認 HEAD committed blob；worktree 只做 identity check；missing / uncommitted / dirty / identity mismatch ⇒ UNKNOWN / fail-closed；agent 修改工作樹 allowlist 不得立即把自己洗白。
+5 dev-mods：空目錄／只有目錄 ⇒ OK；candidate file 的判準依官方 loader contract；不自行寫死 .js/.ts/.mjs；loader 可接受格式若無法完整證明，第一版保守把任何 regular file 視為 candidate，須符合 allowlist。
+6 .claude/skills：列入，但擴充既有 R4（gate.py skill_mirror_violations），不另造第二套。symlink mirror 延續既有「不得斷鏈、不得指向 canonical 外」；實體 mirror directory 由目前只比 SKILL.md 升級成 canonical 與 mirror 的遞迴 tree parity / content identity；canonical 有的合法輔助檔可以存在但內容必須對得上；mirror 多出 canonical 沒有的 regular file ⇒ VIOLATION；mirror 缺 canonical 必要檔、內容 hash 不同 ⇒ VIOLATION；不採「凡非 SKILL.md 一律違規」。
++ UI/status：known static surfaces clean 與 runtime loaded set UNKNOWN 必須分欄呈現，不准用一個「有效」把兩者混在一起。
+
+### Invariant(逐字)
+
+146 可以證明「所有已知靜態載入入口符合 committed policy」，但在沒有獨立 runtime authority source 前，不得把這件事升格成「本 session 實際載入集合已驗證」。
