@@ -205,7 +205,9 @@ $ git status --porcelain
 
 1. 沿用 4i 證據報告(`docs/audits/2026-10-05-m1a-station4i-fix.md`)第 7 節全部項目(含其沿用的 4h 第 7 節與 4g 第 8 節),不擴張;唯 4i 第 7 節第 3 點的殘餘措辭由本節第 4 點取代。
 2. 5g 追蹤項:S5g-F1(下一張票優先)、S5g-F3、S5g-F4、S5g-F5;5h 追蹤項:S5h-F4(併入 S5g-F1 類的 operator / status 追蹤項)。S5h-F3 已於 4i 補準措辭(本輪再由第 4 點取代)。
-3. S5i-F3 已由機器鎖處理:J2(直接呼叫 `_root_is_toplevel` 的四種佈置)與 J1b(解析層替身,鎖住「多餘位元組 ⇒ False」),不另列追蹤項。新增流程教訓追蹤項「R3 與 POSIX-only 紅燈」(R3 只認本機帳本紅燈;規劃平台限定紅燈時須同時規劃本機可紅的對應案例;見票 145「相關」)。
+3. S5i-F3 (a)(c) 已由 J2 / J1b 機器鎖處理；(b)（safe.bareRepository=explicit 下 J2[bare] 空洞通過）未關閉，列為追蹤項（補 -c safe.bareRepository=all 固定設定的 bare 案例屬程式改動，開追蹤票，本票不處理）。J2:直接呼叫 `_root_is_toplevel` 的四種佈置;J1b:解析層替身,以單一樣本 b"true\n\nsub/\n" 鎖住 S5i-F1 的解析形狀；通則由 G1 論證（非空 prefix 必以 / 結尾）支撐，非由 J1b 單獨證明。
+   (F-036 舊文字,保留不刪:~~S5i-F3 已由機器鎖處理:J2(直接呼叫 `_root_is_toplevel` 的四種佈置)與 J1b(解析層替身,鎖住「多餘位元組 ⇒ False」),不另列追蹤項。~~ —— 2026-10-05 S5j-1 依 S5j-F2 / S5j-F3 補準。)
+   新增流程教訓追蹤項「R3 與 POSIX-only 紅燈」(R3 只認本機帳本紅燈;規劃平台限定紅燈時須同時規劃本機可紅的對應案例;見票 145「相關」)。
 4. 依 S5i-F2 補準的殘餘措辭(照錄,取代 4i 版本中的對應段落):
    「本輪檢查的語意是 git rev-parse --is-inside-work-tree --show-prefix 的 stdout（\r\n 正規化後）完整等於 b"true\n\n"，即 Git 對該 root 回報「在工作樹內」且 prefix 為空且沒有任何其他位元組。在預設環境（未設 GIT_DIR / GIT_WORK_TREE / core.worktree）下明確不支援（⇒ unknown）：monorepo 中非最上層的普通子目錄（H1；含 POSIX 上名稱以 LF 開頭者，J1 / J1b）、位於 gitdir 或 bare repository 內的 root（I1 / I2）。會被接受但本輪未納入 acceptance、屬未證明：巢狀獨立 Git repo、submodule、linked worktree、.git 為檔案且 gitdir 指向他處，以及 GIT_DIR / GIT_WORK_TREE / core.worktree 等重新對應佈局（含 Git 因此把 gitdir 本身視為工作樹的情形）。上述佈局若 Git 對該 root 實際回報上述 stdout，即會被本檢查接受；其 HEAD 與工作樹是否符合既定 identity invariant，本輪未完整 acceptance，不得宣稱已拒絕或已支援。」
 5. 本機只驗 Windows;J1(LF 開頭子目錄的端到端)在 Windows 不可建立,未在本機執行。
