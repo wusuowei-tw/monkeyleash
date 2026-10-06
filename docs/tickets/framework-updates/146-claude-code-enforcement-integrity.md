@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:立案 —— 第三站補強中(3d-146);尚未實作
+**狀態**:第三站紅燈已補強(S3d-146-1,blob 20cb16da3635);待第四站核心實作;146 尚未生效
+~~**狀態**:立案 —— 第三站補強中(3d-146);尚未實作~~(F-036 體例:舊行不刪)—— 2026-10-06 3d 紅燈提交並證紅時更新。
 ~~**狀態**:第三站紅燈已補強(S3c-146-1,blob 3c75d69a142a);待第四站核心實作;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3d 裁決入票時更新:補「同欄位 path 重複 ⇒ malformed」紅燈。
 ~~**狀態**:立案 —— 第三站補強中(3c-146);尚未實作~~(F-036 體例:舊行不刪)—— 2026-10-06 第三站補強提交時更新:S3c-146-1 已提交、已在乾淨 HEAD 證紅。
 ~~**狀態**:第三站紅燈已補完(S3b-146-1);待第四站核心實作;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3c 裁決入票時更新:T146-9 / T146-13 修正、path + sha256 綁定,第三站重開補強。
@@ -398,3 +399,12 @@ gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 
 (n) 目錄走訪對 symlink 的處理：在 dirnames 裡發現 symlink 目錄 ⇒ 記 (relpath, None) 並從 dirnames 移除（不追、不漏）；symlink 檔同樣記 (relpath, None)。
 (o) extension_status_lines 的原因選擇順序必須與 extension_state 完全一致；不得讓較低優先級原因遮蔽較高優先級 violation。實作上兩者共用同一個「找出第一個原因」的內部函式。
 (p) 整合紅燈（status / pre-commit / status.py:36）改編號為 3e-146。
+
+---
+
+## 第三站補強(S3d-146-1)
+
+- 審計:`docs/audits/2026-10-06-146-station3d-redlight.md`
+- 紅燈總數:**39 個 node**(既有 36 + `test_t146_16` 三欄位 3);T146-9 依規格在 Windows skip。
+- 證紅(S3d-146-1 `449a2e67c6e95f783a46216c64f166f667d0111e`,乾淨工作樹,Windows):39 failed、2110 passed、5 skipped、3 xfailed;collected 2157;沒有 ERROR。
+- **BLOB-3d**(第四站要變綠的精確版本):`tests/test_redlight.py` = `20cb16da363547daf233de2aca94e525cb7f4a0c`。
