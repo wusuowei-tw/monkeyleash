@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:立案 —— 設計 v0 已產出(2026-10-06T144009Z-ticket146-design-v0.md);待審
+**狀態**:立案 —— 設計 v0 + Q1–Q6 已裁;進入第三站紅燈
+~~**狀態**:立案 —— 設計 v0 已產出(2026-10-06T144009Z-ticket146-design-v0.md);待審~~(F-036 體例:舊行不刪)—— 2026-10-06 Q1–Q6 裁決入票時更新:設計 v0 已審、Q1–Q6 已裁。
 ~~**狀態**:立案 —— 第一步唯讀盤點已完成(2026-10-04 報告 2026-10-04T124314Z-ticket146-step1-inventory.md / 2026-10-04T130149Z-ticket146-step1-closeout.md,於 Claude Code 2.1.289 執行;門檻 ≥ 2.1.287 已滿足);可進入設計。~~(F-036 體例:舊行不刪)—— 2026-10-06 設計 v0 產出時更新:已進入設計。
 ~~**狀態**:**candidate。只登記。** 第一步**必須等升級之後才做**(見〈第一步〉)。~~(F-036 體例:舊行不刪)—— 2026-10-06 立案 commit 時更新:升級前提已於 10/4 滿足。
 **優先度**:**未定。**
@@ -242,3 +243,56 @@ reference.md 開頭標的就是 "as of v2.1.289",它的 render sites 表也不�
 ### Invariant(逐字)
 
 146 可以證明「所有已知靜態載入入口符合 committed policy」，但在沒有獨立 runtime authority source 前，不得把這件事升格成「本 session 實際載入集合已驗證」。
+
+---
+
+## 設計決策 Q1–Q6(2026-10-06)
+
+### 裁決(Jeff,2026-10-06;逐字)
+
+Q1：共享 read-only facts layer，由 gate/status 共用；不靠 gate 產出的殘留摘要。若需碰 ~/.claude/，正式修訂 capability boundary（status.py:36），不偷繞。
+Q2：synced/ 不直接判 VIOLATION，但在未有 committed policy 前屬 unmanaged/UNKNOWN，不能算 static clean。
+Q3：IDE lock 只顯示，不判定。
+Q4：前哨只警告；pre-commit fail-closed；status 必須顯示。
+Q5：agent 可算 hash/產 diff，但 policy 生效 commit 必須 Jeff 明確核准；目前是 procedural invariant，尚未 machine-enforced；另票候選「policy-approval provenance」。
+Q6：保留 fingerprint 模型；v0 讓 dev_mod_files=[]，所以任何 regular file 都因未登記而 VIOLATION，而不是另寫一條永久「非空即違規」語意。
+附：T146-7 的禁詞掃描必須限定 146 的 status 區段，不得因 145 的 POLICY_VALID="有效" 誤殺；mcp__ 前綴不可作 provenance 證據 —— 列為 known limitation，不做成測試（v0 沒有 provenance API，不硬生一個）。
+
+### 狀態機(依 Q2,四態)
+
+EXT_VIOLATION：policy authority 任一步失敗、或監看路徑有未登記項目、或 R4 非空。
+EXT_UNKNOWN：policy 與受管路徑都乾淨，但存在未受管的已知載入入口（v0：synced/ 任一目錄含 regular file）。
+EXT_DECLARED_OK：policy 四步通過、受管路徑全符合、R4 為空、synced/ 無 regular file。runtime 欄仍固定「未證明」。
+EXT_VERIFIED：常數存在，無任何回傳路徑（v0 以行為測試 + 結構性 regression lock 鎖住，不宣稱形式證明）。
+優先序：VIOLATION > UNKNOWN > DECLARED_OK。
+
+### v0 介面契約(第四站只能實作,不能改名;要改名須回本票記一筆)
+
+放在 .claude/hooks/redlight.py：
+  EXT_ALLOWLIST_FILE = ".agents/extension-allowlist.json"
+  EXT_ALLOWLIST_SCHEMA = "monkeyleash.extension-allowlist"，版本 1
+  EXT_ALLOWLIST_FIELDS = ("schema","version","dev_mod_files","user_skill_plugins","user_commands","project_settings_hook_commands","mcp_json_servers")
+  EXT_VIOLATION、EXT_UNKNOWN、EXT_DECLARED_OK、EXT_VERIFIED 四個字串常數，值 "VIOLATION"、"UNKNOWN"、"DECLARED_OK"、"VERIFIED"
+  extension_allowlist_facts(root) → dict，至少含 "state"（"uninitialized" / "uncommitted" / "worktree_differs" / "identity_mismatch" / "malformed" / "ok"）、"blob"、"policy"。流程與 145 的 evidence_policy_facts 相同：只認 HEAD blob，工作樹只做一次 hash-object 比對。
+  extension_state(facts, surfaces) → 四常數之一。
+  extension_status_lines(facts, surfaces) → list，恰好兩個字串，第一個以 "static surfaces: " 開頭，第二個以 "runtime loaded set: " 開頭且含「未證明」。
+放在「共用唯讀 facts 模組」：
+  extension_surface_facts(dev_mods_dir, synced_dirs, canon_dir, mirror_dirs, project_settings_paths, mcp_json_path) → surfaces dict：{"dev_mod_files": [(relpath, sha256 或 None), ...], "synced_files": [relpath, ...], "r4_violations": [str, ...], "project_hook_commands": [str, ...], "mcp_json_servers": [str, ...]}。純讀、無副作用、所有路徑由參數注入；symlink 以 (relpath, None) 標為不可信。
+  要求：gate.py 與 status.py 都能直接 import 該模組取得這個函式，呼叫時現場計算，不讀任何 cache 或前一次 pre-commit 的產物。
+gate.py：skill_mirror_violations 簽名不變，實體副本分支改為遞迴 tree parity。
+
+**「共用唯讀 facts 模組」的落點 = `.claude/hooks/redlight.py`**(第三站步驟 0d 判定)。依據:
+- `gate.py` → `redlight.py`:`gate.py:2051-2065` `_redlight()` 以 `spec_from_file_location` 依路徑載入同目錄的 `redlight.py`(呼叫點 `:2085`、`:2437`、`:2592`)。
+- `status.py` → `redlight.py`:`status.py:355-370` `load_redlight(root)` 依路徑載入 `<root>/.claude/hooks/redlight.py`。
+- `status.py` → `gate.py`:`status.py:98-111` `load_gate(root)`。
+- `redlight.py` → `gate.py`:**無**。`redlight.py` 的 import 只有標準庫(`:33-40`,以及函式內的 `uuid` / `types` / `subprocess` / `shlex` / `tomllib`);提到 `gate` 的地方(`:18`、`:27`、`:86`、`:89`、`:157`)都是註解。
+- `verify_gates.py` → 兩者:`.claude/portable/verify_gates.py:238` `load_target_gate`、`:295` `load_target_redlight`。
+⇒ 兩邊都已經引用 `redlight.py`,而且沒有循環 ⇒ 不新建模組,facts 模組本身不需要新的 manifest 登記。
+(⚠ 這句只講模組。**新的測試檔另計**:`tests/test_manifest.py:196-219` 要求 `tests/` 下每個檔都在 `.agents/portable-manifest.txt` 標 copy / skip。)
+
+### 已知盲區 / known limitation
+
+1. `--plugin-dir`:只是啟動旗標,沒有落地檔 ⇒ 沒有靜態入口。
+2. claude.ai connector:沒有本機登記點。
+3. `mcp__` 前綴不證明來源(2.1.289 reference.md:178:mod 註冊的工具也列成 `mcp__<plugin>__<name>`)。**不做成測試**:v0 沒有 provenance API。
+4. EXT_VERIFIED 不可達,只有 regression lock(行為鎖 + 結構鎖),**不是形式證明**。
