@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:4b 已實作並正式驗證(S4b-146-1 982a661d438783902247a1da7e4a023bc7961a9d);待第五站獨立審查;146 已接線但尚未宣告生效
+**狀態**:第五站 PASS-with-notes;N-1～N-4 依追加裁決於 3h／4c 處理並重驗後，才進第六站;146 尚未宣告生效
+~~**狀態**:4b 已實作並正式驗證(S4b-146-1 982a661d438783902247a1da7e4a023bc7961a9d);待第五站獨立審查;146 已接線但尚未宣告生效~~(F-036 體例:舊行不刪)—— 2026-10-07 S5-146-1 第五站獨立審查入庫時更新。
 ~~**狀態**:4b 實作中;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-07 S4b-146 4b-5 時更新:commit 1 已提交、HEAD 正式 pytest 0 failed,審計 `docs/audits/2026-10-07-146-station4b-implementation.md`。
 ~~**狀態**:3f-2 紅燈已驗收;待 policy 草稿與 Jeff 核准;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-07 S4b-146 4b-1 開工時更新(其間 policy 已由 Jeff 提交 `4cb59eb`、G-0 `2b7c9f8`、3g 紅燈 `8e7b293`)。
 ~~**狀態**:3f-2 紅燈已提交(S3f2-146-1);待 policy 草稿與 Jeff 核准;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f-2 驗收、D-1～D-3 裁決入票時更新。
@@ -935,3 +936,84 @@ S4b-146 補件五(Jeff 裁決 2026-10-07):第 17 項選 A。
 - 審計記：補件四把 R7 訊息格式寫成 "[R7]" 是指令錯誤,VS 以實測更正;Jeff 先前核准的精確子字串同樣作廢。
 
 落地：第 17 項最後一行改為 `assert msg and "[R7/" in msg, msg`。
+
+---
+
+## 第五站獨立審查(S5-146-1)
+
+- 審查檔:`docs/audits/2026-10-07-146-station5-independent-review.md`(審查者撰寫，入庫時未改一字)。
+- 審查標的 HEAD:`eb3a3dbc5482e9475d62418a6c4911ab264dba4b`。
+- 結論(審查者原始結論，保留不改):**PASS-with-notes**;阻擋項 **0**。
+- 審查檔入庫時遮罩一處(第 123 行本機路徑與 session id → <scratchpad>),非審查者原文;內容判斷未改;遮罩前 sha256 f2a9c31ce82fd620d4288901bf6ca59aba02d2d64707cda86363684d0f769cd5、遮罩後 sha256 4ace6b3048fc3f2b5749365f90b4550f4218af42d382ef99a1c2e3c6e6724716。
+- 觀察：前哨 R7 將 cp 的來源路徑列為寫入目標而誤擋(保守解析，屬設計內);本輪只記錄不處理。
+
+### Jeff 裁決原文(2026-10-07,逐字)
+
+裁：N-1 選 A、N-2 一起修、O-1 另立票。另把 N-3、N-4 升為推送前修正項。
+已讀獨立審查原文。保留其 PASS-with-notes、阻擋 0 的原始結論，不改審查檔;以下是 Jeff 裁決層新增的推送條件。
+
+* N-1:3h／4c 修。`_staged_names_all` 加 `--no-renames`,紅燈驗 rename 的來源刪除與目的新增都在清單中，混合提交走 HEAD。
+* **N-2：接受契約增補。**一般 HEAD 路徑的 allowlist facts 非 `ok`,獨立硬擋、不受 shadow 豁免。保留 static state 的既有優先序;新增 shadow 開啟的負控，不只驗 `worktree_differs`,也涵蓋缺失／identity 失敗。
+* **N-3：不留後補。**junction 型別與 realpath 已實測;「清理會越界」是讀碼推論，但已違反隔離清理邊界。清理前驗 claude_root 的解析位置，並拒絕根及清理項目的 junction／異常 reparse point;用 scratchpad 外部哨兵檔驗證拒絕後未刪任何內容。
+* **N-4：不留後補。**情境 trigger 必須與正控不同，確認 staged 非空。再加「印正確 marker／reason、gate 卻回 0 ⇒ 演習判失敗」負控，排除 `nothing to commit` 白送非零退出碼。
+* O-1:接受另立票 148,先確認號碼未占用;與票 140 A-1 交叉引用，區分清單漏掉 rename 的實測與秘密漏掃的推論，不在 146 順手修。
+
+### 後補清單(審查檔 §5 原文)
+
+後補(依優先):(h) 第 2 項例外硬擋 node → N-6 → N-3 → (g) `index_unreadable` node → (h) 第 7、9(status 側)項 → N-4 → N-5 → (h) 其餘 → N-8 訊息更正。
+
+註:N-3／N-4 已升級為推送前修正，不覆寫審查者排序。
+
+### 推送前修正(3h／4c)
+
+N-1、N-2、N-3、N-4,依上列裁決;處理並重驗後才進第六站。
+
+### 未驗
+
+- POSIX:146 的 symlink / chmod skip node 共 8 個(`test_redlight.py:3074` ×1、`:3505` ×1、`:3702` ×3、`:3752` ×1、`test_verify_gates.py:383` ×1、`:461` ×1)。
+- CI(尚未 push)。
+- 真實使用者層上的 report / status 一致性(審查包 §4.3 只引用 4b 審計 §3.3,審查者未獨立重現)。
+
+### O-1 → 票 148(待立)
+
+- 收票時立;立票前再確認號碼未占用。
+- 2026-10-07 入庫時查過:`docs/tickets/**/14[7-9]*` 只有 147。
+- 與票 140 A-1 交叉引用。
+- 區分兩件事:「staged 清單漏掉 rename」是實測;「秘密漏掃」是推論。
+- 不在 146 順手修。
+
+---
+
+## S5-146-R1:R10 擋下與 inventory 重新核准(2026-10-07)
+
+**兩次提交失敗**
+
+- S5-146-1 第一次提交被 leak_scan 擋下：審查檔有一行含本機路徑與 session id。該行已遮罩，見上節。
+- 第二次被 R10 硬擋:「[R10/fail-closed] unmanaged_entry：未受管入口：synced（額外 0 / 缺少 0 / 內容不符 2）」【實測】。
+
+**內容不符的 2 筆**
+
+- `plugins/<bucket>/.last-complete-round`:舊 `b86387644d03dcff45011c3d02d3ff32f4c7555553f78b508046fea69fc5b421` → 新 `b7817e9461f8948d8d8da8a037dc8703efd754fe6b59de88d0f9c2b148598762`。
+- `plugins/<bucket>/.marketplaces.json`:舊 `48a4a2af215dcb5c3ed5faeeb624bcdaf321f25fdc2e47cf4b231d8b61d2fbfd` → 新 `0520f148d4424daf3922521b66e1dace3e8444109db5c03a648283eb544422dc`。
+- 兩檔 mtime 皆為 2026-10-07 11:32:35 美東【實測】。
+- 其餘 228 筆相符、缺少 0、額外 0【實測】。
+
+**查證(R1b / R1c)**
+
+- `.marketplaces.json` 目前 1 筆，結構與 10/6 相同【實測】。
+- `plugins/synced` 沒有外掛本體檔;指定紀錄中未找到安裝 / 啟用紀錄【實測】。
+- `anthropic-plugin-directory` 出現在 Claude Code 擴充 JS 的保留市集名稱集合中【實測】;是否為官方來源，未證明。
+- 寫入者與 `.marketplaces.json` 的用途:UNKNOWN(native 主程式未搜尋)。
+- 「上游同步造成」與「146 首次實際攔截」都是【推論】。
+
+**核准**
+
+- Jeff 在用途未完全確認的情況下，審閱目前內容後決定接受。
+- 核准只更新這 2 筆指紋，不會自動登記未來新增的檔案。
+- R10 擋 commit 不代表能阻止 commit 之前的載入(runtime 恆 UNPROVEN)。
+- 核准 commit:`b3cfe7187deb8fd88ff6c48a886a683880aef74e`(Jeff 親自提交，走 policy-only 通道)。hook 訊息原文：「[R10/policy-only] policy-only commit（policy_source=index）：staged 候選 policy 對現場成立（DECLARED_OK；runtime 仍 UNPROVEN）。這是候選驗證，不是 HEAD 已生效的 policy。」
+
+**觀察(只記錄，本輪不處理)**
+
+- 前哨 R7 誤擋兩次：一次把 cp 的來源路徑當成寫入目標;一次擋下含 `<bucket>` 角括號的唯讀 grep。
+- `~/.claude/plugins/plugin-directory-cache-v2.json` 不在 146 任何監控入口內;收票時列入已知盲區。
