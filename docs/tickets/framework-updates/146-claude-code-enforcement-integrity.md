@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:3f-2 紅燈補完中;146 尚未生效
+**狀態**:3f-2 紅燈已提交(S3f2-146-1);待 policy 草稿與 Jeff 核准;146 尚未生效
+~~**狀態**:3f-2 紅燈補完中;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f-2 紅燈提交並證紅時更新。
 ~~**狀態**:3f 紅燈已提交(S3f-146-1);待 policy 草稿與 Jeff 核准;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f-2 裁決 (uu)–(zz) 入票時更新。
 ~~**狀態**:3f 紅燈撰寫中;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f 紅燈提交並證紅時更新。
 ~~**狀態**:3e 紅燈已提交;3f-0 偵查待裁;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f 裁決入票、進入 3f 紅燈時更新。
@@ -617,3 +618,16 @@ C0 要求：重新列出被改佈置之既有 node 的預期；不預設 2149 pa
 tests/test_redlight.py：(1) _surfaces helper：synced_dirs 改傳 [("skills", str(synced))]；(2) _scenarios 的 T146-4b 佈置：synced 內改為 <D>/manifest.json + .bucket-<D>；(3) test_t146_4b：同 (2)；(4) test_t146_11c：synced 佈置改合法 bucket + marker，synced_dirs 改傳 [("skills", <user_skills_dir>/synced)]；(5) test_t146_14 docstring（七鍵 → 八鍵）；(6) 3f 新 helper _t3f_layout / _t3f_report 若自行組 synced_dirs，改成對的串列。
 tests/test_gate.py：(7) TestTicket146Integration._root：同時提交合法空 inventory；(8) test_t146_23 與 test_t146_38 的 docstring 改為「未納管」語意。
 其他方法一律不動。
+
+---
+
+## 第三站 3f-2 紅燈(S3f2-146-1)
+
+- 審計:`docs/audits/2026-10-06-146-station3f2-redlight.md`
+- 紅燈數：新增 node **6**(T146-42b[empty-root]、T146-46 ×4、T146-47),全紅。依 (xx) 改傳成對 `synced_dirs` 之後，既有綠 node **35** 在未實作基線上轉紅(TypeError,屬預期)。
+- 證紅(S3f2-146-1 `b5eb69d0c32b75b95251d65facec4edf3895cae6`,Windows):109 failed、2114 passed、10 skipped、3 xfailed;collected 2236;ERROR 0;帳本只追加。
+- BLOB-3f2:`tests/test_redlight.py` `c3aa2b499bc9d057b28805cb52418dbe79637b09`;`tests/test_gate.py` `dd2e0430ec38c09fc1d9cb9722fa193c09924d48`。
+- 待裁(見審計 §9):
+  - D-1:T146-23 / 38 的佈置在 v2 下是結構錯誤，4b 後硬擋原因會被替換;
+  - D-2:T146-24b 的重複 inventory 寫入(`_root` 以緊湊 JSON 迴避);
+  - D-3:T146-42[empty-root] 以 `test_t146_42b[empty-root]` 實作。
