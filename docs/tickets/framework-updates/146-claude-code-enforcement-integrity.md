@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:4c 已實作並正式驗證(S4c-146-1 98099bae297b68e5c6cd4787ea8474d3f400ccc0);N-1～N-4 推送前修正完成，待 Jeff 裁定是否進第六站;146 尚未宣告生效
+**狀態**:第六站完成：已推送 6bc98085e4c018e896cf252b945f51bfaa8ed7fb（02a3265..6bc9808，fast-forward）；CI：Jeff 回報目視 commit 頁綠燈（未取得 run id、workflow／event 與 job 明細）；146 宣告生效（Jeff 2026-10-07）；後補項見〈後補清單〉
+~~**狀態**:4c 已實作並正式驗證(S4c-146-1 98099bae297b68e5c6cd4787ea8474d3f400ccc0);N-1～N-4 推送前修正完成，待 Jeff 裁定是否進第六站;146 尚未宣告生效~~(F-036 體例:舊行不刪)—— 2026-10-07 S6-146-2 收尾時更新：已推送、Jeff 裁決「146生效」。
 ~~**狀態**:4c 實作中;146 尚未宣告生效~~(F-036 體例:舊行不刪)—— 2026-10-07 S4c-146 4c-5 時更新:commit 1 已提交，正式 pytest 0 failed,審計 `docs/audits/2026-10-07-146-station4c-implementation.md`。
 ~~**狀態**:第五站 PASS-with-notes;N-1～N-4 依追加裁決於 3h／4c 處理並重驗後，才進第六站;146 尚未宣告生效~~(F-036 體例:舊行不刪)—— 2026-10-07 S4c-146 開工時更新(3h 紅燈 `adc3ef5` 已提交並證紅)。
 ~~**狀態**:4b 已實作並正式驗證(S4b-146-1 982a661d438783902247a1da7e4a023bc7961a9d);待第五站獨立審查;146 已接線但尚未宣告生效~~(F-036 體例:舊行不刪)—— 2026-10-07 S5-146-1 第五站獨立審查入庫時更新。
@@ -966,17 +967,30 @@ S4b-146 補件五(Jeff 裁決 2026-10-07):第 17 項選 A。
 
 註:N-3／N-4 已升級為推送前修正，不覆寫審查者排序。
 
+**收票時補記(2026-10-07)**
+
+- 已處理:N-3、N-4(S4c-146-1,98099bae297b68e5c6cd4787ea8474d3f400ccc0)。
+- 仍待排(審查者原順序):(h) 第 2 項例外硬擋 node → N-6 → (g) `index_unreadable` node → (h) 第 7、9(status 側)項 → N-5 → (h) 其餘 → N-8 訊息更正。
+- 已知盲點(未處理):
+  - `~/.claude/plugins/plugin-directory-cache-v2.json` 不在監看範圍;
+  - `CLAUDE_CODE_PLUGIN_DIRS` 指定的外掛目錄不在監看範圍;
+  - runtime 載入集合恆為 UNPROVEN。
+- 前哨 R7 誤擋紀錄(只記錄):cp 的來源路徑被當成寫入目標;grep 樣式中的 `<bucket>` 角括號被誤判。
+- S4c 詮釋 (ii):正控 commit 前不檢查 staged。staged 為空時正控會失敗，而不是誤放行，屬安全方向。
+
 ### 推送前修正(3h／4c)
 
 N-1、N-2、N-3、N-4,依上列裁決;處理並重驗後才進第六站。
 
 ### 未驗
 
-- POSIX:146 的 symlink / chmod skip node 共 8 個(`test_redlight.py:3074` ×1、`:3505` ×1、`:3702` ×3、`:3752` ×1、`test_verify_gates.py:383` ×1、`:461` ×1)。
-- CI(尚未 push)。
-- 真實使用者層上的 report / status 一致性(審查包 §4.3 只引用 4b 審計 §3.3,審查者未獨立重現)。
+- ~~POSIX:146 的 symlink / chmod skip node 共 8 個(`test_redlight.py:3074` ×1、`:3505` ×1、`:3702` ×3、`:3752` ×1、`test_verify_gates.py:383` ×1、`:461` ×1)。~~(F-036 體例:舊行不刪)—— 2026-10-07:外部 Linux 同樹預演已通過;GitHub CI 平台明細未取得。
+- ~~CI(尚未 push)。~~(F-036 體例:舊行不刪)—— 2026-10-07:已推送;Jeff 回報目視綠燈，run 明細未取得。
+- 真實使用者層上的 report / status 一致性(審查包 §4.3 只引用 4b 審計 §3.3,審查者未獨立重現)。仍未驗;S4c 為實作視窗自測，非獨立重現。
 
-### O-1 → 票 148(待立)
+### O-1 → 票 148(~~待立~~ 已立：票 148,`docs/tickets/framework-updates/148-staged-list-misses-renames.md`)
+
+(標題原為「O-1 → 票 148(待立)」;2026-10-07 S6-146-2 立票後依 F-036 劃線改寫。)
 
 - 收票時立;立票前再確認號碼未占用。
 - 2026-10-07 入庫時查過:`docs/tickets/**/14[7-9]*` 只有 147。
@@ -1080,3 +1094,33 @@ T146-50b[home-is-symlink] 與 T146-51b[vi-home-symlink]:Windows 改用 junction 
   - N-3:新增 `_is_reparse`;`_require_isolation` 加 claude_root realpath 檢查，並對 home / claude_root / marker 做 reparse 檢查;`restore_user_layer` 改為全樹 topdown 預檢、原地剪枝 dirnames,預檢過才刪。
   - N-3′:`isolated_home` 的進入檢查。
   - N-4:新增 `SCENARIO_TRIGGER_R10`;`scenario_r10` 改寫新 trigger;`run_scenario` 對 commit 型情境檢查 staged 非空。
+
+---
+
+## 第六站 S6-146-1／S6-146-2
+
+### Jeff 裁決原文(逐字)
+
+「146生效」
+
+### 推送(實測,S6-1)
+
+- push 前 `git ls-remote origin refs/heads/master` = `02a3265200c79216b9b9e68194305764a484764d`。
+- push 輸出:「02a3265..6bc9808  master -> master」。
+- push 後 `git ls-remote origin refs/heads/master` = `6bc98085e4c018e896cf252b945f51bfaa8ed7fb`。
+- 裁決者另以匿名 ls-remote 獨立確認相同。
+
+### CI
+
+- Jeff 回報目視 GitHub commit 頁綠燈(2026-10-07 16:09 美東)。
+- 未取得 run id、workflow 名稱、event、job / step 明細(本機無 gh;裁決者端無 API 權限)。
+- 此證據不等同依 headSha 逐 run 的工具驗證。
+
+### POSIX(分列)
+
+- 外部 Linux 同樹預演已通過;GitHub CI 的平台明細未取得。
+- 預演內容(外部證據，不取代 CI):
+  - 樹 `3593731708e5479217a90bd521795732c972fd08` 與真實 HEAD tree 相同(S6-1 步驟 0 實測);
+  - Python 3.11、非 root、家目錄無 `~/.claude`;
+  - pytest 2324 passed / 0 failed / 0 skipped / 3 xfailed(collect 2327,另排除 `tests/test_known_items_regression.py` 12 個);
+  - verify_gates rc 0,R10 正控放行後以「額外 2」擋下。
