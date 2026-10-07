@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:3f 紅燈已提交(S3f-146-1);待 policy 草稿與 Jeff 核准;146 尚未生效
+**狀態**:3f-2 紅燈補完中;146 尚未生效
+~~**狀態**:3f 紅燈已提交(S3f-146-1);待 policy 草稿與 Jeff 核准;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f-2 裁決 (uu)–(zz) 入票時更新。
 ~~**狀態**:3f 紅燈撰寫中;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f 紅燈提交並證紅時更新。
 ~~**狀態**:3e 紅燈已提交;3f-0 偵查待裁;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f 裁決入票、進入 3f 紅燈時更新。
 ~~**狀態**:3e 紅燈已提交(S3e-146-1);待 4b 接線;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f-0 synced 納管偵查產出時更新:4b 前插入 3f-0 → 納管契約裁決 → 3f 紅燈 → policy 進 HEAD(裁決 (cc))。
@@ -493,7 +494,7 @@ redlight.py：
     前置觀測：claude_root 不存在 / 不是目錄 / lstat 失敗 / expanduser 結果仍含 "~" ⇒ observation="claude_root_invalid"，facts=None、surfaces=None、state=UNKNOWN、category=observation_missing、reason 含「claude_root 無法確定」、lines 由 _extension_render_lines(state, category, reason, None) 產生；_extension_first_reason 呼叫 0 次。
     有效 ⇒ observation="ok"；facts = extension_allowlist_facts(repo_root)；surfaces = extension_surface_facts(八個路徑, walk, lstat)；_extension_first_reason 恰好 1 次；lines 由 _extension_render_lines 從同一結果產生。
     authority 固定 "ok"；runtime_assurance 固定 "UNPROVEN"。
-    八個路徑：dev_mods_dir = <claude_root>/dev-mods；synced_dirs = [<claude_root>/skills/synced, <claude_root>/plugins/synced]；canon_dir = <repo_root>/.agents/skills；mirror_dirs = [<repo_root>/.claude/skills, <repo_root>/skills]；project_settings_paths = [<repo_root>/.claude/settings.json, <repo_root>/.claude/settings.local.json]；mcp_json_path = <repo_root>/.mcp.json；user_skills_dir = <claude_root>/skills；user_commands_dir = <claude_root>/commands。
+    八個路徑：dev_mods_dir = <claude_root>/dev-mods；~~synced_dirs = [<claude_root>/skills/synced, <claude_root>/plugins/synced]~~(2026-10-06 3f-2 修訂:synced_dirs 改為 (root_name, path) 對的串列，見〈3f-2 裁決與契約修訂〉)；canon_dir = <repo_root>/.agents/skills；mirror_dirs = [<repo_root>/.claude/skills, <repo_root>/skills]；project_settings_paths = [<repo_root>/.claude/settings.json, <repo_root>/.claude/settings.local.json]；mcp_json_path = <repo_root>/.mcp.json；user_skills_dir = <claude_root>/skills；user_commands_dir = <claude_root>/commands。
 gate.py：
   rule_sources(source_path=None) → dict，鍵為兩個絕對路徑字串，值為 {"exists": bool, "readable": bool, "complete": bool, "codes": set}；complete = exists and readable；不存在 ⇒ exists False、readable False、complete False、codes set()；存在但讀不到 ⇒ exists True、readable False、complete False、codes set()。rule_codes() 回傳型別不變。
   _extension_claude_root() → None（production 固定回 None ⇒ fallback；唯一的測試注入接縫）。
@@ -563,7 +564,7 @@ redlight.py：
   EXT_INVENTORY_FILE = ".agents/extension-inventory.json"；EXT_INVENTORY_SCHEMA = "monkeyleash.extension-inventory"；EXT_INVENTORY_VERSION = 1；EXT_INVENTORY_FIELDS = ("schema","version","entries")；EXT_SYNCED_ROOTS = ("skills","plugins")；EXT_BUCKET_TOKEN = "<bucket>"；EXT_INVENTORY_UNCHECKED：模組層唯一哨兵物件，表示「synced 納管未評估」，只供兩參數相容 wrapper 使用，production 不得傳入。
   邏輯路徑合法集合（只允許四種）：(1) "skills/<bucket>/<R>"　(2) "plugins/<bucket>/<R>"　(3) "skills/.bucket-<bucket>"　(4) "plugins/.bucket-<bucket>"。<R> 為非空 canonical 相對檔案路徑（沿用 (k) 規則），<R> 的任何 segment 不得等於 "<bucket>"、不得以 ".bucket-" 開頭；"<bucket>" 只能出現在第二個 segment；其他形式一律 malformed。
   inventory 檔：entries 為物件陣列，每項恰好 {"path","sha256","note"}；path 須屬合法集合；path 在整個 entries 內唯一；sha256 64 碼小寫十六進位，不准 null；entries 可為空陣列（合法的空 inventory）。
-  磁碟結構：對 <claude_root>/<root>/synced/（root ∈ EXT_SYNCED_ROOTS）：先對根本身 lstat：FileNotFoundError ⇒ 該 root 無項目、無錯誤（確認不存在）；根為 symlink 或非目錄 ⇒ errors ("synced", <root 路徑>, "bucket structure: root is symlink/not a directory")，不走訪；其他 lstat 失敗 ⇒ errors。根合法時以 lstat 檢查直接子項：必須恰好一個目錄 D（非 symlink）與恰好一個 regular file 名為 ".bucket-" + D；任何其他直接子項（第二個目錄、多餘檔案、symlink、名稱不符的 marker、marker 是 symlink）⇒ 結構錯誤。D 內 regular file 的邏輯路徑 = "<root>/<bucket>/<D 內相對路徑>"；marker = "<root>/.bucket-<bucket>"。D 內 symlink、lstat 失敗或內容讀取失敗 ⇒ (邏輯路徑, None)。
+  磁碟結構：對 <claude_root>/<root>/synced/（root ∈ EXT_SYNCED_ROOTS）：先對根本身 lstat：FileNotFoundError ⇒ 該 root 無項目、無錯誤（確認不存在）；根為 symlink 或非目錄 ⇒ errors ("synced", <root 路徑>, "bucket structure: root is symlink/not a directory")，不走訪；其他 lstat 失敗 ⇒ errors。~~根合法時以 lstat 檢查直接子項：必須恰好一個目錄 D（非 symlink）與恰好一個 regular file 名為 ".bucket-" + D；~~(2026-10-06 3f-2 修訂:列舉成功且無任何直接子項 ⇒ 無項目、無錯誤;有任何子項才套下列結構規則，見〈3f-2 裁決與契約修訂〉)有任何直接子項時：必須恰好一個目錄 D（非 symlink）與恰好一個 regular file 名為 ".bucket-" + D；任何其他直接子項（第二個目錄、多餘檔案、symlink、名稱不符的 marker、marker 是 symlink）⇒ 結構錯誤。D 內 regular file 的邏輯路徑 = "<root>/<bucket>/<D 內相對路徑>"；marker = "<root>/.bucket-<bucket>"。D 內 symlink、lstat 失敗或內容讀取失敗 ⇒ (邏輯路徑, None)。
   _walk_regular(root_dir, exclude_top=None, walk=None, lstat=None, read_bytes=None) 與 extension_surface_facts(…八個必填…, walk=None, lstat=None, read_bytes=None)：read_bytes 預設為讀整檔 bytes 的函式；注入用；讀取丟任何 OSError ⇒ (relpath, None)。
   surfaces["synced_files"]：list，每項 (logical_path, sha256 或 None)。結構錯誤進 surfaces["errors"]，形式 ("synced", <path>, "bucket structure: <說明>")。
   extension_inventory_facts(repo_root) → dict 同 extension_allowlist_facts 形狀（六態；非 ok 時 policy 為 None）。
@@ -590,3 +591,29 @@ tests/test_status.py：T146-20 / 28 / 30 的 DECLARED_OK 佈置加空 inventory�
 - 證紅(S3f-146-1 `0a8a494237db7d50aedefc9f4056bc39c7f421cd`,Windows):68 failed、2149 passed、10 skipped、3 xfailed;collected 2230;與逐 node 預期表一致;ERROR 0;帳本只追加。
 - BLOB-3f:`tests/test_redlight.py` `2a2af9ba1b333942e5a62fa94e7f3342b0377edf`;`tests/test_gate.py` `be0e51d6a6c41e0a4df1f7e2b8cd36cf8d7d32cf`;`tests/test_status.py` `bbfd3758e930b991c6abd0345545e72da5f752cb`。
 - 4b 前待裁(見審計 §9):C-1 T146-35 的 `_scenarios` 佈置在 v2 下是結構錯誤;C-2 T146-21 在沒有 inventory 時被 (d) 硬擋、`[R10]` 斷言不成立;C-3 synced 根為空目錄的處置;C-4 `extension_surface_facts` 的 synced_dirs → `<root>` 對應;C-5 T146-42 對子項層級結構錯誤也鎖「不走訪」。
+
+---
+
+## 3f-2 裁決與契約修訂(2026-10-06)
+
+### Jeff 裁決(2026-10-06,逐字)
+
+(uu) C-1：准改 _scenarios、T146-4b／11c 的 synced 佈置為合法 bucket + marker；保留「有檔、未納管 ⇒ UNKNOWN／unmanaged_entry」及頂層 synced 排除的原驗收。
+(vv) C-2：准改 TestTicket146Integration._root，提交合法空 inventory；T146-21 只留下 dev-mod 未登記這個違規變數。其他測試原本的硬擋原因不得被替換。
+(ww) C-3：synced 根經成功列舉、確認沒有任何直接子項 ⇒ 無項目、無錯誤。結果可與不存在同為空集合，但觀測事實不同。列舉失敗不得當空；有任何子項就套完整結構規則。必要的 committed inventory 不變。
+(xx) C-4：synced_dirs 改為 (root_name, path) 對的串列，名稱只准 skills／plugins，不得重複 root_name；無效或重複名稱回結構化錯誤，不得忽略。production 明確傳兩根；測試可傳子集或 []。准改點名呼叫處。重複 root 名採「該名稱的所有項目都不走訪」，其他唯一且合法的 root 照常觀測。
+(yy) C-5：根或直接子項結構錯誤 ⇒ 不走訪該 bucket、不產生該根的 synced entries；保留 errors。為辨識結構而列舉直接子項仍必要。另一個合法根繼續觀測。
+(zz) C-6：准改 T146-23／38／14 的過期 docstring，不改斷言。
+C0 要求：重新列出被改佈置之既有 node 的預期；不預設 2149 passed 不變，新參數契約在未實作基線上可能讓既有 node 轉紅，逐項說明。
+
+### 契約修訂(逐字;寫進 v2 契約節，舊句劃線)
+
+  synced_dirs：list of (root_name, path)；root_name ∈ EXT_SYNCED_ROOTS；無效 root_name ⇒ surfaces["errors"] 加 ("synced", <path>, "bucket structure: invalid root name")，該項不走訪；重複 root_name ⇒ errors 加 ("synced", <path>, "bucket structure: duplicate root name")（每個重複項各一筆），該名稱的所有項目都不走訪；其他唯一且合法的 root 照常觀測；extension_report 固定傳 [("skills", <claude_root>/skills/synced), ("plugins", <claude_root>/plugins/synced)]。
+  synced 根存在且列舉成功但無任何直接子項 ⇒ 無項目、無錯誤（與不存在同為空集合）；列舉失敗 ⇒ errors。
+  結構錯誤（根或直接子項層級）⇒ 不走訪該 bucket、該根不產生 synced entries、errors 保留；另一合法根繼續。
+
+### 既有測試允許修改清單(逐字;- 行逐行進審計;此外不得改)
+
+tests/test_redlight.py：(1) _surfaces helper：synced_dirs 改傳 [("skills", str(synced))]；(2) _scenarios 的 T146-4b 佈置：synced 內改為 <D>/manifest.json + .bucket-<D>；(3) test_t146_4b：同 (2)；(4) test_t146_11c：synced 佈置改合法 bucket + marker，synced_dirs 改傳 [("skills", <user_skills_dir>/synced)]；(5) test_t146_14 docstring（七鍵 → 八鍵）；(6) 3f 新 helper _t3f_layout / _t3f_report 若自行組 synced_dirs，改成對的串列。
+tests/test_gate.py：(7) TestTicket146Integration._root：同時提交合法空 inventory；(8) test_t146_23 與 test_t146_38 的 docstring 改為「未納管」語意。
+其他方法一律不動。
