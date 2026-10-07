@@ -3537,7 +3537,7 @@ class TestTicket146ExtensionIntegrity:
         rep = self._t3e_report(root, claude)
         assert set(rep) == {"facts", "surfaces", "state", "category", "reason", "lines",
                             "runtime_assurance", "claude_root", "claude_root_source",
-                            "authority", "observation", "inventory", "synced"}, sorted(rep)
+                            "authority", "observation", "inventory", "synced", "policy_source"}, sorted(rep)
 
     # ── 3f(S3f-146-1):synced 納管 —— inventory、匿名邏輯路徑、逐檔驗證 ─────────
     #
@@ -3842,7 +3842,8 @@ class TestTicket146ExtensionIntegrity:
     def test_t146_44(self, tmp_path, monkeypatch):
         """T146-44:extension_report 十三鍵、synced 六鍵、inventory 與 extension_inventory_facts 同態;沒有 inventory ⇒ uninitialized 且 UNKNOWN;前置觀測失敗 ⇒ inventory / synced 為 None;判定恰好 1 次並收到 report["inventory"];對應裁決 (rr)、z1。"""
         keys = {"facts", "surfaces", "state", "category", "reason", "lines", "runtime_assurance",
-                "claude_root", "claude_root_source", "authority", "observation", "inventory", "synced"}
+                "claude_root", "claude_root_source", "authority", "observation", "inventory", "synced",
+                "policy_source"}
         six = {"verified", "reason", "missing", "extra", "mismatch", "structure_errors"}
         inventory_facts = self._api("extension_inventory_facts")
         orig = self._api("_extension_first_reason")
@@ -3983,3 +3984,147 @@ class TestTicket146ExtensionIntegrity:
         assert not [p for p in got if p.startswith("skills/")], sorted(got)
         assert got.get("plugins/.bucket-<bucket>") == exp_plugins["plugins/.bucket-<bucket>"], sorted(got)
         assert [p for p in got if p.startswith("plugins/<bucket>/")], sorted(got)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 146 第三站 3g 紅燈(S3g-146-1)—— policy-only commit 的 index 通道(H-6)與完整 inventory validator
+#
+# 契約在票 146〈3g 契約與紅燈〉。新名稱 / 新參數一律在測試內取得;缺 ⇒ 該 node 以 AttributeError / TypeError 紅。
+# 文件形狀沿用 `TestTicket146ExtensionIntegrity` 的 staticmethod(`_allowlist` / `_inventory` / `_text`),只呼叫、不修改。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_IP = TestTicket146ExtensionIntegrity
+_IP_FACTS = {"allowlist": ("extension_allowlist_facts", ".agents/extension-allowlist.json"),
+             "inventory": ("extension_inventory_facts", ".agents/extension-inventory.json")}
+
+
+def _ip_git(root, *args, **kw):
+    return _d_subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True, **kw)
+
+
+def _ip_repo(root):
+    """真的 git repo:只提交 README(policy 由各案自己 stage)。"""
+    root = pathlib.Path(str(root))
+    root.mkdir(parents=True, exist_ok=True)
+    _g_write(root, "README.md", u"t146 index\n")
+    _ip_git(root, "init", "-q")
+    _ip_git(root, "config", "user.email", "t@example.invalid")
+    _ip_git(root, "config", "user.name", "t")
+    _ip_git(root, "add", "README.md")
+    _ip_git(root, "commit", "-q", "-m", "baseline")
+    return root
+
+
+def _ip_valid_text(kind):
+    return _IP._text(_IP._allowlist() if kind == "allowlist" else _IP._inventory())
+
+
+class TestTicket146IndexPolicy:
+    """票 146 3g:facts 的 policy_source="index"、report 的 policy_source 鍵、inventory validator、gate 的純字串路徑常數。"""
+
+    @pytest.mark.parametrize("case", ["a-missing", "b-ok", "c-worktree-garbage", "d-worktree-deleted",
+                                      "e-conflict", "f-nonregular", "g-malformed", "h-bad-source"])
+    @pytest.mark.parametrize("kind", ["allowlist", "inventory"])
+    def test_t146_71_facts_policy_source_index_states(self, tmp_path, kind, case):
+        """T146-71(behavior-red):index 模式的六種結果與 ValueError;index 合法時 worktree 的內容或存在與否不影響結果。
+        BASELINE 紅因:allowlist facts 沒有 policy_source 參數(TypeError);inventory facts 不存在(AttributeError)。"""
+        import json
+        name, rel = _IP_FACTS[kind]
+        fn = getattr(redlight, name)
+        root = _ip_repo(tmp_path / "r")
+        text = _ip_valid_text(kind)
+        if case == "h-bad-source":
+            with pytest.raises(ValueError):
+                fn(str(root), policy_source="worktree")
+            return
+        if case in ("b-ok", "c-worktree-garbage", "d-worktree-deleted"):
+            _g_write(root, rel, text)
+            _ip_git(root, "add", rel)
+            if case == "c-worktree-garbage":
+                _g_write(root, rel, u"{garbage")
+            elif case == "d-worktree-deleted":
+                (root / rel).unlink()
+            facts = fn(str(root), policy_source="index")
+            assert facts["state"] == "ok", facts
+            staged = _ip_git(root, "rev-parse", ":" + rel).stdout.decode().strip()
+            assert facts["blob"] == staged, (facts, staged)
+            assert facts["policy"] == json.loads(text), facts
+            return
+        if case == "e-conflict":
+            blob = _ip_git(root, "hash-object", "-w", "--stdin", input=text.encode("utf-8")).stdout.decode().strip()
+            info = "".join("100644 %s %d\t%s\n" % (blob, st, rel) for st in (1, 2, 3))
+            _ip_git(root, "update-index", "--index-info", input=info.encode("utf-8"))
+            want = "index_conflict"
+        elif case == "f-nonregular":
+            blob = _ip_git(root, "hash-object", "-w", "--stdin", input=b"target-of-link").stdout.decode().strip()
+            _ip_git(root, "update-index", "--index-info", input=("120000 %s 0\t%s\n" % (blob, rel)).encode("utf-8"))
+            want = "index_nonregular"
+        elif case == "g-malformed":
+            _g_write(root, rel, u"not json at all\n")
+            _ip_git(root, "add", rel)
+            want = "malformed"
+        else:
+            want = "index_missing"
+        facts = fn(str(root), policy_source="index")
+        assert facts["state"] == want, (case, facts)
+
+    def test_t146_72_report_policy_source_key(self, tmp_path):
+        """T146-72(behavior-red):extension_report 十四鍵、policy_source 預設 "head";傳 "index" ⇒ "index";無效 ⇒ ValueError;
+        claude_root 無效時仍有該鍵。BASELINE 紅因:`extension_report` 不存在。"""
+        fn = getattr(redlight, "extension_report")
+        helper = _IP()
+        root = helper._repo_with_policies(tmp_path / "r", _IP._text(_IP._allowlist()), _IP._text(_IP._inventory()))
+        claude = tmp_path / "claude"
+        claude.mkdir()
+        keys = {"facts", "surfaces", "state", "category", "reason", "lines", "runtime_assurance", "claude_root",
+                "claude_root_source", "authority", "observation", "inventory", "synced", "policy_source"}
+        rep = fn(str(root), str(claude))
+        assert set(rep) == keys, sorted(rep)
+        assert rep["policy_source"] == "head", rep["policy_source"]
+        assert fn(str(root), str(claude), policy_source="index")["policy_source"] == "index"
+        with pytest.raises(ValueError):
+            fn(str(root), str(claude), policy_source="worktree")
+        bad = fn(str(root), str(tmp_path / "missing-claude-root"), policy_source="index")
+        assert bad.get("policy_source") == "index", sorted(bad)
+
+    @pytest.mark.parametrize("case", [
+        "ok-empty", "ok-one", "missing-key", "extra-key", "schema-wrong", "version-str", "entries-not-list",
+        "entry-extra-key", "path-bad-form", "path-duplicate", "sha-upper", "sha-63", "note-not-str"])
+    def test_t146_73_inventory_ok_validator(self, case):
+        """T146-73(behavior-red):`_extension_inventory_ok` 完整驗 schema / version 型別 / 鍵集合 / 每項鍵 / 四種邏輯路徑 /
+        path 唯一 / sha256 / note;不拋例外。BASELINE 紅因:`_extension_inventory_ok` 不存在。"""
+        ok = getattr(redlight, "_extension_inventory_ok")
+        good = {"path": "skills/<bucket>/SKILL.md", "sha256": "a" * 64, "note": "t146"}
+        base = {"schema": "monkeyleash.extension-inventory", "version": 1}
+        docs = {
+            "ok-empty": dict(base, entries=[]),
+            "ok-one": dict(base, entries=[good]),
+            "missing-key": {"schema": base["schema"], "entries": []},
+            "extra-key": dict(base, entries=[], extra=1),
+            "schema-wrong": dict(base, schema="other.schema", entries=[]),
+            "version-str": dict(base, version="1", entries=[]),
+            "entries-not-list": dict(base, entries={}),
+            "entry-extra-key": dict(base, entries=[dict(good, more="x")]),
+            "path-bad-form": dict(base, entries=[dict(good, path="skills/x")]),
+            "path-duplicate": dict(base, entries=[good, dict(good, sha256="b" * 64)]),
+            "sha-upper": dict(base, entries=[dict(good, sha256="A" * 64)]),
+            "sha-63": dict(base, entries=[dict(good, sha256="a" * 63)]),
+            "note-not-str": dict(base, entries=[dict(good, note=1)]),
+        }
+        want = case.startswith("ok-")
+        assert ok(docs[case]) is want, (case, docs[case])
+
+    def test_t146_74_gate_policy_paths_match_redlight(self):
+        """T146-74(behavior-red):gate.EXT_POLICY_PATHS == (EXT_ALLOWLIST_FILE, EXT_INVENTORY_FILE);
+        gate.py 中它的賦值右側是純字串常數 tuple(AST;不呼叫任何函式)。BASELINE 紅因:`gate.EXT_POLICY_PATHS` 不存在。"""
+        import ast
+        g = _IP._gate()
+        paths = getattr(g, "EXT_POLICY_PATHS")
+        assert paths == (redlight.EXT_ALLOWLIST_FILE, getattr(redlight, "EXT_INVENTORY_FILE")), paths
+        tree = ast.parse((ROOT / ".claude" / "hooks" / "gate.py").read_text(encoding="utf-8"))
+        values = [n.value for n in tree.body if isinstance(n, ast.Assign)
+                  and any(isinstance(t, ast.Name) and t.id == "EXT_POLICY_PATHS" for t in n.targets)]
+        assert len(values) == 1, len(values)
+        v = values[0]
+        assert isinstance(v, ast.Tuple) and v.elts, ast.dump(v)
+        assert all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in v.elts), ast.dump(v)

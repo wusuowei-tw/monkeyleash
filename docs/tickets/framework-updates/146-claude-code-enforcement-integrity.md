@@ -524,7 +524,7 @@ status.py：
 
 (aa) 3e 證紅合格。接受 3f-0 唯讀偵查；甲-2（manifest 指紋納管）留作候選，尚未核准。
 (bb) manifest 指紋相符不足以單獨納管：必須證明實際檔案集合與核准清單一致，且逐檔內容雜湊一致；沒有逐檔 hash 就需另產生完整 inventory，不能只驗檔名。額外檔案、內容變更、列舉失敗與 symlink 的處置都須明定。「同步更新只需重新核准一筆」是審核呈現方式，不能省略對整份 inventory 變更的審查。
-(cc) 先讓核准 policy 進 HEAD，再接 enforcement。順序：3f-0 → 納管契約裁決 → 3f 紅燈 → Jeff 核准並提交 policy → 4b 實作接線。policy 須涵蓋本機所有已知入口，不只 synced；沿用 committed-policy 模型，不新增 bootstrap 豁免。allowlist 只認 HEAD blob，同一 commit 內新增的 allowlist 不能替該次 commit 放行。
+(cc) 先讓核准 policy 進 HEAD，再接 enforcement。順序：3f-0 → 納管契約裁決 → 3f 紅燈 → Jeff 核准並提交 policy → 4b 實作接線。policy 須涵蓋本機所有已知入口，不只 synced；沿用 committed-policy 模型，不新增 bootstrap 豁免。~~allowlist 只認 HEAD blob，同一 commit 內新增的 allowlist 不能替該次 commit 放行。~~(F-036 體例:舊句不刪)—— 2026-10-07 加註:policy-only commit 除外(H-6;見〈3g 契約與紅燈〉)。
 (dd) synced 納管須明文修訂補鎖 6：由「synced 非空一律硬擋」改為依結構化納管結果判斷；未納管或驗證失敗仍硬擋，完整驗證通過才可繼續；T146-23 / 38 同步修訂，不得在 4b 偷改語意。
 (ee) 三個小衝突：status 的 runtime 值去掉固定前綴並補斷言只出現一次；前置觀測失敗的原因類別用 observation 值，其餘用 category；4b 須明列允許修改的隔離點、CLAUDE.md 正典與 R10 scenario，隔離測試繼續用 tmp 或 stub。
 (ff) mtime 只能支持變動時間的推論，不能單獨證明同步頻率；manifest 的 authority 能力不代表已獲 Jeff 核准。
@@ -724,3 +724,141 @@ tests/test_gate.py：(7) TestTicket146Integration._root：同時提交合法空 
   - `.agents/extension-inventory.json skip`
 - 只加不刪。
 - 驗收(依補鎖第 1 條):分類測試 `tests/test_upstream_manifest.py::test_every_tracked_file_is_classified` 轉綠，既有預期失敗集合(S3f2-146-1)保留，沒有新增非預期失敗。
+
+---
+
+## 3g 契約與紅燈（2026-10-07）
+
+### 裁決補件轉錄，僅排版調整(2026-10-07)
+
+**一、H-6 裁決**
+
+**裁 H-6，接受 policy-only 使用 index；也接受只改 `g3_installed_repo` fixture，撤回 autouse 方案。**但 3g 契約須補鎖以下邊界。
+先修正死結描述：mtime 改變、hash 不變不會讓 inventory 失效；內容、集合或結構變更才可能觸發硬擋。HEAD-only policy 更新死結仍成立。
+H-6 定案：
+
+* staged 集合非空，且全部屬兩個 canonical policy 路徑，才可走通道；混入任何其他檔仍用 HEAD。
+* policy-only 時，兩份 policy 都從 index 讀取，包含未修改的那份；不得把 index 與 worktree／HEAD 混用。
+* 缺檔、刪除、未解決衝突、非 regular blob、格式不合法或 index 讀取失敗 ⇒ 硬擋。
+* candidate policy 對當下 live facts 必須為 `DECLARED_OK`；runtime 仍可 UNPROVEN。R1–R9 與 leak scanner 照跑。
+* worktree 與 index 不同不得影響授權結果；訊息與 report 明示 `policy_source=index`。這是 staged candidate 驗證，不是 HEAD committed policy 已生效。
+* Jeff 親自提交仍是 procedural invariant，尚未 machine-enforced；policy-only 集合判斷本身不能證明提交者獲准。
+
+3g 除兩個既提負控，再鎖：index 合法但 worktree 被改、index 不符但 worktree 符合、只改其中一份 policy、policy 刪除／衝突，以及成功核准後普通 commit 回到 HEAD 路徑。
+隔離與安裝契約另補：
+
+1. marker 單獨不足以授權清理。`restore_user_layer()` 必須使用本輪 context 保存的隔離根，確認解析路徑位於指定 workdir、根與 marker 非 symlink，且是本輪建立的目錄；失敗即停止。既有非空 home 不得直接清空。
+2. `isolated_home()` 必須在載入 gate／leak scanner 之前生效，避免模組層常數先綁到真實家目錄。
+3. fixture 若後續三個 node 還會呼叫安裝目標 gate，隔離須涵蓋它們的使用期間，不能在 fixture 回傳前就撤銷。
+4. 安裝目標已有兩份 policy 時，保留但先驗 schema／型別；invalid 或僅有一份即停止，不覆寫。
+
+G-3 的乾淨正控與「已登記兩筆後放行」對照都接受。`policy_source` 加鍵與相關既有 report-key 測試修訂，也須明列允許修改清單。
+可據此寫 3g 紅燈完整指令；不實作、不改真實使用者層、不 push。
+
+**二、補件裁決(run_scenario 判定)**
+
+五處修正已閉合；還差一處明確契約，再貼。
+`run_scenario()` 目前仍用通用的 `[code]`／`[code/` 判定。對 R10 而言，這會接受：
+`[R10] 未受管入口：synced（額外 2…`
+但 G-3 裁的是具體硬擋路徑。改為：
+
+* R10：`rc != 0`，且同時包含 `[R10/fail-closed]` 與指定原因。
+* R1–R9：保留原代號判定。
+* T146-55 再加一個負控：原因正確、但只有 `[R10]` 或其他 `[R10/…]` ⇒ False。
+
+其餘接受，包括純字串 policy 路徑、policy-only 順序、有效 isolation context、完整 inventory validator，以及 T146-36／44 的准改範圍。
+這一處同步修入契約與測試後即可執行 3g；步驟 0 若盤點不符仍須停止。維持只寫紅燈、票與審計，不實作、不 push。
+
+**三、五處閉合裁決**
+
+先不要貼；3g 的主方向正確，但有五處需要閉合。
+
+1. `EXT_POLICY_PATHS` 不能在 gate 載入時呼叫 `_redlight()`。
+缺 redlight 會先造成 import 失敗，T146-26 的可讀硬擋永遠走不到。改為不依賴 redlight 載入的固定 canonical 路徑常數，或在已捕捉 authority 失敗的函式內取得；不得新增模組層載入風險。
+2. policy-only 的硬擋順序須寫死。
+現在「既有 (a)(b)(c)(d) 不變，另加 (e)(f)」可能先回一般 synced 硬擋，遮掉 T146-64／65／66／70 要驗的 policy-only 原因。
+明定：取得 report 後，policy-only 先檢查兩份 index facts，再要求 `DECLARED_OK`；任何失敗均包含 `policy-only`、`policy_source=index` 與具體原因。非 policy-only 才走原有分支。authority／前置觀測失敗仍硬擋。
+3. 隔離驗證仍不能只靠 marker 存在。
+`scenario_r10()` 只驗檔案存在便寫入，比清理契約弱；可偽造的 `SimpleNamespace + token` 也不能證明目錄由本輪 context 建立。
+用本輪 context 註冊的 iso 驗證 scenario 與清理；進入時也拒絕 home／`.claude`／marker 的 symlink 或異常型別。沒有有效 context，即使 marker 存在也不得寫入或刪除。補負控。
+4. 既有完整鍵集合測試不只 T146-36。
+已裁的 T146-44 也鎖十三鍵，須先列出全部命中，再把必要修訂明列准改；不能預知會永久紅卻留給 4b「待裁」。各 report 計數 wrapper 若需轉交 `policy_source`，也須列准，保留判定一次的斷言。
+5. 安裝器驗 existing inventory 必須完整驗 schema。
+「schema/version/entries 為 list」不足以接受既有 policy。固定驗證函式名稱，驗每項鍵、合法邏輯路徑、唯一 path、hash／note 型別；補「頂層合法但 entry 非法 ⇒ 停止、不覆寫」候選。不能把完整驗證留到 4b 自行決定。
+
+另外兩點接受／修正：
+
+* 安裝來源記在 `decisions-pending.md` 與 commit 訊息：接受，不用加頂層 note。
+* T146-60b 須獨立建立佈置；核准 commit 前斷言 staged 集合恰好只有 inventory，trigger 此時不得 staged，避免它其實驗到混合 commit。
+
+新 node 數依 parametrize 展開後的 C0 計算，不沿用「26 個」概數。修完再裁；本輪沒有改檔、commit 或 push。
+
+**四、補件二附註(2026-10-07)**
+
+- T146-28／30 是預判編號錯誤，wrapper 行為一致、修改範圍不變，不構成停止條件；審計步驟 0 記明即可。
+- 補件二的三段原文，票內標題寫「裁決補件轉錄，僅排版調整」，不寫「逐字」；時間只記日期 2026-10-07，不記時分。
+
+### 步驟 0 盤點摘要
+
+- (i) 對 `extension_report` 回傳鍵集合做精確斷言的 node:只有 T146-36(`tests/test_redlight.py:3538-3540`)與 T146-44(`:3844-3846` 定義、`:3857` 斷言)。與預判一致。
+- (ii) 替換 `extension_report` 的 wrapper 共 3 處(替換 `extension_allowlist_facts` / `extension_inventory_facts` 的 0 處):
+  - T146-37(`tests/test_gate.py:6710-6711`)與 T146-23h(`:6921-6922`)的 lambda 以 `**k` 吸收、不轉交;
+  - `recording(*a, **k)` 原樣轉交，位於 `tests/test_status.py:3268-3272`,所屬 node 是 **T146-28**(預判寫 T146-30,屬編號錯誤;行為一致、修改範圍不變)。
+- ⇒ 既有測試必改項只有 T146-36 / T146-44 的鍵集合。
+
+### 契約(4b 只能實作，不能改名)
+
+verify_gates.py：
+  ISOLATED_HOME_DIRNAME = "home"；ISOLATION_MARKER = ".verify-gates-isolated"。
+  模組層 _ACTIVE_ISOLATION = None；current_isolation() 回傳它。
+  isolated_home(workdir)：context manager。進入：若 _ACTIVE_ISOLATION 非 None ⇒ SystemExit（不准巢狀）。workdir 轉絕對；home = <workdir>/home。home 若存在：lstat 為 symlink 或非目錄 ⇒ SystemExit；是目錄但非空 ⇒ SystemExit。home/.claude 若存在：symlink 或非目錄或非空 ⇒ SystemExit。marker 若以任何型別存在 ⇒ SystemExit。以上全過才建 home、home/.claude、marker（內容 = 本次 uuid4 token）。記下進入前 USERPROFILE / HOME 的（存在,值）；設兩者 = home；建立 iso（屬性 workdir、home、claude_root、marker、token）並設 _ACTIVE_ISOLATION = iso；yield iso。離開（含例外）：精確還原兩個變數（原本不存在的 del）、_ACTIVE_ISOLATION = None。
+  _require_isolation(iso)：iso is current_isolation()（同一物件、非 None）；realpath(iso.home) 位於 realpath(iso.workdir) 之下；iso.home、iso.claude_root 以 lstat 為非 symlink 的目錄；iso.marker 以 lstat 為非 symlink 的 regular file 且內容 == iso.token；expanduser("~") == iso.home。任一不成立 ⇒ SystemExit。
+  restore_user_layer(iso)：_require_isolation(iso) 後清空 iso.claude_root 內容（保留空目錄）。失敗即停、不刪任何東西。
+  scenario_r10(target)：iso = current_isolation()；_require_isolation(iso)（iso 為 None ⇒ SystemExit，即使 marker 檔存在）；之後才在 iso.claude_root/skills/synced/vgbucket/SKILL.md 寫 "# verify_gates r10\n"、iso.claude_root/skills/synced/.bucket-vgbucket 寫 "vgbucket\n"；set_stage(target,"implement")；write(target,"docs/adr/verify-trigger.md", …)；回 None。
+  precontrol_r10(target)：set_stage implement + 同一 trigger 檔；不碰家目錄。
+  EXPECTED_REASON = {"R10": "未受管入口：synced（額外 2"}；PRECONTROL = {"R10": precontrol_r10}；SCENARIOS 加 "R10": scenario_r10。
+  run_scenario(target, code, iso=None)：code in PRECONTROL ⇒ 先 PRECONTROL[code](target)、git add -A、git commit；rc != 0 ⇒ restore(target) 後回 (False, "正控未放行：" + out)，不跑情境；否則 restore(target) 再跑 SCENARIOS[code]、add、commit；restore(target)；iso 非 None ⇒ restore_user_layer(iso)；blocked 判定見下(補件一替換)。
+  EXPECTED_MARKER = {"R10": "[R10/fail-closed]"}。
+  blocked 判定：rc != 0 且 EXPECTED_MARKER 有 code 時 ⇒ EXPECTED_MARKER[code] in out 且 EXPECTED_REASON[code] in out（兩者缺一即 False；"[R10]" 或其他 "[R10/…]" 前綴不算）；EXPECTED_MARKER 沒有 code 時 ⇒ 沿用原判定（"[code]" in out 或 "[code/" in out）。
+  main(workdir)：with isolated_home(workdir) as iso 包住從 install.main 起到最後一條情境；load_target_gate 在 with 內；run_scenario 傳 iso。
+
+install.py：
+  write_extension_policy(target) → (allowlist_path, inventory_path, created)。常數與驗證函式經 _target_redlight(target) 取：EXT_ALLOWLIST_FILE、EXT_INVENTORY_FILE、EXT_ALLOWLIST_SCHEMA、EXT_ALLOWLIST_VERSION、EXT_ALLOWLIST_FIELDS、EXT_INVENTORY_SCHEMA、EXT_INVENTORY_VERSION、EXT_INVENTORY_FIELDS、_extension_allowlist_ok、_extension_inventory_ok。兩檔都不存在 ⇒ 產生：inventory {"schema","version":1,"entries":[]}；allowlist 七欄位，三個檔案型欄位與 mcp_json_servers 為 []，project_settings_hook_commands = 從目標 .claude/settings.json 的 hooks 讀出的全部 command 字串（出現順序、去重）；UTF-8、LF、indent 2、檔尾單一 LF；created=True。兩檔都存在 ⇒ 讀 JSON，_extension_allowlist_ok(doc) 與 _extension_inventory_ok(doc) 都為真 ⇒ 不覆寫、created=False；任一為假或 JSON 解析失敗 ⇒ SystemExit。只存在一份 ⇒ SystemExit。任何 SystemExit 前不得寫入任何檔。
+  呼叫點：main 內 write_policy_template 之後、第一個 git add -A 之前（隨第一個安裝 commit 進 HEAD）。
+  write_decisions_pending 增加一段，點名兩個 policy 路徑並寫「由安裝器產生：空 inventory + 安裝器寫入的 hook command；未登記任何使用者擴充；這不是核准過的觀測快照」。安裝 commit 訊息不改。
+
+redlight.py：
+  _extension_inventory_ok(doc) → bool：doc 為 dict；鍵集合恰為 EXT_INVENTORY_FIELDS；schema == EXT_INVENTORY_SCHEMA；version 為 int 且 == EXT_INVENTORY_VERSION；entries 為 list；每項 dict 且鍵恰為 {"path","sha256","note"}；path 為 str 且屬四種合法邏輯路徑（v2 契約）；path 在 entries 內唯一；sha256 為 64 碼小寫十六進位 str；note 為 str。extension_inventory_facts 的 malformed 判定必須經由它（4b）。
+  extension_allowlist_facts(repo_root, policy_source="head") 與 extension_inventory_facts(repo_root, policy_source="head")：policy_source ∉ {"head","index"} ⇒ ValueError。"head" 不變。"index"：git ls-files -s -- <path>：無輸出 ⇒ "index_missing"；任何 stage != 0 ⇒ "index_conflict"；mode 非 100644/100755 ⇒ "index_nonregular"；git cat-file 失敗 ⇒ "index_unreadable"；JSON/schema 不合法 ⇒ "malformed"；合法 ⇒ "ok"，blob = index blob，policy = 其內容。index 模式不做 worktree identity 比對，worktree 內容或存在與否不影響結果。dict 形狀同 head 模式。
+  extension_report(repo_root, claude_root=None, walk=None, lstat=None, read_bytes=None, policy_source="head")：兩份 facts 用同一 policy_source；回傳十四鍵（十三鍵 + "policy_source"）；前置觀測失敗時仍有 policy_source 鍵。
+
+gate.py：
+  EXT_POLICY_PATHS = (".agents/extension-allowlist.json", ".agents/extension-inventory.json")：模組層純字串常數，不呼叫 _redlight()，不新增任何模組層載入風險；與 redlight 常數的一致性由測試鎖。
+  _staged_names_all() → list：git diff --cached --name-only -z 的全部路徑（含刪除），POSIX 分隔，去空。
+  extension_policy_only_commit(names) → bool：names 非空且 set(names) ⊆ set(EXT_POLICY_PATHS)。
+  check_extension_integrity(staged_names=None)：所有分支同一形狀 {"hard_block","violations","report","policy_source"}。順序寫死：
+    0. _redlight() 載入失敗 ⇒ authority 硬擋（訊息同 v1），policy_source 為依 staged_names 算出的值（算不出 ⇒ "head"）。
+    1. staged_names 為 None ⇒ _staged_names_all()；policy_only = extension_policy_only_commit(staged_names)；policy_source = "index" if policy_only else "head"。
+    2. report = rl.extension_report(ROOT, _extension_claude_root(), policy_source=policy_source)。
+    3. report["observation"] != "ok" ⇒ (a) 硬擋（訊息同 v1；policy_only 時尾綴「（policy-only commit，policy_source=index）」）。
+    4. policy_only ⇒ (e) report["facts"] 為 None 或 state != "ok"，或 report["inventory"] 為 None 或 state != "ok" ⇒ hard_block "[R10/fail-closed] policy-only commit（policy_source=index）：staged policy 無效：allowlist=<state>/inventory=<state>"；否則 (f) report["state"] != EXT_DECLARED_OK ⇒ hard_block "[R10/fail-closed] policy-only commit（policy_source=index）：staged policy 對現場不成立：<reason>"；否則放行 {"hard_block": None, "violations": [], ...}。policy-only 沒有 violations 路徑，(b)(c)(d) 不另行評估（它們的事實已含在 state/reason 中）。
+    5. 非 policy_only ⇒ (b)(c)(d) 與 VIOLATION/DECLARED_OK 分支，完全同 v1/v2。
+  mode_pre_commit：staged_paths 之後、R4 之前呼叫 check_extension_integrity(_staged_names_all())；其餘同 v1。
+
+### 允許修改清單(逐字)
+
+  tests/test_install.py：g3_installed_repo 改 yield fixture + 家目錄隔離；三支既有 node 不動。
+  tests/test_redlight.py：T146-36、T146-44 鍵集合加 "policy_source"。
+  步驟 0 盤點若發現其他必改項 ⇒ 停下回報，不改。
+
+### 安裝來源記法
+
+記在 `docs/decisions-pending.md`(安裝器增加的一段)與安裝 commit 訊息;不在 policy 檔加頂層 note(五處閉合裁決「另外兩點」第 1 點)。安裝 commit 訊息依契約不改。
+
+### 已知效果
+
+淨室在隔離家目錄下執行後，安裝目標的 gate / leak scanner 不再讀本機的 `upstream-roots.txt`(`gate.py:2340`)、`shadow-clamp.txt`(`gate.py:3108`)、`leak-patterns.local.txt`(`leak_scan.py:57`)—— 三者在隔離家目錄中都不存在。
+
+### (cc) 加註
+
+〈3f-0 synced 納管偵查〉(cc) 的「allowlist 只認 HEAD blob，同一 commit 內新增的 allowlist 不能替該次 commit 放行」已依 F-036 劃線，並加註「policy-only commit 除外(H-6)」。

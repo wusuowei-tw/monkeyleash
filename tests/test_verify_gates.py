@@ -313,3 +313,337 @@ def test_every_evidence_policy_scenario_is_wired():
     assert isinstance(table, dict), "verify_gates 沒有 EVIDENCE_SCENARIOS:淨室的兩正三負沒有接線"
     assert set(table) == _EVIDENCE_SCENARIO_KEYS, sorted(table)
     assert all(callable(f) for f in table.values()), table
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 146 第三站 3g 紅燈(S3g-146-1)—— 淨室家目錄隔離(G-1)、R10 情境與原因斷言(G-3)
+#
+# 契約在票 146〈3g 契約與紅燈〉。新名稱一律在測試內 getattr 取得;缺 ⇒ 該 node 以 AttributeError 紅,
+# 不讓收集失敗。真實 ~/.claude 一律不碰:需要家目錄的佈置先把 USERPROFILE 與 HOME 都指到 tmp。
+# Windows 上 symlink 案 skip。marker 的位置以 `<home>/<ISOLATION_MARKER>` 佈置(契約:建 home、home/.claude、marker)。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_T146_SKIP_SYMLINK = pytest.mark.skipif("os.name == 'nt'", reason="Windows 建 symlink 需要額外權限;POSIX 才產得出來")
+_T146_R10_OUT = u"[R10/fail-closed] 未受管入口：synced（額外 2 / 缺少 0 / 內容不符 0）"
+
+
+class _T146Stop(Exception):
+    pass
+
+
+def _t146_norm(p):
+    return os.path.normcase(os.path.abspath(str(p)))
+
+
+def _t146_tree(root):
+    """root 底下所有項目的 (相對路徑, 型別, 位元組或 None)。"""
+    out = []
+    for dirpath, dirnames, filenames in os.walk(str(root)):
+        for d in sorted(dirnames):
+            out.append((os.path.relpath(os.path.join(dirpath, d), str(root)), "dir", None))
+        for f in sorted(filenames):
+            full = os.path.join(dirpath, f)
+            with open(full, "rb") as fh:
+                out.append((os.path.relpath(full, str(root)), "file", fh.read()))
+    return sorted(out)
+
+
+class TestTicket146Cleanroom:
+    """票 146 3g:verify_gates 的隔離家目錄 context、R10 情境、正控與原因斷言。全部在 S3g-146-1 預期失敗(Windows symlink 案 skip)。"""
+
+    @pytest.mark.parametrize("pre", ["both-set", "both-absent"])
+    def test_t146_50_isolated_home_sets_both_vars_and_restores(self, tmp_path, monkeypatch, pre):
+        """T146-50(behavior-red):with 內 expanduser("~") == iso.home == <wd>/home、兩變數 == iso.home、
+        claude_root 為空目錄、marker 內容 == token、current_isolation() is iso;離開後 environ 與進入前完全相同、current 為 None。
+        BASELINE 紅因:`vg.isolated_home` 不存在。"""
+        isolated_home = getattr(vg, "isolated_home")
+        current = getattr(vg, "current_isolation")
+        if pre == "both-set":
+            monkeypatch.setenv("USERPROFILE", str(tmp_path / "pre-up"))
+            monkeypatch.setenv("HOME", str(tmp_path / "pre-home"))
+        else:
+            monkeypatch.delenv("USERPROFILE", raising=False)
+            monkeypatch.delenv("HOME", raising=False)
+        wd = tmp_path / "wd"
+        wd.mkdir()
+        before = dict(os.environ)
+        with isolated_home(str(wd)) as iso:
+            want = _t146_norm(wd / getattr(vg, "ISOLATED_HOME_DIRNAME"))
+            assert _t146_norm(iso.home) == want, iso.home
+            assert _t146_norm(os.path.expanduser("~")) == want
+            assert _t146_norm(os.environ["USERPROFILE"]) == want and _t146_norm(os.environ["HOME"]) == want
+            assert os.path.isdir(iso.claude_root) and os.listdir(iso.claude_root) == []
+            assert os.path.isfile(iso.marker) and not os.path.islink(iso.marker)
+            with open(iso.marker, encoding="utf-8") as f:
+                assert f.read() == iso.token
+            assert current() is iso
+        assert dict(os.environ) == before
+        assert current() is None
+
+    @pytest.mark.parametrize("case", [
+        "home-nonempty", "home-is-file", "claude-is-file", "marker-preexists",
+        pytest.param("home-is-symlink", marks=_T146_SKIP_SYMLINK)])
+    def test_t146_50b_isolated_home_refuses_bad_preexisting(self, tmp_path, case):
+        """T146-50b(behavior-red):home 非空 / home 是檔 / .claude 是檔 / marker 已存在 / home 是 symlink ⇒ 進入即 SystemExit;
+        預置物位元組不變、environ 不變、current_isolation() 為 None。BASELINE 紅因:`vg.isolated_home` 不存在。"""
+        isolated_home = getattr(vg, "isolated_home")
+        current = getattr(vg, "current_isolation")
+        wd = tmp_path / "wd"
+        wd.mkdir()
+        home = wd / getattr(vg, "ISOLATED_HOME_DIRNAME")
+        marker_name = getattr(vg, "ISOLATION_MARKER")
+        if case == "home-nonempty":
+            home.mkdir()
+            (home / "keep.txt").write_bytes(b"keep\n")
+        elif case == "home-is-file":
+            home.write_bytes(b"not a dir\n")
+        elif case == "claude-is-file":
+            home.mkdir()
+            (home / ".claude").write_bytes(b"not a dir\n")
+        elif case == "marker-preexists":
+            home.mkdir()
+            (home / marker_name).write_bytes(b"stale-token")
+        else:
+            real = tmp_path / "elsewhere"
+            real.mkdir()
+            os.symlink(str(real), str(home))
+        snap = _t146_tree(wd)
+        env = dict(os.environ)
+        with pytest.raises(SystemExit):
+            with isolated_home(str(wd)):
+                pass
+        assert _t146_tree(wd) == snap, case
+        assert dict(os.environ) == env
+        assert current() is None
+
+    def test_t146_50c_isolated_home_restores_on_exception(self, tmp_path):
+        """T146-50c(behavior-red):with 內 raise RuntimeError ⇒ 外傳;environ 還原;current_isolation() 為 None。
+        BASELINE 紅因:`vg.isolated_home` 不存在。"""
+        isolated_home = getattr(vg, "isolated_home")
+        current = getattr(vg, "current_isolation")
+        wd = tmp_path / "wd"
+        wd.mkdir()
+        env = dict(os.environ)
+        with pytest.raises(RuntimeError):
+            with isolated_home(str(wd)):
+                raise RuntimeError("t146-50c")
+        assert dict(os.environ) == env
+        assert current() is None
+
+    def test_t146_50d_isolated_home_refuses_nesting(self, tmp_path):
+        """T146-50d(behavior-red):巢狀進入 ⇒ SystemExit;外層 iso 仍是 current。BASELINE 紅因:`vg.isolated_home` 不存在。"""
+        isolated_home = getattr(vg, "isolated_home")
+        current = getattr(vg, "current_isolation")
+        (tmp_path / "wd1").mkdir()
+        (tmp_path / "wd2").mkdir()
+        with isolated_home(str(tmp_path / "wd1")) as outer:
+            with pytest.raises(SystemExit):
+                with isolated_home(str(tmp_path / "wd2")):
+                    pass
+            assert current() is outer
+        assert current() is None
+
+    def test_t146_51_restore_user_layer_clears_only_isolated_root(self, tmp_path):
+        """T146-51(behavior-red):restore_user_layer(iso) 清空 claude_root(保留空目錄),home 下的 marker 仍在。
+        BASELINE 紅因:`vg.restore_user_layer` 不存在。"""
+        isolated_home = getattr(vg, "isolated_home")
+        restore_user_layer = getattr(vg, "restore_user_layer")
+        (tmp_path / "wd").mkdir()
+        with isolated_home(str(tmp_path / "wd")) as iso:
+            p = os.path.join(iso.claude_root, "skills", "synced", "x", "y.md")
+            os.makedirs(os.path.dirname(p))
+            with open(p, "wb") as f:
+                f.write(b"y\n")
+            restore_user_layer(iso)
+            assert os.path.isdir(iso.claude_root) and os.listdir(iso.claude_root) == []
+            assert os.path.isfile(iso.marker)
+
+    @pytest.mark.parametrize("case", [
+        "i-marker-deleted", "ii-marker-changed", "iii-forged-namespace", "iv-after-exit",
+        "v-env-moved", pytest.param("vi-home-symlink", marks=_T146_SKIP_SYMLINK)])
+    def test_t146_51b_restore_user_layer_refuses(self, tmp_path, monkeypatch, case):
+        """T146-51b(behavior-red):marker 刪除 / 內容改變 / 偽造 iso / context 已結束 / expanduser 不是 iso.home /
+        iso.home 換成 symlink ⇒ 各 SystemExit,事前放的檔仍在。BASELINE 紅因:`vg.isolated_home` 不存在。"""
+        import shutil
+        import types
+        isolated_home = getattr(vg, "isolated_home")
+        restore_user_layer = getattr(vg, "restore_user_layer")
+        (tmp_path / "wd").mkdir()
+        with isolated_home(str(tmp_path / "wd")) as iso:
+            planted = os.path.join(iso.claude_root, "keep.md")
+            with open(planted, "wb") as f:
+                f.write(b"keep\n")
+            if case == "iv-after-exit":
+                pass
+            else:
+                target = iso
+                if case == "i-marker-deleted":
+                    os.remove(iso.marker)
+                elif case == "ii-marker-changed":
+                    with open(iso.marker, "w", encoding="utf-8") as f:
+                        f.write("not-the-token")
+                elif case == "iii-forged-namespace":
+                    target = types.SimpleNamespace(workdir=iso.workdir, home=iso.home, claude_root=iso.claude_root,
+                                                   marker=iso.marker, token=iso.token)
+                elif case == "v-env-moved":
+                    other = tmp_path / "other-home"
+                    other.mkdir()
+                    monkeypatch.setenv("USERPROFILE", str(other))
+                    monkeypatch.setenv("HOME", str(other))
+                else:
+                    moved = str(iso.home) + "-moved"
+                    shutil.move(str(iso.home), moved)
+                    os.symlink(moved, str(iso.home))
+                    planted = os.path.join(moved, os.path.basename(str(iso.claude_root)), "keep.md")
+                with pytest.raises(SystemExit):
+                    restore_user_layer(target)
+                assert os.path.isfile(planted), case
+        if case == "iv-after-exit":
+            with pytest.raises(SystemExit):
+                restore_user_layer(iso)
+            assert os.path.isfile(planted), case
+
+    def test_t146_52_main_enters_isolation_before_install(self, tmp_path, monkeypatch):
+        """T146-52(behavior-red):main 在呼叫 install.main 之前已進入隔離 —— 假 install.main 記到的 expanduser / 兩變數 ==
+        <wd>/home、current_isolation() 非 None;_Stop 外傳後 environ 還原、current 為 None。
+        BASELINE 紅因:main 沒有隔離,記到的是真實家目錄。"""
+        wd = tmp_path / "wd"
+        wd.mkdir()
+        seen = {}
+
+        def fake_main(target):
+            seen["home"] = os.path.expanduser("~")
+            seen["USERPROFILE"] = os.environ.get("USERPROFILE")
+            seen["HOME"] = os.environ.get("HOME")
+            cur = getattr(vg, "current_isolation", None)
+            seen["active"] = bool(cur and cur() is not None)
+            raise _T146Stop()
+        monkeypatch.setattr(vg.install, "main", fake_main)
+        env = dict(os.environ)
+        with pytest.raises(_T146Stop):
+            vg.main(str(wd))
+        want = _t146_norm(wd / "home")
+        assert _t146_norm(seen["home"]) == want, seen
+        assert _t146_norm(seen["USERPROFILE"]) == want and _t146_norm(seen["HOME"]) == want, seen
+        assert seen["active"] is True, seen
+        assert dict(os.environ) == env
+        assert getattr(vg, "current_isolation")() is None
+
+    def test_t146_52b_main_loads_target_gate_inside_isolation(self, tmp_path, monkeypatch):
+        """T146-52b(behavior-red):load_target_gate 在隔離內被呼叫(expanduser == <wd>/home)。
+        BASELINE 紅因:main 沒有隔離。"""
+        wd = tmp_path / "wd"
+        wd.mkdir()
+        seen = {}
+
+        def fake_main(target):
+            os.makedirs(os.path.join(target, ".git", "hooks"))
+            with open(os.path.join(target, ".git", "hooks", "pre-commit"), "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\npython .claude/portable/leak_scan.py --staged\n")
+            with open(os.path.join(target, ".gitignore"), "w", encoding="utf-8") as f:
+                f.write("\n".join(list(_install.GITIGNORE_FRAMEWORK) + list(_install.GITIGNORE_SECRETS)) + "\n")
+
+        def fake_load(target):
+            seen["home"] = os.path.expanduser("~")
+            raise _T146Stop()
+        monkeypatch.setattr(vg.install, "main", fake_main)
+        monkeypatch.setattr(vg, "load_target_gate", fake_load)
+        with pytest.raises(_T146Stop):
+            vg.main(str(wd))
+        assert _t146_norm(seen["home"]) == _t146_norm(wd / "home"), seen
+
+    @pytest.mark.parametrize("case", ["no-marker", "marker-without-context"])
+    def test_t146_53_scenario_r10_refuses_without_active_context(self, tmp_path, monkeypatch, case):
+        """T146-53(behavior-red):沒有有效 context(即使 marker 檔存在)⇒ scenario_r10 SystemExit,假家目錄只有預置物。
+        BASELINE 紅因:`vg.scenario_r10` 不存在。"""
+        scenario_r10 = getattr(vg, "scenario_r10")
+        fake = tmp_path / "fakehome"
+        (fake / ".claude").mkdir(parents=True)
+        if case == "marker-without-context":
+            (fake / getattr(vg, "ISOLATION_MARKER")).write_bytes(b"forged-token")
+        monkeypatch.setenv("USERPROFILE", str(fake))
+        monkeypatch.setenv("HOME", str(fake))
+        target = tmp_path / "target"
+        (target / ".dev").mkdir(parents=True)
+        snap = _t146_tree(fake)
+        with pytest.raises(SystemExit):
+            scenario_r10(str(target))
+        assert _t146_tree(fake) == snap, case
+
+    def test_t146_53b_scenario_r10_plants_exactly_two_entries(self, tmp_path):
+        """T146-53b(behavior-red):隔離 context 內 scenario_r10 回 None;claude_root 下恰好兩個 regular file(內容如契約);
+        trigger 檔存在;stage 為 implement。BASELINE 紅因:`vg.scenario_r10` 不存在。"""
+        import json
+        scenario_r10 = getattr(vg, "scenario_r10")
+        isolated_home = getattr(vg, "isolated_home")
+        target = tmp_path / "target"
+        (target / ".dev").mkdir(parents=True)
+        (tmp_path / "wd").mkdir()
+        with isolated_home(str(tmp_path / "wd")) as iso:
+            assert scenario_r10(str(target)) is None
+            files = []
+            for dirpath, _d, filenames in os.walk(iso.claude_root):
+                for f in filenames:
+                    files.append(os.path.relpath(os.path.join(dirpath, f), iso.claude_root).replace(os.sep, "/"))
+            assert sorted(files) == ["skills/synced/.bucket-vgbucket", "skills/synced/vgbucket/SKILL.md"], files
+            with open(os.path.join(iso.claude_root, "skills", "synced", "vgbucket", "SKILL.md"), encoding="utf-8") as f:
+                assert f.read() == "# verify_gates r10\n"
+            with open(os.path.join(iso.claude_root, "skills", "synced", ".bucket-vgbucket"), encoding="utf-8") as f:
+                assert f.read() == "vgbucket\n"
+        assert (target / "docs" / "adr" / "verify-trigger.md").is_file()
+        stage = json.loads((target / ".dev" / "pipeline.json").read_text(encoding="utf-8"))["current_stage"]
+        assert stage == "implement", stage
+
+    def test_t146_54_r10_wiring_tables(self):
+        """T146-54(behavior-red):SCENARIOS / EXPECTED_REASON / EXPECTED_MARKER / PRECONTROL 的 R10 接線;R1–R9 不在 EXPECTED_MARKER。
+        BASELINE 紅因:`vg.scenario_r10` 等名稱不存在。"""
+        scenario_r10 = getattr(vg, "scenario_r10")
+        precontrol_r10 = getattr(vg, "precontrol_r10")
+        assert vg.SCENARIOS["R10"] is scenario_r10
+        assert getattr(vg, "EXPECTED_REASON")["R10"] == u"未受管入口：synced（額外 2"
+        marker = getattr(vg, "EXPECTED_MARKER")
+        assert marker["R10"] == "[R10/fail-closed]"
+        assert not [c for c in ("R%d" % i for i in range(1, 10)) if c in marker], sorted(marker)
+        assert getattr(vg, "PRECONTROL")["R10"] is precontrol_r10
+
+    @pytest.mark.parametrize("case", ["a-precontrol-blocked", "b-r10-blocked-right-reason", "c-r10-wrong-reason",
+                                      "d-r4-generic", "e-r10-bare-code", "f-r10-other-subtag"])
+    def test_t146_55_run_scenario_requires_code_reason_and_precontrol(self, tmp_path, monkeypatch, case):
+        """T146-55(behavior-red):正控未放行 ⇒ (False, 「正控未放行」) 且情境不跑;R10 必須同時含 "[R10/fail-closed]"
+        與指定原因(只有 "[R10]" 或其他 "[R10/…]" ⇒ False);R1–R9 保留原代號判定;R10 成立時以傳入 iso 清理恰好一次。
+        BASELINE 紅因:`run_scenario` 沒有 iso 參數、沒有 PRECONTROL / restore_user_layer。"""
+        import types
+        target = tmp_path / "target"
+        (target / ".dev").mkdir(parents=True)
+        code = "R4" if case == "d-r4-generic" else "R10"
+        commits = {
+            "a-precontrol-blocked": [(1, "pre-control blocked")],
+            "b-r10-blocked-right-reason": [(0, ""), (1, _T146_R10_OUT)],
+            "c-r10-wrong-reason": [(0, ""), (1, u"[R10/fail-closed] claude_root 無法確定")],
+            "d-r4-generic": [(1, u"[R4] 鏡像缺少 x")],
+            "e-r10-bare-code": [(0, ""), (1, u"[R10] 未受管入口：synced（額外 2 / 缺少 0 / 內容不符 0）")],
+            "f-r10-other-subtag": [(0, ""), (1, u"[R10/shadow] 未受管入口：synced（額外 2 / 缺少 0 / 內容不符 0）")],
+        }[case]
+        cleaned, ran = [], []
+
+        def fake_sh(args, cwd, check=True):
+            if len(args) > 1 and args[1] == "commit":
+                return commits.pop(0)
+            return 0, ""
+        monkeypatch.setattr(vg, "sh", fake_sh)
+        monkeypatch.setattr(vg, "restore", lambda t: None)
+        monkeypatch.setattr(vg, "restore_user_layer", lambda iso: cleaned.append(iso))
+        monkeypatch.setitem(vg.PRECONTROL, "R10", lambda t: None)
+        monkeypatch.setitem(vg.SCENARIOS, code, lambda t: ran.append(t))
+        iso = types.SimpleNamespace(tag="t146-55") if code == "R10" else None
+        blocked, out = vg.run_scenario(str(target), code, iso=iso)
+        if case == "a-precontrol-blocked":
+            assert blocked is False and u"正控未放行" in out, out
+            assert ran == [], ran
+        elif case == "b-r10-blocked-right-reason":
+            assert blocked is True and _T146_R10_OUT in out, out
+            assert cleaned == [iso], cleaned
+        elif case == "d-r4-generic":
+            assert blocked is True, out
+        else:
+            assert blocked is False, (case, out)

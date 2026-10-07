@@ -6952,3 +6952,207 @@ class TestTicket146SyncedGovernance:
         assert log.exists(), err
         recs = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
         assert any(r.get("rule") == "R10" for r in recs), recs
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 票 146 第三站 3g 紅燈(S3g-146-1)—— policy-only commit 的 index 通道(H-6)
+#
+# 契約在票 146〈3g 契約與紅燈〉。沿用 TestTicket146Integration 的 `_root` / `_load` / `_wire`
+# (只呼叫、不修改);claude_root 為 tmp 的有效空目錄(T146-69 例外:不存在)。缺 API ⇒ 測試內紅。
+# ══════════════════════════════════════════════════════════════════════════
+
+_PO_ALLOW = ".agents/extension-allowlist.json"
+_PO_INV = ".agents/extension-inventory.json"
+
+
+def _po_git(root, *args, **kw):
+    return subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True, **kw)
+
+
+def _po_write(root, rel, text):
+    with io.open(str(root / rel), "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
+def _po_inventory_text(entries=(), indent=2):
+    doc = {"schema": "monkeyleash.extension-inventory", "version": 1,
+           "entries": [{"path": p, "sha256": s, "note": "t146-po"} for p, s in entries]}
+    return json.dumps(doc, ensure_ascii=False, indent=indent) + "\n"
+
+
+def _po_plant(claude):
+    base = claude / "skills" / "synced"
+    (base / "vgbucket").mkdir(parents=True)
+    skill, marker = b"# verify_gates r10\n", b"vgbucket\n"
+    (base / "vgbucket" / "SKILL.md").write_bytes(skill)
+    (base / ".bucket-vgbucket").write_bytes(marker)
+    return [("skills/.bucket-<bucket>", hashlib.sha256(marker).hexdigest()),
+            ("skills/<bucket>/SKILL.md", hashlib.sha256(skill).hexdigest())]
+
+
+def _po_staged(root):
+    return [n for n in _po_git(root, "diff", "--cached", "--name-only").stdout.decode("utf-8").split("\n") if n]
+
+
+class TestTicket146PolicyOnlyLane:
+    """票 146 3g:staged 集合全屬兩個 canonical policy 路徑 ⇒ 兩份 policy 都從 index 讀,候選 policy 對現場須 DECLARED_OK。"""
+
+    @staticmethod
+    def _setup(tmp_path, monkeypatch, tag, claude_override=None, shadow=False):
+        root, claude = TestTicket146Integration()._root(tmp_path)
+        mod = TestTicket146Integration._load(root, "po_" + tag)
+        TestTicket146Integration._wire(monkeypatch, mod, claude_override if claude_override is not None else claude,
+                                       shadow=shadow)
+        return root, claude, mod
+
+    @staticmethod
+    def _check(mod, names):
+        return getattr(mod, "check_extension_integrity")(staged_names=names)
+
+    @pytest.mark.parametrize("names, want", [
+        ([], False),
+        ([_PO_ALLOW], True),
+        ([_PO_INV], True),
+        ([_PO_ALLOW, _PO_INV], True),
+        ([_PO_ALLOW, _PO_INV, "x.py"], False),
+        (["x.py"], False),
+        (["docs/a.md", _PO_ALLOW], False),
+    ], ids=["empty", "allowlist", "inventory", "both", "both-plus-x", "x-only", "docs-plus-allowlist"])
+    def test_t146_61_policy_only_predicate(self, names, want):
+        """T146-61(behavior-red):names 非空且 ⊆ 兩個 canonical 路徑才為真。BASELINE 紅因:`gate.extension_policy_only_commit` 不存在。"""
+        assert getattr(gate, "extension_policy_only_commit")(names) is want, names
+
+    def test_t146_62_staged_names_all_includes_deletions(self, tmp_path):
+        """T146-62(behavior-red):`_staged_names_all()` 含刪除、修改、新增,POSIX 分隔。BASELINE 紅因:函式不存在。"""
+        root, _claude = TestTicket146Integration()._root(tmp_path)
+        mod = TestTicket146Integration._load(root, "po_62")
+        fn = getattr(mod, "_staged_names_all")
+        (root / "a.txt").write_bytes(b"a\n")
+        (root / "sub").mkdir()
+        (root / "sub" / "b.txt").write_bytes(b"b\n")
+        _po_git(root, "add", "a.txt", "sub/b.txt")
+        _po_git(root, "commit", "-q", "-m", "ab")
+        _po_git(root, "rm", "-q", "--cached", "a.txt")
+        (root / "sub" / "b.txt").write_bytes(b"b2\n")
+        (root / "c.txt").write_bytes(b"c\n")
+        _po_git(root, "add", "sub/b.txt", "c.txt")
+        got = fn()
+        assert {"a.txt", "sub/b.txt", "c.txt"} <= set(got), got
+        assert not [n for n in got if "\\" in n], got
+
+    def test_t146_63_index_valid_worktree_dirty_passes(self, tmp_path, monkeypatch):
+        """T146-63(behavior-red):stage 合法空 inventory 後 worktree 改成垃圾 ⇒ 放行、policy_source "index"。
+        BASELINE 紅因:`gate._extension_claude_root` / `check_extension_integrity` 不存在。"""
+        root, _claude, mod = self._setup(tmp_path, monkeypatch, "63")
+        _po_write(root, _PO_INV, _po_inventory_text())
+        _po_git(root, "add", _PO_INV)
+        _po_write(root, _PO_INV, u"{garbage")
+        res = self._check(mod, [_PO_INV])
+        assert res["hard_block"] is None, res["hard_block"]
+        assert res["violations"] == [] and res["policy_source"] == "index", res
+
+    def test_t146_64_index_invalid_worktree_valid_blocks(self, tmp_path, monkeypatch):
+        """T146-64(behavior-red):stage 垃圾 inventory、worktree 合法 ⇒ 硬擋含 "[R10/fail-closed]"、"policy-only commit"、
+        "policy_source=index"、"malformed"。BASELINE 紅因:同 T146-63。"""
+        root, _claude, mod = self._setup(tmp_path, monkeypatch, "64")
+        _po_write(root, _PO_INV, u"{garbage")
+        _po_git(root, "add", _PO_INV)
+        _po_write(root, _PO_INV, _po_inventory_text())
+        hb = self._check(mod, [_PO_INV])["hard_block"] or ""
+        for needle in ("[R10/fail-closed]", "policy-only commit", "policy_source=index", "malformed"):
+            assert needle in hb, (needle, hb)
+
+    def test_t146_65_index_policy_not_matching_live_facts_blocks(self, tmp_path, monkeypatch):
+        """T146-65(behavior-red):stage 多登記一筆磁碟沒有的 ⇒ 「staged policy 對現場不成立」與「缺少 1」。BASELINE 紅因:同 T146-63。"""
+        root, _claude, mod = self._setup(tmp_path, monkeypatch, "65")
+        _po_write(root, _PO_INV, _po_inventory_text([("skills/<bucket>/ghost.md", "a" * 64)]))
+        _po_git(root, "add", _PO_INV)
+        hb = self._check(mod, [_PO_INV])["hard_block"] or ""
+        assert u"staged policy 對現場不成立" in hb and u"缺少 1" in hb, hb
+
+    @pytest.mark.parametrize("rel", [_PO_ALLOW, _PO_INV], ids=["allowlist", "inventory"])
+    def test_t146_66_staged_deletion_blocks(self, tmp_path, monkeypatch, rel):
+        """T146-66(behavior-red):git rm --cached 其中一份 ⇒ 硬擋含 "index_missing"。BASELINE 紅因:同 T146-63。"""
+        root, _claude, mod = self._setup(tmp_path, monkeypatch, "66")
+        _po_git(root, "rm", "-q", "--cached", rel)
+        hb = self._check(mod, [rel])["hard_block"] or ""
+        assert "index_missing" in hb and "policy_source=index" in hb, hb
+
+    def test_t146_66b_index_conflict_blocks(self, tmp_path, monkeypatch):
+        """T146-66b(behavior-red):allowlist 在 index 有 stage 1/2/3 ⇒ 硬擋含 "index_conflict"。BASELINE 紅因:同 T146-63。"""
+        root, _claude, mod = self._setup(tmp_path, monkeypatch, "66b")
+        text = json.dumps(TestTicket146Integration._ALLOWLIST, ensure_ascii=False, indent=2) + "\n"
+        blob = _po_git(root, "hash-object", "-w", "--stdin", input=text.encode("utf-8")).stdout.decode().strip()
+        info = "0 %s\t%s\n" % ("0" * 40, _PO_ALLOW)
+        info += "".join("100644 %s %d\t%s\n" % (blob, st, _PO_ALLOW) for st in (1, 2, 3))
+        _po_git(root, "update-index", "--index-info", input=info.encode("utf-8"))
+        hb = self._check(mod, [_PO_ALLOW])["hard_block"] or ""
+        assert "index_conflict" in hb, hb
+
+    def test_t146_66c_only_one_policy_staged_reads_both_from_index(self, tmp_path, monkeypatch):
+        """T146-66c(behavior-red):只 stage 合法 allowlist ⇒ 放行、"index",且 inventory 也從 index 讀(blob == :<inventory>)。
+        BASELINE 紅因:同 T146-63。"""
+        root, _claude, mod = self._setup(tmp_path, monkeypatch, "66c")
+        _po_write(root, _PO_ALLOW, json.dumps(TestTicket146Integration._ALLOWLIST, ensure_ascii=False, indent=4) + "\n")
+        _po_git(root, "add", _PO_ALLOW)
+        assert _po_staged(root) == [_PO_ALLOW], _po_staged(root)
+        res = self._check(mod, [_PO_ALLOW])
+        assert res["hard_block"] is None and res["policy_source"] == "index", res
+        staged_inv = _po_git(root, "rev-parse", ":" + _PO_INV).stdout.decode().strip()
+        assert res["report"]["inventory"]["blob"] == staged_inv, (res["report"]["inventory"], staged_inv)
+
+    def test_t146_67_mixed_commit_uses_head(self, tmp_path, monkeypatch):
+        """T146-67(behavior-red):claude_root 有 bucket 兩筆;stage 含那兩筆的合法 inventory **且** stage x.py ⇒ "head"、
+        硬擋含「額外 2」(HEAD 的 inventory 是空的)。BASELINE 紅因:同 T146-63。"""
+        root, claude, mod = self._setup(tmp_path, monkeypatch, "67")
+        entries = _po_plant(claude)
+        _po_write(root, _PO_INV, _po_inventory_text(entries))
+        (root / "x.py").write_bytes(b"x = 1\n")
+        _po_git(root, "add", _PO_INV, "x.py")
+        res = self._check(mod, _po_staged(root))
+        assert res["policy_source"] == "head", res
+        assert u"額外 2" in (res["hard_block"] or ""), res["hard_block"]
+
+    def test_t146_68_after_approval_normal_commit_returns_to_head_path(self, tmp_path, monkeypatch):
+        """T146-68(behavior-red):只 stage inventory ⇒ 放行、"index";提交後 stage x.py ⇒ "head"、放行、violations []。
+        BASELINE 紅因:同 T146-63。"""
+        root, claude, mod = self._setup(tmp_path, monkeypatch, "68")
+        entries = _po_plant(claude)
+        _po_write(root, _PO_INV, _po_inventory_text(entries))
+        _po_git(root, "add", _PO_INV)
+        res = self._check(mod, _po_staged(root))
+        assert res["hard_block"] is None and res["policy_source"] == "index", res
+        _po_git(root, "commit", "-q", "-m", "approve inventory (t146-68)")
+        (root / "x.py").write_bytes(b"x = 1\n")
+        _po_git(root, "add", "x.py")
+        res = self._check(mod, _po_staged(root))
+        assert res["policy_source"] == "head", res
+        assert res["hard_block"] is None and res["violations"] == [], res
+
+    def test_t146_69_observation_failure_still_blocks_in_lane(self, tmp_path, monkeypatch):
+        """T146-69(behavior-red):claude_root 不存在 + 只 stage 合法 inventory ⇒ 硬擋含 "claude_root_invalid" 與
+        "policy_source=index";判定器 0 次。BASELINE 紅因:同 T146-63。"""
+        root, _claude, mod = self._setup(tmp_path, monkeypatch, "69", claude_override=tmp_path / "no-such-claude-root")
+        rl = mod._redlight()
+        calls = []
+        orig = getattr(rl, "_extension_first_reason")
+
+        def counting(*a, **k):
+            calls.append(1)
+            return orig(*a, **k)
+        monkeypatch.setattr(rl, "_extension_first_reason", counting)
+        _po_write(root, _PO_INV, _po_inventory_text())
+        _po_git(root, "add", _PO_INV)
+        hb = self._check(mod, [_PO_INV])["hard_block"] or ""
+        assert "claude_root_invalid" in hb and "policy_source=index" in hb, hb
+        assert calls == [], calls
+
+    def test_t146_70_pre_commit_lane_hard_block_not_shadow_exempt(self, tmp_path, monkeypatch, capsys):
+        """T146-70(behavior-red):影子開;stage 垃圾 allowlist ⇒ mode_pre_commit() == 1、stderr 含
+        "[R10/fail-closed] policy-only commit"。BASELINE 紅因:同 T146-63。"""
+        root, _claude, mod = self._setup(tmp_path, monkeypatch, "70", shadow=True)
+        _po_write(root, _PO_ALLOW, u"{garbage")
+        _po_git(root, "add", _PO_ALLOW)
+        rc, err = TestTicket146Integration._run(mod, capsys)
+        assert rc == 1, err
+        assert "[R10/fail-closed] policy-only commit" in err, err

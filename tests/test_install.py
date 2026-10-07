@@ -485,19 +485,27 @@ _G_TEST_X = ("tests/test_x.py::test_a", "tests/test_x.py::test_b")
 
 @pytest.fixture(scope="module")
 def g3_installed_repo(tmp_path_factory):
-    """`install.main(<tmp>/repo)` 裝好的新 repo(真安裝)。回傳 repo 路徑(pathlib.Path)。"""
+    """`install.main(<tmp>/repo)` 裝好的新 repo(真安裝)。產出 repo 路徑(pathlib.Path)。
+
+    票 146 3g(G-1 / H-6 隔離契約第 3 點):USERPROFILE 與 HOME 在 `install.main` **之前**指到 tmp 家目錄
+    (含空的 `.claude`),並涵蓋整個 module 的使用期 —— 後續 node 仍會呼叫安裝目標的 gate。
+    真實使用者層因此不被讀寫。"""
     import sys
     target = tmp_path_factory.mktemp("g3-install") / "repo"
+    home = tmp_path_factory.mktemp("g3-home")
+    (home / ".claude").mkdir()
     mp = pytest.MonkeyPatch()
     try:
+        mp.setenv("USERPROFILE", str(home))
+        mp.setenv("HOME", str(home))
         mp.setattr(sys, "path", list(sys.path))
         if "gate" in sys.modules:
             mp.setitem(sys.modules, "gate", sys.modules["gate"])
         mod = _load("install_for_g3_template", "install.py")
         mod.main(str(target))
+        yield target
     finally:
         mp.undo()
-    return target
 
 
 def _g_load_from(path, name):
@@ -666,3 +674,272 @@ class TestEvidencePolicyTemplate:
         body = path.read_text(encoding="utf-8")
         assert "evidence policy" in body.lower(), body
         assert _G_POLICY_FILE in body, body
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 146 第三站 3g 紅燈(S3g-146-1)—— 安裝器最小 policy(G-2)、R10 演習(G-3)、policy-only 通道(H-6)
+#
+# 契約在票 146〈3g 契約與紅燈〉。全部經 `g3_installed_repo`(USERPROFILE / HOME 已指到 tmp 家目錄);
+# 會改目標狀態的 node 進入時記 SHA,finally `git reset --hard` 回去並清掉自己放的檔。
+# 寫入家目錄前一律先確認它是隔離出來的 tmp(`_t146_isolated_claude_root`),否則拒絕。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_T146_ALLOW = ".agents/extension-allowlist.json"
+_T146_INV = ".agents/extension-inventory.json"
+_T146_HOOK = 'python "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py"'
+_T146_ALLOW_KEYS = {"schema", "version", "dev_mod_files", "user_skill_plugins", "user_commands",
+                    "project_settings_hook_commands", "mcp_json_servers"}
+_T146_TRIGGER = "docs/adr/verify-trigger.md"
+
+
+def _t146_git(root, *args, **kw):
+    import subprocess
+    return subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, **kw)
+
+
+def _t146_isolated_claude_root():
+    """隔離出來的 `<home>/.claude`。家目錄不是 `g3_installed_repo` 的 tmp ⇒ 拒絕(不碰真實使用者層)。"""
+    import pathlib
+    home = os.path.expanduser("~")
+    assert os.environ.get("USERPROFILE") == home and os.environ.get("HOME") == home, \
+        "USERPROFILE / HOME / expanduser 不一致 —— 拒絕寫入家目錄"
+    assert os.path.basename(home).startswith("g3-home"), "家目錄沒有隔離 —— 拒絕碰真實使用者層"
+    return pathlib.Path(home) / ".claude"
+
+
+def _t146_hook_commands(settings_path):
+    """settings.json 的 hooks 內全部 command 字串(出現順序、去重)。"""
+    import json
+    with open(str(settings_path), encoding="utf-8") as f:
+        doc = json.load(f)
+    out = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == "command" and isinstance(v, str):
+                    if v not in out:
+                        out.append(v)
+                else:
+                    walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+    walk(doc.get("hooks"))
+    return out
+
+
+def _t146_set_stage(root, stage):
+    import json
+    with open(str(root / ".dev" / "pipeline.json"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps({"current_stage": stage, "feature": "t146", "ticket_id": None, "updated": ""},
+                           ensure_ascii=False, indent=2) + "\n")
+
+
+def _t146_write_trigger(root):
+    p = root / _T146_TRIGGER
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes("觸發一次 commit 用(t146)\n".encode("utf-8"))
+    return p
+
+
+def _t146_pre_commit(root):
+    import subprocess
+    import sys
+    p = subprocess.run([sys.executable, os.path.join(".claude", "hooks", "gate.py"), "--pre-commit"],
+                       cwd=str(root), capture_output=True)
+    return p.returncode, (p.stdout + p.stderr).decode("utf-8", "replace")
+
+
+def _t146_plant_bucket(claude_root):
+    """在隔離 claude_root/skills/synced 放合法 bucket + marker 兩筆;回 {邏輯路徑: sha256}。"""
+    import hashlib
+    base = claude_root / "skills" / "synced"
+    (base / "vgbucket").mkdir(parents=True)
+    skill = b"# verify_gates r10\n"
+    marker = b"vgbucket\n"
+    (base / "vgbucket" / "SKILL.md").write_bytes(skill)
+    (base / ".bucket-vgbucket").write_bytes(marker)
+    return {"skills/<bucket>/SKILL.md": hashlib.sha256(skill).hexdigest(),
+            "skills/.bucket-<bucket>": hashlib.sha256(marker).hexdigest()}
+
+
+def _t146_unplant(claude_root):
+    import shutil
+    if (claude_root / "skills").exists():
+        shutil.rmtree(str(claude_root / "skills"))
+
+
+def _t146_dump(doc):
+    import json
+    return (json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+
+class TestTicket146InstallPolicy:
+    """票 146 3g:安裝器寫最小 policy 並隨第一個安裝 commit 進 HEAD;R10 演習;policy-only 通道。"""
+
+    def test_t146_56_install_commits_minimal_policy(self, g3_installed_repo):
+        """T146-56(behavior-red):兩份 canonical policy 存在、tracked、HEAD blob == 工作樹;inventory 為合法空;
+        allowlist 七鍵、四個 list 欄位為 []、hook 清單 == 目標 settings.json 的 command;無 BOM、無 CR、單一 LF。
+        BASELINE 紅因:安裝器不寫這兩份檔(`install.write_extension_policy` 不存在)。"""
+        import json
+        root = g3_installed_repo
+        for rel in (_T146_ALLOW, _T146_INV):
+            assert (root / rel).is_file(), "安裝器沒有寫 %s" % rel
+        tracked = _t146_git(root, "ls-files", check=True).stdout.decode("utf-8").split("\n")
+        for rel in (_T146_ALLOW, _T146_INV):
+            assert rel in tracked, (rel, "沒有進 HEAD")
+            head = _t146_git(root, "rev-parse", "HEAD:" + rel, check=True).stdout.decode().strip()
+            wt = _t146_git(root, "hash-object", rel, check=True).stdout.decode().strip()
+            assert head == wt, (rel, head, wt)
+            raw = (root / rel).read_bytes()
+            assert not raw.startswith(b"\xef\xbb\xbf") and b"\r" not in raw, rel
+            assert raw.endswith(b"\n") and not raw.endswith(b"\n\n"), rel
+        inv = json.loads((root / _T146_INV).read_text(encoding="utf-8"))
+        assert inv == {"schema": "monkeyleash.extension-inventory", "version": 1, "entries": []}, inv
+        allow = json.loads((root / _T146_ALLOW).read_text(encoding="utf-8"))
+        assert set(allow) == _T146_ALLOW_KEYS, sorted(allow)
+        assert allow["schema"] == "monkeyleash.extension-allowlist" and allow["version"] == 1, allow
+        for k in ("dev_mod_files", "user_skill_plugins", "user_commands", "mcp_json_servers"):
+            assert allow[k] == [], (k, allow[k])
+        hooks = _t146_hook_commands(root / ".claude" / "settings.json")
+        assert allow["project_settings_hook_commands"] == hooks == [_T146_HOOK], (allow, hooks)
+
+    def test_t146_57_decisions_pending_names_installer_policy(self, g3_installed_repo):
+        """T146-57(behavior-red):decisions-pending 點名兩個 policy 路徑並寫「未登記任何使用者擴充」。
+        BASELINE 紅因:待決項沒有這一段。"""
+        body = (g3_installed_repo / "docs" / "decisions-pending.md").read_text(encoding="utf-8")
+        assert _T146_ALLOW in body and _T146_INV in body, body
+        assert u"未登記任何使用者擴充" in body, body
+
+    @pytest.mark.parametrize("case", ["a-none", "b-valid-both", "c-only-allowlist", "d-allowlist-schema",
+                                      "e-inventory-entry-invalid"])
+    def test_t146_58_write_extension_policy_keeps_valid_refuses_partial_or_invalid(self, install_mod, tmp_path, case):
+        """T146-58(behavior-red):都不存在 ⇒ 產生;兩份合法 ⇒ 保留不覆寫;只有一份 / 任一不合法 ⇒ SystemExit、不寫任何檔。
+        BASELINE 紅因:`install.write_extension_policy` 不存在(AttributeError)。"""
+        import json
+        import shutil
+        fn = getattr(install_mod, "write_extension_policy")
+        target = tmp_path / "target"
+        (target / ".claude" / "hooks").mkdir(parents=True)
+        (target / ".agents").mkdir()
+        src_root = os.path.join(HERE, "..")
+        shutil.copy2(os.path.join(src_root, ".claude", "hooks", "redlight.py"),
+                     str(target / ".claude" / "hooks" / "redlight.py"))
+        shutil.copy2(os.path.join(src_root, ".claude", "settings.json"), str(target / ".claude" / "settings.json"))
+        allow_p, inv_p = target / _T146_ALLOW, target / _T146_INV
+        good_allow = {"schema": "monkeyleash.extension-allowlist", "version": 1, "dev_mod_files": [],
+                      "user_skill_plugins": [], "user_commands": [],
+                      "project_settings_hook_commands": [_T146_HOOK], "mcp_json_servers": []}
+        good_inv = {"schema": "monkeyleash.extension-inventory", "version": 1,
+                    "entries": [{"path": "skills/<bucket>/SKILL.md", "sha256": "a" * 64, "note": "t146"}]}
+        if case == "a-none":
+            res = fn(str(target))
+            assert res[2] is True, res
+            assert json.loads(inv_p.read_text(encoding="utf-8")) == \
+                {"schema": "monkeyleash.extension-inventory", "version": 1, "entries": []}
+            allow = json.loads(allow_p.read_text(encoding="utf-8"))
+            assert set(allow) == _T146_ALLOW_KEYS and allow["project_settings_hook_commands"] == [_T146_HOOK], allow
+            for p in (allow_p, inv_p):
+                raw = p.read_bytes()
+                assert b"\r" not in raw and raw.endswith(b"\n") and not raw.endswith(b"\n\n"), p
+            return
+        if case == "b-valid-both":
+            allow_p.write_bytes(_t146_dump(good_allow))
+            inv_p.write_bytes(_t146_dump(good_inv))
+            before = (allow_p.read_bytes(), inv_p.read_bytes())
+            res = fn(str(target))
+            assert res[2] is False, res
+            assert (allow_p.read_bytes(), inv_p.read_bytes()) == before
+            return
+        if case == "c-only-allowlist":
+            allow_p.write_bytes(_t146_dump(good_allow))
+        elif case == "d-allowlist-schema":
+            bad = dict(good_allow, schema="wrong.schema")
+            allow_p.write_bytes(_t146_dump(bad))
+            inv_p.write_bytes(_t146_dump(good_inv))
+        else:
+            bad_inv = dict(good_inv, entries=[{"path": "skills/x", "sha256": "a" * 64, "note": "t146"}])
+            allow_p.write_bytes(_t146_dump(good_allow))
+            inv_p.write_bytes(_t146_dump(bad_inv))
+        before = {p: p.read_bytes() for p in (allow_p, inv_p) if p.exists()}
+        with pytest.raises(SystemExit):
+            fn(str(target))
+        after = {p: p.read_bytes() for p in (allow_p, inv_p) if p.exists()}
+        assert after == before, case
+
+    def test_t146_59_installed_repo_precommit_passes_under_empty_isolated_home(self, g3_installed_repo):
+        """T146-59(正控;BASELINE **綠**):隔離家目錄為空時,安裝出來的 repo 的 pre-commit 放行,且不含 "[R10"。"""
+        root = g3_installed_repo
+        claude_root = _t146_isolated_claude_root()
+        assert not any(claude_root.iterdir()), "隔離 claude_root 不是空的"
+        sha = _t146_git(root, "rev-parse", "HEAD", check=True).stdout.decode().strip()
+        trigger = None
+        try:
+            _t146_set_stage(root, "implement")
+            trigger = _t146_write_trigger(root)
+            _t146_git(root, "add", _T146_TRIGGER, check=True)
+            rc, out = _t146_pre_commit(root)
+            assert rc == 0, out
+            assert "[R10" not in out, out
+        finally:
+            _t146_git(root, "reset", "-q", "--hard", sha)
+            if trigger is not None and trigger.exists():
+                trigger.unlink()
+
+    def test_t146_60_installed_repo_blocks_unregistered_synced_bucket(self, g3_installed_repo):
+        """T146-60(behavior-red):隔離 claude_root 放 bucket + marker 兩筆 ⇒ rc 1、"[R10/fail-closed]"、
+        「未受管入口：synced（額外 2」。BASELINE 紅因:R10 未接線,pre-commit 放行(rc 0)。"""
+        root = g3_installed_repo
+        claude_root = _t146_isolated_claude_root()
+        sha = _t146_git(root, "rev-parse", "HEAD", check=True).stdout.decode().strip()
+        trigger = None
+        try:
+            _t146_plant_bucket(claude_root)
+            _t146_set_stage(root, "implement")
+            trigger = _t146_write_trigger(root)
+            _t146_git(root, "add", _T146_TRIGGER, check=True)
+            rc, out = _t146_pre_commit(root)
+            assert rc == 1, out
+            assert "[R10/fail-closed]" in out and u"未受管入口：synced（額外 2" in out, out
+        finally:
+            _t146_unplant(claude_root)
+            _t146_git(root, "reset", "-q", "--hard", sha)
+            if trigger is not None and trigger.exists():
+                trigger.unlink()
+
+    def test_t146_60b_policy_only_approval_then_normal_commit_passes(self, g3_installed_repo):
+        """T146-60b(behavior-red):獨立佈置兩筆;inventory 寫成那兩筆、**只** stage inventory(trigger 不存在)
+        ⇒ pre-commit rc 0 且含 "policy_source=index";走 hook 提交;再 stage trigger ⇒ rc 0、不含 "policy_source=index"。
+        BASELINE 紅因:沒有 policy-only 通道,輸出不含 "policy_source=index"。"""
+        root = g3_installed_repo
+        claude_root = _t146_isolated_claude_root()
+        sha = _t146_git(root, "rev-parse", "HEAD", check=True).stdout.decode().strip()
+        trigger = root / _T146_TRIGGER
+        try:
+            planted = _t146_plant_bucket(claude_root)
+            _t146_set_stage(root, "implement")
+            inv = {"schema": "monkeyleash.extension-inventory", "version": 1,
+                   "entries": [{"path": p, "sha256": s, "note": "t146-60b"} for p, s in sorted(planted.items())]}
+            inv_path = root / _T146_INV
+            inv_path.parent.mkdir(parents=True, exist_ok=True)
+            inv_path.write_bytes(_t146_dump(inv))
+            _t146_git(root, "add", _T146_INV, check=True)
+            staged = [n for n in _t146_git(root, "diff", "--cached", "--name-only", check=True)
+                      .stdout.decode("utf-8").split("\n") if n]
+            assert staged == [_T146_INV], staged
+            assert not trigger.exists(), "trigger 此時不得存在"
+            rc, out = _t146_pre_commit(root)
+            assert rc == 0, out
+            assert "policy_source=index" in out, out
+            _t146_git(root, "commit", "-q", "-m", "approve extension inventory (t146-60b)", check=True)
+            _t146_write_trigger(root)
+            _t146_git(root, "add", _T146_TRIGGER, check=True)
+            rc, out = _t146_pre_commit(root)
+            assert rc == 0, out
+            assert "policy_source=index" not in out, out
+        finally:
+            _t146_unplant(claude_root)
+            _t146_git(root, "reset", "-q", "--hard", sha)
+            if trigger.exists():
+                trigger.unlink()
