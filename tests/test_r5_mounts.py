@@ -650,6 +650,11 @@ def _wire_pre_commit(monkeypatch, root):
     monkeypatch.setattr(gate, "check_friction_numbers",
                         lambda path=None, cwd=None: [])
     monkeypatch.setattr(gate, "shadow_active", lambda: False)
+    # 票 146 R10(4b 准改第 1 項):停掉 —— 它讀使用者層與 HEAD policy,臨時 repo 兩者皆無 ⇒ 硬擋會搶走 rc。
+    # R10 真的在權威層通行路上由 tests/test_gate.py 的 TestTicket146Integration 守著。
+    monkeypatch.setattr(gate, "check_extension_integrity",
+                        lambda staged_names=None: {"hard_block": None, "violations": [],
+                                                   "report": None, "policy_source": "head"})
 
 
 class TestR5IsActuallyInvokedAtTheAuthoritativeLayer:

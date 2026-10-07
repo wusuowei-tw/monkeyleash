@@ -56,6 +56,7 @@
 | R5 | 正典 `code-review` 缺第三軸掛載點(patch 未重套)→ 擋 |
 | R6 | 紅燈豁免清單列入不在 go-live commit 樹裡的路徑 → 擋。**清單只減不增** —— 入場券是「存在於上線那一刻的樹裡」,而 agent 改不了 git 歷史(`docs/adr/0006`) |
 | R9 | 同一份 friction log 裡有兩個相同的號 → 擋。**只查重複**,不查連號(改號會留下空洞,而缺號合法)、不查格式、不查跨 repo(下游用自己的前綴,天然不衝突)。讀不到 → **fail-closed 照擋**。<br>**這一條為什麼在權威層而別的檢查不在**:零誤報(兩個一樣的號就是撞號,沒有灰色地帶)、零判斷(不必理解那兩則寫了什麼)、極便宜。**門檻不是「重要」,是「零誤報 + 零判斷 + 便宜」** —— 需要推論的檢查(例如「票面說的與實際做的一不一致」)放 lint,不放這裡:推論會錯,而錯在權威層等於擋住做對事的人,那種規則最後會被整條關掉 |
+| R10 | Claude Code 擴充入口完整性（票 146）：pre-commit 以 HEAD 的 .agents/extension-allowlist.json 與 extension-inventory.json 為唯一 authority，核對 dev-mods / 使用者 skills / commands / synced 兩根 / 專案 hook / .mcp.json 八個靜態入口。未登記 ⇒ 擋；觀測失敗、authority 缺失、synced 未納管或驗證失敗 ⇒ **fail-closed 硬擋，不受影子豁免**。只改兩份 policy 的 commit 改以 index 中的候選 policy 判定（policy-only 通道，H-6）。本規則只證明「已知靜態入口符合 committed policy」，**不證明本 session 實際載入集合**（runtime 恆 UNPROVEN）。|
 
 被擋時不要繞過(改路徑、換工具、改 pipeline.json)。跳過流程由使用者自行修改 `.dev/pipeline.json` 的 `current_stage`。
 

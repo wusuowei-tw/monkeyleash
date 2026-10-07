@@ -412,7 +412,81 @@ def write_policy_template(target):
     return dst, rl.POLICY_FILE
 
 
-def write_decisions_pending(target, buckets, carried_untracked, unmarked, policy_file=None):
+def _settings_hook_commands(target):
+    """目標 `.claude/settings.json` 的 hooks 內全部 command 字串(出現順序、去重)。讀不到 / 不是 JSON ⇒ SystemExit。"""
+    path = os.path.join(target, ".claude", "settings.json")
+    try:
+        with io.open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, ValueError) as e:
+        raise SystemExit("讀不到目標的 .claude/settings.json,產生不了 extension allowlist:%s" % type(e).__name__)
+    out = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == "command" and isinstance(v, str):
+                    if v not in out:
+                        out.append(v)
+                else:
+                    walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+    walk(doc.get("hooks") if isinstance(doc, dict) else None)
+    return out
+
+
+def write_extension_policy(target):
+    """票 146 G-2:安裝器的最小 extension policy —— 空 inventory + 只授權安裝器寫入的 hook command。
+
+    **這是安裝預設,不是核准過的觀測快照**:不登記任何使用者擴充(dev-mods / skills / commands / synced / .mcp.json)。
+    兩份都不存在 ⇒ 產生,回 `created=True`;兩份都存在且合法 ⇒ 保留不覆寫,`created=False`;
+    只有一份、任一不合法或 JSON 解析失敗 ⇒ SystemExit,**之前不寫任何檔**。
+    常數與驗證函式取自目標 repo 的 redlight —— 與判定器是同一份,不在這裡另寫一份。
+    """
+    rl = _target_redlight(target)
+    allow_path = os.path.join(target, *rl.EXT_ALLOWLIST_FILE.split("/"))
+    inv_path = os.path.join(target, *rl.EXT_INVENTORY_FILE.split("/"))
+    present = [os.path.lexists(p) for p in (allow_path, inv_path)]
+    if all(present):
+        docs = []
+        for rel, p in ((rl.EXT_ALLOWLIST_FILE, allow_path), (rl.EXT_INVENTORY_FILE, inv_path)):
+            try:
+                with io.open(p, encoding="utf-8") as f:
+                    docs.append(json.load(f))
+            except (OSError, ValueError) as e:
+                raise SystemExit("既有的 %s 讀不到或不是 JSON(%s)—— 不覆寫,安裝停止。" % (rel, type(e).__name__))
+        bad = [rel for rel, ok in ((rl.EXT_ALLOWLIST_FILE, rl._extension_allowlist_ok(docs[0])),
+                                   (rl.EXT_INVENTORY_FILE, rl._extension_inventory_ok(docs[1]))) if not ok]
+        if bad:
+            raise SystemExit("既有的 extension policy 不合法:%s —— 不覆寫,安裝停止。" % "、".join(bad))
+        return allow_path, inv_path, False
+    if any(present):
+        have = rl.EXT_ALLOWLIST_FILE if present[0] else rl.EXT_INVENTORY_FILE
+        raise SystemExit("extension policy 只有一份(%s)—— 不補另一份、不覆寫,安裝停止。" % have)
+    hooks = _settings_hook_commands(target)
+    allow = {}
+    for k in rl.EXT_ALLOWLIST_FIELDS:
+        allow[k] = []
+    allow["schema"] = rl.EXT_ALLOWLIST_SCHEMA
+    allow["version"] = rl.EXT_ALLOWLIST_VERSION
+    allow["project_settings_hook_commands"] = hooks
+    inv = {"schema": rl.EXT_INVENTORY_SCHEMA, "version": rl.EXT_INVENTORY_VERSION, "entries": []}
+    for k in rl.EXT_INVENTORY_FIELDS:
+        if k not in inv:
+            raise SystemExit("目標 redlight 的 EXT_INVENTORY_FIELDS 多出未知欄位 %r —— 產生不了合法 inventory" % k)
+    if not (rl._extension_allowlist_ok(allow) and rl._extension_inventory_ok(inv)):
+        raise SystemExit("產生的最小 extension policy 沒有通過目標 redlight 的驗證 —— 安裝停止。")
+    for p, doc in ((allow_path, allow), (inv_path, inv)):
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with io.open(p, "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+    return allow_path, inv_path, True
+
+
+def write_decisions_pending(target, buckets, carried_untracked, unmarked, policy_file=None,
+                           extension_policy=None):
     """把需要人決定的項目**寫成檔案**,不只印終端機。
 
     印出來沒人看等於沒列(F-036 的同一個病:訊號不落地就等於沒有訊號)。
@@ -431,6 +505,14 @@ def write_decisions_pending(target, buckets, carried_untracked, unmarked, policy
                          "(例:`--strict-markers` ⇒ `strict_markers=true`)→ 存成 `%s` → commit。"
                          "**這一步只有人做**;status 的 `evidence policy:` 行會顯示目前狀態。"
                          % (POLICY_TEMPLATE, policy_file)))
+    if extension_policy:
+        # 票 146 G-2:安裝來源記在這裡與安裝 commit 訊息,不在 policy 檔加頂層 note(五處閉合裁決)。
+        sections.append(("extension policy 是安裝器產生的最小版 —— 不是核准過的觀測快照",
+                         list(extension_policy),
+                         "由安裝器產生：空 inventory + 安裝器寫入的 hook command；未登記任何使用者擴充；"
+                         "這不是核准過的觀測快照。R10 在 pre-commit 以這兩份的 HEAD 版本判定;"
+                         "使用者層(`~/.claude`)有任何未登記的入口,commit 就會被擋。"
+                         "要登記實際擴充,由人審閱後只 stage 這兩份 policy 提交(policy-only 通道)。"))
     if buckets.get("ask"):
         sections.append(("需要你決定帶不帶(標記為 ask,安裝時沒有帶過去)",
                          buckets["ask"],
@@ -470,7 +552,11 @@ def verify(target):
     rc, out = run(["python", os.path.join(".claude", "hooks", "gate.py"), "--pre-commit"],
                   target, check=False)
     if rc != 0:
-        raise SystemExit("安裝後的權威判定不乾淨,安裝不算完成:\n%s" % out)
+        hint = ""
+        if "[R10/fail-closed] claude_root_invalid" in out:
+            # 票 146 G-4(選 A):root 不存在即 invalid;安裝器只說明前提,不替人建立。
+            hint = "\n需要使用者層根目錄 ~/.claude 存在且可列舉；安裝器不會替你建立。"
+        raise SystemExit("安裝後的權威判定不乾淨,安裝不算完成:\n%s%s" % (out, hint))
 
     # 權威層裝了沒 —— 這一層不進版控,漏裝是完全靜默的。安裝時是唯一被機器強制的時點。
     import importlib.util
@@ -553,6 +639,8 @@ def main(target):
     hook = install_hook(target)
     portable_hook, boot = install_portable_layer(target)
     _template, policy_file = write_policy_template(target)
+    # 票 146 G-2:在第一個 `git add -A` 之前 —— 隨既有的安裝 commit 進 HEAD,不另開 commit、不新增豁免。
+    ext_allow, ext_inv, _created = write_extension_policy(target)
 
     run(["git", "add", "-A"], target)
     # **在 add 之後、commit 之前。** `update-index --chmod` 改的是既有 index 條目,
@@ -568,8 +656,9 @@ def main(target):
          "凍結既有 .py 的紅燈豁免清單(go-live %s)" % go_live[:7]], target)
 
     blocked = verify(target)
-    pending = write_decisions_pending(target, buckets, carried_untracked, unmarked,
-                                      policy_file=policy_file)
+    pending = write_decisions_pending(
+        target, buckets, carried_untracked, unmarked, policy_file=policy_file,
+        extension_policy=[os.path.relpath(p, target).replace("\\", "/") for p in (ext_allow, ext_inv)])
 
     _out("裝好了:%s" % target)
     _out("  複製      %d 個檔案" % len(buckets["copy"]))

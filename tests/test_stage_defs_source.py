@@ -527,6 +527,9 @@ _PRE_COMMIT_STUBS = {
     "check_friction_numbers": lambda *a, **k: [],
     "check_legacy_list": lambda *a, **k: [],
     "shadow_active": lambda *a, **k: False,
+    # 票 146 R10(4b 准改第 3 項):rig 沒有 HEAD policy 也沒有隔離使用者層 ⇒ 不替身會硬擋、蓋掉要測的東西。
+    "check_extension_integrity": lambda *a, **k: {"hard_block": None, "violations": [],
+                                                  "report": None, "policy_source": "head"},
 }
 
 

@@ -13,10 +13,10 @@
 | # | 判準 | 在本檔的樣子 |
 |---|---|---|
 | 1 | **projection 不存** | 全檔沒有任何寫入。每次呼叫都從現場重算 |
-| 2 | **只呼叫 `gate.py`,不重述它** | `load_gate()` + 呼叫;本檔**不含**任何 R1–R9 或站別判準 |
+| 2 | ~~**只呼叫 `gate.py`,不重述它**~~(F-036 體例:舊句不刪;票 146 裁決 7 修訂)**只呼叫 `gate.py` 與 `redlight.extension_report`,不重述它們** | `load_gate()` + 呼叫;本檔**不含**任何 R1–R10 或站別判準。146 的兩行呼叫 `redlight.extension_report` 取得與 pre-commit 同一份 live facts 與同一次判定,不另行判定 |
 | 3 | **每行帶來源** | `_line()` 是唯一的產行函式,`source` 是必填參數 |
 | 4 | **算不出寫「未記錄」** | `UNRECORDED`;缺檔、缺欄、指令失敗一律走它 |
-| 5 | **規則不做靜態 PASS** | 不重跑任何規則。印的是帳本內容與從帳本推導 |
+| 5 | **規則不做靜態 PASS** | ~~不重跑任何規則。~~(F-036;票 146 裁決 7 修訂)除 R10 外不重跑任何規則;R10 的兩行是 `redlight.extension_report` 那**一次**判定的渲染,不另行判定、不宣告通過(runtime 恆未證明)。其餘印的是帳本內容與從帳本推導 |
 | 6 | Enforcement Health 四行各帶來源 | `_enforcement()` |
 | 7 | Sync Health 進 `--all` | **Day 3,本檔不做** |
 | 8 | `--all` 跨三 repo | **Day 3,本檔不做** |
@@ -33,11 +33,15 @@
 的實作印出的字一模一樣。`tests/test_status.py::TestStageComesFromGate`
 靠換掉 `load_gate` 讓輸出跟著變來證明它。**沒有這個接縫,判準 2 就只是一句話。**
 
-## ⚠ 本檔不讀 `~/.claude/`
+## ⚠ ~~本檔不讀 `~/.claude/`~~ 本檔不**另**讀 `~/.claude/`(F-036;票 146 裁決 7 修訂)
 
 G1 掛在使用者層,而使用者層**不屬於任何 repo**。去讀它會讓同一份輸出
 在不同機器上意義不同,而讀的人分不出來。所以 G1 那一行只說
 「這是使用者層的東西,repo 內無設定」,值恆為未證明。
+
+票 146 修訂:R10 的兩行經 `redlight.extension_report` 觀測使用者層的已知靜態入口 ——
+那是 pre-commit 的同一份 live facts 與同一次判定;claude_root 由 production 固定 fallback
+(`_extension_claude_root()` 回 None),status 本身不另讀使用者層。
 
 ## ⚠ 「未證明」不是「沒裝」
 
@@ -664,6 +668,35 @@ def _repository(root, gate):
     return out
 
 
+_EXT_SOURCE = u"redlight.extension_report(<repo>, <claude_root 遮罩>)"
+_EXT_RUNTIME_PREFIX = u"runtime loaded set: "
+
+
+def _extension_claude_root():
+    """claude_root 的注入接縫(同 gate)。production 固定回 None ⇒ redlight 以 `expanduser("~")/.claude` fallback。"""
+    return None
+
+
+def _extension_lines(root):
+    """票 146 R10 的兩行:**同一次** `extension_report` 的渲染,不另行判定。
+
+    redlight 載不到 ⇒ 一行「未記錄（146 判定器不在）」。runtime 那一行的值去掉固定前綴
+    `runtime loaded set: `,欄名本身就是那個前綴(裁決 (ee))。
+    """
+    rl = load_redlight(root)
+    if rl is None or not hasattr(rl, "extension_report"):
+        return [_line(u"extension integrity (R10)", u"未記錄（146 判定器不在）", _EXT_SOURCE)]
+    try:
+        report = rl.extension_report(root, _extension_claude_root())
+        first, second = report["lines"][0], report["lines"][1]
+    except Exception as e:
+        return [_line(u"extension integrity (R10)", u"%s(%s)" % (UNRECORDED, type(e).__name__), _EXT_SOURCE)]
+    if second.startswith(_EXT_RUNTIME_PREFIX):
+        second = second[len(_EXT_RUNTIME_PREFIX):]
+    return [_line(u"extension integrity (R10)", first, _EXT_SOURCE),
+            _line(u"runtime loaded set", second, _EXT_SOURCE)]
+
+
 def _enforcement(root, gate):
     out = [_head(u"Enforcement Health")]
 
@@ -720,6 +753,8 @@ def _enforcement(root, gate):
     out.append(_line(u"g1",
                      u"使用者層 hook,repo 內無設定; mounted: %s" % UNPROVEN,
                      u"(無 —— 本檔不讀 ~/.claude)"))
+
+    out.extend(_extension_lines(root))
 
     # ── skill mirror:直接呼叫純判定,**不走會寫 .cache 的那一支** ────
     # `mount_violations_cached()` 會寫 `.cache/mount-check.json`(gate.py:2791),

@@ -18,14 +18,18 @@ S5「安裝流程不另測」的涵蓋就是假的 —— 那是 F-018 的形狀
 那句話就是它保持吵鬧的機制。
 """
 
+import contextlib
 import importlib.util
 import io
 import re
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
+import types
+import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC_ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -222,6 +226,136 @@ def scenario_r7(target):
     return "predicate"
 
 
+# ── 票 146 3g:淨室家目錄隔離(G-1)與 R10 情境(G-3)────────────────────────
+#
+# 安裝、情境子程序、直接載入的目標 gate 一律用同一個隔離家目錄;真實使用者層不讀不寫。
+# Windows 的 expanduser 只看 USERPROFILE,POSIX 看 HOME —— 兩個都設。
+# 清理與寫入都要求**本輪 context 註冊的那一個 iso**:marker 檔單獨存在不足以授權(3g 五處閉合第 3 點)。
+
+ISOLATED_HOME_DIRNAME = "home"
+ISOLATION_MARKER = ".verify-gates-isolated"
+_ACTIVE_ISOLATION = None
+_HOME_VARS = ("USERPROFILE", "HOME")
+
+
+def current_isolation():
+    return _ACTIVE_ISOLATION
+
+
+def _lkind(path):
+    """lstat 的型別:"absent" / "symlink" / "dir" / "file" / "other";lstat 失敗(非不存在)⇒ SystemExit。"""
+    try:
+        mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        return "absent"
+    except OSError as e:
+        raise SystemExit("隔離家目錄:lstat 失敗(%s):%s" % (type(e).__name__, path))
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    if stat.S_ISDIR(mode):
+        return "dir"
+    if stat.S_ISREG(mode):
+        return "file"
+    return "other"
+
+
+@contextlib.contextmanager
+def isolated_home(workdir):
+    """把 USERPROFILE / HOME 指到 `<workdir>/home`(含空的 `.claude` 與本輪 marker),離開時精確還原。
+
+    進入前任何一項預置物不對(home 是 symlink / 不是目錄 / 非空;`.claude` 同;marker 已存在)⇒ SystemExit,
+    **什麼都不建**。不准巢狀。"""
+    global _ACTIVE_ISOLATION
+    if _ACTIVE_ISOLATION is not None:
+        raise SystemExit("隔離家目錄不准巢狀進入(已有一個作用中的隔離)")
+    workdir = os.path.abspath(workdir)
+    home = os.path.join(workdir, ISOLATED_HOME_DIRNAME)
+    claude_root = os.path.join(home, ".claude")
+    marker = os.path.join(home, ISOLATION_MARKER)
+    k = _lkind(home)
+    if k not in ("absent", "dir"):
+        raise SystemExit("隔離家目錄的位置已有東西且不是目錄(%s):%s" % (k, home))
+    if k == "dir" and os.listdir(home):
+        raise SystemExit("隔離家目錄已存在且非空 —— 不清空既有內容:%s" % home)
+    k = _lkind(claude_root)
+    if k not in ("absent", "dir"):
+        raise SystemExit("隔離 .claude 的位置已有東西且不是目錄(%s):%s" % (k, claude_root))
+    if k == "dir" and os.listdir(claude_root):
+        raise SystemExit("隔離 .claude 已存在且非空:%s" % claude_root)
+    if _lkind(marker) != "absent":
+        raise SystemExit("隔離 marker 已存在 —— 不是本輪建立的家目錄:%s" % marker)
+    os.makedirs(claude_root, exist_ok=True)
+    token = uuid.uuid4().hex
+    with io.open(marker, "w", encoding="utf-8", newline="\n") as f:
+        f.write(token)
+    saved = dict((v, (v in os.environ, os.environ.get(v))) for v in _HOME_VARS)
+    try:
+        for v in _HOME_VARS:
+            os.environ[v] = home
+        iso = types.SimpleNamespace(workdir=workdir, home=home, claude_root=claude_root,
+                                    marker=marker, token=token)
+        _ACTIVE_ISOLATION = iso
+        yield iso
+    finally:
+        for v, (present, value) in saved.items():
+            if present:
+                os.environ[v] = value
+            else:
+                os.environ.pop(v, None)
+        _ACTIVE_ISOLATION = None
+
+
+def _require_isolation(iso):
+    """iso 必須是本輪作用中的那一個,且家目錄 / marker / 環境都還是進入時的樣子;任一不成立 ⇒ SystemExit。"""
+    if iso is None or iso is not _ACTIVE_ISOLATION:
+        raise SystemExit("沒有作用中的隔離家目錄(或不是本輪 context 建立的)—— 拒絕碰家目錄")
+    root = os.path.normcase(os.path.realpath(iso.workdir))
+    real_home = os.path.normcase(os.path.realpath(iso.home))
+    if not real_home.startswith(root.rstrip(os.sep) + os.sep):
+        raise SystemExit("隔離家目錄解析後不在 workdir 之下:%s" % iso.home)
+    for p in (iso.home, iso.claude_root):
+        if _lkind(p) != "dir":
+            raise SystemExit("隔離路徑不是非 symlink 的目錄:%s" % p)
+    if _lkind(iso.marker) != "file":
+        raise SystemExit("隔離 marker 不是非 symlink 的一般檔:%s" % iso.marker)
+    with io.open(iso.marker, encoding="utf-8") as f:
+        if f.read() != iso.token:
+            raise SystemExit("隔離 marker 內容不是本輪 token:%s" % iso.marker)
+    if os.path.normcase(os.path.abspath(os.path.expanduser("~"))) != os.path.normcase(os.path.abspath(iso.home)):
+        raise SystemExit("expanduser(\"~\") 不是隔離家目錄 —— 環境被改過")
+
+
+def restore_user_layer(iso):
+    """清空隔離 `.claude` 的內容(保留空目錄)。先驗隔離;驗不過就停,什麼都不刪。"""
+    _require_isolation(iso)
+    for name in os.listdir(iso.claude_root):
+        p = os.path.join(iso.claude_root, name)
+        if _lkind(p) == "dir":
+            shutil.rmtree(p)
+        else:
+            os.remove(p)
+
+
+def scenario_r10(target):
+    """隔離 `.claude/skills/synced` 放一個合法 bucket + marker(兩筆),安裝器的空 inventory 沒有登記 ⇒ 額外 2。"""
+    iso = current_isolation()
+    _require_isolation(iso)
+    synced = os.path.join(iso.claude_root, "skills", "synced")
+    os.makedirs(os.path.join(synced, "vgbucket"))
+    with io.open(os.path.join(synced, "vgbucket", "SKILL.md"), "w", encoding="utf-8", newline="\n") as f:
+        f.write("# verify_gates r10\n")
+    with io.open(os.path.join(synced, ".bucket-vgbucket"), "w", encoding="utf-8", newline="\n") as f:
+        f.write("vgbucket\n")
+    set_stage(target, "implement")
+    write(target, "docs/adr/verify-trigger.md", "觸發一次 commit 用\n")
+
+
+def precontrol_r10(target):
+    """R10 的乾淨正控:同一佈置、家目錄不放任何東西 ⇒ 必須放行。"""
+    set_stage(target, "implement")
+    write(target, "docs/adr/verify-trigger.md", "觸發一次 commit 用\n")
+
+
 SCENARIOS = {
     "R1": scenario_r1,
     "R2": scenario_r2,
@@ -232,7 +366,15 @@ SCENARIOS = {
     "R7": scenario_r7,
     "R8": scenario_r8,
     "R9": scenario_r9,
+    "R10": scenario_r10,
 }
+
+# 有指定擋下路徑的規則:代號標記與原因**同時**出現才算擋到(G-3;補件裁決)。
+# 不在這兩張表的規則沿用 `[code]` / `[code/` 判定。
+EXPECTED_MARKER = {"R10": "[R10/fail-closed]"}
+EXPECTED_REASON = {"R10": u"未受管入口：synced（額外 2"}
+# 情境前先跑的正控:同一佈置在放入情境物之前必須放行,否則情境的擋下證明不了什麼。
+PRECONTROL = {"R10": precontrol_r10}
 
 
 def load_target_gate(target):
@@ -487,7 +629,15 @@ def run_evidence_scenarios(target):
     return failures
 
 
-def run_scenario(target, code):
+def run_scenario(target, code, iso=None):
+    if code in PRECONTROL:
+        PRECONTROL[code](target)
+        sh(["git", "add", "-A"], target)
+        rc, out = sh(["git", "commit", "-m", "verify %s precontrol" % code], target, check=False)
+        if rc != 0:
+            restore(target)
+            return False, u"正控未放行：" + out
+        restore(target)
     marker = SCENARIOS[code](target)
     if marker == "predicate":
         # 前哨規則:直接問述詞。走 commit 驗不到它 —— 它管的是工具呼叫。
@@ -497,7 +647,12 @@ def run_scenario(target, code):
     sh(["git", "add", "-A"], target)
     rc, out = sh(["git", "commit", "-m", "verify %s" % code], target, check=False)
     restore(target)
-    blocked = rc != 0 and ("[%s]" % code in out or "[%s/" % code in out)
+    if iso is not None:
+        restore_user_layer(iso)
+    if code in EXPECTED_MARKER:
+        blocked = rc != 0 and EXPECTED_MARKER[code] in out and EXPECTED_REASON[code] in out
+    else:
+        blocked = rc != 0 and ("[%s]" % code in out or "[%s/" % code in out)
     return blocked, out
 
 
@@ -511,7 +666,15 @@ def main(workdir):
             func(path)
         shutil.rmtree(target, onerror=_force)
 
+    # 票 146 G-1:安裝、規則情境、目標 gate 的載入、框架測試與 evidence 情境全在同一個隔離家目錄內 ——
+    # 真實 `~/.claude` 不讀不寫,目標 gate / leak scanner 的模組層常數也不會先綁到真實家目錄。
+    with isolated_home(workdir) as iso:
+        _main_isolated(target, iso)
+
+
+def _main_isolated(target, iso):
     _out("=== 真實安裝(不是簡化版)===")
+    _out("    隔離家目錄:%s" % iso.home)
     # ⚠ `install.main()` 自己還有 21 個裸 `print` —— **不在票 62 範圍內**
     # (票面掃描的對象是這三支「證明別的東西是對的」的工具)。
     # 實測那 21 個沒有一個含 cp950 編不出的字,所以它不會炸;
@@ -555,8 +718,14 @@ def main(workdir):
     _out("\n=== 逐條實測(每條各擋一次)===")
     failures = []
     for code in codes:
-        blocked, out = run_scenario(target, code)
+        blocked, out = run_scenario(target, code, iso=iso)
         _report_rule_result(code, blocked)
+        if blocked and code in PRECONTROL:
+            # 擋下的證明要連正控一起看:正控沒放行時 run_scenario 回 False,走不到這裡。
+            _out(u"         正控放行 ✓(同一佈置、家目錄未放情境物)")
+            for line in out.splitlines():
+                if EXPECTED_MARKER[code] in line:
+                    _out("         %s" % line.strip())
         if not blocked:
             failures.append((code, out))
 

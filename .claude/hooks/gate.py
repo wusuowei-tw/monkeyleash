@@ -1354,6 +1354,30 @@ def rule_codes(source_path=None):
     return codes
 
 
+def rule_sources(source_path=None):
+    """規則列舉的來源逐檔現況(票 146 補鎖 4)。**不經 `_redlight()`**,redlight 缺失時仍可用。
+
+    回傳 `{絕對路徑: {"exists", "readable", "complete", "codes"}}`,鍵為本檔(或 `source_path`)與同目錄的
+    redlight.py。complete = exists and readable;不存在 ⇒ 全 False、codes 空;存在但讀不到 ⇒ exists True、
+    其餘 False、codes 空。列舉成功不代表模組可執行 —— import authority 仍由 enforcement 路徑判斷。
+    `rule_codes()` 的回傳型別不變。
+    """
+    path = os.path.abspath(source_path or __file__)
+    out = {}
+    for p in (path, os.path.join(os.path.dirname(path), "redlight.py")):
+        entry = {"exists": os.path.exists(p), "readable": False, "complete": False, "codes": set()}
+        if entry["exists"]:
+            try:
+                with io.open(p, encoding="utf-8") as f:
+                    entry["codes"] = set(RULE_CODE_RE.findall(f.read()))
+                entry["readable"] = True
+            except Exception:
+                entry["codes"] = set()
+        entry["complete"] = entry["exists"] and entry["readable"]
+        out[p] = entry
+    return out
+
+
 def _err(msg):
     """把訊息寫進 stderr,**明確用 utf-8**。
 
@@ -4013,6 +4037,100 @@ def staged_paths(cwd=None, gitlinks=None):
     return kept
 
 
+# ── 票 146 R10:Claude Code 擴充入口完整性(pre-commit 接線)──────────────────────
+#
+# 判定只在 redlight.extension_report 裡發生一次;這裡只把結構化結果翻成「硬擋 / 違規 / 放行」。
+# **硬擋不受影子豁免**:觀測失敗、authority 缺失、synced 未納管或驗證失敗、policy-only 候選不成立。
+# 本規則只證明「已知靜態入口符合 committed policy」,不證明本 session 實際載入集合(runtime 恆 UNPROVEN)。
+
+# 模組層**純字串**常數 —— 不呼叫 `_redlight()`:缺 redlight 時 gate 仍要能載入,
+# 才走得到 authority 硬擋那條可讀訊息(五處閉合裁決第 1 點;與 redlight 常數的一致性由 T146-74 鎖)。
+EXT_POLICY_PATHS = (".agents/extension-allowlist.json", ".agents/extension-inventory.json")
+
+
+def _extension_claude_root():
+    """claude_root 的唯一注入接縫。production 固定回 None ⇒ redlight 以 `expanduser("~")/.claude` fallback。"""
+    return None
+
+
+def _staged_names_all():
+    """`git diff --cached --name-only -z` 的**全部**路徑(含刪除),POSIX 分隔,去空。"""
+    out = subprocess.check_output(["git", "diff", "--cached", "-z", "--name-only"], cwd=ROOT)
+    return [p.replace("\\", "/") for p in out.decode("utf-8", "replace").split("\0") if p.strip()]
+
+
+def extension_policy_only_commit(names):
+    """staged 集合非空,且全部屬兩個 canonical policy 路徑 ⇒ policy-only commit(H-6)。"""
+    names = list(names or [])
+    return bool(names) and set(names) <= set(EXT_POLICY_PATHS)
+
+
+def check_extension_integrity(staged_names=None):
+    """R10。回傳 `{"hard_block", "violations", "report", "policy_source"}`(所有分支同一形狀)。
+
+    順序(3g 契約,寫死):0 判定器載入失敗 ⇒ authority 硬擋;1 policy-only ⇒ policy_source="index";
+    2 一次 `extension_report`;3 前置觀測失敗 ⇒ (a) 硬擋;4 policy-only ⇒ (e) staged policy 無效 / (f) 對現場
+    不成立 ⇒ 硬擋,否則放行(沒有 violations 路徑);5 一般 commit ⇒ (b)(c)(d) 硬擋,否則 VIOLATION 進
+    violations(走既有影子規則),DECLARED_OK 放行。
+    """
+    try:
+        names = _staged_names_all() if staged_names is None else list(staged_names)
+        policy_only = extension_policy_only_commit(names)
+    except Exception:
+        policy_only = False
+    policy_source = "index" if policy_only else "head"
+    lane = u"（policy-only commit，policy_source=index）" if policy_only else u""
+    try:
+        rl = _redlight()
+        if not hasattr(rl, "extension_report"):
+            raise ImportError("redlight.extension_report")
+    except Exception as e:
+        return {"hard_block": u"[R10/fail-closed] 146 判定器不在或無法載入：%s；commit 已擋下%s"
+                              % (type(e).__name__, lane),
+                "violations": [], "report": None, "policy_source": policy_source}
+    try:
+        report = rl.extension_report(ROOT, _extension_claude_root(), policy_source=policy_source)
+    except Exception as e:
+        return {"hard_block": u"[R10/fail-closed] 146 判定器執行失敗：%s；commit 已擋下%s"
+                              % (type(e).__name__, lane),
+                "violations": [], "report": None, "policy_source": policy_source}
+    res = {"hard_block": None, "violations": [], "report": report, "policy_source": policy_source}
+    if report.get("observation") != "ok":
+        res["hard_block"] = u"[R10/fail-closed] %s：%s%s" % (report.get("observation"), report.get("reason"), lane)
+        return res
+    if policy_only:
+        facts, inventory = report.get("facts"), report.get("inventory")
+        a_state = facts.get("state") if isinstance(facts, dict) else None
+        i_state = inventory.get("state") if isinstance(inventory, dict) else None
+        if a_state != "ok" or i_state != "ok":
+            res["hard_block"] = (u"[R10/fail-closed] policy-only commit（policy_source=index）：staged policy 無效："
+                                 u"allowlist=%s/inventory=%s" % (a_state, i_state))
+        elif report.get("state") != rl.EXT_DECLARED_OK:
+            res["hard_block"] = (u"[R10/fail-closed] policy-only commit（policy_source=index）：staged policy 對現場"
+                                 u"不成立：%s" % report.get("reason"))
+        return res
+    parts = []
+    surfaces = report.get("surfaces") or {}
+    errors = surfaces.get("errors") or []
+    if errors:
+        parts.append(u"%s：觀測失敗：%s: %s（共 %d 筆）"
+                     % (rl.EXT_CAT_OBSERVATION, errors[0][0], errors[0][-1], len(errors)))
+    synced = report.get("synced")
+    if synced is None or synced.get("verified") is not True:
+        why = synced.get("reason") if isinstance(synced, dict) else u"synced 未評估"
+        parts.append(u"%s：未受管入口：synced（%s）" % (rl.EXT_CAT_UNMANAGED, why))
+    if report.get("state") == rl.EXT_UNKNOWN and not parts:
+        parts.append(u"%s：%s" % (report.get("category"), report.get("reason")))
+    if parts:
+        if report.get("state") == rl.EXT_VIOLATION:
+            parts.append(u"另有 %s：%s" % (report.get("category"), report.get("reason")))
+        res["hard_block"] = u"[R10/fail-closed] " + u"；".join(parts)
+        return res
+    if report.get("state") == rl.EXT_VIOLATION:
+        res["violations"] = [u"[R10] %s" % report.get("reason")]
+    return res
+
+
 def mode_pre_commit():
     """權威判定:掃 staged 檔案 + R4 副本一致性 + R5 第三軸掛載點。"""
     # **票 89:放在最前面,而且刻意不進 `violations`。**
@@ -4033,7 +4151,20 @@ def mode_pre_commit():
         return 1
     if gitlinks:
         _err(gitlink_note(gitlinks))
-    violations = []
+    # 票 146 R10:在逐檔 check、影子分支與 R4 之前。硬擋不進 `violations` —— 那條路會被影子放行。
+    try:
+        staged_all = _staged_names_all()
+    except Exception as e:
+        _err("[六站閘門] 無法取得 staged 檔案(含刪除)—— [R10/fail-closed] 判定不了 commit 的範圍:%s\n" % e)
+        return 1
+    ext = check_extension_integrity(staged_all)
+    if ext["hard_block"]:
+        _err("\n[六站閘門/pre-commit] commit 已擋下:\n\n  %s\n" % ext["hard_block"])
+        return 1
+    if ext["policy_source"] == "index":
+        _err(u"[R10/policy-only] policy-only commit（policy_source=index）：staged 候選 policy 對現場成立"
+             u"（DECLARED_OK；runtime 仍 UNPROVEN）。這是候選驗證，不是 HEAD 已生效的 policy。\n")
+    violations = list(ext["violations"])
     for f in staged:
         used = []
         m = check(f, None, at_commit=True, exemptions=used)

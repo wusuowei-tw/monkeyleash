@@ -37,6 +37,7 @@ import ntpath
 import os
 import posixpath
 import re
+import stat
 from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1030,7 +1031,38 @@ EXT_UNKNOWN = "UNKNOWN"
 EXT_DECLARED_OK = "DECLARED_OK"
 EXT_VERIFIED = "VERIFIED"
 EXT_SURFACE_KEYS = frozenset(("dev_mod_files", "synced_files", "r4_violations", "project_hook_commands",
-                              "mcp_json_servers", "user_skill_plugins", "user_commands"))
+                              "mcp_json_servers", "user_skill_plugins", "user_commands", "errors"))
+
+# 3e(v1 接線契約):EXT_UNKNOWN 的結構化原因類別;state 與 category 分開承載。
+EXT_CAT_ALLOWLIST = "allowlist_state"
+EXT_CAT_UNREGISTERED = "unregistered"
+EXT_CAT_R4 = "r4"
+EXT_CAT_HOOK = "hook"
+EXT_CAT_MCP = "mcp"
+EXT_CAT_OBSERVATION = "observation_missing"
+EXT_CAT_UNMANAGED = "unmanaged_entry"
+EXT_CATEGORIES = frozenset((EXT_CAT_ALLOWLIST, EXT_CAT_UNREGISTERED, EXT_CAT_R4, EXT_CAT_HOOK,
+                            EXT_CAT_MCP, EXT_CAT_OBSERVATION, EXT_CAT_UNMANAGED))
+EXT_RUNTIME_UNPROVEN = "UNPROVEN"
+
+# 3f(v2 synced 契約):synced 兩根以獨立 inventory 納管;路徑一律是匿名邏輯路徑,不寫 bucket 真名。
+EXT_INVENTORY_FILE = ".agents/extension-inventory.json"
+EXT_INVENTORY_SCHEMA = "monkeyleash.extension-inventory"
+EXT_INVENTORY_VERSION = 1
+EXT_INVENTORY_FIELDS = ("schema", "version", "entries")
+EXT_SYNCED_ROOTS = ("skills", "plugins")
+EXT_BUCKET_TOKEN = "<bucket>"
+EXT_POLICY_SOURCES = ("head", "index")
+
+
+class _InventoryUnchecked(object):
+    """「synced 納管未評估」的哨兵:只給兩參數相容 wrapper 用,production 不得傳入。"""
+
+    def __repr__(self):
+        return "EXT_INVENTORY_UNCHECKED"
+
+
+EXT_INVENTORY_UNCHECKED = _InventoryUnchecked()
 
 # 檔案型欄位(policy 與 surfaces 同名)與它在訊息裡的入口名,順序即判定順序。
 _EXT_FILE_FIELDS = (("dev_mod_files", "dev-mods"), ("user_skill_plugins", "user-skills"),
@@ -1053,38 +1085,76 @@ def _rel(path):
         return path.replace("\\", "/")
 
 
-def _walk_regular(root_dir, exclude_top=None):
-    """`root_dir` 底下每個檔 → `(posix 相對路徑, sha256 或 None)`,依路徑排序。不存在 ⇒ []。
+def _read_all_bytes(path):
+    with io.open(path, "rb") as fh:
+        return fh.read()
 
+
+def _error_text(exc):
+    """例外 → 錯誤文字。**只帶型別與 strerror,不帶路徑**(訊息會被貼出去;路徑另有欄位)。"""
+    detail = getattr(exc, "strerror", None)
+    return "%s: %s" % (type(exc).__name__, detail) if detail else type(exc).__name__
+
+
+def _walk_regular(root_dir, exclude_top=None, walk=None, lstat=None, read_bytes=None):
+    """`root_dir` 底下每個檔 → `(entries, errors)`。
+
+    entries:`[(posix 相對路徑, sha256 或 None), ...]`,依路徑排序;errors:`[(path, error_text), ...]`。
+    存在性用 lstat(預設 `os.lstat`):FileNotFoundError ⇒ 確認不存在 ⇒ `([], [])`;其他 OSError ⇒
+    `([], [(root_dir, err)])`;存在但不是目錄 ⇒ `([], [(root_dir, "not a directory")])`。
+    列舉用 walk(預設 `os.walk`),以 onerror 收集例外 —— 列舉失敗不得洗成空集合(3e 裁決 z3)。
     symlink(檔或目錄)記 None 且不追;symlink 目錄從走訪中移除(3d 裁決 (n))。讀不到 ⇒ None。
     `exclude_top` 只排除 `root_dir` 這一層同名的子目錄(及其整棵),更深層同名的不排除。
     """
-    if not os.path.isdir(root_dir):
-        return []
-    out = []
-    for dirpath, dirnames, filenames in os.walk(root_dir, followlinks=False):
+    walk = walk or os.walk
+    lstat = lstat or os.lstat
+    read_bytes = read_bytes or _read_all_bytes
+    try:
+        st = lstat(root_dir)
+    except FileNotFoundError:
+        return [], []
+    except OSError as e:
+        return [], [(root_dir, _error_text(e))]
+    if not stat.S_ISDIR(st.st_mode):
+        return [], [(root_dir, "not a directory")]
+    out, errors = [], []
+
+    def onerror(e):
+        errors.append((getattr(e, "filename", None) or root_dir, _error_text(e)))
+
+    for dirpath, dirnames, filenames in walk(root_dir, onerror=onerror, followlinks=False):
         if exclude_top is not None and os.path.normcase(dirpath) == os.path.normcase(root_dir):
             dirnames[:] = [d for d in dirnames if d != exclude_top]
         keep = []
         for d in dirnames:
             full = os.path.join(dirpath, d)
-            if os.path.islink(full):
-                out.append((os.path.relpath(full, root_dir).replace("\\", "/"), None))
-            else:
+            relp = os.path.relpath(full, root_dir).replace("\\", "/")
+            try:
+                mode = lstat(full).st_mode
+            except OSError as e:
+                errors.append((full, _error_text(e)))
+                continue
+            if stat.S_ISDIR(mode):
                 keep.append(d)
+            else:
+                out.append((relp, None))
         dirnames[:] = keep
         for f in filenames:
             full = os.path.join(dirpath, f)
             relp = os.path.relpath(full, root_dir).replace("\\", "/")
-            if os.path.islink(full):
+            try:
+                mode = lstat(full).st_mode
+            except OSError:
+                out.append((relp, None))
+                continue
+            if not stat.S_ISREG(mode):
                 out.append((relp, None))
                 continue
             try:
-                with io.open(full, "rb") as fh:
-                    out.append((relp, hashlib.sha256(fh.read()).hexdigest()))
+                out.append((relp, hashlib.sha256(read_bytes(full)).hexdigest()))
             except Exception:
                 out.append((relp, None))
-    return sorted(out, key=lambda item: item[0])
+    return sorted(out, key=lambda item: item[0]), errors
 
 
 def skill_mirror_violations(canon_dir, mirror_dirs):
@@ -1140,9 +1210,9 @@ def skill_mirror_violations(canon_dir, mirror_dirs):
                            % (_rel(os.path.join(canon_dir, name)), rel_entry))
                 continue
             canon_entry = os.path.join(canon_dir, name)
-            canon_files = set(p for p, _ in _walk_regular(canon_entry))
+            canon_files = set(p for p, _ in _walk_regular(canon_entry)[0])
             mirror_files = set()
-            for p, _ in _walk_regular(entry):
+            for p, _ in _walk_regular(entry)[0]:
                 if os.path.islink(os.path.join(entry, *p.split("/"))):
                     out.append(u"[R4] 鏡像內含 symlink：%s/%s（第一版不追連結）" % (rel_entry, p))
                 else:
@@ -1207,26 +1277,112 @@ def _extension_allowlist_ok(doc):
     return _is_str_list(doc["project_settings_hook_commands"]) and _is_str_list(doc["mcp_json_servers"])
 
 
-def extension_allowlist_facts(root):
-    """`<root>` 的 allowlist 事實:`{"path", "state", "blob", "worktree", "policy"}`。
+def _logical_path_ok(p):
+    """inventory 的 path 是否屬四種合法匿名邏輯路徑(v2 synced 契約)。只判定,不修正。"""
+    if not isinstance(p, str):
+        return False
+    if p in ("%s/.bucket-%s" % (r, EXT_BUCKET_TOKEN) for r in EXT_SYNCED_ROOTS):
+        return True
+    parts = p.split("/")
+    if len(parts) < 3 or parts[0] not in EXT_SYNCED_ROOTS or parts[1] != EXT_BUCKET_TOKEN:
+        return False
+    rest = parts[2:]
+    if not _canonical_relpath_ok("/".join(rest)):
+        return False
+    return all(seg != EXT_BUCKET_TOKEN and not seg.startswith(".bucket-") for seg in rest)
 
-    流程同 `evidence_policy_facts` 第 1–5 步:只認 HEAD blob;工作樹只做一次 hash-object 比對,
-    之後只讀 HEAD blob。state ∈ uninitialized / uncommitted / identity_mismatch /
-    worktree_differs / malformed / ok;非 ok 時 policy 為 None。不拋例外。
-    root 不是 git 最上層 ⇒ HEAD:<path> 與工作樹不是同一邏輯路徑 ⇒ identity_mismatch。
-    """
-    out = {"path": EXT_ALLOWLIST_FILE, "state": "identity_mismatch", "blob": None,
-           "worktree": None, "policy": None}
+
+def _extension_inventory_ok(doc):
+    """inventory 文件是否合格:鍵集合、schema、version(int)、entries 每項鍵 / 四種邏輯路徑 / path 唯一 /
+    sha256 / note 型別(3g 契約;五處閉合裁決第 5 點)。不拋例外。"""
     try:
-        exists = os.path.exists(os.path.join(os.fspath(root), *EXT_ALLOWLIST_FILE.split("/")))
+        if not isinstance(doc, dict) or set(doc) != set(EXT_INVENTORY_FIELDS):
+            return False
+        version = doc["version"]
+        if doc["schema"] != EXT_INVENTORY_SCHEMA or type(version) is not int \
+                or version != EXT_INVENTORY_VERSION:
+            return False
+        entries = doc["entries"]
+        if not isinstance(entries, list):
+            return False
+        seen = set()
+        for item in entries:
+            if not isinstance(item, dict) or set(item) != _EXT_ENTRY_KEYS:
+                return False
+            if not (_logical_path_ok(item["path"]) and _is_sha256_hex(item["sha256"])
+                    and isinstance(item["note"], str)):
+                return False
+            if item["path"] in seen:
+                return False
+            seen.add(item["path"])
+        return True
+    except Exception:
+        return False
+
+
+def _policy_facts(root, rel, ok_fn, policy_source):
+    """canonical policy 檔的事實:`{"path", "state", "blob", "worktree", "policy"}`。
+
+    `policy_source="head"`:流程同 `evidence_policy_facts` 第 1–5 步 —— 只認 HEAD blob;工作樹只做一次
+    hash-object 比對,之後只讀 HEAD blob。state ∈ uninitialized / uncommitted / identity_mismatch /
+    worktree_differs / malformed / ok。root 不是 git 最上層 ⇒ identity_mismatch。
+    `policy_source="index"`(H-6,policy-only commit):只讀 index(`git ls-files -s` + `git cat-file`),
+    **不做 worktree identity 比對**,worktree 的內容或存在與否不影響結果。state ∈ index_missing /
+    index_conflict / index_nonregular / index_unreadable / malformed / ok。
+    非 ok 時 policy 為 None。除 policy_source 不合法(ValueError)外不拋例外。
+    """
+    if policy_source not in EXT_POLICY_SOURCES:
+        raise ValueError("policy_source 只接受 %s,收到 %r" % ("/".join(EXT_POLICY_SOURCES), policy_source))
+    out = {"path": rel, "state": "identity_mismatch", "blob": None, "worktree": None, "policy": None}
+    if policy_source == "index":
+        out["state"] = "index_unreadable"
+        try:
+            if not _root_is_toplevel(root):
+                return out
+            listed = _git_bytes(root, ["ls-files", "-s", "--", rel])
+            if listed is None:
+                return out
+            rows = []
+            for line in listed.decode("utf-8", "replace").splitlines():
+                meta, _, path = line.partition("\t")
+                if path == rel:
+                    rows.append(meta.split())
+            if not rows:
+                out["state"] = "index_missing"
+                return out
+            if any(len(r) != 3 or r[2] != "0" for r in rows):
+                out["state"] = "index_conflict"
+                return out
+            mode, blob, _stage = rows[0]
+            if mode not in ("100644", "100755"):
+                out["state"] = "index_nonregular"
+                return out
+            raw = _git_bytes(root, ["cat-file", "blob", blob])
+            if raw is None:
+                return out
+            out["blob"] = blob
+            try:
+                doc = json.loads(raw.decode("utf-8"))
+            except Exception:
+                doc = None
+            if not ok_fn(doc):
+                out["state"] = "malformed"
+                return out
+            out["policy"] = doc
+            out["state"] = "ok"
+        except Exception:
+            pass
+        return out
+    try:
+        exists = os.path.exists(os.path.join(os.fspath(root), *rel.split("/")))
         if not _root_is_toplevel(root):
             return out
-        head = _git_lines(root, ["rev-parse", "HEAD:" + EXT_ALLOWLIST_FILE], 1)
+        head = _git_lines(root, ["rev-parse", "HEAD:" + rel], 1)
         if not head:
             out["state"] = "uncommitted" if exists else "uninitialized"
             return out
         out["blob"] = head[0]
-        worktree = _git_lines(root, ["hash-object", EXT_ALLOWLIST_FILE], 1) if exists else None
+        worktree = _git_lines(root, ["hash-object", rel], 1) if exists else None
         if not worktree:
             return out
         out["worktree"] = worktree[0]
@@ -1240,7 +1396,7 @@ def extension_allowlist_facts(root):
             doc = json.loads(raw.decode("utf-8"))
         except Exception:
             doc = None
-        if not _extension_allowlist_ok(doc):
+        if not ok_fn(doc):
             out["state"] = "malformed"
             return out
         out["policy"] = doc
@@ -1248,6 +1404,16 @@ def extension_allowlist_facts(root):
     except Exception:
         pass
     return out
+
+
+def extension_allowlist_facts(root, policy_source="head"):
+    """`<root>` 的 allowlist 事實(形狀與狀態見 `_policy_facts`)。"""
+    return _policy_facts(root, EXT_ALLOWLIST_FILE, _extension_allowlist_ok, policy_source)
+
+
+def extension_inventory_facts(root, policy_source="head"):
+    """`<root>` 的 synced inventory 事實(形狀與狀態見 `_policy_facts`;malformed 經 `_extension_inventory_ok`)。"""
+    return _policy_facts(root, EXT_INVENTORY_FILE, _extension_inventory_ok, policy_source)
 
 
 def _hook_commands(node, acc):
@@ -1262,12 +1428,101 @@ def _hook_commands(node, acc):
             _hook_commands(value, acc)
 
 
+def _synced_root(name, root, walk, lstat, read_bytes):
+    """一個 synced 根 → `(entries, errors)`。entries 是 `(邏輯路徑, sha256 或 None)`;errors 是
+    `("synced", path, text)`。根不存在 ⇒ 空;列舉成功且無直接子項 ⇒ 空(3f-2 裁決 (ww))。
+    根或直接子項結構錯誤 ⇒ 不走訪 bucket、不產生該根的 entries(裁決 (yy))。bucket 真名不進任何輸出。"""
+    entries, errors = [], []
+    try:
+        st = lstat(root)
+    except FileNotFoundError:
+        return entries, errors
+    except OSError as e:
+        errors.append(("synced", root, "lstat failed: " + _error_text(e)))
+        return entries, errors
+    if not stat.S_ISDIR(st.st_mode):
+        errors.append(("synced", root, "bucket structure: root is symlink/not a directory"))
+        return entries, errors
+    try:
+        names = sorted(os.listdir(root))
+    except OSError as e:
+        errors.append(("synced", root, "listdir failed: " + _error_text(e)))
+        return entries, errors
+    if not names:
+        return entries, errors
+    dirs, files, other = [], [], []
+    for n in names:
+        try:
+            mode = lstat(os.path.join(root, n)).st_mode
+        except OSError as e:
+            errors.append(("synced", root, "child lstat failed: " + _error_text(e)))
+            return entries, errors
+        if stat.S_ISDIR(mode):
+            dirs.append(n)
+        elif stat.S_ISREG(mode):
+            files.append(n)
+        else:
+            other.append(n)
+    if other or len(dirs) != 1:
+        errors.append(("synced", root, "bucket structure: expected exactly one bucket directory and its marker"
+                       "(directories=%d, non-regular children=%d)" % (len(dirs), len(other))))
+        return entries, errors
+    marker = ".bucket-" + dirs[0]
+    extra = [f for f in files if f != marker]
+    if marker not in files or extra:
+        errors.append(("synced", root, "bucket structure: marker missing or mismatched, or extra root files"
+                       "(regular children=%d)" % len(files)))
+        return entries, errors
+    try:
+        msha = hashlib.sha256(read_bytes(os.path.join(root, marker))).hexdigest()
+    except Exception:
+        msha = None
+    entries.append(("%s/.bucket-%s" % (name, EXT_BUCKET_TOKEN), msha))
+    sub, sub_errors = _walk_regular(os.path.join(root, dirs[0]), walk=walk, lstat=lstat, read_bytes=read_bytes)
+    entries.extend(("%s/%s/%s" % (name, EXT_BUCKET_TOKEN, p), s) for p, s in sub)
+    errors.extend(("synced", p, t) for p, t in sub_errors)
+    return entries, errors
+
+
 def extension_surface_facts(dev_mods_dir, synced_dirs, canon_dir, mirror_dirs, project_settings_paths,
-                            mcp_json_path, user_skills_dir, user_commands_dir):
-    """已知靜態載入入口的事實(恰好七鍵)。純讀、無副作用、所有路徑由參數注入,不讀任何快取。"""
+                            mcp_json_path, user_skills_dir, user_commands_dir,
+                            walk=None, lstat=None, read_bytes=None):
+    """已知靜態載入入口的事實(恰好八鍵)。純讀、無副作用、所有路徑由參數注入,不讀任何快取。
+
+    `synced_dirs`:`[(root_name, path), ...]`,root_name ∈ EXT_SYNCED_ROOTS(3f-2 裁決 (xx))。
+    無效名 / 重複名 ⇒ 結構化錯誤,該名稱的所有項目都不走訪;其他唯一且合法的根照常觀測。
+    `errors`:`[(surface_name, path, error_text), ...]`;列舉失敗不得洗成空集合。
+    """
+    lstat_fn = lstat or os.lstat
+    read_fn = read_bytes or _read_all_bytes
+    errors = []
+
+    def walked(surface, root_dir, exclude_top=None):
+        found, errs = _walk_regular(root_dir, exclude_top=exclude_top, walk=walk, lstat=lstat, read_bytes=read_bytes)
+        errors.extend((surface, p, t) for p, t in errs)
+        return found
+
+    dev_mod_files = walked("dev-mods", dev_mods_dir)
+    user_skill_plugins = walked("user-skills", user_skills_dir, exclude_top="synced")
+    user_commands = walked("user-commands", user_commands_dir)
     synced_files = []
-    for d in synced_dirs:
-        synced_files.extend(p for p, _ in _walk_regular(d))
+    valid = []
+    for item in synced_dirs or []:
+        if isinstance(item, (tuple, list)) and len(item) == 2 and item[0] in EXT_SYNCED_ROOTS:
+            valid.append((item[0], item[1]))
+        else:
+            where = item[1] if isinstance(item, (tuple, list)) and len(item) == 2 else item
+            errors.append(("synced", str(where), "bucket structure: invalid root name"))
+    seen = {}
+    for name, _p in valid:
+        seen[name] = seen.get(name, 0) + 1
+    for name, path in valid:
+        if seen[name] > 1:
+            errors.append(("synced", path, "bucket structure: duplicate root name"))
+            continue
+        found, errs = _synced_root(name, path, walk, lstat_fn, read_fn)
+        synced_files.extend(found)
+        errors.extend(errs)
     hook_commands = []
     for path in project_settings_paths:
         if not os.path.exists(path):
@@ -1292,58 +1547,175 @@ def extension_surface_facts(dev_mods_dir, synced_dirs, canon_dir, mirror_dirs, p
         except Exception:
             mcp_servers = [u"%s: unreadable" % mcp_json_path]
     return {
-        "dev_mod_files": _walk_regular(dev_mods_dir),
+        "dev_mod_files": dev_mod_files,
         "synced_files": synced_files,
         "r4_violations": skill_mirror_violations(canon_dir, mirror_dirs),
         "project_hook_commands": hook_commands,
         "mcp_json_servers": mcp_servers,
-        "user_skill_plugins": _walk_regular(user_skills_dir, exclude_top="synced"),
-        "user_commands": _walk_regular(user_commands_dir),
+        "user_skill_plugins": user_skill_plugins,
+        "user_commands": user_commands,
+        "errors": errors,
     }
 
 
-def _extension_first_reason(facts, surfaces):
-    """`(狀態, 原因文字或 None)`。extension_state 與 extension_status_lines 共用(3d 裁決 (o))。"""
+def synced_verification(inventory_facts, surfaces):
+    """synced 納管的結構化結果:恰好六鍵 `{"verified","reason","missing","extra","mismatch","structure_errors"}`。
+
+    順序(v2 契約):inventory 為 None 或非 ok ⇒ 未納管(不讀 entries、不拋例外);synced 結構錯誤 ⇒ 不通過;
+    否則以 entries 的 {path: sha256} 與 synced_files 比對 —— 額外 / 缺少 / 內容不符(含磁碟 sha 為 None)任一 > 0
+    ⇒ 不通過;全 0 ⇒ 通過(含兩邊皆空)。
+    """
+    out = {"verified": False, "reason": None, "missing": 0, "extra": 0, "mismatch": 0, "structure_errors": 0}
+    if inventory_facts is None:
+        out["reason"] = u"synced 未納管：inventory absent"
+        return out
+    state = inventory_facts.get("state") if isinstance(inventory_facts, dict) else "malformed"
+    if state != "ok":
+        out["reason"] = u"synced 未納管：inventory %s" % state
+        return out
+    surfaces = surfaces if isinstance(surfaces, dict) else {}
+    structure = [e for e in (surfaces.get("errors") or []) if e and e[0] == "synced"]
+    if structure:
+        out["structure_errors"] = len(structure)
+        out["reason"] = u"synced 結構錯誤：%s" % structure[0][2]
+        return out
+    want = dict((e["path"], e["sha256"]) for e in inventory_facts["policy"]["entries"])
+    have = dict((p, s) for p, s in (surfaces.get("synced_files") or []))
+    out["extra"] = len([p for p in have if p not in want])
+    out["missing"] = len([p for p in want if p not in have])
+    out["mismatch"] = len([p for p in have if p in want and (have[p] is None or have[p] != want[p])])
+    if out["extra"] or out["missing"] or out["mismatch"]:
+        out["reason"] = u"額外 %d / 缺少 %d / 內容不符 %d" % (out["extra"], out["missing"], out["mismatch"])
+        return out
+    out["verified"] = True
+    return out
+
+
+def _extension_first_reason(facts, surfaces, inventory):
+    """`(state, category, reason)`。判定只在這裡發生一次;渲染不再判定(3e 裁決 z1)。
+
+    順序:1 allowlist 非 ok ⇒ VIOLATION;2 鍵集合 ≠ 八鍵 ⇒ UNKNOWN / observation_missing;3 檔案型入口未登記
+    ⇒ VIOLATION;4 R4;5 hook;6 mcp;7 errors 非空 ⇒ UNKNOWN / observation_missing;8 synced(inventory 為
+    `EXT_INVENTORY_UNCHECKED` ⇒ 舊語意「非空即未受管(未評估)」;否則依 `synced_verification`);9 DECLARED_OK。
+    """
     state = facts.get("state") if isinstance(facts, dict) else None
     if state != "ok":
-        return (EXT_VIOLATION, _EXT_STATE_TEXT.get(state, _EXT_STATE_TEXT["malformed"]))
+        return (EXT_VIOLATION, EXT_CAT_ALLOWLIST, _EXT_STATE_TEXT.get(state, _EXT_STATE_TEXT["malformed"]))
     keys = set(surfaces) if isinstance(surfaces, dict) else set()
     if keys != EXT_SURFACE_KEYS:
-        return (EXT_UNKNOWN, u"surfaces 不完整：缺 %s / 多 %s；fail-closed"
+        return (EXT_UNKNOWN, EXT_CAT_OBSERVATION, u"surfaces 不完整：缺 %s / 多 %s；fail-closed"
                 % (sorted(EXT_SURFACE_KEYS - keys), sorted(keys - EXT_SURFACE_KEYS)))
     policy = facts["policy"]
     for field, label in _EXT_FILE_FIELDS:
         allowed = set((item["path"], item["sha256"]) for item in policy[field])
         bad = [relp for relp, sha in surfaces[field] if sha is None or (relp, sha) not in allowed]
         if bad:
-            return (EXT_VIOLATION, u"%s 未登記（path, sha256）：%s（共 %d 筆）" % (label, bad[0], len(bad)))
+            return (EXT_VIOLATION, EXT_CAT_UNREGISTERED,
+                    u"%s 未登記（path, sha256）：%s（共 %d 筆）" % (label, bad[0], len(bad)))
     r4 = surfaces["r4_violations"]
     if r4:
-        return (EXT_VIOLATION, u"%s（共 %d 筆）" % (str(r4[0]).splitlines()[0], len(r4)))
+        return (EXT_VIOLATION, EXT_CAT_R4, u"%s（共 %d 筆）" % (str(r4[0]).splitlines()[0], len(r4)))
     bad = [c for c in surfaces["project_hook_commands"] if c not in policy["project_settings_hook_commands"]]
     if bad:
-        return (EXT_VIOLATION, u"專案 settings hook 未登記：%s（共 %d 筆）" % (bad[0], len(bad)))
+        return (EXT_VIOLATION, EXT_CAT_HOOK, u"專案 settings hook 未登記：%s（共 %d 筆）" % (bad[0], len(bad)))
     bad = [s for s in surfaces["mcp_json_servers"] if s not in policy["mcp_json_servers"]]
     if bad:
-        return (EXT_VIOLATION, u".mcp.json server 未登記：%s（共 %d 筆）" % (bad[0], len(bad)))
-    if surfaces["synced_files"]:
-        return (EXT_UNKNOWN, u"未受管入口有內容：synced %d 檔；不得視為乾淨" % len(surfaces["synced_files"]))
-    return (EXT_DECLARED_OK, None)
+        return (EXT_VIOLATION, EXT_CAT_MCP, u".mcp.json server 未登記：%s（共 %d 筆）" % (bad[0], len(bad)))
+    errors = surfaces["errors"]
+    if errors:
+        first = errors[0]
+        return (EXT_UNKNOWN, EXT_CAT_OBSERVATION,
+                u"觀測失敗：%s: %s（共 %d 筆）" % (first[0], first[-1], len(errors)))
+    if inventory is EXT_INVENTORY_UNCHECKED:
+        if surfaces["synced_files"]:
+            return (EXT_UNKNOWN, EXT_CAT_UNMANAGED, u"未受管入口：synced（未評估）")
+    else:
+        v = synced_verification(inventory, surfaces)
+        if v["verified"] is not True:
+            return (EXT_UNKNOWN, EXT_CAT_UNMANAGED, u"未受管入口：synced（" + v["reason"] + u"）")
+    return (EXT_DECLARED_OK, None, None)
 
 
-def extension_state(facts, surfaces):
-    """四態之一(實際可回的只有 VIOLATION / UNKNOWN / DECLARED_OK)。"""
-    return _extension_first_reason(facts, surfaces)[0]
-
-
-def extension_status_lines(facts, surfaces):
-    """恰好兩行:static surfaces 與 runtime loaded set 分欄;runtime 欄固定未證明。"""
-    state, reason = _extension_first_reason(facts, surfaces)
+def _extension_render_lines(state, category, reason, facts):
+    """恰好兩行:static surfaces 與 runtime loaded set 分欄;runtime 欄固定未證明。facts 可為 None(不帶 blob)。"""
     if state == EXT_DECLARED_OK:
-        first = u"static surfaces: 已知靜態入口符合已提交的 allowlist（%s）" % (facts.get("blob") or "")[:12]
+        blob = (facts.get("blob") or "")[:12] if isinstance(facts, dict) else ""
+        first = u"static surfaces: 已知靜態入口符合已提交的 allowlist（%s）" % blob
     else:
         first = u"static surfaces: %s —— %s" % (state, reason)
     return [first, _EXT_RUNTIME_LINE]
+
+
+def extension_state(facts, surfaces):
+    """四態之一(實際可回的只有 VIOLATION / UNKNOWN / DECLARED_OK)。兩參數相容 wrapper:synced 未評估。"""
+    return _extension_first_reason(facts, surfaces, EXT_INVENTORY_UNCHECKED)[0]
+
+
+def extension_status_lines(facts, surfaces):
+    """兩參數相容 wrapper = 一次判定 + 渲染;synced 未評估。production 不經這裡(3e 裁決 z1)。"""
+    state, category, reason = _extension_first_reason(facts, surfaces, EXT_INVENTORY_UNCHECKED)
+    return _extension_render_lines(state, category, reason, facts)
+
+
+def extension_report(repo_root, claude_root=None, walk=None, lstat=None, read_bytes=None, policy_source="head"):
+    """146 的單一判定入口(十四鍵)。gate 的 pre-commit 與 status 都消費這一份。
+
+    claude_root 為 None ⇒ `expanduser("~")/.claude`(fallback);給值 ⇒ 該值(param),不 fallback(補鎖 3)。
+    前置觀測失敗(不存在 / 不是目錄 / lstat 失敗 / `~` 沒展開)⇒ observation="claude_root_invalid",
+    facts / surfaces / inventory / synced 皆 None,判定 0 次。否則判定恰好 1 次,lines 由同一結果渲染。
+    authority 固定 "ok";runtime_assurance 固定 UNPROVEN —— 本函式不證明本 session 實際載入了什麼。
+    """
+    if policy_source not in EXT_POLICY_SOURCES:
+        raise ValueError("policy_source 只接受 %s,收到 %r" % ("/".join(EXT_POLICY_SOURCES), policy_source))
+    lstat_fn = lstat or os.lstat
+    if claude_root is None:
+        home = os.path.expanduser("~")
+        claude_root = os.path.join(home, ".claude")
+        source = "fallback"
+        unexpanded = home.startswith("~")
+    else:
+        claude_root = os.fspath(claude_root)
+        source = "param"
+        unexpanded = False
+    report = {"facts": None, "surfaces": None, "state": EXT_UNKNOWN, "category": EXT_CAT_OBSERVATION,
+              "reason": None, "lines": None, "runtime_assurance": EXT_RUNTIME_UNPROVEN,
+              "claude_root": claude_root, "claude_root_source": source, "authority": "ok",
+              "observation": "ok", "inventory": None, "synced": None, "policy_source": policy_source}
+    why = None
+    if unexpanded:
+        why = u"家目錄沒有展開"
+    else:
+        try:
+            if not stat.S_ISDIR(lstat_fn(claude_root).st_mode):
+                why = u"不是目錄"
+        except FileNotFoundError:
+            why = u"不存在"
+        except OSError as e:
+            why = u"lstat 失敗（%s）" % type(e).__name__
+    if why is not None:
+        report["observation"] = "claude_root_invalid"
+        report["reason"] = u"claude_root 無法確定：%s（%s）" % (why, source)
+        report["lines"] = _extension_render_lines(EXT_UNKNOWN, EXT_CAT_OBSERVATION, report["reason"], None)
+        return report
+    root = os.fspath(repo_root)
+    facts = extension_allowlist_facts(root, policy_source=policy_source)
+    inventory = extension_inventory_facts(root, policy_source=policy_source)
+    surfaces = extension_surface_facts(
+        os.path.join(claude_root, "dev-mods"),
+        [("skills", os.path.join(claude_root, "skills", "synced")),
+         ("plugins", os.path.join(claude_root, "plugins", "synced"))],
+        os.path.join(root, ".agents", "skills"),
+        [os.path.join(root, ".claude", "skills"), os.path.join(root, "skills")],
+        [os.path.join(root, ".claude", "settings.json"), os.path.join(root, ".claude", "settings.local.json")],
+        os.path.join(root, ".mcp.json"),
+        os.path.join(claude_root, "skills"),
+        os.path.join(claude_root, "commands"),
+        walk=walk, lstat=lstat, read_bytes=read_bytes)
+    state, category, reason = _extension_first_reason(facts, surfaces, inventory)
+    report.update({"facts": facts, "surfaces": surfaces, "state": state, "category": category,
+                   "reason": reason, "lines": _extension_render_lines(state, category, reason, facts),
+                   "inventory": inventory, "synced": synced_verification(inventory, surfaces)})
+    return report
 
 
 def _completeness_problems(comp):

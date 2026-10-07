@@ -58,6 +58,17 @@ import status                      # noqa: E402  ← 尚不存在,本檔的紅�
 from status import render          # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _t146_isolated_claude_root(tmp_path, monkeypatch):
+    """票 146(4b 准改第 15 項;補件三裁決 A):status 的 R10 兩行一律讀 tmp 空目錄,不 fallback 到真實 ~/.claude。
+
+    只換 `status._extension_claude_root`,不改 HOME / USERPROFILE。T146-20 / 28 / 30 自己的 `_inject`
+    在 function 層較晚設定,以各自注入為準。"""
+    claude = tmp_path / "_t146_isolated_claude_root"
+    claude.mkdir()
+    monkeypatch.setattr(status, "_extension_claude_root", lambda: str(claude))
+
+
 # 分類詞 —— 裁 B:票面狀態行**不分類**,只印原文。
 CLASSIFIER_WORDS = (u"done", u"open", u"candidate")
 
@@ -3249,6 +3260,8 @@ class TestTicket146StatusLines:
             "v0 contract not implemented: redlight.extension_report"
         rep = rl.extension_report(root, str(claude))
         assert _value_of(out, u"extension integrity (R10)") == rep["lines"][0], (ext, rep["lines"])
+        # 4b 准改第 14 項(Jeff 新裁):runtime 那一行的前綴只出現一次(值已去掉固定前綴)。
+        assert rt[0].count(u"runtime loaded set: ") == 1, rt
 
     def test_t146_28(self, tmp_path, monkeypatch):
         """T146-28:status 實際消費的 report 與 gate.check_extension_integrity 消費的 report 同 state、同第一行;對應裁決 (w)。"""

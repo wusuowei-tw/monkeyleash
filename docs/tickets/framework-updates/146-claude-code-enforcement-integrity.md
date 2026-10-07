@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:3f-2 紅燈已驗收;待 policy 草稿與 Jeff 核准;146 尚未生效
+**狀態**:4b 實作中;146 尚未生效
+~~**狀態**:3f-2 紅燈已驗收;待 policy 草稿與 Jeff 核准;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-07 S4b-146 4b-1 開工時更新(其間 policy 已由 Jeff 提交 `4cb59eb`、G-0 `2b7c9f8`、3g 紅燈 `8e7b293`)。
 ~~**狀態**:3f-2 紅燈已提交(S3f2-146-1);待 policy 草稿與 Jeff 核准;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f-2 驗收、D-1～D-3 裁決入票時更新。
 ~~**狀態**:3f-2 紅燈補完中;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f-2 紅燈提交並證紅時更新。
 ~~**狀態**:3f 紅燈已提交(S3f-146-1);待 policy 草稿與 Jeff 核准;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f-2 裁決 (uu)–(zz) 入票時更新。
@@ -862,3 +863,74 @@ gate.py：
 ### (cc) 加註
 
 〈3f-0 synced 納管偵查〉(cc) 的「allowlist 只認 HEAD blob，同一 commit 內新增的 allowlist 不能替該次 commit 放行」已依 F-036 劃線，並加註「policy-only commit 除外(H-6)」。
+
+---
+
+## 第四站 4b 實作(S4b-146-1)
+
+### 範圍
+
+依 v1 / v2 / 3f-2 / 4b 允許修改清單(累積)/ G-0 / 3g 契約實作;不改名、不改語意。
+
+- production 六檔:`.claude/hooks/redlight.py`、`.claude/hooks/gate.py`、`.claude/portable/status.py`、`.claude/portable/verify_gates.py`、`.claude/portable/install.py`、`CLAUDE.md`(R10 一列,文字依 S4b 指令逐字)。
+- 測試(只動准改清單第 1–14 項):
+  - 第 1–5 項:`check_extension_integrity` 換成固定回 `{"hard_block": None, "violations": [], "report": None, "policy_source": "head"}` 的替身。
+  - 第 6 項:`_make_root` 不改,維持「redlight 缺失」分支(只複製 gate.py)。
+  - 第 7 項:T146-23 / 38 佈置改合法 bucket + marker,加斷言「額外 2」且不含「結構錯誤」。
+  - 第 8 項:T146-24b 刪五行。
+  - 第 9 項:`_root` docstring 移除緊湊 JSON 說明,inventory 回一般格式。
+  - 第 10 項:docstring。
+  - 第 11–13 項:隨 production 完成。
+  - 第 14 項:T146-20 加「runtime loaded set: 恰好出現 1 次」—— **此斷言未經獨立紅燈,屬准改**。
+
+### 4b-2 前待裁(實作後盤點,未跑 pytest)
+
+接線後 status 對「root 內有 redlight.py」的 root 以 `claude_root=None` 呼叫 `extension_report`,依契約 fallback 到 `expanduser("~")/.claude`。
+准改清單外有測試會因此在 pytest 中**唯讀走訪真實使用者層**:
+
+- `tests/test_status.py` 的 `_root_with_redlight` 呼叫點,以及 `:572` 的 fixture。
+- `tests/test_gate.py:3702`(在真 repo 上跑 `mode_pre_commit()`,沒有 R10 替身)。
+
+S4b 指令只准 4b-2 第 3、4 步與 4b-3 的真正 commit 唯讀觀測真實使用者層,所以 4b-2 第 1 步在裁決前不執行。
+
+### 補件三 Jeff 裁決(2026-10-07,逐字要點)
+
+S4b-146 補件三(Jeff 裁決 2026-10-07,逐字要點):裁 A,准改第 15、16 項。隨 S4b-146-1 一併處理,審計逐行列 - 行,兩項及新增斷言入票。
+
+- 第 15 項 tests/test_status.py:模組內新增 function-scope autouse fixture(名稱 _t146_isolated_claude_root),只用 monkeypatch.setattr(status, "_extension_claude_root", lambda: str(<tmp 空目錄>))(tmp_path 建立、為空);不改全套 HOME／USERPROFILE;T146-20／28／30 的專用 _inject 保留,以各自注入為準。不改任何既有 node 的斷言。tests/test_status.py:572 的 fixture 由此 autouse 覆蓋,不另改。
+- 第 16 項 tests/test_gate.py:3702 那支 node:加與第 1–5 項同款的 check_extension_integrity 替身(回 {"hard_block": None, "violations": [], "report": None, "policy_source": "head"}),並以計數或 spy 包住 check_friction_numbers,斷言它確實被呼叫恰好 ≥1 次,避免只靠 rc == 1 的假綠。
+- staged 為空時 gate 仍跑 R10:這是已裁的全局入口檢查行為,不自行改成略過;(v5) 在 4b-2 第 2 步淨室實測時照實回報。
+
+(同一則訊息貼了兩個版本;第二版是第一版的超集,多了第 16 項的 spy 斷言。以第二版為準。)
+
+### 第 15、16 項落地
+
+- 第 15 項:`tests/test_status.py` 在 `from status import render` 之後加 `_t146_isolated_claude_root`(autouse、function scope),tmp 目錄為 `tmp_path / "_t146_isolated_claude_root"`(建立時為空)。
+- 第 16 項:`TestFrictionNumbersAreUnique::test_the_rule_is_actually_invoked_at_the_authoritative_layer` 改以 spy 包住 `check_friction_numbers`,加 `check_extension_integrity` 替身。
+  - 新增斷言 `assert len(calls) >= 1`;原 `rc == 1` 斷言保留。
+  - **此兩項斷言 / 替身未經獨立紅燈,屬准改。**
+
+### 補件四 Jeff 裁決(2026-10-07)
+
+S4b-146 補件四(Jeff 裁決 2026-10-07):紅一、紅二都選 A,4b 允許修改清單新增:
+
+- 第 17 項 tests/test_gate.py TestInlineInterpretersAreUndecidable::test_the_rule_stays_inside_r7:移除 "R10" not in codes 那句;改為斷言 gate.bash_write_violation 對 python -c 形式的擋下訊息含 "[R7]"(用既有述詞呼叫方式),保留 "R7" in codes;不寫死任何其他號碼。保留 R7 原意。
+- 第 18 項 tests/test_gate.py T146-67:期待原因由「額外 2」改為 "inventory worktree_differs";新增結構化斷言 assert res["report"]["inventory"]["state"] == "worktree_differs";保留 res["policy_source"] == "head";明確斷言 res["hard_block"] 含 "[R10/fail-closed]";docstring 補一句「混合 commit 走 HEAD 路徑：工作樹 inventory ≠ HEAD ⇒ identity 先判 worktree_differs」。不改 HEAD identity 契約。
+- 審計:第 17、18 項逐行列 - 行;3g 審計 C0 的預判漏項(T146-67)在 4b 審計〈待裁／偏離〉記明;前檢第一次用了 python -m pytest -q -rs、漏 -X utf8 致中文亂碼，記入偏離。
+- 口徑：目前 193 個 146 紅燈已轉綠,T146-67 待第 18 項後再驗;不得寫「194 全綠」。
+
+### 第 17、18 項落地
+
+- 第 18 項：依裁決完成(四個斷言 + docstring 一句)。
+- 第 17 項：已移除 `"R10" not in codes`,改寫為 `assert msg and "[R7]" in msg, msg`。
+  - **與實測矛盾，待裁**:`bash_write_violation('python -c "print(1)"')` 的擋下訊息第一行是 `[R7/內嵌直譯器] …`,含 `[R7/`、不含 `[R7]`(scratchpad 唯讀腳本實測)。
+  - 照字面寫的斷言必紅;4b-2 重跑因此暫停。
+
+### 補件五 Jeff 裁決(2026-10-07)
+
+S4b-146 補件五(Jeff 裁決 2026-10-07):第 17 項選 A。
+
+- 斷言改為 assert msg and "[R7/" in msg, msg;其餘(移除 "R10" not in codes、保留 "R7" in codes、用 gate.bash_write_violation('python -c "print(1)"'))不變;不改 production 訊息。
+- 審計記：補件四把 R7 訊息格式寫成 "[R7]" 是指令錯誤,VS 以實測更正;Jeff 先前核准的精確子字串同樣作廢。
+
+落地：第 17 項最後一行改為 `assert msg and "[R7/" in msg, msg`。

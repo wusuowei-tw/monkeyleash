@@ -1067,6 +1067,10 @@ class TestTheListItselfIsGuarded:
         monkeypatch.setattr(gate, "check_third_axis_mount", lambda: [])
         monkeypatch.setattr(gate, "check_to_spec_override", lambda: [])
         monkeypatch.setattr(gate, "check_legacy_list", lambda: ["假違規"])
+        # 票 146 R10(4b 准改第 4 項):停掉 —— 否則 rc 1 可能來自 R10 硬擋,而不是 R6。
+        monkeypatch.setattr(gate, "check_extension_integrity",
+                            lambda staged_names=None: {"hard_block": None, "violations": [],
+                                                       "report": None, "policy_source": "head"})
         assert gate.mode_pre_commit() == 1, "pre-commit 沒有呼叫 check_legacy_list"
 
     def test_an_unreadable_list_is_not_silently_clean(self, tmp_path, monkeypatch):
@@ -3045,6 +3049,10 @@ class TestEnforcementDoesNotTeachItsOwnBypass:
         monkeypatch.setattr(gate, "check_legacy_list",
                             lambda: ["[R6] 測試用的違規"])
         monkeypatch.setattr(gate, "shadow_active", lambda: False)
+        # 票 146 R10(4b 准改第 5 項):停掉 —— 本組驗的是一般違規的擋下訊息,不是 R10 硬擋。
+        monkeypatch.setattr(gate, "check_extension_integrity",
+                            lambda staged_names=None: {"hard_block": None, "violations": [],
+                                                       "report": None, "policy_source": "head"})
         rc = gate.mode_pre_commit()
         return rc, capsys.readouterr().err
 
@@ -3689,9 +3697,19 @@ class TestFrictionNumbersAreUnique:
             self, monkeypatch):
         """**最強的那一條**(照 R6 的先例):驗規則真的被 pre-commit 呼叫,
         不只是函式回對值。沒有這條的話,一個寫好卻沒接上的檢查會全綠。"""
-        monkeypatch.setattr(gate, "check_friction_numbers",
-                            lambda *a, **k: ["假違規"])
+        calls = []
+
+        def spy(*a, **k):
+            calls.append((a, k))
+            return ["假違規"]
+        monkeypatch.setattr(gate, "check_friction_numbers", spy)
+        # 票 146 R10(4b 准改第 16 項;補件三):停掉 —— 否則 rc 1 可能來自 R10 硬擋(假綠);
+        # 另以 spy 斷言本條規則確實被呼叫,不只靠 rc。
+        monkeypatch.setattr(gate, "check_extension_integrity",
+                            lambda staged_names=None: {"hard_block": None, "violations": [],
+                                                       "report": None, "policy_source": "head"})
         assert gate.mode_pre_commit() == 1, "pre-commit 沒有呼叫 check_friction_numbers"
+        assert len(calls) >= 1, "check_friction_numbers 沒有被 pre-commit 呼叫"
 
     def test_the_shipped_log_is_clean(self):
         """對**本庫現行的** friction-log 跑一次 —— 正對照,不是只測 tmp_path。"""
@@ -4795,7 +4813,10 @@ class TestInlineInterpretersAreUndecidable:
         """
         codes = gate.rule_codes()
         assert "R7" in codes
-        assert "R10" not in codes, "多了一個規則代號,淨室會要求它的情境:%s" % sorted(codes)
+        # 票 146(4b 准改第 17 項):~~`"R10" not in codes`~~ —— R10 已是正式新規則(票 146),
+        # 寫死「下一個號」會在每次合法加規則時紅。改驗原意本身:內嵌直譯器的擋下掛在 R7 名下。
+        msg = gate.bash_write_violation('python -c "print(1)"')
+        assert msg and "[R7/" in msg, msg
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -6213,6 +6234,10 @@ def _d_silence_the_neighbours(monkeypatch, repo):
     monkeypatch.setattr(gate, "check_friction_numbers",
                         lambda path=None, cwd=None: [])
     monkeypatch.setattr(gate, "shadow_active", lambda *a, **k: False)
+    # 票 146 R10(4b 准改第 2 項):停掉 —— 臨時 repo 沒有 HEAD policy,R10 會硬擋並搶走 rc。
+    monkeypatch.setattr(gate, "check_extension_integrity",
+                        lambda staged_names=None: {"hard_block": None, "violations": [],
+                                                   "report": None, "policy_source": "head"})
 
 
 def test_d_mode_pre_commit_blocks_an_entry_absent_from_the_go_live_tree(
@@ -6568,9 +6593,7 @@ class TestTicket146Integration:
         subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True)
 
     def _root(self, tmp_path, with_redlight=True):
-        """臨時 repo(已提交空白 allowlist + 合法空 inventory)+ 存在但空的 claude_root。
-
-        inventory 用緊湊 JSON(不縮排):T146-24b 會再以縮排格式寫一次並提交,位元組不同才提交得進去(3f-2)。"""
+        """臨時 repo(已提交空白 allowlist + 合法空 inventory)+ 存在但空的 claude_root。"""
         root = tmp_path / "repo"
         hooks = root / ".claude" / "hooks"
         hooks.mkdir(parents=True)
@@ -6584,7 +6607,8 @@ class TestTicket146Integration:
             f.write(json.dumps(self._ALLOWLIST, ensure_ascii=False, indent=2) + "\n")
         with io.open(str(root / ".agents" / "extension-inventory.json"), "w",
                      encoding="utf-8", newline="\n") as f:
-            f.write(json.dumps({"schema": "monkeyleash.extension-inventory", "version": 1, "entries": []}) + "\n")
+            f.write(json.dumps({"schema": "monkeyleash.extension-inventory", "version": 1, "entries": []},
+                               ensure_ascii=False, indent=2) + "\n")
         self._git(root, "init", "-q")
         self._git(root, "config", "user.email", "t@example.invalid")
         self._git(root, "config", "user.name", "t")
@@ -6670,15 +6694,18 @@ class TestTicket146Integration:
         assert rc == 1, err
 
     def test_t146_23(self, tmp_path, monkeypatch, capsys):
-        """T146-23:synced 有檔但未納管(inventory 沒有登記這些檔)、其他乾淨 ⇒ rc 1,[R10/fail-closed] +「未受管入口：synced」;影子開仍 rc 1;對應裁決 3、補鎖 6(3f 修訂版)。"""
+        """T146-23:synced 有合法 bucket + marker 但未納管(inventory 沒有登記這些檔)、其他乾淨 ⇒ rc 1,[R10/fail-closed] +「未受管入口：synced」;
+        紅因是額外檔案,不是結構錯誤(裁決 (aaa));影子開仍 rc 1;對應裁決 3、補鎖 6(3f 修訂版)。"""
         root, claude = self._root(tmp_path)
-        (claude / "skills" / "synced").mkdir(parents=True)
-        (claude / "skills" / "synced" / "manifest.json").write_bytes(b"{}\n")
+        (claude / "skills" / "synced" / "b1").mkdir(parents=True)
+        (claude / "skills" / "synced" / "b1" / "SKILL.md").write_bytes(b"# s\n")
+        (claude / "skills" / "synced" / ".bucket-b1").write_bytes(b"b1\n")
         mod = self._load(root, "23")
         self._wire(monkeypatch, mod, claude)
         rc, err = self._run(mod, capsys)
         assert rc == 1, err
         assert "[R10/fail-closed]" in err and u"未受管入口：synced" in err, err
+        assert u"額外 2" in err and u"結構錯誤" not in err, err
         self._wire(monkeypatch, mod, claude, shadow=True)
         rc, err = self._run(mod, capsys)
         assert rc == 1, err
@@ -6714,26 +6741,24 @@ class TestTicket146Integration:
         assert "[R10/fail-closed]" in err and u"觀測失敗" in err, err
 
     def test_t146_38(self, tmp_path, monkeypatch, capsys):
-        """T146-38:未登記檔 + synced 有檔但未納管 + 影子開 ⇒ rc 1,[R10/fail-closed] +「未受管入口：synced」(補鎖 6 3f 修訂版,不得只重述未登記檔);對應裁決 3。"""
+        """T146-38:未登記 dev-mod 檔 + synced 有合法 bucket + marker 但未納管 + 影子開 ⇒ rc 1,[R10/fail-closed] +「未受管入口：synced」
+        (補鎖 6 3f 修訂版,不得只重述未登記檔);紅因是額外檔案,不是結構錯誤(裁決 (aaa));對應裁決 3。"""
         root, claude = self._root(tmp_path)
         (claude / "dev-mods").mkdir()
         (claude / "dev-mods" / "x.txt").write_bytes(b"x\n")
-        (claude / "skills" / "synced").mkdir(parents=True)
-        (claude / "skills" / "synced" / "manifest.json").write_bytes(b"{}\n")
+        (claude / "skills" / "synced" / "b1").mkdir(parents=True)
+        (claude / "skills" / "synced" / "b1" / "SKILL.md").write_bytes(b"# s\n")
+        (claude / "skills" / "synced" / ".bucket-b1").write_bytes(b"b1\n")
         mod = self._load(root, "38")
         self._wire(monkeypatch, mod, claude, shadow=True)
         rc, err = self._run(mod, capsys)
         assert rc == 1, err
         assert "[R10/fail-closed]" in err and u"未受管入口：synced" in err, err
+        assert u"額外 2" in err and u"結構錯誤" not in err, err
 
     def test_t146_24b(self, tmp_path, monkeypatch, capsys):
         """T146-24b:DECLARED_OK 佈置 ⇒ rc 0(runtime 未證明不擋;裁決 4);對應 invariant 後半。"""
         root, claude = self._root(tmp_path)
-        with io.open(str(root / ".agents" / "extension-inventory.json"), "w", encoding="utf-8", newline="\n") as f:
-            f.write(json.dumps({"schema": "monkeyleash.extension-inventory", "version": 1, "entries": []},
-                               ensure_ascii=False, indent=2) + "\n")
-        self._git(root, "add", ".agents/extension-inventory.json")
-        self._git(root, "commit", "-q", "-m", "inventory")
         mod = self._load(root, "24b")
         self._wire(monkeypatch, mod, claude)
         rc, err = self._run(mod, capsys)
@@ -7103,7 +7128,8 @@ class TestTicket146PolicyOnlyLane:
 
     def test_t146_67_mixed_commit_uses_head(self, tmp_path, monkeypatch):
         """T146-67(behavior-red):claude_root 有 bucket 兩筆;stage 含那兩筆的合法 inventory **且** stage x.py ⇒ "head"、
-        硬擋含「額外 2」(HEAD 的 inventory 是空的)。BASELINE 紅因:同 T146-63。"""
+        硬擋含 "inventory worktree_differs"(4b 准改第 18 項;原期待「額外 2」為 3g 預判錯)。BASELINE 紅因:同 T146-63。
+        混合 commit 走 HEAD 路徑：工作樹 inventory ≠ HEAD ⇒ identity 先判 worktree_differs。"""
         root, claude, mod = self._setup(tmp_path, monkeypatch, "67")
         entries = _po_plant(claude)
         _po_write(root, _PO_INV, _po_inventory_text(entries))
@@ -7111,7 +7137,10 @@ class TestTicket146PolicyOnlyLane:
         _po_git(root, "add", _PO_INV, "x.py")
         res = self._check(mod, _po_staged(root))
         assert res["policy_source"] == "head", res
-        assert u"額外 2" in (res["hard_block"] or ""), res["hard_block"]
+        hb = res["hard_block"] or ""
+        assert "[R10/fail-closed]" in hb, hb
+        assert "inventory worktree_differs" in hb, hb
+        assert res["report"]["inventory"]["state"] == "worktree_differs", res["report"]["inventory"]
 
     def test_t146_68_after_approval_normal_commit_returns_to_head_path(self, tmp_path, monkeypatch):
         """T146-68(behavior-red):只 stage inventory ⇒ 放行、"index";提交後 stage x.py ⇒ "head"、放行、violations []。
