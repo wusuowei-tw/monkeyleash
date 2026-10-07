@@ -2875,7 +2875,7 @@ class TestTicket146ExtensionIntegrity:
         user_commands = base / "user-commands"
         user_commands.mkdir(parents=True, exist_ok=True)
         fn = self._api("extension_surface_facts")
-        return fn(str(dev), [str(synced)], str(canon), [], [], str(base / "absent.mcp.json"),
+        return fn(str(dev), [("skills", str(synced))], str(canon), [], [], str(base / "absent.mcp.json"),
                   str(user_skills), str(user_commands))
 
     def _facts(self, root):
@@ -2930,7 +2930,7 @@ class TestTicket146ExtensionIntegrity:
         r = self._repo(tmp_path / "r4b", allowlist_text=text)
         out.append(("T146-4b", self._facts(r),
                     self._surfaces(tmp_path / "s4b", dev_mod_dirs=("session-id-shell",),
-                                   synced_files={"manifest.json": b"{}\n"})))
+                                   synced_files={"bkt/manifest.json": b"{}\n", ".bucket-bkt": b"marker\n"})))
         return out
 
     def test_t146_0a(self):
@@ -3020,7 +3020,7 @@ class TestTicket146ExtensionIntegrity:
         """T146-4b:同 T146-4 但 synced 目錄有一個 manifest.json ⇒ UNKNOWN(Q2:未受管入口不算 static clean);對應 invariant 前半。"""
         root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist()))
         surfaces = self._surfaces(tmp_path / "s", dev_mod_dirs=("session-id-shell",),
-                                  synced_files={"manifest.json": b"{}\n"})
+                                  synced_files={"bkt/manifest.json": b"{}\n", ".bucket-bkt": b"marker\n"})
         state, lines = self._evaluate(self._facts(root), surfaces)
         assert state == self._api("EXT_UNKNOWN"), state
         assert "UNKNOWN" in lines[0], lines
@@ -3132,6 +3132,7 @@ class TestTicket146ExtensionIntegrity:
         manifest = user_skills / "synced" / "session-id" / "manifest.json"
         manifest.parent.mkdir(parents=True)
         manifest.write_bytes(b"{}\n")
+        (user_skills / "synced" / ".bucket-session-id").write_bytes(b"marker\n")
         user_commands = base / "user-commands"
         user_commands.mkdir(parents=True)
         dev = base / "dev-mods"
@@ -3139,7 +3140,7 @@ class TestTicket146ExtensionIntegrity:
         canon = base / "canon"
         _g_write(canon, "s/SKILL.md", u"skill\n")
         fn = self._api("extension_surface_facts")
-        args = (str(dev), [str(user_skills / "synced")], str(canon), [], [], str(base / "absent.mcp.json"),
+        args = (str(dev), [("skills", str(user_skills / "synced"))], str(canon), [], [], str(base / "absent.mcp.json"),
                 str(user_skills), str(user_commands))
         surfaces = fn(*args)
         assert list(surfaces.get("user_skill_plugins", ["<missing>"])) == [], surfaces.get("user_skill_plugins")
@@ -3224,7 +3225,7 @@ class TestTicket146ExtensionIntegrity:
         assert via_gate == via_redlight, (via_gate, via_redlight)
 
     def test_t146_14(self, tmp_path):
-        """T146-14:完整性前提 —— surfaces 鍵集合恰為七鍵才可能 DECLARED_OK;少一鍵或多一鍵都不得 DECLARED_OK;對應 invariant 後半。"""
+        """T146-14:完整性前提 —— surfaces 鍵集合恰為八鍵才可能 DECLARED_OK;少一鍵或多一鍵都不得 DECLARED_OK;對應 invariant 後半。"""
         keys = ("dev_mod_files", "synced_files", "r4_violations", "project_hook_commands",
                 "mcp_json_servers", "user_skill_plugins", "user_commands", "errors")
         root = self._repo(tmp_path / "r", allowlist_text=self._text(self._allowlist()))
@@ -3895,3 +3896,90 @@ class TestTicket146ExtensionIntegrity:
         assert state_fn(rep2["facts"], rep2["surfaces"]) == ok, lines2
         assert "UNKNOWN" not in lines2[0], lines2
         assert first(rep2["facts"], rep2["surfaces"], unchecked)[0] == ok
+
+    # ── 3f-2(S3f2-146-1):synced_dirs 成對、空根、root 名錯誤、部分根走訪 ─────────
+
+    def _t3f2_surfaces(self, base, synced_dirs):
+        """其他入口乾淨(tmp、路徑注入)、synced_dirs 照傳 → extension_surface_facts。"""
+        base = pathlib.Path(str(base))
+        dev = base / "dev-mods"
+        dev.mkdir(parents=True, exist_ok=True)
+        canon = base / "canon"
+        _g_write(canon, "s/SKILL.md", u"skill\n")
+        user_skills = base / "user-skills"
+        user_skills.mkdir(parents=True, exist_ok=True)
+        user_commands = base / "user-commands"
+        user_commands.mkdir(parents=True, exist_ok=True)
+        fn = self._api("extension_surface_facts")
+        return fn(str(dev), list(synced_dirs), str(canon), [], [], str(base / "absent.mcp.json"),
+                  str(user_skills), str(user_commands))
+
+    @pytest.mark.parametrize("case", ["empty-root"])
+    def test_t146_42b(self, tmp_path, case):
+        """T146-42[empty-root]:skills/synced 存在、列舉成功、沒有任何直接子項(跨平台)⇒ synced_files 空、errors 空;與合法空 inventory ⇒ synced_verification True;對應裁決 (ww)。"""
+        claude = tmp_path / "claude"
+        (claude / "skills" / "synced").mkdir(parents=True)
+        root = self._repo_with_policies(tmp_path / "r", self._text(self._allowlist()), self._text(self._inventory()))
+        rep = self._t3f_report(root, claude)
+        assert list(rep["surfaces"]["synced_files"]) == [], rep["surfaces"]["synced_files"]
+        assert list(rep["surfaces"]["errors"]) == [], rep["surfaces"]["errors"]
+        assert rep["synced"]["verified"] is True, rep["synced"]
+
+    @pytest.mark.parametrize("case", ["a-invalid-name", "b-duplicate-skills", "c-duplicate-skills-plus-plugins",
+                                      "d-valid-pair"])
+    def test_t146_46(self, tmp_path, case):
+        """T146-46:synced_dirs 為 (root_name, path) 對 —— 無效名 / 重複名 ⇒ 結構化錯誤且該名所有項目不走訪;其他唯一合法根照常;對應裁決 (xx)。"""
+        p0 = tmp_path / "p0"
+        p1 = tmp_path / "p1"
+        p2 = tmp_path / "p2"
+        p3 = tmp_path / "p3"
+        self._t3f_bucket(p0, "skills", self._T3F_D, {"foo/SKILL.md": b"skill\n"})
+        self._t3f_bucket(p1, "skills", self._T3F_D, {"foo/SKILL.md": b"skill\n"})
+        self._t3f_bucket(p2, "skills", "f0f0-second-bucket", {"bar/SKILL.md": b"other\n"})
+        exp_plugins = self._t3f_bucket(p3, "plugins", self._T3F_E, {".marketplaces.json": b"{}\n"})
+        exp_skills = self._t3f_bucket(tmp_path / "p1-expected", "skills", self._T3F_D, {"foo/SKILL.md": b"skill\n"})
+        s0 = str(p0 / "skills" / "synced")
+        s1 = str(p1 / "skills" / "synced")
+        s2 = str(p2 / "skills" / "synced")
+        s3 = str(p3 / "plugins" / "synced")
+        pairs = {"a-invalid-name": [("other", s0)],
+                 "b-duplicate-skills": [("skills", s1), ("skills", s2)],
+                 "c-duplicate-skills-plus-plugins": [("skills", s1), ("skills", s2), ("plugins", s3)],
+                 "d-valid-pair": [("skills", s1), ("plugins", s3)]}[case]
+        surfaces = self._t3f2_surfaces(tmp_path / "s", pairs)
+        errors = [tuple(e) for e in surfaces["errors"]]
+        got = dict(tuple(x) for x in surfaces["synced_files"])
+        if case == "a-invalid-name":
+            hits = [e for e in errors if len(e) == 3 and e[0] == "synced" and "invalid root name" in str(e[2])]
+            assert hits, errors
+            assert got == {}, got
+        elif case in ("b-duplicate-skills", "c-duplicate-skills-plus-plugins"):
+            hits = [e for e in errors if len(e) == 3 and e[0] == "synced" and "duplicate root name" in str(e[2])]
+            assert len(hits) == 2, errors
+            assert not [p for p in got if p.startswith("skills/")], sorted(got)
+            if case == "c-duplicate-skills-plus-plugins":
+                for path, sha in exp_plugins.items():
+                    assert got.get(path) == sha, (path, sorted(got))
+        else:
+            assert errors == [], errors
+            want = dict(exp_skills)
+            want.update(exp_plugins)
+            assert got == want, (sorted(got), sorted(want))
+
+    def test_t146_47(self, tmp_path):
+        """T146-47:skills 根結構錯誤(兩個目錄)+ plugins 根合法 ⇒ errors 有 skills 的結構錯誤、無任何 skills/ 項目;plugins 的 marker 與檔照常觀測;對應裁決 (yy)。"""
+        claude = tmp_path / "claude"
+        claude.mkdir()
+        self._t3f_bucket(claude, "skills", self._T3F_D, {"foo/SKILL.md": b"skill\n"})
+        (claude / "skills" / "synced" / "second-bucket").mkdir()
+        exp_plugins = self._t3f_bucket(claude, "plugins", self._T3F_E, {".marketplaces.json": b"{}\n"})
+        root = self._repo_with_policies(tmp_path / "r", self._text(self._allowlist()), self._text(self._inventory()))
+        rep = self._t3f_report(root, claude)
+        errors = [tuple(e) for e in rep["surfaces"]["errors"]]
+        hits = [e for e in errors if len(e) == 3 and e[0] == "synced" and str(e[2]).startswith("bucket structure:")
+                and "skills" in str(e[1])]
+        assert hits, errors
+        got = dict(tuple(x) for x in rep["surfaces"]["synced_files"])
+        assert not [p for p in got if p.startswith("skills/")], sorted(got)
+        assert got.get("plugins/.bucket-<bucket>") == exp_plugins["plugins/.bucket-<bucket>"], sorted(got)
+        assert [p for p in got if p.startswith("plugins/<bucket>/")], sorted(got)

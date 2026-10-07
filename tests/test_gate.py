@@ -6568,7 +6568,9 @@ class TestTicket146Integration:
         subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True)
 
     def _root(self, tmp_path, with_redlight=True):
-        """臨時 repo(已提交空白 allowlist)+ 存在但空的 claude_root。"""
+        """臨時 repo(已提交空白 allowlist + 合法空 inventory)+ 存在但空的 claude_root。
+
+        inventory 用緊湊 JSON(不縮排):T146-24b 會再以縮排格式寫一次並提交,位元組不同才提交得進去(3f-2)。"""
         root = tmp_path / "repo"
         hooks = root / ".claude" / "hooks"
         hooks.mkdir(parents=True)
@@ -6580,10 +6582,13 @@ class TestTicket146Integration:
         with io.open(str(root / ".agents" / "extension-allowlist.json"), "w",
                      encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(self._ALLOWLIST, ensure_ascii=False, indent=2) + "\n")
+        with io.open(str(root / ".agents" / "extension-inventory.json"), "w",
+                     encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"schema": "monkeyleash.extension-inventory", "version": 1, "entries": []}) + "\n")
         self._git(root, "init", "-q")
         self._git(root, "config", "user.email", "t@example.invalid")
         self._git(root, "config", "user.name", "t")
-        self._git(root, "add", ".agents/extension-allowlist.json")
+        self._git(root, "add", ".agents/extension-allowlist.json", ".agents/extension-inventory.json")
         self._git(root, "commit", "-q", "-m", "baseline")
         claude = tmp_path / "claude"
         claude.mkdir()
@@ -6665,7 +6670,7 @@ class TestTicket146Integration:
         assert rc == 1, err
 
     def test_t146_23(self, tmp_path, monkeypatch, capsys):
-        """T146-23:synced 有檔、其他乾淨 ⇒ rc 1,[R10/fail-closed] +「未受管入口：synced」;影子開仍 rc 1;對應裁決 3。"""
+        """T146-23:synced 有檔但未納管(inventory 沒有登記這些檔)、其他乾淨 ⇒ rc 1,[R10/fail-closed] +「未受管入口：synced」;影子開仍 rc 1;對應裁決 3、補鎖 6(3f 修訂版)。"""
         root, claude = self._root(tmp_path)
         (claude / "skills" / "synced").mkdir(parents=True)
         (claude / "skills" / "synced" / "manifest.json").write_bytes(b"{}\n")
@@ -6709,7 +6714,7 @@ class TestTicket146Integration:
         assert "[R10/fail-closed]" in err and u"觀測失敗" in err, err
 
     def test_t146_38(self, tmp_path, monkeypatch, capsys):
-        """T146-38:未登記檔 + synced 有檔 + 影子開 ⇒ rc 1,[R10/fail-closed] +「未受管入口：synced」(補鎖 6,不得只重述未登記檔);對應裁決 3。"""
+        """T146-38:未登記檔 + synced 有檔但未納管 + 影子開 ⇒ rc 1,[R10/fail-closed] +「未受管入口：synced」(補鎖 6 3f 修訂版,不得只重述未登記檔);對應裁決 3。"""
         root, claude = self._root(tmp_path)
         (claude / "dev-mods").mkdir()
         (claude / "dev-mods" / "x.txt").write_bytes(b"x\n")
