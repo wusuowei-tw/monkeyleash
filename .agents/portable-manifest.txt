@@ -104,6 +104,12 @@ bootstrap.sh                    skip
 # 已提交設定與執行環境,每個 repo 自己的那一份只能由人放上去並 commit(〈四十八〉48.1 第 6 點)。
 # 照抄到下游等於替下游自動信任上游的環境 —— 那正是本票要拆掉的狀態。
 .agents/evidence-policy.json    skip
+# 票 146：Claude Code extension policy（canonical path）。**skip**，理由同 evidence-policy.json：
+# 這兩份描述的是**這台機器**的使用者層擴充快照（synced 逐檔 hash 與 hook 授權），由人核准並 commit。
+# 照抄到下游等於替下游自動信任上游機器的擴充集合 —— 正是本票要拆掉的狀態。
+# 下游安裝器只生成空 inventory 與授權其自身 hook 的最小 policy（3g/4b），不複製上游快照、不自動授權觀察到的擴充。
+.agents/extension-allowlist.json skip
+.agents/extension-inventory.json skip
 scripts/skills-update.sh        copy
 # 票 84 專用的一次性探針(寫死 wusuowei-tw/monkeyleash、寫死那組 sha、
 # 讀本 repo 的 commit-map)。**標 skip 不標 copy**:照抄到下游,它會去打

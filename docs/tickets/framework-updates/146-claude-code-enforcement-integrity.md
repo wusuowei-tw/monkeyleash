@@ -673,3 +673,54 @@ tests/test_gate.py：(7) TestTicket146Integration._root：同時提交合法空 
 13. `.claude/portable/status.py` `:16`(「只呼叫 gate」)、`:19`(「不重跑任何規則」)、`:36` 的契約字句,依 3e 裁決 7 修訂。
 
 **相關但非修改項(4b 須確認仍綠)**:`tests/test_gate.py:171-172` 前哨同型斷言(新檢查在 `mode_pre_commit`、不在 `mode_hook`)。
+
+---
+
+## G-0 manifest 分類修正（2026-10-07）
+
+### 裁決依據
+
+- 4b-0b 報告:`.dev/reports/2026-10-07T020019Z-ticket146-4b-0b-ci-impact.md`(本機證據，不在 git 內)。
+- 裁決助手的 Linux 沙盒獨立確認:manifest 對兩份 policy 的 `explicit_mark` 為 None(非本 repo 帳本證據)。
+
+### 裁決者原題摘要
+
+- G-0 補 manifest 兩行 skip;
+- G-1 verify_gates 以隔離家目錄(HOME／USERPROFILE 指向淨室臨時資料夾、建立空 .claude)跑安裝與情境;
+- G-2 install 生成空 inventory 與只授權自身 hook 的最小 allowlist 並隨安裝 commit 進 HEAD;
+- G-3 scenario_r10 以合法 bucket＋marker、空 inventory 造「額外 2」硬擋,run_scenario 加原因子字串斷言;
+- G-4 是否修訂「claude_root 確認不存在」語意(A 維持 / B 修訂);
+- G-5 順序 G-0 → 3g 紅燈 → 4b → 驗證 → 推。
+
+### Jeff 裁決原文(2026-10-07 07:44 美東，逐字)
+
+**接受 G-1 丁隔離＋G-2 最小 policy＋G-3 原因斷言；G-4 選 A。**G-0 與 G-5 也接受，但須修正驗收與 manifest 表述。
+
+已讀 4b-0b 報告並核對控制流：`install.py` 先做安裝 commit，之後 `verify()` 執行 pre-commit；目前兩個 canonical policy 路徑未分類。R10 接線後的安裝失敗仍是有依據的推論，本輪沒有實測。
+
+| 題目 | 裁決 |
+|---|---|
+| **G-0** | VS 可依獨立指令提交兩行 `skip` 與理由。這是框架分類修正，不是 policy 核准。 |
+| **G-1** | 接受隔離家目錄。安裝、情境子程序及直接載入 gate 的檢查都須一致使用隔離來源；Windows 同步設定 HOME／USERPROFILE。結束後恢復環境，真實使用者層不得被讀寫。 |
+| **G-2** | 接受新安裝生成合法空 inventory，以及只授權安裝器實際寫入之 hook command 的 allowlist；須在安裝驗證前進 HEAD。 |
+| **G-3** | 接受合法 bucket＋marker、空 inventory 的「額外 2」情境；同時驗非零退出碼、`[R10/fail-closed]` 與具體原因。 |
+| **G-4** | 選 A，維持 root 不存在即 invalid。安裝器須清楚說明使用者層根目錄前提；不得偷偷建立真實 `~/.claude` 來替人滿足前提。 |
+| **G-5** | 接受先 G-0，再 3g 紅燈、4b 實作、完整驗證，最後才進推送流程。 |
+
+補鎖以下細節：
+
+- **G-0 不能要求完整 pytest「回綠」。**目前 3e／3f／3f-2 紅燈尚未實作。驗收應是分類測試轉綠，原有預期紅燈保留、無新增非預期失敗；全套用事前預期表核對。
+- **同一路徑不能同時標 `skip` 與 `generate`。**現行 manifest 已有 duplicate-entry 錯誤契約。上游兩份 canonical policy 保持 `skip`；安裝器另外生成目標 policy，或另列生成範本路徑，不複製上游機器快照。
+- **最小 policy 是安裝預設，不是 Jeff 核准過的觀測快照。**note 明寫來源為安裝器；不得登記任何實際使用者擴充。已有 canonical policy 時不得覆寫，應停止或驗證後保留，行為要由 3g 鎖住。
+- **沿用既有安裝 commit 機制，不新增 R10 豁免。**生成 policy 要在既有安裝 commit 中進 HEAD，後面的真實 pre-commit 驗證照跑；不得為驗證新增 `--no-verify`。
+- **R10 演習須先有乾淨正控。**同一佈置在放入 synced 檔前能放行；放入兩筆後才因「額外 2」硬擋。restore 也須清掉隔離家目錄中的情境檔，避免污染後續驗證。
+
+因此可寫 **G-0 修正指令與 3g 紅燈指令**。這次裁決沒有核准現在 push，也沒有改 root 語意或核准 CI 豁免。
+
+### 本次修正內容
+
+- `.agents/portable-manifest.txt`:在 `.agents/evidence-policy.json    skip` 之後、`scripts/skills-update.sh        copy` 之前，新增 4 行註解與兩行:
+  - `.agents/extension-allowlist.json skip`
+  - `.agents/extension-inventory.json skip`
+- 只加不刪。
+- 驗收(依補鎖第 1 條):分類測試 `tests/test_upstream_manifest.py::test_every_tracked_file_is_classified` 轉綠，既有預期失敗集合(S3f2-146-1)保留，沒有新增非預期失敗。
