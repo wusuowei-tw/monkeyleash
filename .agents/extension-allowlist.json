@@ -1,0 +1,17 @@
+{
+  "schema": "monkeyleash.extension-allowlist",
+  "version": 1,
+  "dev_mod_files": [],
+  "user_skill_plugins": [],
+  "user_commands": [
+    {
+      "path": "finmind.md",
+      "sha256": "54a4f349f1fee2532a4e60dff874ac30dbe1850575c7212c4d5862f6dc890722",
+      "note": "command draft；Jeff 核准 2026-10-06"
+    }
+  ],
+  "project_settings_hook_commands": [
+    "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py\""
+  ],
+  "mcp_json_servers": []
+}
