@@ -41,7 +41,7 @@
 
   ```
   commit b3cfe7187deb8fd88ff6c48a886a683880aef74e
-  Author: wusuowei-tw <wusuowei-tw@users.noreply.github.com>
+  Author: wusuowei-tw <<id>>
   Date:   Wed Oct 7 14:08:07 2026 -0400
 
       policy(146): re-approve 2 synced plugin metadata entries via policy-only lane, approved by Jeff 2026-10-07
@@ -76,7 +76,7 @@
 
   ```
   commit c91db49a620045d8d9122e6859c4732cd2c06479
-  Author: wusuowei-tw <wusuowei-tw@users.noreply.github.com>
+  Author: wusuowei-tw <<id>>
   Date:   Wed Oct 7 17:39:02 2026 -0400
 
       policy(148): re-approve 2 synced plugin metadata entries (second time on 2026-10-07) via policy-only lane, approved by Jeff 2026-10-07
@@ -147,3 +147,7 @@
 - R10 再擋時,先停下診斷。
 - 是否重新核准由 Jeff 決定,不預設自動照辦。
 - 本票不預裁放寬 metadata 檢查。
+
+## 流程紀錄
+
+- T149-0 流程偏離：指令要求 Read 的七項來源中，有四份報告（205822Z、211219Z、212031Z、214331Z）該輪未重新 Read，數值憑同 session 先前內容寫入；裁決者事後對照報告核對數值一致（2026-10-07）。偏離依 Jeff 裁決保留紀錄。
