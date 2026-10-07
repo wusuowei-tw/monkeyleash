@@ -1123,3 +1123,92 @@ class TestTheStagedBlobIsWhatGetsScanned:
         assert rc == 1, (
             u"index 與工作樹一致且含機敏樣本,卻回了 %r —— 偵測面被弄小了:%s"
             % (rc, err))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 148 第三站紅燈(S3-148-1)—— rename 目的檔須進入 leak scan
+#
+# Jeff 裁決 A:`scanner.staged_paths` 加 `--no-renames`、保留 `--diff-filter=ACM`。
+# 合成秘密一律**執行時組合**(本檔也被 pre-commit leak scan 掃描):私鑰標頭 + 假 base64 + 私鑰結尾。
+# 斷言命中**指定規則**(通用 pattern 的私鑰標頭那一條)與檔名,不只看 rc。
+# git 設定隔離:GIT_CONFIG_GLOBAL → tmp 空檔、GIT_CONFIG_NOSYSTEM=1;HOME / USERPROFILE → tmp。
+# 外部證據(裁決者 Linux 沙盒,不屬本 repo 帳本)只說「該佈置下 leak scan 回 rc 0」,不泛化。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _t148_secret_block():
+    kind = "RSA " + "PRIVATE " + "KEY-----"
+    body = ("QUJD" + "REVG") * 8
+    return u"-----BEGIN " + kind + u"\n" + body + u"\n" + u"-----END " + kind + u"\n"
+
+
+def _t148_rule():
+    """leak-patterns.txt 私鑰標頭那一條的原文(組合,不靜置)。"""
+    return u"-----BEGIN " + u"[A-Z ]*" + u"PRIVATE " + u"KEY-----"
+
+
+def _t148_git(root, *args):
+    import subprocess
+    return subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True)
+
+
+def _t148_repo(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    empty = tmp_path / "empty-gitconfig"
+    empty.write_bytes(b"")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    root = tmp_path / "repo"
+    root.mkdir()
+    _t148_git(root, "init", "-q")
+    _t148_git(root, "config", "user.email", "t@example.invalid")
+    _t148_git(root, "config", "user.name", "t")
+    (root / "README.md").write_bytes(b"base\n")
+    _t148_git(root, "add", "README.md")
+    _t148_git(root, "commit", "-q", "-m", "base (t148)")
+    monkeypatch.setattr(ls, "ROOT", str(root))
+    monkeypatch.setattr(ls, "LOCAL_PATTERNS_FILE", str(tmp_path / "none.local.txt"))
+    return root
+
+
+def _t148_assert_hit(rc, err, rel):
+    assert rc != 0, u"leak scan 回 0(%s 未被擋):%s" % (rel, err)
+    assert (u"命中 pattern:" + _t148_rule()) in err, u"沒有命中私鑰標頭規則:%s" % err
+    assert (rel + u":") in err, u"擋下報告沒有點名 %s:%s" % (rel, err)
+
+
+class TestTicket148RenamedFileIsScanned:
+
+    def test_t148_5_secret_in_a_new_file_is_caught(self, tmp_path, monkeypatch, capsys):
+        """T148-5(正控;C0 綠):合成秘密放新檔並 add ⇒ `--staged` 非 0,命中私鑰標頭規則與該檔名。"""
+        root = _t148_repo(tmp_path, monkeypatch)
+        (root / "notes").mkdir()
+        io.open(str(root / "notes" / "fresh.txt"), "w", encoding="utf-8", newline="\n").write(
+            u"說明\n" + _t148_secret_block())
+        _t148_git(root, "add", "notes/fresh.txt")
+        rc = ls.main(["--staged"])
+        _t148_assert_hit(rc, capsys.readouterr().err, u"notes/fresh.txt")
+
+    def test_t148_6_secret_added_during_rename_is_caught(self, tmp_path, monkeypatch, capsys):
+        """T148-6(負控;C0 紅):既有檔 `git mv` + 少量修改 + 檔尾加同一合成秘密,前提斷言為 R
+        ⇒ `--staged` 非 0,命中私鑰標頭規則與目的檔名。C0 紅因:R 不在 ACM ⇒ 清單空 ⇒ 回 0。"""
+        root = _t148_repo(tmp_path, monkeypatch)
+        (root / "notes").mkdir()
+        lines = [u"第 %02d 行:一般說明文字,沒有任何秘密。\n" % i for i in range(1, 41)]
+        io.open(str(root / "notes" / "a.txt"), "w", encoding="utf-8", newline="\n").write(u"".join(lines))
+        _t148_git(root, "add", "notes/a.txt")
+        _t148_git(root, "commit", "-q", "-m", "notes (t148-6)")
+        _t148_git(root, "mv", "notes/a.txt", "notes/b.txt")
+        lines[0] = u"第 01 行:改名時順手改了這一行。\n"
+        io.open(str(root / "notes" / "b.txt"), "w", encoding="utf-8", newline="\n").write(
+            u"".join(lines) + _t148_secret_block())
+        _t148_git(root, "add", "notes/b.txt")
+        rows = [ln for ln in _t148_git(root, "diff", "--cached", "--name-status").stdout.decode("utf-8").splitlines()
+                if ln.strip()]
+        hit = [ln.split("\t") for ln in rows if ln.startswith("R")]
+        if not (len(hit) == 1 and hit[0][1:] == ["notes/a.txt", "notes/b.txt"] and hit[0][0] != "R100"):
+            pytest.fail(u"佈置未形成「rename + 修改」(name-status):%r" % rows)
+        rc = ls.main(["--staged"])
+        _t148_assert_hit(rc, capsys.readouterr().err, u"notes/b.txt")

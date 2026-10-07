@@ -1049,3 +1049,59 @@ class TestStagedBytesComeFromTheIndex:
             u"不在 index 裡的路徑回了 `why is None` —— 多半退回工作樹了。\n"
             u"    拿到的文字:%r" % text)
         assert text is None, u"fail-closed 那條路還是回了文字:%r" % text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 148 第三站紅燈(S3-148-1)—— rename 目的檔須進入 staged 清單
+#
+# Jeff 裁決 A:`staged_paths` 加 `--no-renames`、保留 `--diff-filter=ACM`。
+# git 設定隔離:GIT_CONFIG_GLOBAL → tmp 空檔、GIT_CONFIG_NOSYSTEM=1;diff.renames 只用 local config。
+# 使用者層隔離:HOME / USERPROFILE → tmp。只用真實 git 與真實 `sc.staged_paths`。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _t148_git(root, *args):
+    import subprocess
+    return subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True)
+
+
+def _t148_mv_repo(tmp_path, monkeypatch, renames):
+    """src/a.py 已提交;`git mv src/a.py src/b.py`(內容相同);前提斷言 R(false ⇒ D + A)。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    empty = tmp_path / "empty-gitconfig"
+    empty.write_bytes(b"")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    root = tmp_path / "repo"
+    root.mkdir()
+    _t148_git(root, "init", "-q")
+    _t148_git(root, "config", "user.email", "t@example.invalid")
+    _t148_git(root, "config", "user.name", "t")
+    if renames != "unset":
+        _t148_git(root, "config", "diff.renames", renames)
+    (root / "src").mkdir()
+    (root / "src" / "a.py").write_bytes(b"x = 1\n")
+    _t148_git(root, "add", "src/a.py")
+    _t148_git(root, "commit", "-q", "-m", "base (t148)")
+    _t148_git(root, "mv", "src/a.py", "src/b.py")
+    rows = [ln for ln in _t148_git(root, "diff", "--cached", "--name-status").stdout.decode("utf-8").splitlines()
+            if ln.strip()]
+    if renames == "false":
+        if sorted(rows) != sorted(["D\tsrc/a.py", "A\tsrc/b.py"]):
+            pytest.fail(u"diff.renames=false 未形成 D + A:%r" % rows)
+    else:
+        hit = [ln.split("\t") for ln in rows if ln.startswith("R")]
+        if not (len(hit) == 1 and hit[0][1:] == ["src/a.py", "src/b.py"]):
+            pytest.fail(u"佈置未形成 rename src/a.py → src/b.py:%r" % rows)
+    return root
+
+
+@pytest.mark.parametrize("renames", ["unset", "true", "copies", "false"])
+def test_t148_2_scanner_staged_paths_lists_rename_destination(tmp_path, monkeypatch, renames):
+    """T148-2:`git mv src/a.py src/b.py` 後 `scanner.staged_paths` 含 src/b.py。
+    C0:unset / true / copies 紅(R 不在 ACM)、false 綠(基線正控:D + A)。"""
+    root = _t148_mv_repo(tmp_path, monkeypatch, renames)
+    got = sc.staged_paths(cwd=str(root))
+    assert "src/b.py" in got, u"rename 目的檔不在 scanner.staged_paths(diff.renames=%s):%r" % (renames, got)

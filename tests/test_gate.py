@@ -7303,3 +7303,193 @@ class TestTicket146RenameAndAllowlistBlock:
         TestTicket146Integration._wire(monkeypatch, mod, claude, shadow=True)
         rc, err = TestTicket146Integration._run(mod, capsys)
         assert rc == 0, err
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 票 148 第三站紅燈(S3-148-1)—— rename 目的檔須進入 staged 檢查
+#
+# 契約:Jeff 裁決 A(2026-10-07)—— `staged_paths` 加 `--no-renames`、保留 `--diff-filter=ACM`,
+# rename 目的檔按新增檔進入檢查;刪除處置不變。
+# git 設定隔離:GIT_CONFIG_GLOBAL → tmp 空檔、GIT_CONFIG_NOSYSTEM=1;diff.renames 只用 tmp repo 的 local config。
+# 使用者層隔離:HOME / USERPROFILE → tmp。只用真實 git 與真實 staged_paths,不換替身。
+# ══════════════════════════════════════════════════════════════════════════
+
+_T148_RENAMES = ["unset", "true", "copies", "false"]
+
+
+def _t148_env(tmp_path, monkeypatch):
+    """git 設定與使用者層隔離;回 tmp 家目錄。子行程繼承本環境。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    empty = tmp_path / "empty-gitconfig"
+    empty.write_bytes(b"")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return home
+
+
+def _t148_git(root, *args):
+    return subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True)
+
+
+def _t148_repo(root, renames="unset"):
+    root.mkdir(parents=True, exist_ok=True)
+    _t148_git(root, "init", "-q")
+    _t148_git(root, "config", "user.email", "t@example.invalid")
+    _t148_git(root, "config", "user.name", "t")
+    if renames != "unset":
+        _t148_git(root, "config", "diff.renames", renames)
+    return root
+
+
+def _t148_name_status(root):
+    out = _t148_git(root, "diff", "--cached", "--name-status").stdout.decode("utf-8")
+    return [ln for ln in out.splitlines() if ln.strip()]
+
+
+def _t148_assert_rename(root, src, dst):
+    """前提:佈置確實形成 R(來源與目的正確)。不成立 ⇒ fail,不 skip。"""
+    rows = _t148_name_status(root)
+    hit = [ln.split("\t") for ln in rows if ln.startswith("R")]
+    if not (len(hit) == 1 and hit[0][1:] == [src, dst]):
+        pytest.fail(u"佈置未形成 rename %s → %s(name-status):%r" % (src, dst, rows))
+
+
+def _t148_assert_delete_add(root, src, dst):
+    """前提(diff.renames=false):應為 D + A,不是 R。"""
+    rows = _t148_name_status(root)
+    if sorted(rows) != sorted(["D\t" + src, "A\t" + dst]):
+        pytest.fail(u"diff.renames=false 未形成 D + A:%r" % rows)
+
+
+def _t148_mv_repo(tmp_path, monkeypatch, renames="unset"):
+    """src/a.py 已提交;`git mv src/a.py src/b.py`(內容相同)。回 repo 根。"""
+    _t148_env(tmp_path, monkeypatch)
+    root = _t148_repo(tmp_path / "repo", renames)
+    (root / "src").mkdir()
+    (root / "src" / "a.py").write_bytes(b"x = 1\n")
+    _t148_git(root, "add", "src/a.py")
+    _t148_git(root, "commit", "-q", "-m", "base (t148)")
+    _t148_git(root, "mv", "src/a.py", "src/b.py")
+    if renames == "false":
+        _t148_assert_delete_add(root, "src/a.py", "src/b.py")
+    else:
+        _t148_assert_rename(root, "src/a.py", "src/b.py")
+    return root
+
+
+def _t148_scanner():
+    spec = importlib.util.spec_from_file_location(
+        "scanner_t148", ROOT / ".claude" / "portable" / "scanner.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestTicket148RenameDestinationIsListed:
+    """票 148:rename 目的檔要出現在 staged 清單裡;來源與純刪除維持不在清單(刪除處置不變)。"""
+
+    @pytest.mark.parametrize("renames", _T148_RENAMES)
+    def test_t148_1_gate_staged_paths_lists_rename_destination(self, tmp_path, monkeypatch, renames):
+        """T148-1:`git mv src/a.py src/b.py` 後 `gate.staged_paths` 含 src/b.py。
+        C0:unset / true / copies 紅(R 不在 ACM)、false 綠(基線正控:D + A)。"""
+        root = _t148_mv_repo(tmp_path, monkeypatch, renames)
+        got = gate.staged_paths(cwd=str(root))
+        assert "src/b.py" in got, u"rename 目的檔不在 gate.staged_paths(diff.renames=%s):%r" % (renames, got)
+
+    def test_t148_3_rename_source_stays_out_of_both_listings(self, tmp_path, monkeypatch):
+        """T148-3(回歸鎖;C0 綠):rename 後兩個 staged_paths 都不含來源 src/a.py(刪除處置不變)。"""
+        root = _t148_mv_repo(tmp_path, monkeypatch)
+        g = gate.staged_paths(cwd=str(root))
+        s = _t148_scanner().staged_paths(cwd=str(root))
+        assert "src/a.py" not in g and "src/a.py" not in s, (g, s)
+
+    def test_t148_4_pure_deletion_stays_out_of_both_listings(self, tmp_path, monkeypatch):
+        """T148-4(回歸鎖;C0 綠):`git rm src/a.py` 後兩個 staged_paths 都不含該檔。"""
+        _t148_env(tmp_path, monkeypatch)
+        root = _t148_repo(tmp_path / "repo")
+        (root / "src").mkdir()
+        (root / "src" / "a.py").write_bytes(b"x = 1\n")
+        _t148_git(root, "add", "src/a.py")
+        _t148_git(root, "commit", "-q", "-m", "base (t148-4)")
+        _t148_git(root, "rm", "-q", "src/a.py")
+        rows = _t148_name_status(root)
+        if rows != ["D\tsrc/a.py"]:
+            pytest.fail(u"佈置不是純刪除:%r" % rows)
+        g = gate.staged_paths(cwd=str(root))
+        s = _t148_scanner().staged_paths(cwd=str(root))
+        assert "src/a.py" not in g and "src/a.py" not in s, (g, s)
+
+
+class TestTicket148AuthorityLayerJudgesRenamedSource:
+    """票 148:權威層實際規則驗證(不只驗清單)。
+
+    R10 隔離採 (a):tmp HOME / USERPROFILE 下建立空的使用者層 `.claude`,tmp repo 提交合法空白
+    allowlist / inventory(佈置同 `TestTicket146Integration._root`),R10 走真實判定且不注入
+    `_extension_claude_root`(production fallback `expanduser("~")/.claude`)⇒ DECLARED_OK。
+    R10 以外的鄰居照 `TestTicket146Integration._wire` 的同一份清單停掉,**但不停 `staged_paths`**。
+    站別 `tickets`(前置站,不宣告 allows_src_write);`pkg/` 為原始碼、`docs/` 為非原始碼(`is_source_path`)。
+    """
+
+    def _root(self, tmp_path, monkeypatch):
+        home = _t148_env(tmp_path, monkeypatch)
+        (home / ".claude").mkdir()
+        root = _t148_repo(tmp_path / "repo")
+        hooks = root / ".claude" / "hooks"
+        hooks.mkdir(parents=True)
+        shutil.copy2(str(ROOT / ".claude" / "hooks" / "gate.py"), str(hooks / "gate.py"))
+        shutil.copy2(str(ROOT / ".claude" / "hooks" / "redlight.py"), str(hooks / "redlight.py"))
+        (root / ".agents").mkdir()
+        shutil.copy2(str(ROOT / ".agents" / "pipeline-stages.yaml"), str(root / ".agents" / "pipeline-stages.yaml"))
+        with io.open(str(root / ".agents" / "extension-allowlist.json"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(TestTicket146Integration._ALLOWLIST, ensure_ascii=False, indent=2) + "\n")
+        with io.open(str(root / ".agents" / "extension-inventory.json"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"schema": "monkeyleash.extension-inventory", "version": 1, "entries": []},
+                               ensure_ascii=False, indent=2) + "\n")
+        (root / ".dev").mkdir()
+        with io.open(str(root / ".dev" / "pipeline.json"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"current_stage": "tickets", "feature": "t148", "ticket_id": "148"}) + "\n")
+        (root / "docs").mkdir()
+        (root / "docs" / "tool.py").write_bytes(b"def tool():\n    return 1\n")
+        _t148_git(root, "add", ".agents/pipeline-stages.yaml", ".agents/extension-allowlist.json",
+                  ".agents/extension-inventory.json", "docs/tool.py")
+        _t148_git(root, "commit", "-q", "-m", "baseline (t148-7)")
+        return root, home
+
+    def _run(self, monkeypatch, capsys, root, home, tag):
+        monkeypatch.chdir(str(root))
+        mod = TestTicket146Integration._load(root, "148_" + tag)
+        monkeypatch.setattr(mod, "upstream_shadow_violation", lambda *a, **k: (None, None))
+        for name in ("check_third_axis_mount", "check_to_spec_override",
+                     "check_legacy_list", "check_friction_numbers", "check_skill_copies"):
+            monkeypatch.setattr(mod, name, lambda *a, **k: [])
+        monkeypatch.setattr(mod, "shadow_active", lambda *a, **k: False)
+        assert os.path.normcase(os.path.expanduser("~")) == os.path.normcase(str(home)), \
+            u"使用者層隔離未生效 —— R10 fallback 會讀到真實家目錄"
+        assert mod._extension_claude_root() is None
+        return TestTicket146Integration._run(mod, capsys)
+
+    def test_t148_7c_new_source_file_is_blocked_by_r2(self, tmp_path, monkeypatch, capsys):
+        """T148-7c(權威層正控;C0 綠):tickets 站新增 pkg/fresh.py ⇒ rc 1、含 [R2、不含 [R10。"""
+        root, home = self._root(tmp_path, monkeypatch)
+        (root / "pkg").mkdir()
+        (root / "pkg" / "fresh.py").write_bytes(b"def fresh():\n    return 1\n")
+        _t148_git(root, "add", "pkg/fresh.py")
+        rc, err = self._run(monkeypatch, capsys, root, home, "7c")
+        assert rc == 1, err
+        assert "[R2" in err, err
+        assert "[R10" not in err, err
+
+    def test_t148_7_renamed_into_source_is_blocked_by_r2(self, tmp_path, monkeypatch, capsys):
+        """T148-7(權威層;C0 紅):tickets 站 `git mv docs/tool.py pkg/tool.py`(R)⇒ rc 1、含 [R2、不含 [R10。
+        C0 紅因(讀碼推論):ACM 不含 R ⇒ staged_paths 為空 ⇒ 逐檔 check 不跑 ⇒ rc 0。"""
+        root, home = self._root(tmp_path, monkeypatch)
+        (root / "pkg").mkdir()
+        _t148_git(root, "mv", "docs/tool.py", "pkg/tool.py")
+        _t148_assert_rename(root, "docs/tool.py", "pkg/tool.py")
+        rc, err = self._run(monkeypatch, capsys, root, home, "7")
+        assert rc == 1, u"rename 進原始碼目錄沒被權威層擋下:rc=%r\n%s" % (rc, err)
+        assert "[R2" in err, err
+        assert "[R10" not in err, err
