@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:3f-2 紅燈已提交(S3f2-146-1);待 policy 草稿與 Jeff 核准;146 尚未生效
+**狀態**:3f-2 紅燈已驗收;待 policy 草稿與 Jeff 核准;146 尚未生效
+~~**狀態**:3f-2 紅燈已提交(S3f2-146-1);待 policy 草稿與 Jeff 核准;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f-2 驗收、D-1～D-3 裁決入票時更新。
 ~~**狀態**:3f-2 紅燈補完中;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f-2 紅燈提交並證紅時更新。
 ~~**狀態**:3f 紅燈已提交(S3f-146-1);待 policy 草稿與 Jeff 核准;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f-2 裁決 (uu)–(zz) 入票時更新。
 ~~**狀態**:3f 紅燈撰寫中;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-06 3f 紅燈提交並證紅時更新。
@@ -631,3 +632,44 @@ tests/test_gate.py：(7) TestTicket146Integration._root：同時提交合法空 
   - D-1:T146-23 / 38 的佈置在 v2 下是結構錯誤，4b 後硬擋原因會被替換;
   - D-2:T146-24b 的重複 inventory 寫入(`_root` 以緊湊 JSON 迴避);
   - D-3:T146-42[empty-root] 以 `test_t146_42b[empty-root]` 實作。
+
+---
+
+## 3f-2 驗收與 D-1～D-3 裁決(2026-10-06)
+
+### Jeff 裁決(2026-10-06,逐字)
+
+(aaa) D-1：准改 T146-23／38 的佈置為合法 bucket + marker；保留原硬擋斷言，並確認原因是 inventory 未登記／額外檔案，而非結構錯誤；T146-38 仍保留未登記 dev-mod 與 shadow 開啟。
+(bbb) D-2：准刪 T146-24b 重複寫入及提交 inventory 的五行；由 _root 提供已提交的合法空 inventory，保留 rc == 0；一併移除 helper 中依賴 JSON 格式差異的說明。
+(ccc) D-3：接受 test_t146_42b[empty-root]；獨立 node 保留空根驗收，無須改名。
+(ddd) (aaa)(bbb) 的修正列入 4b 允許修改清單，在 4b 一併完成並驗證；不另開純佈置紅燈。
+(eee) 3f-2 證紅結果可接受，但不稱「C0 完全逐格符合」：T146-35 紅因變化事前漏列、TypeError 機制預測錯誤，審計已揭露；35 個轉紅只證明 TypeError，尚未證明後面的行為斷言已執行。
+(fff) policy 草稿不得預寫「核准」字樣；核准與 commit 訊息的 approved 字樣留給 Jeff 實際核准後使用。草稿產生期間任何 ERROR / NONREGULAR / STRUCTURE-ERROR ⇒ 不產生可供核准的 policy 草稿，只產診斷摘要；不得以部分成功輸出組成完整 inventory。快照須兩次完整列舉並雜湊比對一致才可作為草稿依據；這只證明兩次觀測一致，Jeff 提交前與 4b 仍須重新核對。
+
+### 4b 允許修改清單(累積)
+
+依 3e-0 報告 Q-F、3e 審計〈4b 已知衝突〉、3f / 3f-2 審計與本節裁決彙整。行號以各自出處的基準為準,4b 開工時重新定位。
+
+**一、pre-commit 隔離點(3e-0 Q-F 的 5 個)+ status**:
+
+1. `tests/test_r5_mounts.py:588-612` `_wire_pre_commit`(`:707` 斷言 `mode_pre_commit() == 0`)—— 加 R10 替身或 tmp claude_root。
+2. `tests/test_gate.py:6194-6215`(3e-0 稱 `_d_silence_the_neighbours`;`:6235`、`:6255` 斷言 rc)—— 同上。
+3. `tests/test_stage_defs_source.py:522-530` `_PRE_COMMIT_STUBS` —— 同上。
+4. `tests/test_gate.py:1066`(單點 patch `check_skill_copies`)—— 同上。
+5. `tests/test_gate.py:3042`(同上)—— 同上。
+6. `tests/test_status.py` `_make_root`(`:91` 只複製 gate.py)—— 依需要注入 tmp claude_root 或維持「redlight 缺失」分支,隔離測試繼續用 tmp 或 stub(裁決 (ee))。
+
+**二、146 測試本身**:
+
+7. `tests/test_gate.py` `test_t146_23` / `test_t146_38` 的佈置改為合法 bucket + marker(裁決 (aaa));斷言保留,並確認硬擋原因是 inventory 未登記 / 額外檔案,不是結構錯誤;T146-38 保留未登記 dev-mod 與影子開啟。
+8. `tests/test_gate.py` `test_t146_24b` 刪除重複寫入並提交 inventory 的五行(裁決 (bbb)),保留 `rc == 0`。
+9. `tests/test_gate.py` `TestTicket146Integration._root` 的 docstring 移除「緊湊 JSON / 位元組不同才提交得進去」的說明(裁決 (bbb));inventory 寫法可回到一般格式。
+10. docstring:T146-14(七鍵 → 八鍵,**S3f2-146-1 已完成**)、T146-23 / 38(「未納管」語意,**S3f2-146-1 已改**;佈置依第 7 項改後若措辭需配合再調)。
+
+**三、正典與 scenario**:
+
+11. `CLAUDE.md` 規則表加 R10 一列(連動 `tests/test_claude_md.py:249-272` I-1b 要求正典段提到新代號)。
+12. `.claude/portable/verify_gates.py` `SCENARIOS["R10"]`(連動 `tests/test_gate.py:1317-1333` 要求 SCENARIOS 有實測;T146-33 已鎖存在)。
+13. `.claude/portable/status.py` `:16`(「只呼叫 gate」)、`:19`(「不重跑任何規則」)、`:36` 的契約字句,依 3e 裁決 7 修訂。
+
+**相關但非修改項(4b 須確認仍綠)**:`tests/test_gate.py:171-172` 前哨同型斷言(新檢查在 `mode_pre_commit`、不在 `mode_hook`)。
