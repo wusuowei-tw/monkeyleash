@@ -234,6 +234,7 @@ def scenario_r7(target):
 
 ISOLATED_HOME_DIRNAME = "home"
 ISOLATION_MARKER = ".verify-gates-isolated"
+SCENARIO_TRIGGER_R10 = "docs/adr/verify-trigger-r10.md"
 _ACTIVE_ISOLATION = None
 _HOME_VARS = ("USERPROFILE", "HOME")
 
@@ -259,6 +260,33 @@ def _lkind(path):
     return "other"
 
 
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
+def _is_reparse(path):
+    """路徑本身是不是連結 / reparse point(3h N-3)。POSIX:`os.path.islink`;Windows:另看 lstat 的
+    `st_file_attributes` 是否含 FILE_ATTRIBUTE_REPARSE_POINT —— junction 的 lstat 型別是目錄、`islink` 為假,
+    只看 `_lkind` 會把它當成一般目錄。不存在 ⇒ False;其他 lstat 失敗照常拋出(呼叫端視為失敗)。"""
+    if os.path.islink(path):
+        return True
+    if os.name == "nt":
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            return False
+        return bool(getattr(st, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT)
+    return False
+
+
+def _reparse_or_exit(path, what):
+    try:
+        bad = _is_reparse(path)
+    except OSError as e:
+        raise SystemExit("%s:lstat 失敗(%s):%s" % (what, type(e).__name__, path))
+    if bad:
+        raise SystemExit("%s 是連結或 reparse point(junction 等)—— 拒絕:%s" % (what, path))
+
+
 @contextlib.contextmanager
 def isolated_home(workdir):
     """把 USERPROFILE / HOME 指到 `<workdir>/home`(含空的 `.claude` 與本輪 marker),離開時精確還原。
@@ -272,14 +300,19 @@ def isolated_home(workdir):
     home = os.path.join(workdir, ISOLATED_HOME_DIRNAME)
     claude_root = os.path.join(home, ".claude")
     marker = os.path.join(home, ISOLATION_MARKER)
+    # N-3′:任何建立 / 寫入 / 改環境之前,已存在的 home、home/.claude、marker 是連結或 reparse point ⇒ 拒絕。
     k = _lkind(home)
     if k not in ("absent", "dir"):
         raise SystemExit("隔離家目錄的位置已有東西且不是目錄(%s):%s" % (k, home))
+    if k != "absent":
+        _reparse_or_exit(home, "隔離家目錄")
     if k == "dir" and os.listdir(home):
         raise SystemExit("隔離家目錄已存在且非空 —— 不清空既有內容:%s" % home)
     k = _lkind(claude_root)
     if k not in ("absent", "dir"):
         raise SystemExit("隔離 .claude 的位置已有東西且不是目錄(%s):%s" % (k, claude_root))
+    if k != "absent":
+        _reparse_or_exit(claude_root, "隔離 .claude")
     if k == "dir" and os.listdir(claude_root):
         raise SystemExit("隔離 .claude 已存在且非空:%s" % claude_root)
     if _lkind(marker) != "absent":
@@ -313,6 +346,12 @@ def _require_isolation(iso):
     real_home = os.path.normcase(os.path.realpath(iso.home))
     if not real_home.startswith(root.rstrip(os.sep) + os.sep):
         raise SystemExit("隔離家目錄解析後不在 workdir 之下:%s" % iso.home)
+    # N-3:claude_root 的解析位置必須正是 realpath(home)/.claude;三者任一是連結 / reparse point ⇒ 拒絕。
+    if os.path.normcase(os.path.realpath(iso.claude_root)) != os.path.normcase(
+            os.path.join(os.path.realpath(iso.home), ".claude")):
+        raise SystemExit("隔離 .claude 解析後不是 <home>/.claude:%s" % iso.claude_root)
+    for p, what in ((iso.home, "隔離家目錄"), (iso.claude_root, "隔離 .claude"), (iso.marker, "隔離 marker")):
+        _reparse_or_exit(p, what)
     for p in (iso.home, iso.claude_root):
         if _lkind(p) != "dir":
             raise SystemExit("隔離路徑不是非 symlink 的目錄:%s" % p)
@@ -326,8 +365,35 @@ def _require_isolation(iso):
 
 
 def restore_user_layer(iso):
-    """清空隔離 `.claude` 的內容(保留空目錄)。先驗隔離;驗不過就停,什麼都不刪。"""
+    """清空隔離 `.claude` 的內容(保留空目錄)。先驗隔離,再全樹預檢;任一不過就停,什麼都不刪。
+
+    預檢(3h N-3):topdown、不追連結地走訪;每一層先對 dirnames 與 filenames 每個項目 lstat(失敗 ⇒ 停),
+    任一項目是連結 / reparse point ⇒ 停;進下一層之前原地剪掉不得走訪的 dirnames,使走訪不進入它們。
+    列舉失敗(onerror)收集後立即視為失敗。預檢全過才刪。"""
     _require_isolation(iso)
+    errors = []
+    for dirpath, dirnames, filenames in os.walk(iso.claude_root, topdown=True, followlinks=False,
+                                                onerror=errors.append):
+        if errors:
+            break
+        keep = []
+        for name in list(dirnames) + list(filenames):
+            p = os.path.join(dirpath, name)
+            try:
+                st = os.lstat(p)
+            except OSError as e:
+                raise SystemExit("隔離清理預檢:lstat 失敗(%s):%s —— 未刪除任何內容" % (type(e).__name__, p))
+            try:
+                bad = _is_reparse(p)
+            except OSError as e:
+                raise SystemExit("隔離清理預檢:lstat 失敗(%s):%s —— 未刪除任何內容" % (type(e).__name__, p))
+            if bad:
+                raise SystemExit("隔離清理預檢:%s 是連結或 reparse point —— 未刪除任何內容" % p)
+            if name in dirnames and stat.S_ISDIR(st.st_mode):
+                keep.append(name)
+        dirnames[:] = keep
+    if errors:
+        raise SystemExit("隔離清理預檢:列舉失敗(%s)—— 未刪除任何內容" % type(errors[0]).__name__)
     for name in os.listdir(iso.claude_root):
         p = os.path.join(iso.claude_root, name)
         if _lkind(p) == "dir":
@@ -347,7 +413,8 @@ def scenario_r10(target):
     with io.open(os.path.join(synced, ".bucket-vgbucket"), "w", encoding="utf-8", newline="\n") as f:
         f.write("vgbucket\n")
     set_stage(target, "implement")
-    write(target, "docs/adr/verify-trigger.md", "觸發一次 commit 用\n")
+    # N-4:情境 trigger 與正控不同 ⇒ 正控提交之後,情境 commit 的 staged 仍非空。
+    write(target, SCENARIO_TRIGGER_R10, "觸發一次 R10 情境 commit 用(與正控 trigger 不同)\n")
 
 
 def precontrol_r10(target):
@@ -645,6 +712,14 @@ def run_scenario(target, code, iso=None):
         msg = gate.bash_write_violation("echo x > 偷偷寫進去.txt")
         return bool(msg and "[%s]" % code in msg), (msg or "(述詞放行了)")
     sh(["git", "add", "-A"], target)
+    # N-4:staged 為空時 `git commit` 會以 nothing-to-commit 非零結束 —— 那個 rc 不是閘門給的,不得算擋下。
+    # 這一步只排除那個假象;R10 是否擋下仍由 rc + marker + reason 三者共同判定(判定句不變)。
+    _rc, staged = sh(["git", "diff", "--cached", "--name-only"], target)
+    if not staged.strip():
+        restore(target)
+        if iso is not None:
+            restore_user_layer(iso)
+        return False, u"情境 staged 為空：" + code
     rc, out = sh(["git", "commit", "-m", "verify %s" % code], target, check=False)
     restore(target)
     if iso is not None:

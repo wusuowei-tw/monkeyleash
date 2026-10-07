@@ -4054,8 +4054,11 @@ def _extension_claude_root():
 
 
 def _staged_names_all():
-    """`git diff --cached --name-only -z` 的**全部**路徑(含刪除),POSIX 分隔,去空。"""
-    out = subprocess.check_output(["git", "diff", "--cached", "-z", "--name-only"], cwd=ROOT)
+    """`git diff --cached --name-only -z --no-renames` 的**全部**路徑(含刪除),POSIX 分隔,去空。
+
+    `--no-renames`(3h N-1):不做 rename 配對 —— 否則 `git mv x <policy>` 只列目的、藏起來源刪除,
+    混合 commit 會被判成 policy-only。"""
+    out = subprocess.check_output(["git", "diff", "--cached", "--name-only", "-z", "--no-renames"], cwd=ROOT)
     return [p.replace("\\", "/") for p in out.decode("utf-8", "replace").split("\0") if p.strip()]
 
 
@@ -4108,6 +4111,13 @@ def check_extension_integrity(staged_names=None):
         elif report.get("state") != rl.EXT_DECLARED_OK:
             res["hard_block"] = (u"[R10/fail-closed] policy-only commit（policy_source=index）：staged policy 對現場"
                                  u"不成立：%s" % report.get("reason"))
+        return res
+    # (a′)(3h N-2):一般 HEAD 路徑的 allowlist facts 非 ok ⇒ 獨立硬擋、不受影子豁免。
+    # report 的 state / category 仍依 `_extension_first_reason` 原優先序(VIOLATION / allowlist_state)。
+    facts = report.get("facts")
+    a_state = facts.get("state") if isinstance(facts, dict) else None
+    if a_state != "ok":
+        res["hard_block"] = u"[R10/fail-closed] allowlist_state：allowlist %s；本次無法判定" % a_state
         return res
     parts = []
     surfaces = report.get("surfaces") or {}

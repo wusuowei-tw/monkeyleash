@@ -1,6 +1,7 @@
 # 票 146 —— Claude Code Enforcement Integrity
 
-**狀態**:第五站 PASS-with-notes;N-1～N-4 依追加裁決於 3h／4c 處理並重驗後，才進第六站;146 尚未宣告生效
+**狀態**:4c 實作中;146 尚未宣告生效
+~~**狀態**:第五站 PASS-with-notes;N-1～N-4 依追加裁決於 3h／4c 處理並重驗後，才進第六站;146 尚未宣告生效~~(F-036 體例:舊行不刪)—— 2026-10-07 S4c-146 開工時更新(3h 紅燈 `adc3ef5` 已提交並證紅)。
 ~~**狀態**:4b 已實作並正式驗證(S4b-146-1 982a661d438783902247a1da7e4a023bc7961a9d);待第五站獨立審查;146 已接線但尚未宣告生效~~(F-036 體例:舊行不刪)—— 2026-10-07 S5-146-1 第五站獨立審查入庫時更新。
 ~~**狀態**:4b 實作中;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-07 S4b-146 4b-5 時更新:commit 1 已提交、HEAD 正式 pytest 0 failed,審計 `docs/audits/2026-10-07-146-station4b-implementation.md`。
 ~~**狀態**:3f-2 紅燈已驗收;待 policy 草稿與 Jeff 核准;146 尚未生效~~(F-036 體例:舊行不刪)—— 2026-10-07 S4b-146 4b-1 開工時更新(其間 policy 已由 Jeff 提交 `4cb59eb`、G-0 `2b7c9f8`、3g 紅燈 `8e7b293`)。
@@ -1057,3 +1058,24 @@ T146-50b[home-is-symlink] 與 T146-51b[vi-home-symlink]:Windows 改用 junction 
 ### 紅燈落點
 
 - 審計:`docs/audits/2026-10-07-146-station3h-redlight.md`(C0 逐 node 預期、- 行逐行、待裁)。
+- 證紅(S3h-146-1 `adc3ef572f9d3b0392eb0565fa2724b08646d3e5`,Windows):16 failed、2310 passed、10 skipped、3 xfailed;與 C0 逐 node 一致。
+
+---
+
+## 第四站 4c 實作(S4c-146-1)
+
+### Jeff 裁決(2026-10-07)
+
+(1) T146-83c 在 BASELINE 已綠(C0 已列綠),定位為「既有行為回歸鎖」,不改測試;審計與票面記為「正控 81d、回歸鎖 83c」。
+(2) 契約增補 N-3′:verify_gates.isolated_home 必須在任何建立目錄、寫入 marker 或修改環境變數之前，檢查所有已存在的 home、home/.claude、marker:除既有型別檢查外,lstat 為 symlink 或 _is_reparse 為真 ⇒ SystemExit(不建立任何東西、環境不變)。由既有 T146-50b[home-is-symlink] 驗收，不新增測試。
+(3) T146-53b 用 getattr 取常數(該檔無 _api)屬可接受偏離，審計記明。
+
+### 改動範圍(只改兩個 production 檔)
+
+- `.claude/hooks/gate.py`:
+  - N-1:`_staged_names_all` 改為 `git diff --cached --name-only -z --no-renames`。
+  - N-2:`check_extension_integrity` 的非 policy-only 路徑，在 (a) 之後、(b)(c)(d) 之前加 (a′):allowlist facts 非 ok ⇒ `[R10/fail-closed] allowlist_state：allowlist <state>；本次無法判定`。redlight 不動。
+- `.claude/portable/verify_gates.py`:
+  - N-3:新增 `_is_reparse`;`_require_isolation` 加 claude_root realpath 檢查，並對 home / claude_root / marker 做 reparse 檢查;`restore_user_layer` 改為全樹 topdown 預檢、原地剪枝 dirnames,預檢過才刪。
+  - N-3′:`isolated_home` 的進入檢查。
+  - N-4:新增 `SCENARIO_TRIGGER_R10`;`scenario_r10` 改寫新 trigger;`run_scenario` 對 commit 型情境檢查 staged 非空。
