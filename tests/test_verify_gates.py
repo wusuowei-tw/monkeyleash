@@ -381,8 +381,7 @@ class TestTicket146Cleanroom:
         assert current() is None
 
     @pytest.mark.parametrize("case", [
-        "home-nonempty", "home-is-file", "claude-is-file", "marker-preexists",
-        pytest.param("home-is-symlink", marks=_T146_SKIP_SYMLINK)])
+        "home-nonempty", "home-is-file", "claude-is-file", "marker-preexists", "home-is-symlink"])
     def test_t146_50b_isolated_home_refuses_bad_preexisting(self, tmp_path, case):
         """T146-50b(behavior-red):home 非空 / home 是檔 / .claude 是檔 / marker 已存在 / home 是 symlink ⇒ 進入即 SystemExit;
         預置物位元組不變、environ 不變、current_isolation() 為 None。BASELINE 紅因:`vg.isolated_home` 不存在。"""
@@ -406,7 +405,7 @@ class TestTicket146Cleanroom:
         else:
             real = tmp_path / "elsewhere"
             real.mkdir()
-            os.symlink(str(real), str(home))
+            _t146_link_dir(real, home)
         snap = _t146_tree(wd)
         env = dict(os.environ)
         with pytest.raises(SystemExit):
@@ -460,7 +459,7 @@ class TestTicket146Cleanroom:
 
     @pytest.mark.parametrize("case", [
         "i-marker-deleted", "ii-marker-changed", "iii-forged-namespace", "iv-after-exit",
-        "v-env-moved", pytest.param("vi-home-symlink", marks=_T146_SKIP_SYMLINK)])
+        "v-env-moved", "vi-home-symlink"])
     def test_t146_51b_restore_user_layer_refuses(self, tmp_path, monkeypatch, case):
         """T146-51b(behavior-red):marker 刪除 / 內容改變 / 偽造 iso / context 已結束 / expanduser 不是 iso.home /
         iso.home 換成 symlink ⇒ 各 SystemExit,事前放的檔仍在。BASELINE 紅因:`vg.isolated_home` 不存在。"""
@@ -493,7 +492,7 @@ class TestTicket146Cleanroom:
                 else:
                     moved = str(iso.home) + "-moved"
                     shutil.move(str(iso.home), moved)
-                    os.symlink(moved, str(iso.home))
+                    _t146_link_dir(moved, iso.home)
                     planted = os.path.join(moved, os.path.basename(str(iso.claude_root)), "keep.md")
                 with pytest.raises(SystemExit):
                     restore_user_layer(target)
@@ -590,7 +589,8 @@ class TestTicket146Cleanroom:
                 assert f.read() == "# verify_gates r10\n"
             with open(os.path.join(iso.claude_root, "skills", "synced", ".bucket-vgbucket"), encoding="utf-8") as f:
                 assert f.read() == "vgbucket\n"
-        assert (target / "docs" / "adr" / "verify-trigger.md").is_file()
+        # 3h 准改:trigger 改為情境專用常數(N-4;與正控 trigger 不同)。
+        assert (target / getattr(vg, "SCENARIO_TRIGGER_R10")).is_file()
         stage = json.loads((target / ".dev" / "pipeline.json").read_text(encoding="utf-8"))["current_stage"]
         assert stage == "implement", stage
 
@@ -629,6 +629,8 @@ class TestTicket146Cleanroom:
         def fake_sh(args, cwd, check=True):
             if len(args) > 1 and args[1] == "commit":
                 return commits.pop(0)
+            if list(args[1:4]) == ["diff", "--cached", "--name-only"]:
+                return 0, "docs/adr/verify-trigger-r10.md\n"  # 3h 准改:staged 查詢回非空(N-4)
             return 0, ""
         monkeypatch.setattr(vg, "sh", fake_sh)
         monkeypatch.setattr(vg, "restore", lambda t: None)
@@ -647,3 +649,221 @@ class TestTicket146Cleanroom:
             assert blocked is True, out
         else:
             assert blocked is False, (case, out)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 146 第三站 3h 紅燈(S3h-146-1)—— N-3 隔離清理拒絕 reparse point、N-4 情境 staged 非空
+#
+# 契約在票 146〈3h 契約與紅燈(N-1～N-4)〉。Windows 用 junction(`_winapi.CreateJunction`,不需額外權限),
+# POSIX 用 symlink。哨兵目錄放 tmp_path 下、workdir 之外;新名稱以 getattr 取得,缺 ⇒ 該 node 紅。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _t146_link_dir(src, dst):
+    """dst 成為指向 src 的目錄連結:Windows 用 junction,POSIX 用 symlink(3h;T146-50b / 51b 准改亦用此)。"""
+    if os.name == "nt":
+        import _winapi
+        _winapi.CreateJunction(str(src), str(dst))
+    else:
+        os.symlink(str(src), str(dst))
+
+
+def _t146_outside(tmp_path, deep=False):
+    """workdir 之外的哨兵目錄:sentinel.txt(deep=True 再加 deep/inner.txt)。"""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "sentinel.txt").write_bytes(b"sentinel\n")
+    if deep:
+        (outside / "deep").mkdir()
+        (outside / "deep" / "inner.txt").write_bytes(b"inner\n")
+    return outside
+
+
+def _t146_rel_files(root):
+    out = []
+    for dirpath, _d, filenames in os.walk(str(root)):
+        for f in filenames:
+            out.append(os.path.relpath(os.path.join(dirpath, f), str(root)).replace(os.sep, "/"))
+    return sorted(out)
+
+
+def _t146_under(p, base):
+    """realpath(p) 是否為 realpath(base) 本身或其後代(路徑邊界比較;不同磁碟 ⇒ False)。"""
+    rp, rb = os.path.normcase(os.path.realpath(str(p))), os.path.normcase(os.path.realpath(str(base)))
+    try:
+        return os.path.commonpath([rp, rb]) == rb
+    except ValueError:
+        return False
+
+
+class TestTicket146IsolationReparse:
+    """票 146 3h:N-3(清理前驗 claude_root 解析位置、全樹預檢拒絕 reparse point)與 N-4(情境 trigger 與正控不同、
+    staged 非空;gate 回 0 ⇒ 演習失敗)。"""
+
+    def test_t146_82_restore_refuses_claude_root_link(self, tmp_path):
+        """T146-82(behavior-red):iso.claude_root 本身換成指向 outside 的連結 ⇒ restore_user_layer SystemExit;sentinel 仍在。
+        BASELINE 紅因(Windows):junction 被 `_lkind` 判為 dir,清理照做、刪到 outside。"""
+        restore_user_layer = getattr(vg, "restore_user_layer")
+        outside = _t146_outside(tmp_path)
+        (tmp_path / "wd").mkdir()
+        with getattr(vg, "isolated_home")(str(tmp_path / "wd")) as iso:
+            os.rmdir(iso.claude_root)
+            _t146_link_dir(outside, iso.claude_root)
+            with pytest.raises(SystemExit):
+                restore_user_layer(iso)
+        assert (outside / "sentinel.txt").is_file()
+
+    def test_t146_82b_restore_refuses_direct_child_link(self, tmp_path):
+        """T146-82b(behavior-red):iso.claude_root/skills 是指向 outside 的連結、另有 plain.txt ⇒ SystemExit;
+        sentinel 與 plain.txt 都仍在(預檢失敗時什麼都不刪)。"""
+        restore_user_layer = getattr(vg, "restore_user_layer")
+        outside = _t146_outside(tmp_path)
+        (tmp_path / "wd").mkdir()
+        with getattr(vg, "isolated_home")(str(tmp_path / "wd")) as iso:
+            _t146_link_dir(outside, os.path.join(iso.claude_root, "skills"))
+            plain = os.path.join(iso.claude_root, "plain.txt")
+            with open(plain, "wb") as f:
+                f.write(b"plain\n")
+            with pytest.raises(SystemExit):
+                restore_user_layer(iso)
+            assert os.path.isfile(plain)
+        assert (outside / "sentinel.txt").is_file()
+
+    def test_t146_82c_restore_refuses_nested_link_without_enumerating_outside(self, tmp_path, monkeypatch):
+        """T146-82c(behavior-red):巢狀 skills/synced/<D>/sub 是連結(同層有 SKILL.md、根有 plain.txt)⇒ SystemExit;
+        restore_user_layer 執行期間不得列舉 outside 本身或其後代(spy 只在呼叫期間記錄);之後四個檔都仍在。"""
+        restore_user_layer = getattr(vg, "restore_user_layer")
+        outside = _t146_outside(tmp_path, deep=True)
+        (tmp_path / "wd").mkdir()
+        seen = []
+        state = {"on": False}
+        real_listdir, real_scandir = os.listdir, os.scandir
+
+        def spy_listdir(path=".", *a, **k):
+            if state["on"]:
+                seen.append(os.fspath(path) if not isinstance(path, int) else path)
+            return real_listdir(path, *a, **k)
+
+        def spy_scandir(path=".", *a, **k):
+            if state["on"]:
+                seen.append(os.fspath(path) if not isinstance(path, int) else path)
+            return real_scandir(path, *a, **k)
+        with getattr(vg, "isolated_home")(str(tmp_path / "wd")) as iso:
+            d = os.path.join(iso.claude_root, "skills", "synced", "b1")
+            os.makedirs(d)
+            skill = os.path.join(d, "SKILL.md")
+            with open(skill, "wb") as f:
+                f.write(b"# s\n")
+            plain = os.path.join(iso.claude_root, "plain.txt")
+            with open(plain, "wb") as f:
+                f.write(b"plain\n")
+            _t146_link_dir(outside, os.path.join(d, "sub"))
+            monkeypatch.setattr(os, "listdir", spy_listdir)
+            monkeypatch.setattr(os, "scandir", spy_scandir)
+            raised = False
+            state["on"] = True
+            try:
+                restore_user_layer(iso)
+            except SystemExit:
+                raised = True
+            finally:
+                state["on"] = False
+                monkeypatch.setattr(os, "listdir", real_listdir)
+                monkeypatch.setattr(os, "scandir", real_scandir)
+            assert raised, "restore_user_layer 沒有拒絕巢狀連結"
+            leaked = [p for p in seen if not isinstance(p, int) and _t146_under(p, outside)]
+            assert leaked == [], leaked
+            assert os.path.isfile(skill) and os.path.isfile(plain)
+        assert (outside / "sentinel.txt").is_file() and (outside / "deep" / "inner.txt").is_file()
+
+    def test_t146_82d_scenario_r10_refuses_claude_root_link(self, tmp_path):
+        """T146-82d(behavior-red):同 T146-82 佈置 ⇒ scenario_r10(target) SystemExit;outside 遞迴列舉只有 sentinel.txt。"""
+        scenario_r10 = getattr(vg, "scenario_r10")
+        outside = _t146_outside(tmp_path)
+        target = tmp_path / "target"
+        (target / ".dev").mkdir(parents=True)
+        (tmp_path / "wd").mkdir()
+        with getattr(vg, "isolated_home")(str(tmp_path / "wd")) as iso:
+            os.rmdir(iso.claude_root)
+            _t146_link_dir(outside, iso.claude_root)
+            with pytest.raises(SystemExit):
+                scenario_r10(str(target))
+        assert _t146_rel_files(outside) == ["sentinel.txt"], _t146_rel_files(outside)
+
+    def test_t146_82e_require_isolation_checks_claude_root_realpath(self, tmp_path):
+        """T146-82e(behavior-red):iso.claude_root 改指 workdir 內另一個真目錄(非連結)⇒ _require_isolation SystemExit。
+        BASELINE 紅因:只驗 realpath(home),不驗 claude_root 的解析位置。"""
+        require = getattr(vg, "_require_isolation")
+        (tmp_path / "wd").mkdir()
+        with getattr(vg, "isolated_home")(str(tmp_path / "wd")) as iso:
+            other = os.path.join(str(tmp_path / "wd"), "other-claude")
+            os.mkdir(other)
+            iso.claude_root = other
+            with pytest.raises(SystemExit):
+                require(iso)
+
+    def test_t146_83_scenario_trigger_differs_and_stages_nonempty(self, target, tmp_path):
+        """T146-83(behavior-red):正控提交後,情境 trigger 與正控不同 ⇒ git add -A 後 staged 非空且含 SCENARIO_TRIGGER_R10。
+        BASELINE 紅因:`SCENARIO_TRIGGER_R10` 不存在;情境寫同一個 trigger、staged 為空。"""
+        trig = getattr(vg, "SCENARIO_TRIGGER_R10")
+        assert trig != "docs/adr/verify-trigger.md", trig
+        getattr(vg, "precontrol_r10")(target)
+        _git(["add", "-A"], target)
+        _git(["commit", "-qm", "precontrol (t146-83)"], target)
+        vg.restore(target)
+        (tmp_path / "wd").mkdir()
+        with getattr(vg, "isolated_home")(str(tmp_path / "wd")):
+            getattr(vg, "scenario_r10")(target)
+        _git(["add", "-A"], target)
+        staged = [n for n in _git(["diff", "--cached", "--name-only"], target).stdout.decode("utf-8").splitlines() if n]
+        assert staged and trig in staged, staged
+
+    @staticmethod
+    def _wire_run(monkeypatch, commits, staged_after_precontrol, code="R10"):
+        """假 sh:commit 依序回 commits;`git diff --cached --name-only` 在正控 commit 之前回非空,
+        之後回 staged_after_precontrol。回 (calls, ran)。"""
+        calls = {"commit": 0}
+        ran = []
+
+        def fake_sh(args, cwd, check=True):
+            if len(args) > 1 and args[1] == "commit":
+                calls["commit"] += 1
+                return commits.pop(0)
+            if list(args[1:4]) == ["diff", "--cached", "--name-only"]:
+                if code in vg.PRECONTROL and calls["commit"] == 0:
+                    return 0, "docs/adr/verify-trigger.md\n"
+                return 0, staged_after_precontrol
+            return 0, ""
+        monkeypatch.setattr(vg, "sh", fake_sh)
+        monkeypatch.setattr(vg, "restore", lambda t: None)
+        monkeypatch.setattr(vg, "restore_user_layer", lambda iso: None)
+        monkeypatch.setitem(vg.PRECONTROL, "R10", lambda t: None)
+        monkeypatch.setitem(vg.SCENARIOS, code, lambda t: ran.append(t))
+        return calls, ran
+
+    def test_t146_83b_run_scenario_fails_when_staged_empty(self, tmp_path, monkeypatch):
+        """T146-83b(behavior-red):正控 commit rc 0、情境 staged 查詢回空 ⇒ (False, 含「情境 staged 為空」);
+        commit 恰好 1 次(正控),情境 commit 0 次。BASELINE 紅因:沒有 staged 檢查,情境照樣 commit。"""
+        import types
+        calls, _ran = self._wire_run(monkeypatch, [(0, ""), (1, _T146_R10_OUT)], "")
+        blocked, out = vg.run_scenario(str(tmp_path), "R10", iso=types.SimpleNamespace(tag="t146-83b"))
+        assert blocked is False and u"情境 staged 為空" in out, (blocked, out)
+        assert calls["commit"] == 1, calls
+
+    def test_t146_83c_run_scenario_fails_when_gate_returns_zero(self, tmp_path, monkeypatch):
+        """T146-83c:正控 commit (0, "");情境 staged 非空;情境 commit 回 (0, 正確 marker + reason)⇒ False;commit 2 次。
+        (印出正確訊息但 gate 回 0 ⇒ 演習判失敗;排除 nothing-to-commit 白送非零退出碼。)"""
+        import types
+        calls, _ran = self._wire_run(monkeypatch, [(0, ""), (0, _T146_R10_OUT)], "docs/adr/verify-trigger-r10.md\n")
+        blocked, out = vg.run_scenario(str(tmp_path), "R10", iso=types.SimpleNamespace(tag="t146-83c"))
+        assert blocked is False, (blocked, out)
+        assert calls["commit"] == 2, calls
+
+    def test_t146_83d_r4_generic_with_staged_check(self, tmp_path, monkeypatch):
+        """T146-83d(behavior-red):R4 —— staged 非空、commit (1, "[R4] …") ⇒ True;staged 回空 ⇒ (False, 含「情境 staged 為空」)。
+        BASELINE 紅因:沒有 staged 檢查,空 staged 也照樣 commit 並判擋下。"""
+        calls, _ran = self._wire_run(monkeypatch, [(1, u"[R4] 鏡像缺少 x")], "docs/adr/verify-trigger.md\n", code="R4")
+        blocked, out = vg.run_scenario(str(tmp_path), "R4")
+        assert blocked is True, out
+        calls, _ran = self._wire_run(monkeypatch, [(1, u"[R4] 鏡像缺少 x")], "", code="R4")
+        blocked, out = vg.run_scenario(str(tmp_path), "R4")
+        assert blocked is False and u"情境 staged 為空" in out, (blocked, out)

@@ -1017,3 +1017,43 @@ N-1、N-2、N-3、N-4,依上列裁決;處理並重驗後才進第六站。
 
 - 前哨 R7 誤擋兩次：一次把 cp 的來源路徑當成寫入目標;一次擋下含 `<bucket>` 角括號的唯讀 grep。
 - `~/.claude/plugins/plugin-directory-cache-v2.json` 不在 146 任何監控入口內;收票時列入已知盲區。
+
+---
+
+## 3h 契約與紅燈(N-1～N-4)
+
+### Jeff 裁決原文(2026-10-07,逐字;與 S5-146-1 票節同一段)
+
+裁：N-1 選 A、N-2 一起修、O-1 另立票。另把 N-3、N-4 升為推送前修正項。
+已讀獨立審查原文。保留其 PASS-with-notes、阻擋 0 的原始結論，不改審查檔;以下是 Jeff 裁決層新增的推送條件。
+* N-1:3h／4c 修。`_staged_names_all` 加 `--no-renames`,紅燈驗 rename 的來源刪除與目的新增都在清單中，混合提交走 HEAD。
+* **N-2：接受契約增補。**一般 HEAD 路徑的 allowlist facts 非 `ok`,獨立硬擋、不受 shadow 豁免。保留 static state 的既有優先序;新增 shadow 開啟的負控，不只驗 `worktree_differs`,也涵蓋缺失／identity 失敗。
+* **N-3：不留後補。**junction 型別與 realpath 已實測;「清理會越界」是讀碼推論，但已違反隔離清理邊界。清理前驗 claude_root 的解析位置，並拒絕根及清理項目的 junction／異常 reparse point;用 scratchpad 外部哨兵檔驗證拒絕後未刪任何內容。
+* **N-4：不留後補。**情境 trigger 必須與正控不同，確認 staged 非空。再加「印正確 marker／reason、gate 卻回 0 ⇒ 演習判失敗」負控，排除 `nothing to commit` 白送非零退出碼。
+* O-1:接受另立票 148,先確認號碼未占用;與票 140 A-1 交叉引用，區分清單漏掉 rename 的實測與秘密漏掃的推論，不在 146 順手修。
+
+### Jeff 補充裁決(2026-10-07,逐字要點)
+
+1. 准改清單加 T146-53b(改用新 trigger 常數)與 T146-55 的 fake_sh(staged 查詢回非空;六案原斷言保留)。
+2. T146-83b:正控 commit 回 rc 0、情境 staged 查詢回空;斷言正控 commit 一次、情境 commit 零次。T146-83c 明列兩次 commit 回傳。
+3. C0:T146-81d 列 BASELINE 綠;兩支改 junction 的 node 列預期紅(N-3 缺口);T146-53b 因 API 缺失預期轉紅;新 node 數依展開重算。
+4. 契約:staged 非空只排除 nothing-to-commit 假象;R10 仍以非零退出碼 + 精確 marker + 指定原因共同驗證。
+5. N-3:清理前以 topdown 不追連結地遞迴預檢全部子項，每層先 lstat、原地剪枝 dirnames;任何列舉／lstat 失敗或 reparse point ⇒ 停止，尚未刪除任何項目;加巢狀連結 + 外部 sentinel 負控並證明未列舉外部目錄。
+6. T146-81 的參數化以既有 facts state 命名(uninitialized / worktree_differs / malformed),斷言結構化 state,不新增名稱。
+7. T146-82c 的 spy 只記錄 restore_user_layer() 執行期間;禁止列舉 outside 本身及其後代，以路徑邊界比較;停止記錄後才檢查哨兵檔。
+8. T146-80b 不是 BASELINE 綠：現行 _staged_names_all 沒有 --no-renames,Git 辨識為 rename 時來源會被隱藏;固定相同內容的 rename 佈置，列預期紅。先前「可能綠」的預判不精確，更正。
+
+### 契約(逐字;4c 只能實作)
+
+N-1 gate.py:_staged_names_all() 的指令固定為 git diff --cached --name-only -z --no-renames;rename 的來源刪除與目的新增都必須出現在清單中。
+N-2 gate.py:check_extension_integrity 非 policy-only 路徑，在 (a) 之後、(b)(c)(d) 之前新增 (a′):report["facts"] 為 None 或 report["facts"]["state"] != "ok" ⇒ hard_block "[R10/fail-closed] allowlist_state：allowlist <state>；本次無法判定",不受 shadow 豁免;report 的 state/category 仍依 _extension_first_reason 原優先序(VIOLATION / allowlist_state),不改 redlight。
+N-3 verify_gates.py:_is_reparse(path) → bool:POSIX 為 os.path.islink;Windows 為 lstat().st_file_attributes 含 FILE_ATTRIBUTE_REPARSE_POINT(0x400)或 islink。_require_isolation(iso) 增加:realpath(iso.claude_root) == os.path.join(realpath(iso.home), ".claude");iso.home、iso.claude_root、iso.marker 任一 _is_reparse ⇒ SystemExit。restore_user_layer(iso):先 _require_isolation;再全樹預檢:os.walk(iso.claude_root, topdown=True, followlinks=False, onerror=<收集後立即視為失敗>);每一層先對 dirnames 與 filenames 的每個項目 lstat(查詢失敗 ⇒ 停止);任一項目 _is_reparse 為真 ⇒ 停止;在走訪下一層之前，從 dirnames 原地移除所有不得走訪的項目，使 os.walk 不進入它們;任何停止 ⇒ SystemExit,且此時尚未刪除任何內容。全樹預檢成功後才刪除。scenario_r10 經 _require_isolation 故同樣拒絕。
+N-4 verify_gates.py:SCENARIO_TRIGGER_R10 = "docs/adr/verify-trigger-r10.md";scenario_r10 寫此檔(內容與正控 trigger 不同),不再寫 docs/adr/verify-trigger.md;run_scenario 對所有 commit 型情境在 git add -A 之後、commit 之前以 git diff --cached --name-only 確認 staged 非空，為空 ⇒ restore 後回 (False, "情境 staged 為空：" + code),不執行 commit。staged 非空只排除 nothing-to-commit 假象;R10 的擋下仍以 rc != 0 且 EXPECTED_MARKER 且 EXPECTED_REASON 三者共同驗證(判定句不變)。
+
+### 允許修改清單(逐字)
+
+T146-50b[home-is-symlink] 與 T146-51b[vi-home-symlink]:Windows 改用 junction 實跑、不再 skip(POSIX 仍 symlink);T146-53b:trigger 斷言改用 _api("SCENARIO_TRIGGER_R10");T146-55 的 fake_sh:對 git diff --cached --name-only 回非空，六案原斷言保留。其他不動。
+
+### 紅燈落點
+
+- 審計:`docs/audits/2026-10-07-146-station3h-redlight.md`(C0 逐 node 預期、- 行逐行、待裁)。

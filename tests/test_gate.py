@@ -7185,3 +7185,121 @@ class TestTicket146PolicyOnlyLane:
         rc, err = TestTicket146Integration._run(mod, capsys)
         assert rc == 1, err
         assert "[R10/fail-closed] policy-only commit" in err, err
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 票 146 第三站 3h 紅燈(S3h-146-1)—— N-1 rename 不得藏起來源、N-2 allowlist 非 ok 獨立硬擋
+#
+# 契約在票 146〈3h 契約與紅燈(N-1～N-4)〉。沿用 TestTicket146Integration 的 `_root` / `_load` / `_wire`
+# (只呼叫、不修改);claude_root 一律 tmp。缺名稱 ⇒ 該 node 以 AttributeError 紅。
+# ══════════════════════════════════════════════════════════════════════════
+
+def _rn_git(root, *args):
+    return subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True)
+
+
+def _rn_bare_root(tmp_path):
+    """臨時 repo:gate + redlight 真檔複本、.dev、.agents;已 init、未提交任何檔。回 (root, claude)。"""
+    root = tmp_path / "repo"
+    hooks = root / ".claude" / "hooks"
+    hooks.mkdir(parents=True)
+    (root / ".dev").mkdir()
+    (root / ".agents").mkdir()
+    shutil.copy2(str(ROOT / ".claude" / "hooks" / "gate.py"), str(hooks / "gate.py"))
+    shutil.copy2(str(ROOT / ".claude" / "hooks" / "redlight.py"), str(hooks / "redlight.py"))
+    _rn_git(root, "init", "-q")
+    _rn_git(root, "config", "user.email", "t@example.invalid")
+    _rn_git(root, "config", "user.name", "t")
+    claude = tmp_path / "claude"
+    claude.mkdir()
+    return root, claude
+
+
+class TestTicket146RenameAndAllowlistBlock:
+    """票 146 3h:N-1(`_staged_names_all` 不做 rename 配對)與 N-2(一般 HEAD 路徑 allowlist 非 ok ⇒ (a′) 硬擋)。"""
+
+    def test_t146_80_rename_into_policy_path_is_not_policy_only(self, tmp_path, monkeypatch):
+        """T146-80(behavior-red):HEAD 沒有 allowlist;`git mv docs/draft-allowlist.json .agents/extension-allowlist.json`
+        ⇒ 清單同時含來源與目的、不是 policy-only、check 走 "head"。BASELINE 紅因:清單沒有 `--no-renames`,來源刪除被藏起來。"""
+        root, claude = _rn_bare_root(tmp_path)
+        (root / "docs").mkdir()
+        text = json.dumps(TestTicket146Integration._ALLOWLIST, ensure_ascii=False, indent=2) + "\n"
+        (root / "docs" / "draft-allowlist.json").write_bytes(text.encode("utf-8"))
+        (root / ".agents" / "extension-inventory.json").write_bytes(
+            (json.dumps({"schema": "monkeyleash.extension-inventory", "version": 1, "entries": []},
+                        ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+        _rn_git(root, "add", "docs/draft-allowlist.json", ".agents/extension-inventory.json")
+        _rn_git(root, "commit", "-q", "-m", "base (t146-80)")
+        _rn_git(root, "mv", "docs/draft-allowlist.json", ".agents/extension-allowlist.json")
+        mod = TestTicket146Integration._load(root, "80")
+        monkeypatch.setattr(mod, "_extension_claude_root", lambda: str(claude))
+        names = getattr(mod, "_staged_names_all")()
+        assert "docs/draft-allowlist.json" in names and ".agents/extension-allowlist.json" in names, names
+        assert getattr(mod, "extension_policy_only_commit")(names) is False, names
+        assert getattr(mod, "check_extension_integrity")(names)["policy_source"] == "head"
+
+    def test_t146_80b_plain_rename_lists_both_names(self, tmp_path):
+        """T146-80b(behavior-red;非 BASELINE 綠 —— 補充裁決 8):相同內容 `git mv src/a.py src/b.py`(Git 判 R100)
+        ⇒ `_staged_names_all()` 同時含 src/a.py 與 src/b.py。BASELINE 紅因:沒有 `--no-renames`,rename 來源被隱藏。"""
+        root, _claude = _rn_bare_root(tmp_path)
+        (root / "src").mkdir()
+        (root / "src" / "a.py").write_bytes(b"x = 1\n")
+        _rn_git(root, "add", "src/a.py")
+        _rn_git(root, "commit", "-q", "-m", "base (t146-80b)")
+        _rn_git(root, "mv", "src/a.py", "src/b.py")
+        status = _rn_git(root, "diff", "--cached", "--name-status").stdout.decode("utf-8")
+        if not any(ln.startswith("R100") for ln in status.splitlines()):
+            pytest.fail(u"佈置未形成 rename(name-status 沒有 R100):%r" % status)
+        mod = TestTicket146Integration._load(root, "80b")
+        names = getattr(mod, "_staged_names_all")()
+        assert "src/a.py" in names and "src/b.py" in names, names
+
+    @staticmethod
+    def _allowlist_case_root(tmp_path, case):
+        """uninitialized:HEAD 與工作樹都沒有 allowlist(inventory 合法已提交);worktree_differs:HEAD 合法、工作樹改寫;
+        malformed:HEAD 提交非法 JSON 的 allowlist、工作樹相同。之後 stage x.py。"""
+        root, claude = TestTicket146Integration()._root(tmp_path)
+        allow = ".agents/extension-allowlist.json"
+        if case == "uninitialized":
+            _rn_git(root, "rm", "-q", allow)
+            _rn_git(root, "commit", "-q", "-m", "drop allowlist (t146-81)")
+        elif case == "worktree_differs":
+            (root / allow).write_bytes(
+                (json.dumps(TestTicket146Integration._ALLOWLIST, ensure_ascii=False, indent=4) + "\n").encode("utf-8"))
+        else:
+            (root / allow).write_bytes(b"{garbage\n")
+            _rn_git(root, "add", allow)
+            _rn_git(root, "commit", "-q", "-m", "malformed allowlist (t146-81)")
+        (root / "x.py").write_bytes(b"x = 1\n")
+        _rn_git(root, "add", "x.py")
+        return root, claude
+
+    @pytest.mark.parametrize("case", ["uninitialized", "worktree_differs", "malformed"])
+    def test_t146_81_allowlist_not_ok_hard_blocks_under_shadow(self, tmp_path, monkeypatch, capsys, case):
+        """T146-81(behavior-red):一般 HEAD 路徑 allowlist facts 非 ok(id 即預期 state)+ 影子開 ⇒ mode_pre_commit() == 1;
+        hard_block 含 [R10/fail-closed]、allowlist 與該 state;report 的 state / category 維持 VIOLATION / allowlist_state;
+        policy_source "head"。BASELINE 紅因:allowlist 非 ok 走 violations,受影子豁免(rc 0、hard_block None)。"""
+        root, claude = self._allowlist_case_root(tmp_path, case)
+        mod = TestTicket146Integration._load(root, "81_" + case)
+        TestTicket146Integration._wire(monkeypatch, mod, claude, shadow=True)
+        rl = mod._redlight()
+        rc, err = TestTicket146Integration._run(mod, capsys)
+        assert rc == 1, err
+        res = getattr(mod, "check_extension_integrity")(["x.py"])
+        assert res["report"]["facts"]["state"] == case, res["report"]["facts"]
+        hb = res["hard_block"] or ""
+        assert "[R10/fail-closed]" in hb and "allowlist" in hb and case in hb, hb
+        assert res["report"]["state"] == rl.EXT_VIOLATION, res["report"]["state"]
+        assert res["report"]["category"] == rl.EXT_CAT_ALLOWLIST, res["report"]["category"]
+        assert res["policy_source"] == "head", res
+
+    def test_t146_81d_shadow_still_exempts_plain_unregistered(self, tmp_path, monkeypatch, capsys):
+        """T146-81d(正控;BASELINE **綠**):影子開、allowlist ok、dev-mods/x.txt 未登記 ⇒ mode_pre_commit() == 0
+        (未登記仍走 violations,受影子規則;N-2 只擴到 allowlist 非 ok)。"""
+        root, claude = TestTicket146Integration()._root(tmp_path)
+        (claude / "dev-mods").mkdir()
+        (claude / "dev-mods" / "x.txt").write_bytes(b"x\n")
+        mod = TestTicket146Integration._load(root, "81d")
+        TestTicket146Integration._wire(monkeypatch, mod, claude, shadow=True)
+        rc, err = TestTicket146Integration._run(mod, capsys)
+        assert rc == 0, err
