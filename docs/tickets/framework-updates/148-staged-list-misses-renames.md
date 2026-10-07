@@ -1,6 +1,6 @@
 # 票 148 —— staged 清單在 rename 時漏列(權威層／leak scan 側)
 
-**狀態**:~~**立案(未排程)。**~~ **第三站紅燈已寫（S3-148-1，工作樹證紅）；待第四站實作（裁 A）。**
+**狀態**:~~**立案(未排程)。**~~ ~~**第三站紅燈已寫（S3-148-1，工作樹證紅）；待第四站實作（裁 A）。**~~ **第四站實作中（S4-148-1；前檢證據通過）；待正式結果。**
 **優先度**:**未定。**(審查建議見下;排程由 Jeff 另裁。)
 **發現於**:2026-10-07,票 146 第五站獨立審查 (k) O-1。
 **來源**:`docs/audits/2026-10-07-146-station5-independent-review.md`(§4 (k) O-1、(d))。
@@ -175,3 +175,49 @@ staged 清單遇到 rename 時會漏列。漏法有兩種，不能統稱「只�
   - tmp repo 提交合法空白 allowlist / inventory。
   - R10 走真實判定,不注入 `_extension_claude_root`。
   - R10 以外的鄰居照 `TestTicket146Integration._wire` 的同一份清單停掉,**不停 `staged_paths`**。
+
+## 第四站實作(S4-148-1)
+
+### 裁決(逐字節錄)
+
+2026-10-07 16:37 美東:
+
+> 「裁 A，#5 本輪不改，但記入票 148 待辦。
+> #1 與 #3 加 `--no-renames`，保留既有 `--diff-filter=ACM`，讓 rename 目的檔按新增檔進入檢查；刪除處置不變。」
+
+全文見〈Jeff 裁決(2026-10-07)〉。
+
+2026-10-07 19:27 美東:
+
+> 「信箱順手遮，只改票 149 的文件引用，不改 Git commit 身分或既有歷史；在 148 第四站准改清單明列這一處。
+> VS 未重讀四份來源屬流程偏離，即使你已核對數值正確，也應保留紀錄。
+> 切到 `implement` 的安排接受，只改 `current_stage`，保留 ticket 148 與其他欄位。切好後再審第四站指令；不 push。」
+
+### 改動摘要
+
+只改兩個 production 函式,另各補 docstring 說明理由。
+
+| 呼叫點 | 改前 | 改後 |
+|---|---|---|
+| #1 `.claude/hooks/gate.py` `staged_paths` | `["git", "diff", "--cached", "-z", "--name-only", "--diff-filter=ACM"]` | `["git", "diff", "--cached", "-z", "--name-only", "--diff-filter=ACM", "--no-renames"]` |
+| #3 `.claude/portable/scanner.py` `staged_paths` | `["git", "diff", "--cached", "-z", "--name-only", "--diff-filter=ACM"]` | `["git", "diff", "--cached", "-z", "--name-only", "--diff-filter=ACM", "--no-renames"]` |
+
+- #5(`scripts/e2e_authority_layer.py:1046`)不改(Jeff 裁決)。
+- 測試、policy 都沒有改動。
+
+### 前檢證據(工作樹;測試基準 HEAD `96fc8b9c75e734bfc7af2a94c245cc96739aeb78` + 未提交實作)
+
+- 新 node(`-k t148 -rA`):`14 passed, 2339 deselected`。
+  - 14 個名稱與參數 id 和 S3 清單逐字相同。
+  - failed / error / skipped / xfailed 都是 0。
+- 全套:`2340 passed, 10 skipped, 3 xfailed`,0 failed。
+  - 2340 = 2332 + 8,即 S3 的 8 個紅 node 轉綠。
+  - 10 行 skipped 與 S3 相同。
+- 淨室(`verify_gates.py`):rc 0。
+  - R1~R10 各「擋下 ✓」。
+  - R10 正控放行,「額外 2」擋下。
+  - 權威層偵測三項 ✓。
+  - 新 repo 框架測試 `2190 passed, 14 skipped, 3 xfailed`。
+  - evidence 五情境皆「成立 ✓」。
+
+審計:`docs/audits/2026-10-07-148-station4-implementation.md`。

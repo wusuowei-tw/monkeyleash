@@ -4019,9 +4019,13 @@ def staged_paths(cwd=None, gitlinks=None):
     `gitlinks`:呼叫端傳入的收集串列(形狀同 `check(..., exemptions=[])`),
     跳過的那幾格會 append 進去,由 `mode_pre_commit` 印進報告。
     **回傳型別不變** —— 不改成 tuple,理由見票 13 C(忘了解包會靜默翻成 fail-open)。
+
+    `--no-renames`(票 148,裁 A):不做 rename 配對 —— 否則 git 把改名配成 `R`,
+    而 `R` 不在 `ACM` 裡,改名的目的檔整筆不進逐檔判定(R1/R2/R3/R8 都不評估它)。
+    不配對之後,目的檔以 `A` 進清單、按新增檔檢查;來源是 `D`,照舊不進清單(刪除處置不變)。
     """
     out = subprocess.check_output(
-        ["git", "diff", "--cached", "-z", "--name-only", "--diff-filter=ACM"],
+        ["git", "diff", "--cached", "-z", "--name-only", "--diff-filter=ACM", "--no-renames"],
         cwd=cwd or ROOT).decode("utf-8", "replace")
     paths = [p for p in out.split("\0") if p.strip()]
     if not paths:

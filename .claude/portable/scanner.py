@@ -495,9 +495,13 @@ def staged_paths(cwd=None, gitlinks=None):
     票 13 C 的教訓是簽名一改,忘了解包的呼叫端會靜默拿到錯的東西 ——
     `(False, "…")` 在 `if` 裡是真的,fail-closed 整條翻成 fail-open 而測試全綠。
     走收集串列就沒有那個失敗模式(形狀同 `gate.check(..., exemptions=[])`)。
+
+    `--no-renames`(票 148,裁 A):不做 rename 配對 —— 否則 git 把改名配成 `R`,
+    而 `R` 不在 `ACM` 裡,改名的目的檔整筆不進掃描清單,改名時夾帶的內容不被掃。
+    不配對之後,目的檔以 `A` 進清單、按新增檔掃描;來源是 `D`,照舊不進清單(刪除處置不變)。
     """
     out = subprocess.run(["git", "diff", "--cached", "-z", "--name-only",
-                          "--diff-filter=ACM"], capture_output=True, cwd=cwd)
+                          "--diff-filter=ACM", "--no-renames"], capture_output=True, cwd=cwd)
     if out.returncode != 0:
         raise StagedListingFailed(
             "git diff --cached 失敗(退出碼 %s):%s"
