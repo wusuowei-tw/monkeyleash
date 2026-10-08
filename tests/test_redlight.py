@@ -4128,3 +4128,226 @@ class TestTicket146IndexPolicy:
         v = values[0]
         assert isinstance(v, ast.Tuple) and v.elts, ast.dump(v)
         assert all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in v.elts), ast.dump(v)
+
+
+# ── 票 149 第三站補充(T149-8):R3 配對檔紅燈 ────────────────────────────────────
+# 規格:票 149〈方案 2 契約 v3(定稿)〉;封存介面 A1–A6 與原因代碼見 T149-4 / T149-6 的封存檔;
+# 本段新增代碼 N1–N4 由裁決者列定(T149-8)。尚不存在的名稱一律在測試函式內 getattr 取得,
+# 取不到即 `pytest.fail("介面缺失: <名稱>")`。測試資料全部合成;本段不替換平台、不碰全域 os.name。
+
+import builtins as _t149_builtins
+import hashlib as _t149_hashlib
+import io as _t149_io
+import os as _t149_os
+import stat as _t149_stat
+
+_T149_MJ = "synced-marketplaces-v1"
+_T149_LCR = "synced-last-round-v1"
+_T149_MJ_REL = "plugins/<bucket>/.marketplaces.json"
+_T149_LCR_REL = "plugins/<bucket>/.last-complete-round"
+_T149_MARKER_REL = "plugins/.bucket-<bucket>"
+_T149_ID = "marketplace_SynthTestId0000000000000A"
+_T149_PINS = {_T149_MJ: {"id_sha256": _t149_hashlib.sha256(_T149_ID.encode("utf-8")).hexdigest()},
+              _T149_LCR: {}}
+_T149_DATA = {
+    _T149_MJ: json.dumps({"etag": "W/\"synthetic-etag-0001\"", "rows": [{
+        "name": "anthropic-plugin-directory", "display_name": "Anthropic Directory", "scope": "default",
+        "source": {"source": "claudeai"}, "id": _T149_ID, "updated_at": "2026-01-02T03:04:05.123456Z"}],
+        "parserVersion": 1002}).encode("utf-8"),
+    _T149_LCR: b"0f0f0f0f-1111-4222-8333-444455556666 ",
+}
+_T149_FNAME = {_T149_MJ: ".marketplaces.json", _T149_LCR: ".last-complete-round"}
+
+
+def _t149_api(name):
+    value = getattr(redlight, name, None)
+    if value is None:
+        pytest.fail("介面缺失: %s" % name)
+    return value
+
+
+def _t149_file(tmp_path, name):
+    p = tmp_path / "f" / _T149_FNAME[name]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(_T149_DATA[name])
+    return p
+
+
+class _T149St(object):
+    """假 stat:四步一致的一般檔(身分、大小、修改時間相同;st_file_attributes = 0,兩平台都不觸發屬性分支)。"""
+
+    def __init__(self, size, **over):
+        self.st_mode = _t149_stat.S_IFREG | 0o644
+        self.st_size = size
+        self.st_mtime_ns = 1
+        self.st_dev = 1
+        self.st_ino = 1
+        self.st_file_attributes = 0
+        for k, v in over.items():
+            setattr(self, k, v)
+
+
+def _t149_seq(values):
+    calls = [0]
+
+    def fn(_arg):
+        v = values[min(calls[0], len(values) - 1)]
+        calls[0] += 1
+        if isinstance(v, BaseException):
+            raise v
+        return v
+    return fn
+
+
+def _t149_fakes(size, steps):
+    """steps:{步驟 0–3: 例外,或覆寫欄位的 dict}。lstat 依序回 S0、S3;fstat 依序回 S1、S2。"""
+    vals = []
+    for i in range(4):
+        v = steps.get(i, {})
+        vals.append(v if isinstance(v, BaseException) else _T149St(size, **v))
+    return {"lstat": _t149_seq([vals[0], vals[3]]), "fstat": _t149_seq([vals[1], vals[2]])}
+
+
+class _T149ReadFails(object):
+    """包住真的檔案物件:read 拋 OSError,其餘(fileno / close)照常。"""
+
+    def __init__(self, fh):
+        self._fh = fh
+
+    def read(self, *_a, **_k):
+        raise OSError(5, "synthetic read failure")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self._fh.close()
+        return False
+
+    def __getattr__(self, name):
+        return getattr(self._fh, name)
+
+
+def _t149_failing_open(monkeypatch, target, mode):
+    """只對 `target` 生效的 builtins.open / io.open 替身:mode="open" ⇒ 開檔拋 PermissionError;
+    mode="read" ⇒ 開檔成功、讀內容拋 OSError。其他路徑一律交給原本的 open。"""
+    want = _t149_os.path.normcase(_t149_os.path.abspath(target))
+
+    def make(real):
+        def opener(file, *a, **k):
+            if isinstance(file, (str, _t149_os.PathLike)) and \
+                    _t149_os.path.normcase(_t149_os.path.abspath(_t149_os.fspath(file))) == want:
+                if mode == "open":
+                    raise PermissionError(13, "synthetic open failure")
+                return _T149ReadFails(real(file, *a, **k))
+            return real(file, *a, **k)
+        return opener
+    monkeypatch.setattr(_t149_builtins, "open", make(_t149_builtins.open))
+    monkeypatch.setattr(_t149_io, "open", make(_t149_io.open))
+
+
+def _t149_sha(path, sha="a" * 64, **over):
+    e = {"path": path, "sha256": sha, "note": "t149"}
+    e.update(over)
+    return e
+
+
+def _t149_contract(path, name, pins=None, **over):
+    e = {"path": path, "contract": {"name": name, "pins": dict(_T149_PINS[name] if pins is None else pins)},
+         "note": "t149"}
+    e.update(over)
+    return e
+
+
+def _t149_v2(entries=None, **top):
+    if entries is None:
+        entries = [_t149_sha(_T149_MARKER_REL), _t149_contract(_T149_MJ_REL, _T149_MJ),
+                   _t149_contract(_T149_LCR_REL, _T149_LCR)]
+    doc = {"schema": "monkeyleash.extension-inventory", "version": 2, "entries": entries}
+    doc.update(top)
+    return doc
+
+
+_T149_H2 = [
+    ("valid", _t149_v2(), None),
+    ("n4-top-keys", _t149_v2(extra=1), "$"),
+    ("n4-schema", _t149_v2(schema="other.schema"), "schema"),
+    ("n4-entries", _t149_v2(entries={}), "entries"),
+    ("n4-path-form", _t149_v2([_t149_sha("skills/x")]), "path"),
+    ("n4-path-dup", _t149_v2([_t149_sha(_T149_MARKER_REL), _t149_sha(_T149_MARKER_REL, "b" * 64)]), "path"),
+    ("n4-note", _t149_v2([_t149_sha(_T149_MARKER_REL, note=1)]), "note"),
+    ("n4-sha256", _t149_v2([_t149_sha(_T149_MARKER_REL, "A" * 64)]), "sha256"),
+    ("n4-contract-type", _t149_v2([_t149_contract(_T149_MJ_REL, _T149_MJ, contract="x")]), "contract"),
+    ("n4-contract-keys", _t149_v2([_t149_contract(_T149_MJ_REL, _T149_MJ, contract={
+        "name": _T149_MJ, "pins": dict(_T149_PINS[_T149_MJ]), "extra": 1})]), "contract"),
+    ("sealed-both", _t149_v2([_t149_contract(_T149_MJ_REL, _T149_MJ, sha256="a" * 64)]), "entry_kind"),
+    ("sealed-neither", _t149_v2([{"path": _T149_MJ_REL, "note": "t149"}]), "entry_kind"),
+    ("sealed-name", _t149_v2([_t149_contract(_T149_MJ_REL, _T149_MJ, contract={
+        "name": "synced-unknown-v9", "pins": {}})]), "contract.name"),
+    ("sealed-pins", _t149_v2([_t149_contract(_T149_MJ_REL, _T149_MJ, pins={})]), "contract.pins"),
+    ("sealed-path", _t149_v2([_t149_contract(_T149_LCR_REL, _T149_MJ)]), "contract.path"),
+    ("sealed-version-3", _t149_v2(version=3), "version"),
+    ("sealed-v1-with-contract", _t149_v2(version=1), "version"),
+]
+_T149_STEPS = [(_T149_MJ, 0), (_T149_LCR, 1), (_T149_MJ, 2), (_T149_LCR, 3)]
+_T149_STEP_IDS = ["mj-s0", "lcr-s1", "mj-s2", "lcr-s3"]
+
+
+class TestTicket149SyncedContractR3:
+    """票 149 第三站補充(T149-8)。組號 h1–h6;N1–N4 為本輪列定的新增代碼,其餘沿用已封存代碼。"""
+
+    def test_t149_h1_platform_default_tracks_os_name(self):
+        """h1(S4;A6):不替換時 `_SYNCED_PLATFORM` 取自實際平台 —— "windows" if os.name == "nt" else "posix"。"""
+        value = _t149_api("_SYNCED_PLATFORM")
+        assert value == ("windows" if _t149_os.name == "nt" else "posix"), value
+
+    @pytest.mark.parametrize("case, doc, field", _T149_H2, ids=[c[0] for c in _T149_H2])
+    def test_t149_h2_inventory_checkers_agree(self, case, doc, field):
+        """h2(C2;N4 與已封存 inventory_schema):`_extension_inventory_ok(doc)` 等於
+        `extension_inventory_check(doc) is None`;錯誤文件的回傳代碼等值比對。"""
+        check = _t149_api("extension_inventory_check")
+        res = check(doc)
+        want = None if field is None else {"category": "inventory_schema", "field": field}
+        assert res == want, (case, res)
+        assert redlight._extension_inventory_ok(doc) is (res is None), (case, res)
+
+    @pytest.mark.parametrize("name, step", _T149_STEPS, ids=_T149_STEP_IDS)
+    def test_t149_h3_stat_oserror_blocks(self, tmp_path, name, step):
+        """h3(N1):S<step> 的 lstat / fstat 拋 OSError(S0 用非 FileNotFoundError)⇒ contract_read / S<step>_error。"""
+        fn = _t149_api("synced_contract_check")
+        p = _t149_file(tmp_path, name)
+        kw = _t149_fakes(len(_T149_DATA[name]), {step: PermissionError(13, "synthetic stat failure")})
+        res = fn(name, str(p), dict(_T149_PINS[name]), **kw)
+        assert res == {"category": "contract_read", "field": "S%d_error" % step}, res
+
+    @pytest.mark.parametrize("name, mode", [(_T149_MJ, "open"), (_T149_LCR, "read")], ids=["mj-open", "lcr-read"])
+    def test_t149_h4_open_or_read_oserror_blocks(self, tmp_path, monkeypatch, name, mode):
+        """h4(N2):S0 通過後,開檔或讀內容拋 OSError ⇒ contract_read / read_error(以 builtins.open / io.open 替身模擬)。"""
+        fn = _t149_api("synced_contract_check")
+        p = _t149_file(tmp_path, name)
+        _t149_failing_open(monkeypatch, str(p), mode)
+        res = fn(name, str(p), dict(_T149_PINS[name]))
+        assert res == {"category": "contract_read", "field": "read_error"}, res
+
+    @pytest.mark.parametrize("name, step", _T149_STEPS, ids=_T149_STEP_IDS)
+    def test_t149_h5_not_regular_blocks(self, tmp_path, name, step):
+        """h5(N3):S<step> 的 st_mode 為目錄(不是連結)⇒ contract_read / S<step>_type。"""
+        fn = _t149_api("synced_contract_check")
+        p = _t149_file(tmp_path, name)
+        kw = _t149_fakes(len(_T149_DATA[name]), {step: {"st_mode": _t149_stat.S_IFDIR | 0o755}})
+        res = fn(name, str(p), dict(_T149_PINS[name]), **kw)
+        assert res == {"category": "contract_read", "field": "S%d_type" % step}, res
+
+    def test_t149_h6_s0_missing_stays_missing(self, tmp_path):
+        """h6(回歸;已封存 contract_read/missing):S0 FileNotFoundError ⇒ missing,不被 N1 的 S0_error 取代。"""
+        fn = _t149_api("synced_contract_check")
+        res = fn(_T149_MJ, str(tmp_path / "absent" / ".marketplaces.json"), dict(_T149_PINS[_T149_MJ]))
+        assert res == {"category": "contract_read", "field": "missing"}, res
+
+    def test_t149_h6_s0_link_stays_link(self, tmp_path):
+        """h6(回歸;已封存 S0_link):S0 為符號連結 ⇒ S0_link,不被 N3 的 S0_type 取代。"""
+        fn = _t149_api("synced_contract_check")
+        p = _t149_file(tmp_path, _T149_LCR)
+        kw = _t149_fakes(len(_T149_DATA[_T149_LCR]), {0: {"st_mode": _t149_stat.S_IFLNK | 0o777}})
+        res = fn(_T149_LCR, str(p), dict(_T149_PINS[_T149_LCR]), **kw)
+        assert res == {"category": "contract_read", "field": "S0_link"}, res
