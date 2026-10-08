@@ -9,13 +9,13 @@
     },
     {
       "path": "plugins/<bucket>/.last-complete-round",
-      "sha256": "a4fd82fee8b80a275f74e0554fc595034e162766f4f79f697fce7d8edc3de49c",
-      "note": "Jeff 核准 2026-10-07 第三次"
+      "sha256": "88ddde5ddfe1bc70eada71fbf4a5ccdd0ff4c9d9c7c795693573b6a33652575c",
+      "note": "Jeff 核准 2026-10-08 第四次"
     },
     {
       "path": "plugins/<bucket>/.marketplaces.json",
-      "sha256": "6b6bbe6de944280ce7f493a0f20c1b511e3a1856cc52ade855f88c8ab91d7b63",
-      "note": "Jeff 核准 2026-10-07 第三次"
+      "sha256": "510cde9d71ac145dc8c403d63492ee90d9f5079f58676cda42d01229fabd5ea5",
+      "note": "Jeff 核准 2026-10-08 第四次"
     },
     {
       "path": "skills/.bucket-<bucket>",
