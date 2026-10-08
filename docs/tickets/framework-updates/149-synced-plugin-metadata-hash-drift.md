@@ -1,6 +1,6 @@
 # 票 149 —— synced 外掛 metadata 兩檔於 2026-10-07 兩次與已核准 hash 不符(R10 攔截紀錄)
 
-**狀態**:~~**立案(未排程)。**~~ ~~**調查中（T149-1 補記觀測三；寫入者、消費方式、變動機制待唯讀偵察）。**~~ ~~**設計完成（方案 2 契約 v3 定稿，Jeff 裁定 2026-10-08）；待第四次核准後提交，接著進第三站紅燈。**~~ **設計完成；第四次核准完成（26b2224，Jeff 2026-10-08）；待第三站紅燈。**
+**狀態**:~~**立案(未排程)。**~~ ~~**調查中（T149-1 補記觀測三；寫入者、消費方式、變動機制待唯讀偵察）。**~~ ~~**設計完成（方案 2 契約 v3 定稿，Jeff 裁定 2026-10-08）；待第四次核准後提交，接著進第三站紅燈。**~~ ~~**設計完成；第四次核准完成（26b2224，Jeff 2026-10-08）；待第三站紅燈。**~~ **第四站實作中（S4-149-1；前檢通過）；待正式結果。**
 **優先度**:~~**未定。**(排程由 Jeff 另裁。)~~ Jeff 原文:「148 收完後優先做 149」（2026-10-07 20:50 美東）、「做票149」（2026-10-08 08:56 美東）。
 **發現於**:2026-10-07。
 **交叉引用**:票 146(R10)、票 148(S3-148-1 被擋)。
@@ -417,6 +417,78 @@
 - **id 的 hash**【引用】:`41e3e4753c1d07398036cde9eb538cfda495c2a6deccd5899dc38458141a1e70`(:488)。
   - 這是 Jeff 裁定採用的核准值,尚未寫入 policy。
 - **兩檔指紋**【引用】:與 R5 目前值相同(:584-587)。這只是兩個時點的比較,不能排除期間變動後又恢復。
+
+## 第四站實作（S4-149）
+
+### 裁定紀錄（逐字）
+
+- 2026-10-08 09:52 美東(見〈裁定紀錄〉):「裁決：裁:UUID 採小寫版本 4，variant 為 8/9/a/b；id 採用 R7 候選 hash。流程照上述順序進行，不 push。」
+- 2026-10-08 11:16 美東:「裁：接受 -rA 並記錄；介面照封存版並附第四站條件；紅燈測試獨立 commit，不 push。」
+- 打包登記:「裁:兩檔標 copy，併入第四站 L1；只加打包清單兩條登記，不動名冊，不 push」
+- 裁甲:「裁甲：授權在 tests/test_redlight.py 檔尾追加票 149 測試；先列定新增代碼與契約對照、封存逐 node 預期，再取得紅燈並獨立 commit。既有測試與封存代碼不改；打包清單留待第四站，不動名冊、不 push。」
+- 裁決助手審查意見(**非 Jeff 裁決原文**):
+  - 「直接進第四站，避免再多一個文件 commit 與被擋的機會。第四站指令要完整附上已定的四項條件、介面與原因代碼；紀錄隨第四站審計與票面更新一併提交，不用等整票收尾。」「version 2 名冊仍由你親自核准；本輪不 push。」「這是新測試檔必要的打包登記，不涉及放寬 R10 或修改名冊。」
+  - 13:55 美東接續:「建議 A。這是 production 呼叫方式的相容性修正，仍在既有實作範圍內，不必再要求你填一次裁決。將呼叫改為第四個位置參數，保留 synced=None，不改測試；接著重跑 150 項、全套與淨室，全部符合才 commit。接續指令記錄這次偏離與完整帳本基準即可。不動名冊、不 push。」
+- `-rA` 偏離:T149-4 執行時多加 `-rA`,已依 11:16 裁決接受並記錄。
+
+### 四項條件與實作位置(`.claude/hooks/redlight.py`,S4-149-1 版本行號)
+
+| 條件 | 原文(裁決助手審查定稿) | 實作 |
+|---|---|---|
+| C1 路徑接線 | 把兩個契約檔的實際路徑傳給 synced_contract_check;「額外」「缺少」的現行算法不變;extension_report 的 synced 六鍵形狀不變;契約檢查失敗 ⇒ mismatch 計 1 筆,reason 附「類別+欄位」 | 實際路徑 `_synced_contract_real_path` :1911-1925;呼叫與計數 :1970-1978;額外 :1961、缺少 :1962(算式未改);六鍵初值 :1940(未改);reason 附代碼 :1979-1988 |
+| C2 單一判定來源 | version 2 名冊時,`_extension_inventory_ok(doc)` 必須等於 `(extension_inventory_check(doc) is None)` | `_extension_inventory_ok` :1309-1318;version 1 本體改名 `_extension_inventory_v1_ok` :1321(本體未改) |
+| C3 檔案屬性 | posix ⇒ 缺 `st_file_attributes` 視為無 reparse;windows ⇒ 任一步取不到即擋(`contract_read/S<n>_attr_missing`);連結判定 S0、S3 兩平台都做;`_SYNCED_PLATFORM` 每次呼叫時讀取 | `_contract_stat_bad` :1452-1466(平台讀取 :1459);預設值取自實際平台 :1069 |
+| C4 缺檔 | 只計 missing 1,不另計 mismatch;reason 含 contract_read 與 missing,不含欄位值 | :1962、:1966-1969 |
+
+### 介面與原因代碼(引用,不重抄)
+
+- A1–A5、version 2 項目形狀、pins 形狀、原因代碼表:`.dev/reports/2026-10-08T150245Z-ticket149-t149-4-redlight.md` §C :79-125。
+- A6 平台替換點、A1/A4 語意增補、`S0–S3_attr_missing`、檢查順序:`.dev/reports/2026-10-08T164833Z-ticket149-t149-6-redlight.md` §3 :93-118。
+- N1–N4(`S0–S3_error`、`read_error`、`S0–S3_type`、名冊的 `$`/`schema`/`entries`/`path`/`note`/`sha256`/`contract`):`.dev/reports/2026-10-08T174022Z-ticket149-t149-8-r3-redlight.md` §3 封存檔全文。未新增 `contract_read/path`,也未使用表外代碼。
+- A1 定義 `synced_contract_check` :1637-1656;A2 `extension_inventory_check` :1363-1375(規則 :1378-1422);id 核准 hash 只從名冊 pins 讀(:1601),程式內沒有寫死。
+
+### 第三站測試(共 150 項,不是「150 項紅燈」)
+
+| commit | 檔案 | 項數 | 基準結果 |
+|---|---|---|---|
+| `147a25ef6fe7e154ca0e72fec786cc48c8954d67` | `tests/test_synced_contract_149.py` | 102 | 95 失敗 / 7 通過 |
+| `407c481db128edb7cbbdc66c784c59e808a1f21c` | `tests/test_synced_platform_149.py` | 18 | 16 失敗 / 2 通過 |
+| `68c730edb58d48c1b170560272b14aa79bcdf4a8` | `tests/test_redlight.py` 檔尾 t149 | 30 | 30 失敗 |
+
+合計基準 141 失敗、9 通過。
+
+### 第四站三次送出
+
+1. **第一次**:基準全套 113 failed(預期 111);多出的 2 個是 `test_manifest.py:216`、`test_upstream_manifest.py:69` —— 兩個新測試檔沒有登記在 `.agents/portable-manifest.txt`。依打包登記裁決標 `copy`,併入 S4-149-1。出處:`2026-10-08T170843Z-ticket149-s4-implementation.md`。
+2. **第二次**:第一刀改 `redlight.py` 被前哨 R3 擋下 —— R3 只認配對測試檔 `tests/test_redlight.py` 的票 149 紅燈。依裁甲由 T149-8 在該檔尾補 30 項紅燈(`68c730e`)。出處:`2026-10-08T172211Z-ticket149-s4-implementation.md`。
+3. **第三次**:R3 放行;150 項全過,但既有 `test_t146_31` 失敗 —— 呼叫處以關鍵字 `synced=synced` 傳參,測試替身 `counting(facts, surfaces, *inventory)` 不收關鍵字參數。停下回報。出處:`2026-10-08T175131Z-ticket149-s4-implementation.md`。
+4. **第三次・接續(本輪)**:依 13:55 接續意見,只把呼叫改為第四個位置參數(:2116),函式簽名維持 `(facts, surfaces, inventory, synced=None)`;**未改任何測試**。
+
+### 流程教訓
+
+- 第三站紅燈除了新檔,也要跑全套(打包清單這一類「全庫性質」的測試只在全套裡出現)。
+- 紅燈測試要放在 R3 認可的配對測試檔(`tests/test_<模組>.py`),否則第四站第一刀就被擋。
+- 內部函式加參數時,以既有測試替身的呼叫形式為準(本次:替身只轉交位置參數)。
+
+### 第五次攔截與第五次核准
+
+- **第五次攔截**【引用】:T149-5 提交紅燈測試時被 R10 擋下(2026-10-08 美東約 11:17;報告 `2026-10-08T151758Z-ticket149-t149-5-redlight-commit.md`)。
+- **第五次核准**【實測】:`6d667a3713dfe8760c28475ef1a0ff0835a8705b`,policy-only,Jeff 2026-10-08 12:36:55 美東;inventory blob `b3fb9fd5cf840c081a8ca3f0b9904ff4eb64da22`。
+- **計數**:攔截 5、核准 5。
+- **R9 觀測**【實測,並列事實不推論】:兩檔觀測到的最後修改時間 12:22:21 美東;R9 視窗 scratchpad 的建立時間同在 12:22 這一分鐘。寫入者 UNKNOWN。目前內容符合契約 v3;被遮罩值的歷史比較 UNKNOWN。
+
+### 現場狀態
+
+- 名冊 `.agents/extension-inventory.json` **仍為 version 1**,本站未改。S4-149-1 的成果是「支援契約、待 policy 啟用」:契約要等 Jeff 親自核准 version 2 名冊後才在現場生效。
+- runtime 仍 UNPROVEN;讀檔程序不宣稱能排除所有競態。
+
+### 前檢證據摘要(工作樹,S4-149-1 提交前)【實測】
+
+- 兩個新檔:120 passed。
+- `tests/test_redlight.py`:302 passed、7 skipped、0 failed(t149 30 項、`test_t146_31` / `_35` / `_44` / `_45` 皆 passed)。
+- 全套:2490 passed、10 skipped、3 xfailed、0 failed(= 基準 2349 passed + 141);skipped 原因逐行與基準相同。
+- 淨室(`verify_gates.py`):rc 0;R1–R10 各擋下一次(R10 正控放行);新 repo 框架測試 2340 passed、14 skipped、3 xfailed;新 repo 帶入兩個新測試檔。
+- 出處:`.dev/reports/` 本輪第四站報告。
 
 ## 待查問題(全部 UNKNOWN,本票不作答)
 

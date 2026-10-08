@@ -1054,6 +1054,20 @@ EXT_SYNCED_ROOTS = ("skills", "plugins")
 EXT_BUCKET_TOKEN = "<bucket>"
 EXT_POLICY_SOURCES = ("head", "index")
 
+# 票 149(方案 2 契約 v3):version 2 名冊可用 `contract` 項目驗 synced 兩個 metadata 檔的內容。
+# 契約名稱與它唯一合法的邏輯路徑寫死在這裡(契約第 5 節);id 的核准 hash 一律從名冊 pins 讀,不寫在程式裡。
+EXT_INVENTORY_VERSION_CONTRACT = 2
+EXT_CONTRACT_MJ = "synced-marketplaces-v1"
+EXT_CONTRACT_LCR = "synced-last-round-v1"
+EXT_CONTRACT_PATHS = {EXT_CONTRACT_MJ: "plugins/%s/.marketplaces.json" % EXT_BUCKET_TOKEN,
+                      EXT_CONTRACT_LCR: "plugins/%s/.last-complete-round" % EXT_BUCKET_TOKEN}
+_EXT_CONTRACT_CAPS = {EXT_CONTRACT_MJ: 1024, EXT_CONTRACT_LCR: 37}
+_EXT_CONTRACT_ENTRY_KEYS = frozenset(("path", "contract", "note"))
+_REPARSE_POINT = 0x400
+# 平台替換點(T149-6 A6):production 取實際平台、模組載入時決定一次;只有測試替換。
+# `synced_contract_check` 每次呼叫時才讀這個模組屬性(不在定義時捕捉)。
+_SYNCED_PLATFORM = "windows" if os.name == "nt" else "posix"
+
 
 class _InventoryUnchecked(object):
     """「synced 納管未評估」的哨兵:只給兩參數相容 wrapper 用,production 不得傳入。"""
@@ -1293,6 +1307,18 @@ def _logical_path_ok(p):
 
 
 def _extension_inventory_ok(doc):
+    """inventory 文件是否合格。不拋例外。
+
+    version 2(票 149):唯一判定來源是 `extension_inventory_check(doc) is None`(C2,不另寫一套規則)。
+    其餘(version 1 與任何其他版本號):`_extension_inventory_v1_ok`,語意與票 149 之前完全相同。
+    """
+    if isinstance(doc, dict) and type(doc.get("version")) is int \
+            and doc.get("version") == EXT_INVENTORY_VERSION_CONTRACT:
+        return extension_inventory_check(doc) is None
+    return _extension_inventory_v1_ok(doc)
+
+
+def _extension_inventory_v1_ok(doc):
     """inventory 文件是否合格:鍵集合、schema、version(int)、entries 每項鍵 / 四種邏輯路徑 / path 唯一 /
     sha256 / note 型別(3g 契約;五處閉合裁決第 5 點)。不拋例外。"""
     try:
@@ -1318,6 +1344,316 @@ def _extension_inventory_ok(doc):
         return True
     except Exception:
         return False
+
+
+def _contract_code(category, field):
+    """原因代碼:恰好兩鍵 `{"category", "field"}`,只有類別與欄位,不含任何值(契約第 6 節)。"""
+    return {"category": category, "field": field}
+
+
+def _contract_pins_ok(name, pins):
+    """pins 形狀(T149-4 封存):`synced-marketplaces-v1` 恰為 {"id_sha256": 64 小寫 hex};`synced-last-round-v1` 恰為 {}。"""
+    if not isinstance(pins, dict):
+        return False
+    if name == EXT_CONTRACT_MJ:
+        return set(pins) == {"id_sha256"} and _is_sha256_hex(pins["id_sha256"])
+    return not pins
+
+
+def extension_inventory_check(doc):
+    """票 149 A2:inventory 文件 ⇒ 合法 `None`;損壞 ⇒ 恰好 `{"category": "inventory_schema", "field": ...}`。不拋例外。
+
+    version 2 規則的唯一實作(`_extension_inventory_ok` 對 version 2 直接取本函式結果,C2)。
+    version 1 ⇒ 出現 `contract` 即 `version`,否則以 `_extension_inventory_v1_ok` 判定(不合 ⇒ `entries`);
+    其他版本號 ⇒ `version`。version 2 每筆剛好有 `sha256` 或 `contract` 其一(契約第 5 節);
+    契約名稱只能掛在它寫死的那一條邏輯路徑。代碼:封存的 entry_kind / contract.name / contract.pins /
+    contract.path / version,以及 T149-8 N4 的 $ / schema / entries / path / note / sha256 / contract。
+    """
+    try:
+        return _inventory_check(doc)
+    except Exception:
+        return _contract_code("inventory_schema", "$")
+
+
+def _inventory_check(doc):
+    def bad(field):
+        return _contract_code("inventory_schema", field)
+    if not isinstance(doc, dict) or set(doc) != set(EXT_INVENTORY_FIELDS):
+        return bad("$")
+    if doc["schema"] != EXT_INVENTORY_SCHEMA:
+        return bad("schema")
+    version, entries = doc["version"], doc["entries"]
+    if type(version) is not int or version not in (EXT_INVENTORY_VERSION, EXT_INVENTORY_VERSION_CONTRACT):
+        return bad("version")
+    if not isinstance(entries, list):
+        return bad("entries")
+    if version == EXT_INVENTORY_VERSION:
+        if any(isinstance(item, dict) and "contract" in item for item in entries):
+            return bad("version")
+        return None if _extension_inventory_v1_ok(doc) else bad("entries")
+    seen = set()
+    for item in entries:
+        if not isinstance(item, dict):
+            return bad("entries")
+        if ("sha256" in item) == ("contract" in item):
+            return bad("entry_kind")
+        if set(item) != (_EXT_ENTRY_KEYS if "sha256" in item else _EXT_CONTRACT_ENTRY_KEYS):
+            return bad("entries")
+        path = item["path"]
+        if not _logical_path_ok(path) or path in seen:
+            return bad("path")
+        seen.add(path)
+        if not isinstance(item["note"], str):
+            return bad("note")
+        if "sha256" in item:
+            if not _is_sha256_hex(item["sha256"]):
+                return bad("sha256")
+            continue
+        contract = item["contract"]
+        if not isinstance(contract, dict) or set(contract) != {"name", "pins"}:
+            return bad("contract")
+        name = contract["name"]
+        if not isinstance(name, str) or name not in EXT_CONTRACT_PATHS:
+            return bad("contract.name")
+        if path != EXT_CONTRACT_PATHS[name]:
+            return bad("contract.path")
+        if not _contract_pins_ok(name, contract["pins"]):
+            return bad("contract.pins")
+    return None
+
+
+# ── 票 149 A1:synced 兩個 metadata 檔的內容契約(契約 v3 第 2–4 節)──────────────────
+
+_CONTRACT_UPDATED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z", re.ASCII)
+_CONTRACT_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                            re.ASCII)
+_CONTRACT_MJ_FIXED = (("name", "anthropic-plugin-directory"), ("display_name", "Anthropic Directory"),
+                      ("scope", "default"))
+
+
+class _ContractObject(dict):
+    """JSON 物件;`duplicate` 記錄解析時是否看到重複鍵(值相同也算,契約第 3 節)。"""
+    duplicate = False
+
+
+def _contract_object(pairs):
+    obj = _ContractObject()
+    for k, v in pairs:
+        if k in obj:
+            obj.duplicate = True
+        obj[k] = v
+    return obj
+
+
+def _contract_reject_constant(_name):
+    raise ValueError("non-standard JSON constant")
+
+
+def _contract_stat_bad(st, step, check_link):
+    """一步 stat 的判定(T149-6 檢查順序:先連結、再屬性;之後 reparse、一般檔)。"""
+    if check_link and stat.S_ISLNK(st.st_mode):
+        return _contract_code("contract_read", "S%d_link" % step)
+    attrs = getattr(st, "st_file_attributes", None)
+    if attrs is None:
+        # C3:每次呼叫時才讀平台替換點。posix ⇒ 沒有這個屬性即視為無 reparse;其餘(含 windows)⇒ 無法驗證即擋。
+        if _SYNCED_PLATFORM != "posix":
+            return _contract_code("contract_read", "S%d_attr_missing" % step)
+        attrs = 0
+    if attrs & _REPARSE_POINT:
+        return _contract_code("contract_read", "S%d_reparse" % step)
+    if not stat.S_ISREG(st.st_mode):
+        return _contract_code("contract_read", "S%d_type" % step)
+    return None
+
+
+def _contract_read(path, cap, lstat, fstat):
+    """讀檔程序 S0 lstat → 開檔 → S1 fstat → 最多讀 cap+1 → S2 fstat → 關檔 → S3 lstat(契約第 2 節)。
+    回傳 `(bytes, None)` 或 `(None, 代碼)`。不宣稱能排除所有競態。"""
+    def fail(field):
+        return None, _contract_code("contract_read", field)
+    try:
+        s0 = lstat(path)
+    except FileNotFoundError:
+        return fail("missing")
+    except OSError:
+        return fail("S0_error")
+    bad = _contract_stat_bad(s0, 0, True)
+    if bad is not None:
+        return None, bad
+    try:
+        fh = open(path, "rb")
+    except OSError:
+        return fail("read_error")
+    try:
+        try:
+            s1 = fstat(fh.fileno())
+        except OSError:
+            return fail("S1_error")
+        bad = _contract_stat_bad(s1, 1, False)
+        if bad is not None:
+            return None, bad
+        if (s0.st_dev, s0.st_ino) != (s1.st_dev, s1.st_ino):
+            return fail("S0S1_ident")
+        if s0.st_size != s1.st_size:
+            return fail("S0S1_size")
+        if s0.st_mtime_ns != s1.st_mtime_ns:
+            return fail("S0S1_mtime")
+        try:
+            data = fh.read(cap + 1)
+        except OSError:
+            return fail("read_error")
+        if len(data) > cap:
+            return fail("size_cap")
+        try:
+            s2 = fstat(fh.fileno())
+        except OSError:
+            return fail("S2_error")
+        bad = _contract_stat_bad(s2, 2, False)
+        if bad is not None:
+            return None, bad
+        if s1.st_size != s2.st_size:
+            return fail("S1S2_size")
+        if s1.st_mtime_ns != s2.st_mtime_ns:
+            return fail("S1S2_mtime")
+    finally:
+        fh.close()
+    try:
+        s3 = lstat(path)
+    except OSError:
+        return fail("S3_error")
+    bad = _contract_stat_bad(s3, 3, True)
+    if bad is not None:
+        return None, bad
+    if (s3.st_dev, s3.st_ino) != (s1.st_dev, s1.st_ino):
+        return fail("S3S1_ident")
+    if s3.st_size != s1.st_size:
+        return fail("S3S1_size")
+    if s3.st_mtime_ns != s1.st_mtime_ns:
+        return fail("S3S1_mtime")
+    return data, None
+
+
+def _contract_timestamp_ok(text):
+    if _CONTRACT_UPDATED_AT.fullmatch(text) is None:
+        return False
+    try:
+        datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%fZ")
+    except ValueError:
+        return False
+    return True
+
+
+def _check_marketplaces(data, pins):
+    """`.marketplaces.json`(契約第 3 節)。核准 hash 只從 pins 讀。"""
+    c = _contract_code
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return c("contract_encoding", "utf8")
+    try:
+        doc = json.loads(text, object_pairs_hook=_contract_object, parse_constant=_contract_reject_constant)
+    except (ValueError, RecursionError):
+        return c("contract_json", "parse")
+    if not isinstance(doc, dict):
+        return c("contract_type", "$")
+    if doc.duplicate:
+        return c("contract_duplicate_key", "$")
+    if set(doc) != {"etag", "rows", "parserVersion"}:
+        return c("contract_keys", "$")
+    pv = doc["parserVersion"]
+    if type(pv) is not int:
+        return c("contract_type", "parserVersion")
+    if pv != 1002:
+        return c("contract_value", "parserVersion")
+    rows = doc["rows"]
+    if not isinstance(rows, list):
+        return c("contract_type", "rows")
+    if len(rows) != 1:
+        return c("contract_rows_count", "rows")
+    row = rows[0]
+    if not isinstance(row, dict):
+        return c("contract_type", "rows[0]")
+    if row.duplicate:
+        return c("contract_duplicate_key", "rows[0]")
+    if set(row) != {"name", "display_name", "scope", "source", "id", "updated_at"}:
+        return c("contract_keys", "rows[0]")
+    for key, want in _CONTRACT_MJ_FIXED:
+        if not isinstance(row[key], str):
+            return c("contract_type", "rows[0].%s" % key)
+        if row[key] != want:
+            return c("contract_value", "rows[0].%s" % key)
+    src = row["source"]
+    if not isinstance(src, dict):
+        return c("contract_type", "rows[0].source")
+    if src.duplicate:
+        return c("contract_duplicate_key", "rows[0].source")
+    if set(src) != {"source"}:
+        return c("contract_keys", "rows[0].source")
+    if not isinstance(src["source"], str):
+        return c("contract_type", "rows[0].source.source")
+    if src["source"] != "claudeai":
+        return c("contract_value", "rows[0].source.source")
+    rid = row["id"]
+    if not isinstance(rid, str):
+        return c("contract_type", "rows[0].id")
+    if not rid.startswith("marketplace_"):
+        return c("contract_format", "rows[0].id")
+    if hashlib.sha256(rid.encode("utf-8", "surrogatepass")).hexdigest() != pins["id_sha256"]:
+        return c("contract_pin", "rows[0].id")
+    ua = row["updated_at"]
+    if not isinstance(ua, str):
+        return c("contract_type", "rows[0].updated_at")
+    if not _contract_timestamp_ok(ua):
+        return c("contract_format", "rows[0].updated_at")
+    etag = doc["etag"]
+    if not isinstance(etag, str):
+        return c("contract_type", "etag")
+    if not (1 <= len(etag) <= 128 and all(33 <= ord(ch) <= 126 for ch in etag)):
+        return c("contract_format", "etag")
+    return None
+
+
+def _check_last_round(data):
+    """`.last-complete-round`(契約第 4 節)。超過 37 bytes 已在讀檔時判為 size_cap。"""
+    c = _contract_code
+    if len(data) != 37:
+        return c("contract_format", "size")
+    if any(b >= 0x80 for b in bytearray(data)):
+        return c("contract_encoding", "ascii")
+    if data[36:37] != b" ":
+        return c("contract_format", "trailer")
+    head = data[:36].decode("ascii")
+    if _CONTRACT_UUID.fullmatch(head) is None:
+        return c("contract_format", "uuid")
+    if head != head.lower():
+        return c("contract_format", "uuid_case")
+    if head[14] != "4":
+        return c("contract_format", "uuid_version")
+    if head[19] not in "89ab":
+        return c("contract_format", "uuid_variant")
+    return None
+
+
+def synced_contract_check(name, path, pins, lstat=None, fstat=None):
+    """票 149 A1:對磁碟上的契約檔做 v3 讀檔程序與內容驗證。放行 ⇒ `None`;擋 ⇒ 恰好 `{"category", "field"}`。
+
+    `name` ∈ {`synced-marketplaces-v1`, `synced-last-round-v1`};`path` 是實際路徑;`pins` 來自名冊。
+    `lstat` 預設 `os.lstat`(S0、S3 依序呼叫),`fstat` 預設 `os.fstat`(S1、S2 依序呼叫)。不拋例外;
+    名稱或 pins 不合(呼叫端應已由 `extension_inventory_check` 擋下)⇒ inventory_schema 代碼。
+    """
+    try:
+        if not isinstance(name, str) or name not in EXT_CONTRACT_PATHS:
+            return _contract_code("inventory_schema", "contract.name")
+        if not _contract_pins_ok(name, pins):
+            return _contract_code("inventory_schema", "contract.pins")
+        data, err = _contract_read(path, _EXT_CONTRACT_CAPS[name], lstat or os.lstat, fstat or os.fstat)
+        if err is not None:
+            return err
+        if name == EXT_CONTRACT_MJ:
+            return _check_marketplaces(data, pins)
+        return _check_last_round(data)
+    except OSError:
+        return _contract_code("contract_read", "read_error")
 
 
 def _policy_facts(root, rel, ok_fn, policy_source):
@@ -1412,8 +1748,22 @@ def extension_allowlist_facts(root, policy_source="head"):
 
 
 def extension_inventory_facts(root, policy_source="head"):
-    """`<root>` 的 synced inventory 事實(形狀與狀態見 `_policy_facts`;malformed 經 `_extension_inventory_ok`)。"""
-    return _policy_facts(root, EXT_INVENTORY_FILE, _extension_inventory_ok, policy_source)
+    """`<root>` 的 synced inventory 事實(形狀與狀態見 `_policy_facts`;malformed 經 `_extension_inventory_ok`)。
+
+    另帶 `schema_error`(票 149):version 2 文件判為 malformed 時為 `extension_inventory_check` 的代碼
+    (只有類別與欄位,供 reason 使用);其餘情況(含 version 1)為 None —— version 1 的 reason 不變。
+    """
+    seen = {}
+
+    def ok_fn(doc):
+        ok = _extension_inventory_ok(doc)
+        if not ok and isinstance(doc, dict) and type(doc.get("version")) is int \
+                and doc.get("version") == EXT_INVENTORY_VERSION_CONTRACT:
+            seen["code"] = extension_inventory_check(doc)
+        return ok
+    out = _policy_facts(root, EXT_INVENTORY_FILE, ok_fn, policy_source)
+    out["schema_error"] = seen.get("code") if out.get("state") == "malformed" else None
+    return out
 
 
 def _hook_commands(node, acc):
@@ -1558,12 +1908,34 @@ def extension_surface_facts(dev_mods_dir, synced_dirs, canon_dir, mirror_dirs, p
     }
 
 
-def synced_verification(inventory_facts, surfaces):
+def _synced_contract_real_path(claude_root, logical):
+    """契約項目的邏輯路徑 → 磁碟實際路徑(bucket 真名只在記憶體裡)。解析不了 ⇒ None。"""
+    if claude_root is None:
+        return None
+    parts = logical.split("/")
+    if len(parts) < 3 or parts[0] not in EXT_SYNCED_ROOTS or parts[1] != EXT_BUCKET_TOKEN:
+        return None
+    root = os.path.join(os.fspath(claude_root), parts[0], "synced")
+    try:
+        dirs = [n for n in os.listdir(root) if stat.S_ISDIR(os.lstat(os.path.join(root, n)).st_mode)]
+    except OSError:
+        return None
+    if len(dirs) != 1:
+        return None
+    return os.path.join(root, dirs[0], *parts[2:])
+
+
+def synced_verification(inventory_facts, surfaces, claude_root=None):
     """synced 納管的結構化結果:恰好六鍵 `{"verified","reason","missing","extra","mismatch","structure_errors"}`。
 
     順序(v2 契約):inventory 為 None 或非 ok ⇒ 未納管(不讀 entries、不拋例外);synced 結構錯誤 ⇒ 不通過;
     否則以 entries 的 {path: sha256} 與 synced_files 比對 —— 額外 / 缺少 / 內容不符(含磁碟 sha 為 None)任一 > 0
     ⇒ 不通過;全 0 ⇒ 通過(含兩邊皆空)。
+
+    票 149(名冊 version 2 的 `contract` 項目):額外 / 缺少的算法不變;契約檔在磁碟上 ⇒ 以實際路徑交給
+    `synced_contract_check`,失敗計內容不符 1 筆(C1);不在磁碟上 ⇒ 只計缺少,不另計內容不符(C4)。
+    reason 只附「類別/欄位」代碼,不含任何值;version 1 名冊沒有契約項目,reason 與票 149 之前完全相同。
+    契約檔實際路徑解析不了(需 `claude_root`)⇒ 沿用 synced 結構錯誤處理,不另立代碼。
     """
     out = {"verified": False, "reason": None, "missing": 0, "extra": 0, "mismatch": 0, "structure_errors": 0}
     if inventory_facts is None:
@@ -1572,6 +1944,9 @@ def synced_verification(inventory_facts, surfaces):
     state = inventory_facts.get("state") if isinstance(inventory_facts, dict) else "malformed"
     if state != "ok":
         out["reason"] = u"synced 未納管：inventory %s" % state
+        code = inventory_facts.get("schema_error") if isinstance(inventory_facts, dict) else None
+        if isinstance(code, dict):
+            out["reason"] += u"（%s/%s）" % (code.get("category"), code.get("field"))
         return out
     surfaces = surfaces if isinstance(surfaces, dict) else {}
     structure = [e for e in (surfaces.get("errors") or []) if e and e[0] == "synced"]
@@ -1579,24 +1954,50 @@ def synced_verification(inventory_facts, surfaces):
         out["structure_errors"] = len(structure)
         out["reason"] = u"synced 結構錯誤：%s" % structure[0][2]
         return out
-    want = dict((e["path"], e["sha256"]) for e in inventory_facts["policy"]["entries"])
+    entries = inventory_facts["policy"]["entries"]
+    want = dict((e["path"], e.get("sha256")) for e in entries)
+    contracts = dict((e["path"], e["contract"]) for e in entries if "contract" in e)
     have = dict((p, s) for p, s in (surfaces.get("synced_files") or []))
     out["extra"] = len([p for p in have if p not in want])
     out["missing"] = len([p for p in want if p not in have])
-    out["mismatch"] = len([p for p in have if p in want and (have[p] is None or have[p] != want[p])])
+    out["mismatch"] = len([p for p in have if p in want and p not in contracts
+                           and (have[p] is None or have[p] != want[p])])
+    codes = []
+    for p in sorted(contracts):
+        if p not in have:
+            codes.append(_contract_code("contract_read", "missing"))
+            continue
+        real = _synced_contract_real_path(claude_root, p)
+        if real is None:
+            out["structure_errors"] = 1
+            out["reason"] = u"synced 結構錯誤：契約檔實際路徑無法解析"
+            return out
+        res = synced_contract_check(contracts[p]["name"], real, contracts[p]["pins"])
+        if res is not None:
+            out["mismatch"] += 1
+            codes.append(res)
     if out["extra"] or out["missing"] or out["mismatch"]:
         out["reason"] = u"額外 %d / 缺少 %d / 內容不符 %d" % (out["extra"], out["missing"], out["mismatch"])
+        texts = []
+        for code in codes:
+            t = u"%s/%s" % (code["category"], code["field"])
+            if t not in texts:
+                texts.append(t)
+        if texts:
+            out["reason"] += u"；" + u"、".join(texts)
         return out
     out["verified"] = True
     return out
 
 
-def _extension_first_reason(facts, surfaces, inventory):
+def _extension_first_reason(facts, surfaces, inventory, synced=None):
     """`(state, category, reason)`。判定只在這裡發生一次;渲染不再判定(3e 裁決 z1)。
 
     順序:1 allowlist 非 ok ⇒ VIOLATION;2 鍵集合 ≠ 八鍵 ⇒ UNKNOWN / observation_missing;3 檔案型入口未登記
     ⇒ VIOLATION;4 R4;5 hook;6 mcp;7 errors 非空 ⇒ UNKNOWN / observation_missing;8 synced(inventory 為
     `EXT_INVENTORY_UNCHECKED` ⇒ 舊語意「非空即未受管(未評估)」;否則依 `synced_verification`);9 DECLARED_OK。
+    `synced`:呼叫端已算好的 `synced_verification` 結果(票 149:`extension_report` 只評估一次,契約檔只讀一輪);
+    None ⇒ 在這裡算(不帶 claude_root)。
     """
     state = facts.get("state") if isinstance(facts, dict) else None
     if state != "ok":
@@ -1630,7 +2031,7 @@ def _extension_first_reason(facts, surfaces, inventory):
         if surfaces["synced_files"]:
             return (EXT_UNKNOWN, EXT_CAT_UNMANAGED, u"未受管入口：synced（未評估）")
     else:
-        v = synced_verification(inventory, surfaces)
+        v = synced if synced is not None else synced_verification(inventory, surfaces)
         if v["verified"] is not True:
             return (EXT_UNKNOWN, EXT_CAT_UNMANAGED, u"未受管入口：synced（" + v["reason"] + u"）")
     return (EXT_DECLARED_OK, None, None)
@@ -1711,10 +2112,11 @@ def extension_report(repo_root, claude_root=None, walk=None, lstat=None, read_by
         os.path.join(claude_root, "skills"),
         os.path.join(claude_root, "commands"),
         walk=walk, lstat=lstat, read_bytes=read_bytes)
-    state, category, reason = _extension_first_reason(facts, surfaces, inventory)
+    synced = synced_verification(inventory, surfaces, claude_root=claude_root)
+    state, category, reason = _extension_first_reason(facts, surfaces, inventory, synced)
     report.update({"facts": facts, "surfaces": surfaces, "state": state, "category": category,
                    "reason": reason, "lines": _extension_render_lines(state, category, reason, facts),
-                   "inventory": inventory, "synced": synced_verification(inventory, surfaces)})
+                   "inventory": inventory, "synced": synced})
     return report
 
 
