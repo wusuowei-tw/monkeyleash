@@ -24,8 +24,8 @@
     },
     {
       "path": "skills/<bucket>/.last-complete-round",
-      "sha256": "4bb0b47072545d51e2361df91f0523d2fbca0b1b070febb3488ed253954a143d",
-      "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
+      "sha256": "b0f02414ffe1f2f8870aef5a94802eeee1807bdaa6bef8f9a4c434b75541ea3c",
+      "note": "Jeff 核准 2026-10-08 第六次"
     },
     {
       "path": "skills/<bucket>/built-in-browser/LICENSE.txt",
@@ -54,8 +54,8 @@
     },
     {
       "path": "skills/<bucket>/computer-use/SKILL.md",
-      "sha256": "bc4b958fd640143d2738ffdf31b7af149cfb85165f6952224dc9e0e42118edb9",
-      "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
+      "sha256": "f1b16578da1eff27912e53ebf2cb28e710e84903b71eb5ffa8873abe356bf1f1",
+      "note": "Jeff 核准 2026-10-08 第六次"
     },
     {
       "path": "skills/<bucket>/deep-research/SKILL.md",
@@ -434,8 +434,8 @@
     },
     {
       "path": "skills/<bucket>/manifest.json",
-      "sha256": "3fdf6e05b75b7769401e77d3f479a4643911bcdb9532a3e39b91d86b5f0ad738",
-      "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
+      "sha256": "242facb747086153b6ba80cf938e15d524a5d5de58533ce7e39b821f91d00860",
+      "note": "Jeff 核准 2026-10-08 第六次"
     },
     {
       "path": "skills/<bucket>/morning/SKILL.md",
