@@ -1,6 +1,6 @@
 # 票 149 —— synced 外掛 metadata 兩檔於 2026-10-07 兩次與已核准 hash 不符(R10 攔截紀錄)
 
-**狀態**:~~**立案(未排程)。**~~ ~~**調查中（T149-1 補記觀測三；寫入者、消費方式、變動機制待唯讀偵察）。**~~ ~~**設計完成（方案 2 契約 v3 定稿，Jeff 裁定 2026-10-08）；待第四次核准後提交，接著進第三站紅燈。**~~ ~~**設計完成；第四次核准完成（26b2224，Jeff 2026-10-08）；待第三站紅燈。**~~ ~~**第四站實作中（S4-149-1；前檢通過）；待正式結果。**~~ ~~**第四站已實作並正式驗證（S4-149-1 b64a2d6a0a4168fd41a037c6516318eb59d49a74）；支援契約，待 Jeff 核准 version 2 名冊後啟用；待第五站獨立審查。**~~ **第五站審查包已提交（S5-149-0）；待全新視窗獨立審查。**
+**狀態**:~~**立案(未排程)。**~~ ~~**調查中（T149-1 補記觀測三；寫入者、消費方式、變動機制待唯讀偵察）。**~~ ~~**設計完成（方案 2 契約 v3 定稿，Jeff 裁定 2026-10-08）；待第四次核准後提交，接著進第三站紅燈。**~~ ~~**設計完成；第四次核准完成（26b2224，Jeff 2026-10-08）；待第三站紅燈。**~~ ~~**第四站實作中（S4-149-1；前檢通過）；待正式結果。**~~ ~~**第四站已實作並正式驗證（S4-149-1 b64a2d6a0a4168fd41a037c6516318eb59d49a74）；支援契約，待 Jeff 核准 version 2 名冊後啟用；待第五站獨立審查。**~~ ~~**第五站審查包已提交（S5-149-0）；待全新視窗獨立審查。**~~ ~~**第五站獨立審查完成（S5-149-1，PASS-with-notes，阻擋 0）；結果已記錄（S5-149-2）；推送前須補全套。**~~ **第五站獨立審查完成（S5-149-1，PASS-with-notes，阻擋 0）；結果已記錄（S5-149-2）；第七次核准完成（60c5531，version 2 契約啟用）；推送前須補全套（先解決測試隔離範圍）**
 **優先度**:~~**未定。**(排程由 Jeff 另裁。)~~ Jeff 原文:「148 收完後優先做 149」（2026-10-07 20:50 美東）、「做票149」（2026-10-08 08:56 美東）。
 **發現於**:2026-10-07。
 **交叉引用**:票 146(R10)、票 148(S3-148-1 被擋)。
@@ -444,7 +444,7 @@
 
 - A1–A5、version 2 項目形狀、pins 形狀、原因代碼表:`.dev/reports/2026-10-08T150245Z-ticket149-t149-4-redlight.md` §C :79-125。
 - A6 平台替換點、A1/A4 語意增補、`S0–S3_attr_missing`、檢查順序:`.dev/reports/2026-10-08T164833Z-ticket149-t149-6-redlight.md` §3 :93-118。
-- N1–N4(`S0–S3_error`、`read_error`、`S0–S3_type`、名冊的 `$`/`schema`/`entries`/`path`/`note`/`sha256`/`contract`):`.dev/reports/2026-10-08T174022Z-ticket149-t149-8-r3-redlight.md` §3 封存檔全文。未新增 `contract_read/path`,也未使用表外代碼。
+- N1–N4(`S0–S3_error`、`read_error`、`S0–S3_type`、名冊的 `$`/`schema`/`entries`/`path`/`note`/`sha256`/`contract`):`.dev/reports/2026-10-08T174022Z-ticket149-t149-8-r3-redlight.md` §3 封存檔全文。未新增 `contract_read/path`,~~也未使用表外代碼。~~ 更正（2026-10-09，S5-149-1 F-5）：實作另產生四種封存表未列的 contract_type 組合，經 Jeff 2026-10-09 裁決新增核准，見〈第五站獨立審查（S5-149）〉。
 - A1 定義 `synced_contract_check` :1637-1656;A2 `extension_inventory_check` :1363-1375(規則 :1378-1422);id 核准 hash 只從名冊 pins 讀(:1601),程式內沒有寫死。
 
 ### 第三站測試(共 150 項,不是「150 項紅燈」)
@@ -479,7 +479,8 @@
 
 ### 現場狀態
 
-- 名冊 `.agents/extension-inventory.json` **仍為 version 1**,本站未改。S4-149-1 的成果是「支援契約、待 policy 啟用」:契約要等 Jeff 親自核准 version 2 名冊後才在現場生效。
+- ~~名冊 `.agents/extension-inventory.json` **仍為 version 1**,本站未改。S4-149-1 的成果是「支援契約、待 policy 啟用」:契約要等 Jeff 親自核准 version 2 名冊後才在現場生效。~~
+- 更正（2026-10-10）：第七次核准 `60c5531` 起，名冊為 version 2，契約已啟用；見〈第七次攔截與 version 2 啟用（D7／V2P／V2S／V7）〉。
 - runtime 仍 UNPROVEN;讀檔程序不宣稱能排除所有競態。
 
 ### 前檢證據摘要(工作樹,S4-149-1 提交前)【實測】
@@ -522,8 +523,98 @@
   - 兩個 skills metadata 檔在兩個觀測時點內容一致、修改時間不同,不能確定期間發生了什麼。
   - 沒有舊版內容,無法判斷改了哪些地方。
   - 「目前文件未描述可疑外部連線」不代表已驗證實際執行行為。
-- **範圍說明**:名冊仍為 version 1。契約 v3 只涵蓋 plugins 兩檔,本次 skills 三筆不在契約範圍;version 2 仍會偵測並擋下這類變動(逐檔 hash)。
+- **範圍說明**:~~名冊仍為 version 1。~~（更正 2026-10-10：第七次核准 `60c5531` 起為 version 2。）契約 v3 只涵蓋 plugins 兩檔,本次 skills 三筆不在契約範圍;version 2 仍會偵測並擋下這類變動(逐檔 hash)。
 - **重送紀錄**:S4-149-2 重送第一版因指令使用 `cp` 被前哨 R7 擋下(報告 `2026-10-08T190946Z-ticket149-s4-2-commit.md`),屬指令錯誤,**不計入 R10 攔截**。
+
+## 第五站獨立審查（S5-149）
+
+### 裁定紀錄（逐字）
+
+1. 「進第五站。先產審查包，再由全新視窗獨立審查；站別只改 current_stage 為 review，保留 ticket 149 與其他欄位。審查包須分清正式 pytest 對應的 code commit（b64a2d6）、後續 docs 與 policy commit，以及尚未實測的真實 POSIX 環境與 CI。重點核對 C1–C4 四項條件、version 1 名冊行為不變、id 核准值取自名冊不寫死、契約違反一律 fail-closed 且訊息不含欄位值。目前仍不 push、不改名冊。」
+2. 「裁A＋C：接續複本三檔、突變探針與逐題審查，跳過原 repo 全套；全套證據缺口是否阻擋，由審查者判斷。F-1／F-2 測試隔離與 F-3 R7 漏判分別記為候選，立票與排程另裁。不 commit、不 push、不改名冊。」
+3. 「裁：接受第五站 PASS-with-notes。F-5 選 A，新增核准四種代碼組合並保留更正紀錄，補測試列候選；F-6 選 A，記錄寫入範圍偏離並列候選，P6 不補做。進 S5-149-2 記錄結果。推送前補全套；若另裁允許先推再驗 CI，收票前確認對應 HEAD 的 CI。不 push、不改名冊。」
+
+裁決助手審查意見(**非 Jeff 裁決原文**):
+
+- 「接受附註不代表 F-5、F-6 已修復。」
+- 「F-5：寫成『新增核准的四種組合』，保留原封存表與更正紀錄，不能回寫成當初已有封存或測試。」
+- 「尚未 push，就無法取得該次 push 觸發的 CI。」
+- 「F-6 要保留『本輪曾寫入未授權的系統暫存目錄』這項偏離；不能據此推定以前每輪也都如此。」
+- 「先前報告中『未觀測使用者層／已隔離』的宣稱需要重新評估；不得斷言先前每次全套都讀過真實檔。」
+
+### 結論摘要
+
+- 審查對象 HEAD `cb3d1a81861d49a2dbbfc13a713a286ebbec38a5`;全新視窗。第一次因原 repo 全套隔離無法確認而停止;依裁決 2 改在獨立複本跑三檔、突變探針、逐題審查。
+- **PASS-with-notes,阻擋 0**;複本三檔 422 passed / 7 skipped / 0 failed;探針 P1–P5 轉紅數與預期逐一相同;(h) 不符合但不阻擋;P6 未執行。
+- 全套缺口:不阻擋本票審查結論;push / 收票前須補全套或 CI 紀錄。
+- 詳見 `docs/audits/2026-10-09-149-station5-independent-review.md`。
+
+### 新增核准的 contract_type 代碼組合（2026-10-09）
+
+| category | field | 產生處(`.claude/hooks/redlight.py`,HEAD `cb3d1a8`) |
+|---|---|---|
+| `contract_type` | `rows[0].display_name` | :1582(`_CONTRACT_MJ_FIXED` 迴圈) |
+| `contract_type` | `rows[0].scope` | :1582(同上) |
+| `contract_type` | `rows[0].updated_at` | :1605 |
+| `contract_type` | `etag` | :1610 |
+
+- 此為 2026-10-09 新增核准,**非原封存表內容**;原封存表(T149-4 §C)不改。
+- 目前沒有測試涵蓋這四種組合,補測試列為候選。
+- 出處:續審報告 `2026-10-09T141914Z-ticket149-s5-1b-independent-review.md` (h) :102、F-5 :133。
+
+### 寫入範圍偏離
+
+- F-6:獨立審查的 pytest basetemp 寫入系統暫存目錄 `pytest-of-<使用者>`(未授權範圍),共 6 次;發現後停止,P6 不補做。
+- 本輪曾寫入未授權的系統暫存目錄;不據此推定以前各輪也都如此。
+
+### 候選事項（未立票）
+
+- 甲類「測試隔離」:
+  1. F-1 conftest 隔離未涵蓋 `SHADOW_CLAMP`(讀碼發現可能讀取真實檔案的路徑)。
+  2. F-2 `test_mcp_server.py` 一支測試的子程序繼承真實環境。
+  3. 未完成逐一盤點的呼叫點。
+  4. F-4 `monkeyleash.egg-info/` 是否代表 editable install。
+  5. F-6 pytest basetemp 落在 scratchpad 之外。
+- 乙類「R7 判定」:
+  1. F-3 `env -C <dir> python -c` 可能漏判(未實測)。
+- 另列:F-5 四種組合補測試。
+- 詳見審計 §7;先前報告中「未觀測使用者層／已隔離」的宣稱需要重新評估。
+
+### 推送與收票條件
+
+- 推送前補全套;若另裁允許先推再驗 CI,收票前確認對應 HEAD 的 CI(裁決 3)。
+- 尚未 push,無法取得該次 push 觸發的 CI。
+
+## 第七次攔截與 version 2 啟用（D7／V2P／V2S／V7）
+
+- **第七次攔截**【引用】：S5-149-2 的紀錄 commit 被 R10 擋下，原文「[R10/fail-closed] unmanaged_entry：未受管入口：synced（額外 0 / 缺少 0 / 內容不符 2）」。兩檔已退回暫存。報告：`.dev/reports/2026-10-09T142944Z-ticket149-s5-2-record.md`（:12、:221）。
+- **D7 診斷**【引用】：不符的只有 plugins 兩個契約檔（`plugins/<bucket>/.last-complete-round`、`plugins/<bucket>/.marketplaces.json`），兩檔都逐項符合契約 v3；其餘 228 筆相符；兩次診斷前後一致。報告：`.dev/reports/2026-10-09T144129Z-ticket149-d7-diagnosis.md`。
+- **V2P**【引用】：version 2 草稿格式通過；以現場資料判定額外 0／缺少 0／內容不符 0；控制組（HEAD version 1）判定內容不符 2。驗證範圍只限 synced，其他入口（dev-mods、使用者 skills、commands、hooks、mcp、R4）UNKNOWN。報告：`.dev/reports/2026-10-09T145407Z-ticket149-v2p-prep.md`。
+- **V2S**【引用】：在 scratchpad 隔離 clone 中以合成資料驗證：P 放行；N1／N2／N3 擋下；每案兩次輸出一致。N3 只證明「退出 policy-only、改用 HEAD 規則」（因 `worktree_differs` 擋下），沒有測到 HEAD 規則之後的檔案 hash 比對。報告：`.dev/reports/2026-10-09T150935Z-ticket149-v2s-iso.md`、`.dev/reports/2026-10-11T005923Z-ticket149-v2s-iso-b.md`。
+- **V2S 範圍偏離**：有一條未帶 ISO_ENV 的唯讀 `git hash-object`，可能讀取真實 Git 全域／系統設定。依報告未影響四案；記錄，不重跑（v2s-iso-b §6）。
+- **V7**【引用】：最終名冊 58787 bytes、sha256 `d75672363e24f055143dd0004104c5e54109c0b0259e3e468f66018cb9e0b5f3`、blob `ab245d5d77f5c5fafc41ef716c9de2d7c4f6fc40`；228 筆與 HEAD 相同、位置相同；兩筆契約與精確路徑一對一配對。報告：`.dev/reports/2026-10-11T011225Z-ticket149-v7-prep.md`。
+- **第七次核准**：Jeff 親自 add 與 commit，產生 `60c55315538d83d6095e4ce85db0907865d973fe`（2026-10-10 21:19:09 美東；父 `cb3d1a8`；只含名冊一檔）。R10 policy-only 判定 DECLARED_OK，commit 輸出原文【引用：Jeff 貼上的終端輸出】：「[R10/policy-only] policy-only commit（policy_source=index）：staged 候選 policy 對現場成立（DECLARED_OK；runtime 仍 UNPROVEN）。這是候選驗證，不是 HEAD 已生效的 policy。」—— 這是候選驗證；runtime 仍 UNPROVEN。
+- **計數**：R10 攔截 7 次、核准 7 次。第七次是首次啟用契約，plugins 兩檔從逐檔 hash 核准改為契約判定。
+
+### 裁定紀錄
+
+1. D7（Jeff 於 2026-10-10 確認的授權內容；非當時逐字原話）：「裁A：授權唯讀診斷兩個 synced 根目錄，列出目前不符檔案的路徑、hash、大小與修改時間。若任一 plugins 契約檔不符，允許一併檢查契約內兩檔的格式；其他檔只算 hash，不解析或展示內容。不準備草稿、不改名冊、不 commit、不 push。」
+2. V2P：Jeff 原話「裁A」（`.dev/reports/2026-10-09T145407Z-ticket149-v2p-prep.md` :6）。選項說明（非 Jeff 原話；由裁決者列出、經 Jeff 以「裁A」選定）：「裁A：授權準備 version 2 名冊草稿（plugins 兩檔改為契約項，其餘 228 筆照舊逐檔 hash），以隔離程式驗證草稿格式與現場判定；policy-only 通道只做讀碼與隔離合成驗證的設計，本輪不執行、不以實際 add／commit 試驗。不核准、不 commit、不 push。」（同報告 :7）
+3. V2S（Jeff 於 2026-10-10 確認的授權內容；非當時逐字原話）：「裁A：授權依 V2P §5.3 在 scratchpad 隔離 clone 以合成資料驗證 version 2 經 index 進入 policy-only 通道的接線，可在 clone 內執行 gate.py 程式碼與 git add／reset；執行前讀碼確認 gate.py／redlight.py 載入期與實際呼叫鏈（含 git 子程序及其設定來源）只使用 clone 與合成資料，無法確認即停止。負向案例含：現場不符應擋、名冊無效應擋、混合暫存應退出 policy-only 改用 HEAD 規則（以 HEAD 必定不符的合成資料預期擋下）。原 repo 僅允許前後保全核對、讀碼與本機 clone，不執行其程式、不修改；不核准、不 commit、不 push。」
+4. printf（Jeff 原文；`.dev/reports/2026-10-11T005923Z-ticket149-v2s-iso-b.md` :7）：「裁A：授權以一條 printf "%s\040" 指令在 scratchpad 寫出 37 bytes 的合成 .last-complete-round，寫後以 wc -c、最後一個 byte 為 0x20 及事先算好的預期 sha256 核對；N3 預期依讀碼改為 policy_source=head 且以 worktree_differs 擋下。其餘照 V2S-149 接續；不核准、不 commit、不 push。」
+5. V7（Jeff 原文，2026-10-10 21:08 美東；`.dev/reports/2026-10-11T011225Z-ticket149-v7-prep.md` :5）：「裁A，核准日 2026-10-10。VS 準備並核對最終名冊；add 與核准 commit 由我親自執行。不 push。」
+
+D7、V2S 兩項的依據是 Jeff 確認原文（2026-10-10 21:28 美東）：「確認上列 D7、V2S 內容符合我的授權意思；記為我本次確認的授權內容，不宣稱是當時逐字原話。原報告缺漏照實記錄，接續 S5-149-2b，不 push。」
+
+附註：原報告未存逐字原文：D7 報告（2026-10-09T144129Z）無裁決來源一節；V2S 報告（2026-10-09T150935Z）:5 僅以『…』節錄。屬回報方缺漏，依 Jeff 2026-10-10 確認補記。
+
+### 待辦
+
+- 推送前補全套，但須先解決測試隔離範圍（候選 F-1／F-2／F-6）；不得直接重跑可能碰到真實使用者層的指令（審查意見）。
+- 真實 POSIX 環境與 CI 尚未實測。
+- 「v2 經 index」的正式測試、「HEAD hash 比對」案例：列為候選。
+- 回報缺失：D7、V2S 報告未存裁決逐字原文；之後每份報告須含完整逐字裁決來源。
+- 不 push。
 
 ## 待查問題(全部 UNKNOWN,本票不作答)
 
