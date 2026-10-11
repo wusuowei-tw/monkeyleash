@@ -32,8 +32,8 @@
     },
     {
       "path": "skills/<bucket>/.last-complete-round",
-      "sha256": "b0f02414ffe1f2f8870aef5a94802eeee1807bdaa6bef8f9a4c434b75541ea3c",
-      "note": "Jeff 核准 2026-10-08 第六次"
+      "sha256": "695ec9ec8262267ceb0b913389139253d24a779317c407c719c3145a917c0f07",
+      "note": "Jeff 核准 2026-10-11 第八次"
     },
     {
       "path": "skills/<bucket>/built-in-browser/LICENSE.txt",
