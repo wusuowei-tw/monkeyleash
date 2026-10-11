@@ -616,6 +616,59 @@ D7、V2S 兩項的依據是 Jeff 確認原文（2026-10-10 21:28 美東）：「
 - 回報缺失：D7、V2S 報告未存裁決逐字原文；之後每份報告須含完整逐字裁決來源。
 - 不 push。
 
+## 測試隔離盤點與隔離全套（TI-149-0～3）
+
+- **TI-149-0（唯讀盤點）**【讀碼】：
+  - F-1（`SHADOW_CLAMP`）與 F-2（status 子程序）：讀碼確認程式路徑存在。
+  - 實際有哪些測試走到這兩條路徑：UNKNOWN。
+  - 舊全套是否實際讀到真實資料：無法單靠讀碼斷定。
+  - 報告：`.dev/reports/2026-10-11T014351Z-ticket149-ti0-isolation-recon.md`。
+- **TI-149-1（殘留風險）**：
+  - 殘留 R2–R7（TI-149-1 報告編號）：
+    - R2：第三方套件在 import 或執行時的讀取（例：mcp 的設定類別會讀工作目錄下的 `.env`）。
+    - R3：動態組合的路徑，以及寫死路徑的漏網（Grep 只抓得到字面樣式）。
+    - R4：Git for Windows 的 ProgramData 設定（隔離環境下查得的來源為 0 筆，只代表查得的部分）。
+    - R5：重導 LOCALAPPDATA／APPDATA 的副作用（推論不影響 import，未實測）。
+    - R6：啟動時會執行的三個 `.pth`（目標都不在 repo、也不觸及 .claude；這些檔將來可能被改）。
+    - R7：測試中途刪除 HOME／USERPROFILE 後，可能改用 HOMEDRIVE＋HOMEPATH（推論）。
+  - 範圍偏離：多讀了一個第三方原始碼檔（mcp `server.py`，Grep 3 行），它不在該輪允許讀取的清單內。
+  - 報告：`.dev/reports/2026-10-11T015548Z-ticket149-ti1-residual-risk.md`。
+- **TI-149-2（指定排除 known_items 後的隔離全套，執行一次）**：
+  - 記為「**含 3 項失敗的功能測試證據**」，**不是隔離證據**。
+  - 結果：2475 passed、3 failed、10 skipped、3 xfailed（合計 2491）。不能以 2475 項通過概括成程式正常。
+  - 結尾的家目錄檢查不符合隔離條件。這只證明「結尾時」不符合；何時、如何改變、是否沒有還原，仍待查。
+  - 工具框架曾把一次輸出另存到使用者層的 session 目錄；內容沒有檢視，不能斷言其中沒有個資。
+  - 這不是原 repo 全套，也不涵蓋 runtime；目前的核對方法無法證明是否曾讀取真實資料。
+  - 報告：`.dev/reports/2026-10-11T021247Z-ticket149-ti2-isolated-suite.md`。
+- **TI-149-3（pdb 兩項讀碼查證）**：
+  - 兩項的完整 test id：
+    - `tests/test_redlight.py::TestDebuggerModeCoverage::test_f3p_pdb_parsed_by_pytest_is_not_full_coverage`
+    - `tests/test_redlight.py::TestDebuggerModeCoverage::test_f3c_pdbcls_alone_does_not_lower_authority`
+  - 結論：讀碼支持 `-p no:cacheprovider` 可解釋兩項失敗，尚未執行驗證。
+  - 推導中關鍵的一步（停用 cacheprovider 後不註冊 `lf`／`stepwise`）依據的是 repo 內的註解，pytest 原始碼沒有讀。
+  - `-p no:cacheprovider` 這個參數是裁決助手與審查者先前建議加入的。
+  - 第三項失敗 `tests/test_gate.py::TestAuthorityLayerIsWired::test_this_repo_itself_is_wired`：clone 沒跑 bootstrap；該測試自述新 clone 在跑 bootstrap 之前會紅【推論】。
+  - 報告：`.dev/reports/2026-10-11T023456Z-ticket149-ti3-pdb-readcode.md`。
+
+### 裁定紀錄（逐字）
+
+1. TI-149-0（Jeff 原文，2026-10-10 21:37 美東；`.dev/reports/2026-10-11T014351Z-ticket149-ti0-isolation-recon.md` :5）：「裁A：授權唯讀盤點全套測試的使用者層、子程序環境、Git 設定與暫存寫入來源，提出隔離全套測試方案。不觀測真實使用者層、不改檔、不跑測試、不 commit、不 push。」
+2. TI-149-1（Jeff 原文，2026-10-10 21:49 美東；`.dev/reports/2026-10-11T015548Z-ticket149-ti1-residual-risk.md` :5）：「裁A：授權 TI-149-1，依所列範圍讀碼、列名稱，並核對 git 設定來源與套件安裝資訊；執行前列明讀取與可能副作用。一次提出殘留風險及可選驗收方案，不宣稱完全查清或完全隔離。不跑測試、不執行 repo 程式、不改既有檔、不 commit、不 push。」
+3. TI-149-2（Jeff 原文，2026-10-10 22:00 美東；`.dev/reports/2026-10-11T021247Z-ticket149-ti2-isolated-suite.md` :5）：「裁甲：接受殘留 R2–R7（TI-149-1 報告編號），授權在 scratchpad 隔離 clone 跑一次指定排除 known_items 後的隔離全套（HOMEDRIVE／HOMEPATH 一併重導、外掛自動載入不關但開跑前確認只有 anyio、bootstrap 不跑）。不改既有檔、不 commit、不 push。」
+4. TI-149-3（Jeff 原文，2026-10-10 22:31 美東；`.dev/reports/2026-10-11T023456Z-ticket149-ti3-pdb-readcode.md` :5）：「裁：TI-149-2 結果記為「含 3 項失敗的功能測試證據」、非隔離證據；授權唯讀讀碼查 pdb 兩項失敗是否由本輪額外參數造成，須引用完整 test id、失敗斷言、實際 pytest 參數與判定程式碼，無法解釋即標 UNKNOWN、不視為可忽略；結尾家目錄未符合隔離條件列甲類候選，不在票 149 追查。不跑測試、不改既有檔、不 commit、不 push。」
+5. S6-149-0（Jeff 原文，2026-10-10 22:47 美東；取自 S6-149-0 指令）：「裁A：進入 S6-149-0 推送前準備。只修改並提交票 149：補記 TI-149-0～3 的證據與限制，並修正狀態列粗體；唯讀查核推送流程，包含有效的 core.hooksPath、實際 hook、它呼叫的腳本，以及 push-gate 是否接在推送流程上，只讀不執行。不改 hook、不跑測試、不 push。是否接受含失敗的驗收證據、是否以 CI 完成驗證，推送前另裁。」
+
+### 候選事項（未立票）
+
+- 甲類：結尾家目錄檢查未符合隔離條件；何時、如何變化仍 UNKNOWN。
+- pdb 兩支測試會受本次執行參數（`-p no:cacheprovider`）影響，屬於測試的脆弱點。
+- 沿用既有的甲類候選 F-1／F-2／F-6。
+
+### 待辦
+
+- 推送前另裁：是否接受這份含失敗的驗收證據；是否以 CI 完成驗證。
+- 不 push。
+
 ## 待查問題(全部 UNKNOWN,本票不作答)
 
 1. 寫入者。
