@@ -1,6 +1,6 @@
 {
   "schema": "monkeyleash.extension-inventory",
-  "version": 1,
+  "version": 2,
   "entries": [
     {
       "path": "plugins/.bucket-<bucket>",
@@ -9,13 +9,21 @@
     },
     {
       "path": "plugins/<bucket>/.last-complete-round",
-      "sha256": "0c50c7c1c0d13e7a390e8c2e60c4d95bb0f155aaa30ead25368fdd9fd8b13267",
-      "note": "Jeff 核准 2026-10-08 第五次"
+      "contract": {
+        "name": "synced-last-round-v1",
+        "pins": {}
+      },
+      "note": "Jeff 核准 2026-10-10 第七次"
     },
     {
       "path": "plugins/<bucket>/.marketplaces.json",
-      "sha256": "2728613743e3581420dd5aa5a66750cea0bb12125f027f6203c4e7b263650c5d",
-      "note": "Jeff 核准 2026-10-08 第五次"
+      "contract": {
+        "name": "synced-marketplaces-v1",
+        "pins": {
+          "id_sha256": "41e3e4753c1d07398036cde9eb538cfda495c2a6deccd5899dc38458141a1e70"
+        }
+      },
+      "note": "Jeff 核准 2026-10-10 第七次"
     },
     {
       "path": "skills/.bucket-<bucket>",
