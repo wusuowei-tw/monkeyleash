@@ -1059,9 +1059,12 @@ EXT_POLICY_SOURCES = ("head", "index")
 EXT_INVENTORY_VERSION_CONTRACT = 2
 EXT_CONTRACT_MJ = "synced-marketplaces-v1"
 EXT_CONTRACT_LCR = "synced-last-round-v1"
+# 票 151:skills 根的 `.last-complete-round`(只驗格式,pins 恰為 {};上限 1024)。
+EXT_CONTRACT_SK = "synced-skills-last-round-v1"
 EXT_CONTRACT_PATHS = {EXT_CONTRACT_MJ: "plugins/%s/.marketplaces.json" % EXT_BUCKET_TOKEN,
-                      EXT_CONTRACT_LCR: "plugins/%s/.last-complete-round" % EXT_BUCKET_TOKEN}
-_EXT_CONTRACT_CAPS = {EXT_CONTRACT_MJ: 1024, EXT_CONTRACT_LCR: 37}
+                      EXT_CONTRACT_LCR: "plugins/%s/.last-complete-round" % EXT_BUCKET_TOKEN,
+                      EXT_CONTRACT_SK: "skills/%s/.last-complete-round" % EXT_BUCKET_TOKEN}
+_EXT_CONTRACT_CAPS = {EXT_CONTRACT_MJ: 1024, EXT_CONTRACT_LCR: 37, EXT_CONTRACT_SK: 1024}
 _EXT_CONTRACT_ENTRY_KEYS = frozenset(("path", "contract", "note"))
 _REPARSE_POINT = 0x400
 # 平台替換點(T149-6 A6):production 取實際平台、模組載入時決定一次;只有測試替換。
@@ -1352,12 +1355,19 @@ def _contract_code(category, field):
 
 
 def _contract_pins_ok(name, pins):
-    """pins 形狀(T149-4 封存):`synced-marketplaces-v1` 恰為 {"id_sha256": 64 小寫 hex};`synced-last-round-v1` 恰為 {}。"""
+    """pins 形狀(T149-4 封存):`synced-marketplaces-v1` 恰為 {"id_sha256": 64 小寫 hex};`synced-last-round-v1` 恰為 {}。
+
+    票 151:`synced-skills-last-round-v1` 恰為 {};每個名稱明確分派,未知名稱 ⇒ False(不落到任何既有規則)。
+    """
     if not isinstance(pins, dict):
         return False
     if name == EXT_CONTRACT_MJ:
         return set(pins) == {"id_sha256"} and _is_sha256_hex(pins["id_sha256"])
-    return not pins
+    if name == EXT_CONTRACT_LCR:
+        return not pins
+    if name == EXT_CONTRACT_SK:
+        return not pins
+    return False
 
 
 def extension_inventory_check(doc):
@@ -1634,10 +1644,43 @@ def _check_last_round(data):
     return None
 
 
+# 票 151:尾段(第 38 byte 起)只允許的 ASCII 字元集合。只驗字元,不驗逗號清單結構。
+_SK_TAIL_BYTES = frozenset(bytearray(b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-,"))
+
+
+def _check_skills_last_round(data):
+    """skills 的 `.last-complete-round`(票 151 規格四)。超過 1024 bytes 已在讀檔時判為 size_cap。
+
+    依序:長度至少 37 ⇒ 前段 36 bytes 為 ASCII ⇒ 第 37 byte 為 0x20 ⇒ 前段為小寫 UUIDv4(規則同
+    `_check_last_round`)⇒ 尾段每個 byte 屬於 a-z A-Z 0-9 _ . - ,。空尾段(總長 37)放行;
+    開頭、結尾、連續逗號都放行(不驗清單結構)。
+    """
+    c = _contract_code
+    if len(data) < 37:
+        return c("contract_format", "size")
+    if any(b >= 0x80 for b in bytearray(data[:36])):
+        return c("contract_encoding", "ascii")
+    if data[36:37] != b" ":
+        return c("contract_format", "trailer")
+    head = data[:36].decode("ascii")
+    if _CONTRACT_UUID.fullmatch(head) is None:
+        return c("contract_format", "uuid")
+    if head != head.lower():
+        return c("contract_format", "uuid_case")
+    if head[14] != "4":
+        return c("contract_format", "uuid_version")
+    if head[19] not in "89ab":
+        return c("contract_format", "uuid_variant")
+    if any(b not in _SK_TAIL_BYTES for b in bytearray(data[37:])):
+        return c("contract_format", "tail")
+    return None
+
+
 def synced_contract_check(name, path, pins, lstat=None, fstat=None):
     """票 149 A1:對磁碟上的契約檔做 v3 讀檔程序與內容驗證。放行 ⇒ `None`;擋 ⇒ 恰好 `{"category", "field"}`。
 
-    `name` ∈ {`synced-marketplaces-v1`, `synced-last-round-v1`};`path` 是實際路徑;`pins` 來自名冊。
+    `name` ∈ {`synced-marketplaces-v1`, `synced-last-round-v1`, `synced-skills-last-round-v1`}(票 151);
+    `path` 是實際路徑;`pins` 來自名冊。格式檢查依名稱明確分派,未知名稱不落到任何既有規則。
     `lstat` 預設 `os.lstat`(S0、S3 依序呼叫),`fstat` 預設 `os.fstat`(S1、S2 依序呼叫)。不拋例外;
     名稱或 pins 不合(呼叫端應已由 `extension_inventory_check` 擋下)⇒ inventory_schema 代碼。
     """
@@ -1651,7 +1694,11 @@ def synced_contract_check(name, path, pins, lstat=None, fstat=None):
             return err
         if name == EXT_CONTRACT_MJ:
             return _check_marketplaces(data, pins)
-        return _check_last_round(data)
+        if name == EXT_CONTRACT_LCR:
+            return _check_last_round(data)
+        if name == EXT_CONTRACT_SK:
+            return _check_skills_last_round(data)
+        return _contract_code("inventory_schema", "contract.name")
     except OSError:
         return _contract_code("contract_read", "read_error")
 
