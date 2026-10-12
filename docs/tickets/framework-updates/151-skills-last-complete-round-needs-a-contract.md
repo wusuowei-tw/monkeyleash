@@ -1,6 +1,6 @@
 # 票 151 —— skills 的 .last-complete-round 沒有可用的內容契約
 
-**狀態**:~~**candidate(未排程)。**~~ ~~**第一站 grill 完成(規格定稿:方案 B);待第二站 spec。**~~ **第二站 spec 完成;待第三站紅燈。**
+**狀態**:~~**candidate(未排程)。**~~ ~~**第一站 grill 完成(規格定稿:方案 B);待第二站 spec。**~~ ~~**第二站 spec 完成;待第三站紅燈。**~~ **第三站紅燈、第四站實作完成;第五站審查包已提交,待獨立審查。**
 **優先度**:~~**待 Jeff 定。**~~ **高(Jeff 2026-10-12)。**
 **發現於**:2026-10-11,票 149 D9(第九次攔截唯讀診斷)。
 **來源**:`.dev/reports/2026-10-11T192112Z-ticket149-d9-diagnosis.md`(§1、§2、§3)。
@@ -321,3 +321,50 @@ Jeff 2026-10-12 送出 S1 指令確認;授權內容由裁決助手整理,非逐�
 ### 實作位置附註(不屬規格本文)
 - 新增契約時最少要動的位置,見 `.dev/reports/2026-10-12T123630Z-ticket151-r0-recon.md` §1-3a;兩處隱含預設見本票〈第一站 grill〉第 8 條。
 - 規格位置裁定 3a:本票不另開規格檔。
+
+## 第三站紅燈與第四站實作(2026-10-12)
+
+### commit
+
+- `6fb7305`:第三站紅燈測試,只在 `tests/test_redlight.py` 檔尾追加 `TestTicket151SkillsLastRound`,82 項(預期 FAIL 75 / PASS 7)。
+- `05ff2fe`:第四站實作,只改 `.claude/hooks/redlight.py`(新增 `synced-skills-last-round-v1`;pins 與格式明確分派;新增 `_check_skills_last_round`)。
+
+### 測試結果與時點
+
+範圍一律是 REL3 三檔(`tests/test_redlight.py`、`tests/test_synced_contract_149.py`、`tests/test_synced_platform_149.py`),全部**在列明的殘留下執行**。
+
+| 時點 | 結果 | 報告 |
+|---|---|---|
+| T1b 基準(HEAD `903af31`,測試追加前) | 422 passed / 7 skipped / 0 failed | `.dev/reports/2026-10-12T182551Z-ticket151-t1b-redlight-commit.md` |
+| T1b 紅燈(`903af31` + 追加的測試;redlight.py = HEAD) | 75 failed / 429 passed / 7 skipped(75 個失敗都是 `inventory_schema/contract.name`) | 同上 |
+| I4 綠燈(`6fb7305` + 修改後的 redlight.py) | 504 passed / 7 skipped / 0 failed | `.dev/reports/2026-10-12T190510Z-ticket151-i4-implement-commit.md` |
+
+殘留清單(照抄 T1b 報告):
+- UNKNOWN:(U-a) Python 啟動 `.pth` 匯入的模組與其行為;(U-b) pytest 自動載入的 anyio 外掛的行為;(U-c) git ProgramData 設定層(開跑前實測,出現即不跑)。
+- 只能偵測、不能阻止:(D-a) 不該動的證據檔被改;(D-b) 兩次檢查點之間環境被改掉又改回;(D-c) 兩本帳本只驗證只在尾端追加,不驗內容;(D-d) pytest 自建的 `.pytest_cache`;(D-e) 外掛清單只在開跑前比對。
+
+沒有跑原 repo 全套;沒有在真實 POSIX 上跑過,也沒有 CI。名冊尚未切換,新契約在現場尚未生效。
+
+### 隔離盤點經過
+
+- T1a 隔離缺口唯讀盤點:`.dev/reports/2026-10-12T174010Z-ticket151-t1a-isolation-recon.md`。
+- T1b-0 隔離殘留縮小盤點:`.dev/reports/2026-10-12T180007Z-ticket151-t1b0-residual.md`。
+
+### 裁定紀錄
+
+1. Jeff 原文(2026-10-12 12:52 美東):「1a、2b；3先跑已確認隔離的相關測試基準，原 repo 全套先不跑。完整指令須列出執行範圍與隔離方式。不 push」
+2. 方向 K1a、K2a、K3a、K4a、U1b,刪 ii(2026-10-12 13:53 美東;裁決助手記錄的選定內容)。
+3. Jeff 原文(2026-10-12 14:05 美東):「甲」(接受範圍見 T1b 報告〈授權來源〉)。
+4. Jeff 原文(2026-10-12 14:51 美東):「同意」(第四站沿用同一組殘留,綠燈一次)。
+5. Jeff 原文:「改好了」(2026-10-12 14:50 美東,`.dev/pipeline.json` 改為 implement;15:20 美東改為 review)。
+6. 本輪的文件更新與 commit:Jeff 親自送出 S5-151-0 指令(裁決助手記錄)。
+
+### 程序偏離彙整
+
+- T1b-0:用了不在允許清單內的 `ls` 列出 site-packages,之後改用 Glob 重做。
+- T1b、I4:各有指令單以外的唯讀指令(例如 `git rev-list`、`date -u`、另取一次 HEAD blob),都已在各自報告中列出。
+
+### 附註
+
+- 第二站規格 :188「新增的測試檔需要依既有慣例登記到 portable-manifest」不適用:依裁定 1a,本票沒有新增測試檔。
+- 第五站審查包:`docs/audits/2026-10-12-151-station5-review-package.md`。
