@@ -32,8 +32,11 @@
     },
     {
       "path": "skills/<bucket>/.last-complete-round",
-      "sha256": "34294c2321581040b5ff624be5f4d0f41ce2c4d2c2a9638584b4ad3839d5ce18",
-      "note": "Jeff 核准 2026-10-11 第九次"
+      "contract": {
+        "name": "synced-skills-last-round-v1",
+        "pins": {}
+      },
+      "note": "Jeff 核准 2026-10-12 規格七切換（票 151）"
     },
     {
       "path": "skills/<bucket>/built-in-browser/LICENSE.txt",
