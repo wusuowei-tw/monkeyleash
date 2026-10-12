@@ -1,6 +1,6 @@
 # 票 151 —— skills 的 .last-complete-round 沒有可用的內容契約
 
-**狀態**:~~**candidate(未排程)。**~~ ~~**第一站 grill 完成(規格定稿:方案 B);待第二站 spec。**~~ ~~**第二站 spec 完成;待第三站紅燈。**~~ **第三站紅燈、第四站實作完成;第五站審查包已提交,待獨立審查。**
+**狀態**:~~**candidate(未排程)。**~~ ~~**第一站 grill 完成(規格定稿:方案 B);待第二站 spec。**~~ ~~**第二站 spec 完成;待第三站紅燈。**~~ ~~**第三站紅燈、第四站實作完成;第五站審查包已提交,待獨立審查。**~~ ~~**第五站獨立審查有條件通過；M1 以 f01edfc 的指定排除後全套 CI 綠燈滿足（Jeff 2026-10-12 18:47）；待名冊切換（規格七，尚未授權）。**~~ **第五站獨立審查有條件通過；M1 已滿足；名冊已切換為契約 synced-skills-last-round-v1（規格七，b887e69，Jeff 親自提交 2026-10-12）；待驗收（尚未宣告完成）。**
 **優先度**:~~**待 Jeff 定。**~~ **高(Jeff 2026-10-12)。**
 **發現於**:2026-10-11,票 149 D9(第九次攔截唯讀診斷)。
 **來源**:`.dev/reports/2026-10-11T192112Z-ticket149-d9-diagnosis.md`(§1、§2、§3)。
@@ -368,3 +368,90 @@ Jeff 2026-10-12 送出 S1 指令確認;授權內容由裁決助手整理,非逐�
 
 - 第二站規格 :188「新增的測試檔需要依既有慣例登記到 portable-manifest」不適用:依裁定 1a,本票沒有新增測試檔。
 - 第五站審查包:`docs/audits/2026-10-12-151-station5-review-package.md`。
+
+## 第五站獨立審查與 M1 裁定(2026-10-12)
+
+### 審查結果
+
+- 報告:`.dev/reports/2026-10-12T204042Z-ticket151-s5-1-independent-review.md`。
+- 結論「有條件通過」;12 題全部「符合」。
+- 必修 M1:規格 :287 要求第三站也跑全套,實際只跑 REL3 三檔。
+
+### M1 裁定
+
+Jeff 原文(2026-10-12 18:47 美東,同一則訊息):
+- 簡答:「甲」
+- 接著寫:「接受對應 f01edfc 的「指定排除後的全套」CI 綠燈滿足 M1；記錄排除檔案、排除理由、7 項 UNKNOWN，以及綠燈來源為我的網頁確認。這不代表所有測試都已執行，也不授權名冊切換或下一次 push。」
+
+選項「甲」的原始內容(裁決助手整理,非 Jeff 原話):
+- 接受「指定排除後的全套」CI 綠燈滿足 M1,票面寫明排除的檔案與理由,7 項記為 UNKNOWN。
+
+本輪的票面更新與 commit:以 Jeff 親自送出收尾 R1 指令為授權(裁決助手記錄)。
+
+推送與 CI:
+- 推送:`c67a484..f01edfc`,fast-forward,5 個 commit(報告 `.dev/reports/2026-10-12T224038Z-ticket151-closeout-p1-push.md`)。
+- CI:GitHub Actions workflow「tests」,push 事件,commit `f01edfc`。
+- 結論為綠燈;來源是 Jeff 於網頁確認,本機沒有取得 run 明細。
+- 綠燈只表示該次 CI 整體成功,不代表每一項測試都有執行並通過。
+
+### 範圍限制
+
+- 一律稱「指定排除後的全套」。
+- 排除的檔案:`tests/test_known_items_regression.py`。
+- 排除理由:要讀使用者層的個人 pattern 清單(`.github/workflows/tests.yml` :62-65,票 54)。
+- 這一檔能不能改用合成資料補驗:尚未查證。
+- 本機 Windows 略過的 7 項,在 CI 是否執行記為 UNKNOWN(CI 用 `-q`,不列出通過的 test id)。完整 test id(照 P1 報告 §D):
+  - `tests/test_redlight.py::TestRootIsToplevelContract::test_j3_a_lf_prefixed_subdirectory_root_is_not_full_coverage`
+  - `tests/test_redlight.py::TestTicket146ExtensionIntegrity::test_t146_9`
+  - `tests/test_redlight.py::TestTicket146ExtensionIntegrity::test_t146_32e`
+  - `tests/test_redlight.py::TestTicket146ExtensionIntegrity::test_t146_42[root-child-symlink]`
+  - `tests/test_redlight.py::TestTicket146ExtensionIntegrity::test_t146_42[marker-symlink]`
+  - `tests/test_redlight.py::TestTicket146ExtensionIntegrity::test_t146_42[root-is-symlink]`
+  - `tests/test_redlight.py::TestTicket146ExtensionIntegrity::test_t146_43[v-symlink]`
+
+### 建議項目(不擋本票;列為候選,未立票)
+
+- S1:尾段字元集合的窮舉測試(66 個放行 / 190 個回 `tail`)。
+- S2:組合錯誤測試,鎖定「只回報第一個錯誤」。
+
+### 備註
+
+- 審查 N4:裁定 1 寫的「已確認隔離」前提沒有達成,已由裁定 3「甲」(接受列明的殘留風險)取代。
+- 審查 N5:審查包把 3 個 E2E 的失敗也寫成 `contract.name`,屬於略簡化(E2E 的實際值是 rc 與 stderr,stderr 含 `inventory_schema/contract.name`)。
+
+### 未決
+
+- ~~名冊切換(規格七):需 Jeff 另行核准,走 policy-only。~~ 已完成,見下一段〈名冊切換(規格七)〉。
+- 下一次 push:需 Jeff 另行授權。
+
+## 名冊切換(規格七)(2026-10-12)
+
+### 起因
+
+- 收尾 R1 的票面 commit 被 R10 擋下(第十次攔截):`unmanaged_entry`,synced「內容不符 1」(報告 `.dev/reports/2026-10-12T225121Z-ticket151-closeout-r1-record.md`)。
+- 唯讀診斷 D11b:唯一不符項是 `skills/<bucket>/.last-complete-round`;名冊指紋與現場不同(報告 `.dev/reports/2026-10-12T230654Z-ticket151-d11b-diagnosis.md`)。
+- 最後修改時間只是觀測值,不能證明檔案在被擋之後又變過,也不能推論是誰寫的。
+
+### 裁定
+
+- Jeff 2026-10-12 19:11(美東)選「甲」:這一筆改用本票的契約,note 照建議;version、其餘 229 筆與順序、兩個 plugins 契約與 pins 都不變;先核對差異與預期 hash／blob,再由他親自 add／commit(裁決助手記錄,非 Jeff 逐字原話)。
+- 準備:VS 依 V10 指令把票 151 移出暫存區、保留工作樹,改好名冊(報告 `.dev/reports/2026-10-12T231806Z-ticket151-v10-prep.md`)。
+- 裁決助手獨立核對:新名冊只有這一筆不同;與舊版的差別只是把 `sha256` 一行換成多行 `contract` 區塊(排版照 plugins 那一筆)並更新 note。
+
+### 提交
+
+- commit `b887e69`(父 `f01edfc`),只改 `.agents/extension-inventory.json`,由 Jeff 親自 add／commit。
+- 新名冊 blob `75d5c4f349eb16577983b065222bf12050218005`。
+- 這一筆變成:`contract` = `{"name": "synced-skills-last-round-v1", "pins": {}}`,note「Jeff 核准 2026-10-12 規格七切換（票 151）」(逐字照已提交名冊,括號為全形)。
+- R10:pre-commit 當時驗證 staged 候選,回覆 DECLARED_OK(policy-only);commit 成功後名冊已進入 HEAD,runtime 仍 UNPROVEN。
+
+### 範圍限制
+
+- 契約切換只拿掉這一筆的固定指紋比對,改成檢查格式。其他 synced 檔若有變動,R10 仍然可能擋下。
+- 契約在之後的一般 commit 是否放行,要看下一次 commit 的 R10 輸出;本段不做保證。
+
+### 未決
+
+- 推送 `b887e69` 與本票面 commit:需 Jeff 另行授權。
+- 驗收／結案:需 Jeff 另行裁定。
+- S1、S2 候選票;known_items 改用合成資料補驗是否可行:皆未處理。
