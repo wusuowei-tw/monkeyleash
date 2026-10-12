@@ -4351,3 +4351,382 @@ class TestTicket149SyncedContractR3:
         kw = _t149_fakes(len(_T149_DATA[_T149_LCR]), {0: {"st_mode": _t149_stat.S_IFLNK | 0o777}})
         res = fn(_T149_LCR, str(p), dict(_T149_PINS[_T149_LCR]), **kw)
         assert res == {"category": "contract_read", "field": "S0_link"}, res
+
+
+# ── 票 151 第三站紅燈:skills 的 `.last-complete-round` 內容契約 ───────────────────────
+# 規格:票 151〈第二站 spec〉(紅燈測試清單 A1–I38,含 6b)。新契約名稱 `synced-skills-last-round-v1`。
+# CC = `redlight.synced_contract_check`;IC = `redlight.extension_inventory_check`;
+# E2E = tmp git repo 內以同一行程呼叫 pre-commit 的 R10 路徑(比照票 149 端到端,不是真正執行 git hook)。
+# 測試資料全部合成;不讀任何真實 synced 檔、真實名冊或真實家目錄。斷言一律等值比對。
+
+import hashlib as _t151_hashlib
+import os as _t151_os
+import shutil as _t151_shutil
+import stat as _t151_stat
+import subprocess as _t151_subprocess
+
+_T151_NEW = "synced-skills-last-round-v1"
+_T151_LCR = "synced-last-round-v1"
+_T151_MJ = "synced-marketplaces-v1"
+_T151_SK_REL = "skills/<bucket>/.last-complete-round"
+_T151_SK_MARKER_REL = "skills/.bucket-<bucket>"
+_T151_UUID = "0f0f0f0f-1111-4222-8333-444455556666"
+_T151_UUID2 = "a0a0a0a0-2222-4333-9444-555566667777"
+_T151_SENT = "zz151sentinel"
+_T151_BUCKET = "zz151-bucket"
+_T151_MARKER = b"marker151\n"
+_T151_MJ_PINS = {"id_sha256": _t151_hashlib.sha256(b"marketplace_SynthTestId0000000000000A").hexdigest()}
+_T151_NAME_UNIMPL = {"category": "inventory_schema", "field": "contract.name"}
+
+
+def _t151_bytes(tail=b"zzsynth151", uuid=_T151_UUID, sep=b" "):
+    return uuid.encode("ascii") + sep + tail
+
+
+def _t151_pad(total):
+    """總長恰為 `total` bytes 的合法內容(尾段補 `a`)。"""
+    return _t151_bytes(b"a" * (total - 37))
+
+
+def _t151_file(tmp_path, data, fname=".last-complete-round"):
+    p = tmp_path / "f" / fname
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
+    return p
+
+
+def _t151_check(tmp_path, data, name=_T151_NEW, pins=None, **kw):
+    p = _t151_file(tmp_path, data)
+    return redlight.synced_contract_check(name, str(p), {} if pins is None else pins, **kw)
+
+
+class _T151St(object):
+    """假 stat:四步一致的一般檔。`with_attrs=False` ⇒ 不帶 st_file_attributes。"""
+
+    def __init__(self, size, with_attrs=True, **over):
+        self.st_mode = _t151_stat.S_IFREG | 0o644
+        self.st_size = size
+        self.st_mtime_ns = 1
+        self.st_dev = 1
+        self.st_ino = 1
+        if with_attrs:
+            self.st_file_attributes = 0
+        for k, v in over.items():
+            setattr(self, k, v)
+
+
+def _t151_seq(values):
+    calls = [0]
+
+    def fn(_arg):
+        v = values[min(calls[0], len(values) - 1)]
+        calls[0] += 1
+        return v
+    return fn
+
+
+def _t151_fakes(size, steps=None, no_attrs=()):
+    """steps:{步驟 0–3: 覆寫欄位};no_attrs:哪幾步沒有 st_file_attributes。lstat 回 S0、S3;fstat 回 S1、S2。"""
+    steps = steps or {}
+    vals = [_T151St(size, with_attrs=(i not in no_attrs), **steps.get(i, {})) for i in range(4)]
+    return {"lstat": _t151_seq([vals[0], vals[3]]), "fstat": _t151_seq([vals[1], vals[2]])}
+
+
+def _t151_sha_entry(path, sha):
+    return {"path": path, "sha256": sha, "note": "t151"}
+
+
+def _t151_contract_entry(path, name, pins):
+    return {"path": path, "contract": {"name": name, "pins": pins}, "note": "t151"}
+
+
+def _t151_doc(entry):
+    return {"schema": "monkeyleash.extension-inventory", "version": 2,
+            "entries": [_t151_sha_entry(_T151_SK_MARKER_REL, _t151_hashlib.sha256(_T151_MARKER).hexdigest()),
+                        entry]}
+
+
+_T151_A = [
+    ("a1-single", _t151_bytes(b"zzsynth151")),
+    ("a2-list", _t151_bytes(b"alpha.1,beta_2,gamma-3")),
+    ("a3-empty-tail", _t151_bytes(b"")),
+    ("a4-one-comma", _t151_bytes(b",")),
+    ("a4-lead-comma", _t151_bytes(b",lead")),
+    ("a4-trail-comma", _t151_bytes(b"trail,")),
+    ("a4-double-comma", _t151_bytes(b"a,,b")),
+    ("a5-all-classes", _t151_bytes(b"aZ09_.-,")),
+    ("a6-1024", _t151_pad(1024)),
+    ("a6b-1023", _t151_pad(1023)),
+    ("a7-other-values", _t151_bytes(b"other.value_9", uuid=_T151_UUID2)),
+]
+_T151_B = [
+    ("b8-36-bytes", _T151_UUID.encode("ascii"), ("contract_format", "size")),
+    ("b9-not-uuid", _t151_bytes(uuid="zzzzzzzz-1111-4222-8333-444455556666"), ("contract_format", "uuid")),
+    ("b10-uppercase", _t151_bytes(uuid="0F0F0F0F-1111-4222-8333-444455556666"), ("contract_format", "uuid_case")),
+    ("b11-version", _t151_bytes(uuid="0f0f0f0f-1111-1222-8333-444455556666"), ("contract_format", "uuid_version")),
+    ("b12-variant", _t151_bytes(uuid="0f0f0f0f-1111-4222-c333-444455556666"), ("contract_format", "uuid_variant")),
+    ("b13-non-ascii", u"éf0f0f0-1111-4222-8333-444455556666".encode("utf-8") + b" zzsynth151",
+     ("contract_encoding", "ascii")),
+]
+_T151_C = [
+    ("c14-comma", _t151_bytes(sep=b",")),
+    ("c14-letter", _t151_bytes(sep=b"a")),
+    ("c14-tab", _t151_bytes(sep=b"\t")),
+    ("c14-lf", _t151_bytes(sep=b"\n")),
+]
+_T151_D = [
+    ("d15-space", b"zz151 tail"),
+    ("d16-lf-mid", b"zz\nsynth"),
+    ("d16-lf-end", b"zzsynth151\n"),
+    ("d17-cr", b"zz\rsynth"),
+    ("d18-slash", b"zz/x"),
+    ("d18-colon", b"zz:x"),
+    ("d18-semicolon", b"zz;x"),
+    ("d18-equals", b"zz=x"),
+    ("d18-dquote", b"zz\"x"),
+    ("d18-squote", b"zz'x"),
+    ("d18-backslash", b"zz\\x"),
+    ("d19-nul", b"zz\x00x"),
+    ("d19-tab", b"zz\tx"),
+    ("d19-del", b"zz\x7fx"),
+    ("d20-utf8", u"zzéx".encode("utf-8")),
+]
+_T151_F23 = [
+    ("s0-link", {0: {"st_mode": _t151_stat.S_IFLNK | 0o777}}, "S0_link"),
+    ("s0-reparse", {0: {"st_file_attributes": 0x400}}, "S0_reparse"),
+    ("s1-reparse", {1: {"st_file_attributes": 0x400}}, "S1_reparse"),
+    ("s2-reparse", {2: {"st_file_attributes": 0x400}}, "S2_reparse"),
+    ("s3-link", {3: {"st_mode": _t151_stat.S_IFLNK | 0o777}}, "S3_link"),
+    ("s3-reparse", {3: {"st_file_attributes": 0x400}}, "S3_reparse"),
+    ("missing", None, "missing"),
+]
+_T151_F24 = [
+    ("s0s1-ident", {1: {"st_ino": 2}}, "S0S1_ident"),
+    ("s0s1-size", {1: {"st_size": 51}}, "S0S1_size"),
+    ("s0s1-mtime", {1: {"st_mtime_ns": 2}}, "S0S1_mtime"),
+    ("s1s2-size", {2: {"st_size": 51}}, "S1S2_size"),
+    ("s1s2-mtime", {2: {"st_mtime_ns": 2}}, "S1S2_mtime"),
+    ("s3s1-ident", {3: {"st_ino": 2}}, "S3S1_ident"),
+    ("s3s1-size", {3: {"st_size": 51}}, "S3S1_size"),
+    ("s3s1-mtime", {3: {"st_mtime_ns": 2}}, "S3S1_mtime"),
+]
+_T151_DATA50 = _t151_bytes(b"zzsynth151.ok")
+_T151_G_WRONG = [
+    ("new-on-plugins-lcr", "plugins/<bucket>/.last-complete-round"),
+    ("new-on-plugins-mj", "plugins/<bucket>/.marketplaces.json"),
+    ("new-on-plugin-body", "plugins/<bucket>/foo/plugin.json"),
+    ("new-on-skills-other", "skills/<bucket>/foo/SKILL.md"),
+]
+_T151_G_PINS = [
+    ("pins-nonempty", {"x": 1}),
+    ("pins-not-dict", []),
+    ("pins-mj-shape", {"id_sha256": "a" * 64}),
+]
+_T151_I35 = [
+    ("i35-uuid", _t151_bytes(_T151_SENT.encode("ascii"), uuid="zzzzzzzz-1111-4222-8333-444455556666"),
+     ("contract_format", "uuid")),
+    ("i35-trailer", _t151_bytes(_T151_SENT.encode("ascii"), sep=b","), ("contract_format", "trailer")),
+    ("i35-tail", _t151_bytes((_T151_SENT + " x").encode("ascii")), ("contract_format", "tail")),
+    ("i35-size-cap", _t151_bytes(_T151_SENT.encode("ascii") + b"a" * 1000), ("contract_read", "size_cap")),
+]
+
+_T151_ALLOWLIST = {"schema": "monkeyleash.extension-allowlist", "version": 1,
+                   "dev_mod_files": [], "user_skill_plugins": [], "user_commands": [],
+                   "project_settings_hook_commands": [], "mcp_json_servers": []}
+
+
+def _t151_git(root, *args):
+    _t151_subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True)
+
+
+def _t151_text(path, doc):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with io.open(str(path), "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+
+
+def _t151_e2e(tmp_path, monkeypatch, capsys, sk_bytes, shadow):
+    """tmp repo(工作樹的 gate.py / redlight.py 複本 + 提交的合成 allowlist 與名冊)與 tmp claude_root
+    (只建 skills/synced:唯一 bucket + marker + `.last-complete-round`,與名冊一一對應;plugins 根不建)。
+    以同一行程呼叫複本的 `mode_pre_commit`(R10 路徑),依票 149 前例替換外部依賴。"""
+    root = tmp_path / "repo"
+    hooks = root / ".claude" / "hooks"
+    hooks.mkdir(parents=True)
+    (root / ".dev").mkdir()
+    for name in ("gate.py", "redlight.py"):
+        _t151_shutil.copy2(str(ROOT / ".claude" / "hooks" / name), str(hooks / name))
+    _t151_text(root / ".agents" / "extension-allowlist.json", _T151_ALLOWLIST)
+    _t151_text(root / ".agents" / "extension-inventory.json",
+               _t151_doc(_t151_contract_entry(_T151_SK_REL, _T151_NEW, {})))
+    _t151_git(root, "init", "-q")
+    _t151_git(root, "config", "user.email", "t@example.invalid")
+    _t151_git(root, "config", "user.name", "t")
+    _t151_git(root, "add", ".agents/extension-allowlist.json", ".agents/extension-inventory.json")
+    _t151_git(root, "commit", "-q", "-m", "baseline")
+    claude = tmp_path / "claude"
+    base = claude / "skills" / "synced"
+    (base / _T151_BUCKET).mkdir(parents=True)
+    (base / (".bucket-" + _T151_BUCKET)).write_bytes(_T151_MARKER)
+    (base / _T151_BUCKET / ".last-complete-round").write_bytes(sk_bytes)
+    spec = importlib.util.spec_from_file_location("gate_t151_%s" % tmp_path.name, str(hooks / "gate.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod, "_extension_claude_root", lambda: str(claude))
+    monkeypatch.setattr(mod, "upstream_shadow_violation", lambda *a, **k: (None, None))
+    monkeypatch.setattr(mod, "staged_paths", lambda *a, **k: [])
+    for name in ("check_third_axis_mount", "check_to_spec_override", "check_legacy_list",
+                 "check_friction_numbers", "check_skill_copies"):
+        monkeypatch.setattr(mod, name, lambda *a, **k: [])
+    monkeypatch.setattr(mod, "shadow_active", lambda *a, **k: shadow)
+    rc = mod.mode_pre_commit()
+    return rc, capsys.readouterr().err
+
+
+class TestTicket151SkillsLastRound:
+    """票 151 第三站紅燈。node 對應規格項 A1–I38(含 6b);H32、H34 由票 149 既有 node 涵蓋。"""
+
+    @pytest.mark.parametrize("case, data", _T151_A, ids=[c[0] for c in _T151_A])
+    def test_t151_a_valid_passes(self, tmp_path, case, data):
+        """A1–A7、A6b:合法內容放行(只驗格式,不比對指紋)。"""
+        res = _t151_check(tmp_path, data)
+        assert res is None, res
+
+    @pytest.mark.parametrize("case, data, want", _T151_B, ids=[c[0] for c in _T151_B])
+    def test_t151_b_head_blocks(self, tmp_path, case, data, want):
+        """B8–B13:長度不足或前段不合法 ⇒ 擋,代碼等值比對。"""
+        res = _t151_check(tmp_path, data)
+        assert res == {"category": want[0], "field": want[1]}, res
+
+    @pytest.mark.parametrize("case, data", _T151_C, ids=[c[0] for c in _T151_C])
+    def test_t151_c_byte37_blocks(self, tmp_path, case, data):
+        """C14:第 37 byte 不是 0x20 ⇒ contract_format/trailer。"""
+        res = _t151_check(tmp_path, data)
+        assert res == {"category": "contract_format", "field": "trailer"}, res
+
+    @pytest.mark.parametrize("case, tail", _T151_D, ids=[c[0] for c in _T151_D])
+    def test_t151_d_tail_blocks(self, tmp_path, case, tail):
+        """D15–D20:尾段出現集合外的 byte ⇒ contract_format/tail。"""
+        res = _t151_check(tmp_path, _t151_bytes(tail))
+        assert res == {"category": "contract_format", "field": "tail"}, res
+
+    @pytest.mark.parametrize("case", ["e21-1025", "e22-stat-small-read-large"])
+    def test_t151_e_size_cap_blocks(self, tmp_path, case):
+        """E21–E22:實際讀到超過 1024 bytes ⇒ contract_read/size_cap。"""
+        if case == "e21-1025":
+            res = _t151_check(tmp_path, _t151_pad(1025))
+        else:
+            res = _t151_check(tmp_path, _t151_pad(1100), **_t151_fakes(50))
+        assert res == {"category": "contract_read", "field": "size_cap"}, res
+
+    @pytest.mark.parametrize("case, steps, field", _T151_F23, ids=[c[0] for c in _T151_F23])
+    def test_t151_f_link_reparse_missing_blocks(self, tmp_path, case, steps, field):
+        """F23:連結 / reparse / 缺檔 ⇒ contract_read/<欄位>(沿用既有讀檔程序)。"""
+        if steps is None:
+            res = redlight.synced_contract_check(_T151_NEW, str(tmp_path / "absent" / ".last-complete-round"), {})
+        else:
+            res = _t151_check(tmp_path, _T151_DATA50, **_t151_fakes(len(_T151_DATA50), steps))
+        assert res == {"category": "contract_read", "field": field}, res
+
+    @pytest.mark.parametrize("case, steps, field", _T151_F24, ids=[c[0] for c in _T151_F24])
+    def test_t151_f_read_race_blocks(self, tmp_path, case, steps, field):
+        """F24:各步驟之間身分 / 大小 / 修改時間不一致 ⇒ contract_read/<欄位>。"""
+        res = _t151_check(tmp_path, _T151_DATA50, **_t151_fakes(len(_T151_DATA50), steps))
+        assert res == {"category": "contract_read", "field": field}, res
+
+    @pytest.mark.parametrize("case", ["windows-s0", "windows-s1", "windows-s2", "windows-s3",
+                                      "posix-no-attrs-passes"])
+    def test_t151_f_platform_attrs(self, tmp_path, monkeypatch, case):
+        """F25:windows 缺 st_file_attributes ⇒ S<n>_attr_missing;posix 無屬性而內容合法 ⇒ 放行。"""
+        if case.startswith("windows-"):
+            step = int(case[-1])
+            monkeypatch.setattr(redlight, "_SYNCED_PLATFORM", "windows")
+            res = _t151_check(tmp_path, _T151_DATA50, **_t151_fakes(len(_T151_DATA50), no_attrs=(step,)))
+            assert res == {"category": "contract_read", "field": "S%d_attr_missing" % step}, res
+        else:
+            monkeypatch.setattr(redlight, "_SYNCED_PLATFORM", "posix")
+            res = _t151_check(tmp_path, _T151_DATA50, **_t151_fakes(len(_T151_DATA50), no_attrs=(0, 1, 2, 3)))
+            assert res is None, res
+
+    @pytest.mark.parametrize("case, path", _T151_G_WRONG, ids=[c[0] for c in _T151_G_WRONG])
+    def test_t151_g_wrong_path_blocks(self, case, path):
+        """G26–G27:新契約掛在 skills 那一條以外的路徑 ⇒ inventory_schema/contract.path。"""
+        res = redlight.extension_inventory_check(_t151_doc(_t151_contract_entry(path, _T151_NEW, {})))
+        assert res == {"category": "inventory_schema", "field": "contract.path"}, res
+
+    def test_t151_g_lcr_on_skills_still_blocks(self):
+        """G28(回歸鎖):既有 synced-last-round-v1 掛在 skills 路徑 ⇒ 仍是 contract.path。"""
+        res = redlight.extension_inventory_check(_t151_doc(_t151_contract_entry(_T151_SK_REL, _T151_LCR, {})))
+        assert res == {"category": "inventory_schema", "field": "contract.path"}, res
+
+    @pytest.mark.parametrize("case, pins", _T151_G_PINS, ids=[c[0] for c in _T151_G_PINS])
+    def test_t151_g_pins_blocks(self, case, pins):
+        """G29:新契約 pins 非空 / 非物件 ⇒ inventory_schema/contract.pins。"""
+        res = redlight.extension_inventory_check(_t151_doc(_t151_contract_entry(_T151_SK_REL, _T151_NEW, pins)))
+        assert res == {"category": "inventory_schema", "field": "contract.pins"}, res
+
+    @pytest.mark.parametrize("case", ["inventory", "contract-check"])
+    def test_t151_g_unknown_name_blocks(self, tmp_path, case):
+        """G30(正控):未知契約名稱在兩個入口都 ⇒ inventory_schema/contract.name。"""
+        if case == "inventory":
+            res = redlight.extension_inventory_check(
+                _t151_doc(_t151_contract_entry(_T151_SK_REL, "synced-unknown-v151", {})))
+        else:
+            res = _t151_check(tmp_path, _T151_DATA50, name="synced-unknown-v151")
+        assert res == {"category": "inventory_schema", "field": "contract.name"}, res
+
+    @pytest.mark.parametrize("case", ["new-37-passes", "new-50-passes", "lcr-50-still-blocks"])
+    def test_t151_g_explicit_dispatch(self, tmp_path, case):
+        """G31:新契約不落到 last-round 的 37 bytes 規則;既有 last-round 規則不被取代。"""
+        if case == "new-37-passes":
+            res = _t151_check(tmp_path, _t151_bytes(b""))
+            assert res is None, res
+        elif case == "new-50-passes":
+            res = _t151_check(tmp_path, _T151_DATA50)
+            assert res is None, res
+        else:
+            res = _t151_check(tmp_path, _T151_DATA50, name=_T151_LCR)
+            assert res == {"category": "contract_read", "field": "size_cap"}, res
+
+    @pytest.mark.parametrize("case", ["lcr-37-passes", "lcr-38-size-cap", "mj-1025-size-cap"])
+    def test_t151_h_existing_contracts_unchanged(self, tmp_path, case):
+        """H33(回歸鎖):synced-last-round-v1 只接受 37 bytes;synced-marketplaces-v1 上限仍是 1024。"""
+        if case == "lcr-37-passes":
+            res = _t151_check(tmp_path, _t151_bytes(b""), name=_T151_LCR)
+            assert res is None, res
+        elif case == "lcr-38-size-cap":
+            res = _t151_check(tmp_path, _t151_bytes(b"x"), name=_T151_LCR)
+            assert res == {"category": "contract_read", "field": "size_cap"}, res
+        else:
+            p = _t151_file(tmp_path, b" " * 1025, fname=".marketplaces.json")
+            res = redlight.synced_contract_check(_T151_MJ, str(p), dict(_T151_MJ_PINS))
+            assert res == {"category": "contract_read", "field": "size_cap"}, res
+
+    @pytest.mark.parametrize("case, data, want", _T151_I35, ids=[c[0] for c in _T151_I35])
+    def test_t151_i_codes_exact_no_values(self, tmp_path, case, data, want):
+        """I35:原因代碼恰為兩鍵、等於預期代碼,且不含哨兵值。"""
+        res = _t151_check(tmp_path, data)
+        assert res == {"category": want[0], "field": want[1]}, res
+        assert set(res) == {"category", "field"}, res
+        assert _T151_SENT not in repr(res), res
+
+    @pytest.mark.parametrize("shadow", [False, True], ids=["shadow-off", "shadow-on"])
+    def test_t151_i_e2e_blocks_with_codes(self, tmp_path, monkeypatch, capsys, shadow):
+        """I36:R10 擋下訊息只含計數與代碼,不含檔案內容;影子模式下仍硬擋。"""
+        rc, err = _t151_e2e(tmp_path, monkeypatch, capsys, _t151_bytes((_T151_SENT + " x").encode("ascii")), shadow)
+        assert rc == 1, (rc, err)
+        assert "[R10/fail-closed]" in err, err
+        assert u"內容不符 1" in err, err
+        assert "contract_format/tail" in err, err
+        assert _T151_SENT not in err, err
+
+    def test_t151_i_e2e_valid_passes(self, tmp_path, monkeypatch, capsys):
+        """I37:名冊把 skills 那一筆設為新契約項、磁碟上的檔合法 ⇒ R10 放行。"""
+        rc, err = _t151_e2e(tmp_path, monkeypatch, capsys, _T151_DATA50, False)
+        assert rc == 0, (rc, err)
+        assert "[R10" not in err, err
+
+    def test_t151_i_tail_code_exact(self, tmp_path):
+        """I38:尾段非法字元被擋時,原因代碼恰為 {category: contract_format, field: tail} 兩鍵。"""
+        res = _t151_check(tmp_path, _t151_bytes(b"zz;x"))
+        assert res == {"category": "contract_format", "field": "tail"}, res
+        assert set(res) == {"category", "field"}, res
