@@ -1,6 +1,6 @@
 # 票 149 —— synced 外掛 metadata 兩檔於 2026-10-07 兩次與已核准 hash 不符(R10 攔截紀錄)
 
-**狀態**:~~**立案(未排程)。**~~ ~~**調查中（T149-1 補記觀測三；寫入者、消費方式、變動機制待唯讀偵察）。**~~ ~~**設計完成（方案 2 契約 v3 定稿，Jeff 裁定 2026-10-08）；待第四次核准後提交，接著進第三站紅燈。**~~ ~~**設計完成；第四次核准完成（26b2224，Jeff 2026-10-08）；待第三站紅燈。**~~ ~~**第四站實作中（S4-149-1；前檢通過）；待正式結果。**~~ ~~**第四站已實作並正式驗證（S4-149-1 b64a2d6a0a4168fd41a037c6516318eb59d49a74）；支援契約，待 Jeff 核准 version 2 名冊後啟用；待第五站獨立審查。**~~ ~~**第五站審查包已提交（S5-149-0）；待全新視窗獨立審查。**~~ ~~**第五站獨立審查完成（S5-149-1，PASS-with-notes，阻擋 0）；結果已記錄（S5-149-2）；推送前須補全套。**~~ **第五站獨立審查完成（S5-149-1，PASS-with-notes，阻擋 0）；結果已記錄（S5-149-2）；第七次核准完成（60c5531，version 2 契約啟用）；推送前須補全套（先解決測試隔離範圍）**
+**狀態**:~~**立案(未排程)。**~~ ~~**調查中（T149-1 補記觀測三；寫入者、消費方式、變動機制待唯讀偵察）。**~~ ~~**設計完成（方案 2 契約 v3 定稿，Jeff 裁定 2026-10-08）；待第四次核准後提交，接著進第三站紅燈。**~~ ~~**設計完成；第四次核准完成（26b2224，Jeff 2026-10-08）；待第三站紅燈。**~~ ~~**第四站實作中（S4-149-1；前檢通過）；待正式結果。**~~ ~~**第四站已實作並正式驗證（S4-149-1 b64a2d6a0a4168fd41a037c6516318eb59d49a74）；支援契約，待 Jeff 核准 version 2 名冊後啟用；待第五站獨立審查。**~~ ~~**第五站審查包已提交（S5-149-0）；待全新視窗獨立審查。**~~ ~~**第五站獨立審查完成（S5-149-1，PASS-with-notes，阻擋 0）；結果已記錄（S5-149-2）；推送前須補全套。**~~ ~~**第五站獨立審查完成（S5-149-1，PASS-with-notes，阻擋 0）；結果已記錄（S5-149-2）；第七次核准完成（60c5531，version 2 契約啟用）；推送前須補全套（先解決測試隔離範圍）**~~ **收尾完成：已推送 96db9ef（4d22101..96db9ef，fast-forward）；CI：Jeff 確認綠燈（run 明細未取得）；第九次核准已提交（6392ce4）；149 宣告生效（Jeff 2026-10-11）。**
 **優先度**:~~**未定。**(排程由 Jeff 另裁。)~~ Jeff 原文:「148 收完後優先做 149」（2026-10-07 20:50 美東）、「做票149」（2026-10-08 08:56 美東）。
 **發現於**:2026-10-07。
 **交叉引用**:票 146(R10)、票 148(S3-148-1 被擋)。
@@ -669,6 +669,48 @@ D7、V2S 兩項的依據是 Jeff 確認原文（2026-10-10 21:28 美東）：「
 - 推送前另裁：是否接受這份含失敗的驗收證據；是否以 CI 完成驗證。
 - 不 push。
 
+## 第八次攔截與核准（D8／V8）
+
+- **第八次攔截**【引用】：S6-149-0 的票 149 commit 被 R10 擋下，原文「[R10/fail-closed] unmanaged_entry：未受管入口：synced（額外 0 / 缺少 0 / 內容不符 1）」。這是 version 2 啟用後的第一次攔截。報告：`.dev/reports/2026-10-11T142153Z-ticket149-s6-0-prepush.md`。
+- **D8（診斷當下的狀態）**【引用】：
+  - 不符的只有 `skills/<bucket>/.last-complete-round`，屬於逐檔 hash 項。名冊值為 `b0f02414…`（第六次核准值），現場值為 `695ec9ec…`，50 bytes。
+  - 觀測到的最後修改時間是 2026-10-11T14:30:16Z，晚於 commit 被擋的時間 ⇒ 被擋當下是否就是這一筆、當時內容為何，都是 UNKNOWN。
+  - 擋下訊息沒有原因代碼，只能當作線索。
+  - 契約判定本輪為 UNKNOWN：R10 的 `_walk_regular` 對目錄沒有檢查 reparse，因此改用自寫腳本，不呼叫判定函式。
+  - 報告：`.dev/reports/2026-10-11T143246Z-ticket149-d8-diagnosis.md`。
+- **V8（唯讀核對，沒有審閱內容）**【引用】：
+  - 五層路徑檢查通過；sha256 與 D8 相同；觀測到的最後修改時間是 14:40:17Z。
+  - 草稿只改這一筆的 sha256 與 note，其餘 229 筆與契約項都沒變。
+  - 最終 sha256 `c488412644647ca88991e669d95ea75cb77d521f0e917d0c8248d0fefb7d8c12`、blob `e4087853414706dd9ade295fcc272b51c5789fe0`。
+  - add 前的現場複核（14:47:50Z）仍相符。
+  - 指紋相同、修改時間不同，只能證明兩個觀測時點的結果，不能確認是否曾重新寫入相同內容。
+  - 報告：`.dev/reports/2026-10-11T144126Z-ticket149-v8-prep.md`、`.dev/reports/2026-10-11T144750Z-ticket149-v8-final.md`。
+- **第八次核准**：
+  - Jeff 親自 add 與 commit，產生 `b9b44537542b54a56077bdb3fdf84d419cec1900`（2026-10-11 10:50:57 美東，只含名冊一檔）。
+  - R10 policy-only 的輸出原文【引用：Jeff 貼上的終端輸出】：「[R10/policy-only] policy-only commit（policy_source=index）：staged 候選 policy 對現場成立（DECLARED_OK；runtime 仍 UNPROVEN）。這是候選驗證，不是 HEAD 已生效的 policy。」
+  - 接受的是新的內容指紋，沒有審閱內容；寫入者與觸發條件 UNKNOWN。
+- **重送**：票 149 的 commit `96db9efc56f63ffee23a47bb88edeb10a8aecf5b`。commit 成功；R10 當次執行情況 UNKNOWN；runtime 未驗證。報告：`.dev/reports/2026-10-11T145413Z-ticket149-s6-0b-commit.md`。
+- **計數**：R10 攔截 8 次、核准 8 次。
+
+### 裁定紀錄（逐字）
+
+1. D8（Jeff 原文，2026-10-11 10:28 美東；`.dev/reports/2026-10-11T143246Z-ticket149-d8-diagnosis.md` :5）：「裁A：授權唯讀診斷第八次攔截：兩個 synced 根目錄中，列出目前與 HEAD 名冊（version 2）不符的檔案路徑、hash、大小與修改時間，並註明屬於契約項或逐檔 hash 項。若為 plugins 契約檔，允許檢查契約內兩檔的格式；其他檔只算 hash，不解析或展示內容。不準備草稿、不改名冊、不 commit、不 push。」
+2. V8 準備（Jeff 原文，2026-10-11 10:36 美東；`.dev/reports/2026-10-11T144126Z-ticket149-v8-prep.md` :5）：「裁A：授權準備第八次核准：唯讀核對 skills/<bucket>/.last-complete-round（只算 hash、大小、觀測到的最後修改時間，不解析、不審閱內容），準備 version 2 名冊草稿，只更新該筆 sha256 與 note。草稿 note 先寫「待 Jeff 核准」，並計算草稿 hash／blob。草稿須核對：version 2 不變、230 筆路徑順序與 HEAD 完全相同、其餘 229 筆內容完全不變、兩個契約項與 pins 不變。準備好後停止，交我確認；我決定實際核准後，才將 note 改為「Jeff 核准 YYYY-MM-DD 第八次」（使用實際核准日），重新計算並核對最終 hash／blob。add 前再次唯讀核對現場指紋，不符即停止；正式 add 與核准 commit 由我親自執行，被擋不重試。不 push。skills 該檔納入契約列為新票候選，立票與排程另裁；R10 目錄 reparse 檢查列為候選。」
+3. 第八次核准（Jeff 原文，2026-10-11 10:45 美東；`.dev/reports/2026-10-11T144750Z-ticket149-v8-final.md` :5）：「裁：核准第八次，核准日 2026-10-11，接受 skills/<bucket>/.last-complete-round 的新內容指紋，未審閱內容。VS 將該筆 note 改為「Jeff 核准 2026-10-11 第八次」，核對最終 sha256／blob，並再次唯讀核對現場指紋；任一不符即停。我親自 add 與核准 commit，被擋不重試。核准 commit 成功後，授權 VS 以同內容、同訊息重送 S6-149-0 票 149 的 commit，被擋依原規定退回暫存並停止，不重試。不 push。」
+4. C0 本輪（Jeff 原文，2026-10-11 11:03 美東；取自 C0-149 指令）：「裁A：進入收尾準備，合併三項：(1) 唯讀核對六站正式定義（.agents/pipeline-stages.yaml、CLAUDE.md、docs/decisions.md 等原文），引用檔名與行號，核對票 149 是否需要、是否已完成第六站要求；只回報證據與差異，不定案。(2) 只修改並提交票 149，補記第八次攔截、D8、V8 與第八次核准（b9b4453）的證據與限制；推送相關新節暫稱「收尾」，不得以改名取代第六站要求。(3) 唯讀查核 Claude Code 前哨對 git push 指令的判定，只讀碼、不執行。不改 hook、不改名冊、不跑測試、不 push；提交只限票 149，被擋依原規定退回暫存並停止，不重試。推送、驗收證據與第六站後續安排另裁。」
+
+### 候選事項（未立票）
+
+- 把 skills 的 `.last-complete-round` 納入契約：新票候選，立票與排程另裁。
+- R10 目錄的 reparse 檢查：redlight 的 `_walk_regular` 對目錄只看 `S_ISDIR`。
+
+## 收尾（暫稱）
+
+- 本節是推送相關事項的暫稱，不取代第六站要求；第六站是否適用、後續如何安排，另裁。
+- 第六站定義核對與前哨對 git push 的判定：結果見本輪報告（C0-149），待 Jeff 裁決。
+- 推送前另裁：是否接受含失敗的驗收證據；是否以 CI 完成驗證；push 需另行授權。
+- 不 push。
+
 ## 待查問題(全部 UNKNOWN,本票不作答)
 
 1. 寫入者。
@@ -707,3 +749,96 @@ D7、V2S 兩項的依據是 Jeff 確認原文（2026-10-10 21:28 美東）：「
 - T149-1：本輪 Read 的來源清單見報告；依 Jeff 2026-10-08 07:48 裁決補記日期更正。
 - T149-2：本輪 Read 的來源清單見報告；T149-1 的 Grep 名冊偏離已依 Jeff 2026-10-08 09:10 裁決接受，來源 .agents/extension-inventory.json。
 - T149-3：修正 scope／source 出處說明（區分 repo 報告與聊天紀錄）；補記第四次核准。
+
+## 收尾（推送、CI、收票）
+
+本節接續〈收尾（暫稱）〉。推送、CI、收票一律稱「收尾」。本節只記錄證據與限制；第九次核准已提交（6392ce4）；Jeff 已確認本節並宣告 149 生效（見〈生效範圍〉與〈裁定紀錄〉第 4 點）。
+
+### 推送【引用】
+
+- 授權來源：Jeff 親自送出收尾 P1 指令（含 push）。授權內容由裁決助手整理，非逐字原話：
+  - C：現有隔離全套結果只當部分證據；推送本機領先的 14 個 commit（HEAD 96db9ef）；由對應 96db9ef 的必要 CI 檢查完成驗證，必要檢查沒通過就不收票。
+  - D：本次不排 arch。
+  - B：skills 契約另開新票（P1 當輪不建票）。
+  - A：P1 當輪不做第九次核准（後由 V9 另行授權，見下）。
+  - C0 補記：留在工作樹。
+- 推送前唯讀核對 20 項全部相符，摘要：
+  - HEAD 96db9ef、分支 master、工作樹只有票 149 一行、暫存區空；
+  - 遠端 4d22101 是 HEAD 的祖先，領先 14、落後 0 ⇒ 可以快轉；
+  - push URL 只有一個，ls-remote 與本機追蹤參照一致；
+  - 有效 hook 目錄 `.githooks`（local 設定），裡面只有 `pre-commit`，沒有 pre-push；
+  - workflow 只有 `tests.yml`，讀碼符合這次推送的觸發條件（`push: branches: [master]`，沒有 paths 條件）；
+  - 三本帳本等於基準。
+- 結果【引用】：`git push origin master` 只執行一次，輸出 `4d22101..96db9ef  master -> master`（fast-forward；沒有 force；沒有被 hook 或前哨擋下）。推送後 ls-remote 為 `96db9efc56f63ffee23a47bb88edeb10a8aecf5b`。
+- 報告：`.dev/reports/2026-10-12T001307Z-ticket149-closeout-p1-push.md`。
+
+### CI【引用】
+
+- Jeff 2026-10-11 20:20 美東確認：對應 96db9ef 的 CI 為綠燈（授權內容由裁決助手整理，非逐字原話）。
+- run 明細（run id、workflow／event、各 job）：未取得，UNKNOWN。本機環境沒有 `gh`（P1 報告 步驟 3）。
+- 必要檢查設定（branch protection）：未取得，UNKNOWN。
+- Linux 上各 job 的細節（含 symlink 分支、R10）：UNKNOWN。
+
+### 驗收證據的定位
+
+- TI-149-2 含 3 項失敗的結果，只作為部分證據；以 CI 完成驗證（依 Jeff 核准的 C 選項；授權內容由裁決助手整理，非逐字原話）。
+- 3 項失敗的說明維持本票〈測試隔離盤點與隔離全套（TI-149-0～3）〉一節的記錄（TI-149-3）：pdb 兩項讀碼支持由 `-p no:cacheprovider` 解釋、尚未執行驗證；第三項由「clone 沒跑 bootstrap」解釋【推論】。
+
+### 第九次攔截與第九次核准
+
+- **第九次攔截**【引用】：C0 的票 149 commit 被 R10 擋下，原文「`[R10/fail-closed] unmanaged_entry：未受管入口：synced（額外 0 / 缺少 0 / 內容不符 1）`」。已退回暫存，沒有重試。報告：`.dev/reports/2026-10-11T190733Z-ticket149-c0-closeout-prep.md` :27。
+- **D9、D10（診斷當下的狀態）**【引用】：兩次都觀測到 `skills/<bucket>/.last-complete-round` 的 hash 與名冊不符（逐檔 hash 項）；其餘 227 筆相符，plugins 兩個契約檔的 sha256 與 D7／D8 相同。
+
+  | 輪次 | 名冊 sha256 | 現場 sha256 | size | 觀測到的最後修改時間 |
+  |---|---|---|---|---|
+  | D9 | `695ec9ec…0f07`（第八次核准值） | `34294c23…ce18` | 50 bytes | 2026-10-11T19:15:12Z |
+  | D10 | `695ec9ec…0f07` | `34294c23…ce18` | 50 bytes | 2026-10-12T00:17:26Z |
+
+  - D9 的觀測時間晚於 commit 被擋的時間 ⇒ 被擋當時是否就是這一筆、當時的狀態：UNKNOWN。
+  - 擋下訊息沒有原因代碼，只能當作線索。不推論寫入者、原因或變動頻率。
+  - 報告：`.dev/reports/2026-10-11T192112Z-ticket149-d9-diagnosis.md`、`.dev/reports/2026-10-12T002718Z-ticket149-d10-r10-recheck.md`。
+- **只改名冊，無法把 skills 這個檔納入現有契約**【引用：D9 §2，HEAD 96db9ef 的 redlight.py 讀碼】：
+  - 契約名稱與路徑寫死綁定：`EXT_CONTRACT_PATHS` :1062-1063 只對應 plugins 兩條路徑；`_inventory_check` :1418-1419 遇到路徑不符回 `inventory_schema/contract.path`。
+  - `synced-last-round-v1` 的讀檔上限是 37 bytes（`_EXT_CONTRACT_CAPS` :1064；`_check_last_round` :1619-1620 要求長度 37），skills 這個檔是 50 bytes；硬套的推論結果是 `contract_read/size_cap`【推論：重現】。
+  - 要讓 skills 這個檔走契約，需要改程式 ⇒ 另開票 151。
+- **V9（唯讀核對，沒有審閱內容）**【引用】：
+  - 逐層路徑檢查通過；sha256 `34294c2321581040b5ff624be5f4d0f41ce2c4d2c2a9638584b4ad3839d5ce18`、50 bytes；觀測到的最後修改時間 2026-10-12T00:38:41Z。
+  - 名冊只改這一筆的 sha256 與 note（「Jeff 核准 2026-10-11 第九次」）；version 2、其餘 229 筆、兩個契約項與 pins 都不變。
+  - 最終名冊 sha256 `707822a09132d8b4591b0a460a68715d09da642e30ed119520ee2715c7f81b4c`、blob `ba6859dec904f2448113ceb308485839e99e5a90`。
+  - add 前的現場複核（2026-10-12T00:43:57Z）仍相符；這只代表複核當時的狀態，不代表 Jeff 實際 add 時的狀態。
+  - 報告：`.dev/reports/2026-10-12T004549Z-ticket149-v9-prep.md`。
+- **第九次核准**：
+  - 授權：Jeff 2026-10-11 20:32 美東簡答「核准第九次，起草。」授權內容由裁決助手整理，非逐字原話：接受上述新內容指紋，未審閱內容；核准日 2026-10-11；VS 只改名冊該筆的 sha256 與 note；Jeff 親手 add 與 commit，被擋不重試。
+  - 核准結果：已提交 `6392ce4a0b2d347783b0aa069d1461c7f2e7780e`（Jeff 親手 add 與 commit，2026-10-11 20:56 美東；只含名冊一檔，名冊 blob `ba6859dec904f2448113ceb308485839e99e5a90`）。
+  - R10 policy-only 的輸出原文【引用：Jeff 貼上的終端輸出】：「[R10/policy-only] policy-only commit（policy_source=index）：staged 候選 policy 對現場成立（DECLARED_OK；runtime 仍 UNPROVEN）。這是候選驗證，不是 HEAD 已生效的 policy。」
+  - runtime 未驗證。
+  - 接受的是新的內容指紋，沒有審閱內容；寫入者與觸發條件 UNKNOWN。
+  - 提交後核對報告：`.dev/reports/2026-10-12T005925Z-ticket149-v9b-finalize.md`。
+- **計數**：R10 攔截 9 次；核准已提交 9 次。
+
+### arch
+
+- 本次不排 arch（D；授權內容由裁決助手整理，非逐字原話）。
+- arch 的觸發條件在搜尋範圍內沒有明文，只有「累積性、非每票」（CLAUDE.md :21）與「只能手動呼叫」（SKILL.md :4）（D9 §4）⇒ 列為後續，本票不定案。
+
+### 後續（只寫指向，不展開、不排順序）
+
+- 票 151：把 `skills/<bucket>/.last-complete-round` 納入契約（新票，candidate）。
+- 候選事項（未立票）：
+  - R10 目錄的 reparse 檢查：redlight `_walk_regular` 對目錄只看 `S_ISDIR`。
+  - `docs/decisions.md` 缺檔：`.agents/pipeline-stages.yaml` :10 把它列為消費端，但檔案不存在。
+  - TI-149-2 結尾的家目錄檢查不符合隔離條件（甲類候選）。
+  - 用語統一：推送、CI、收票一律稱「收尾」。
+
+### 生效範圍
+
+- 生效限於 plugins 兩檔（`plugins/<bucket>/.marketplaces.json`、`plugins/<bucket>/.last-complete-round`）的契約規則（契約 v3，名冊 version 2）。
+- 不代表 runtime 已驗證。
+- `skills/<bucket>/.last-complete-round` 仍採逐檔 hash 比對；要不要納入契約，見票 151。
+
+### 裁定紀錄
+
+1. 收尾 P1：Jeff 親自送出含 push 的指令；授權內容由裁決助手整理，非逐字原話（見本節〈推送〉）。
+2. CI：Jeff 2026-10-11 20:20 美東確認 96db9ef 的 CI 為綠燈；授權內容由裁決助手整理，非逐字原話。同一份紀錄：收尾方向為票 149（含 C0 補記與收票）與票 151 兩個檔合併成一個 commit，正式提交另待 Jeff 確認。
+3. 第九次核准與起草（Jeff 原文，2026-10-11 20:32 美東）：「核准第九次，起草。」
+4. 收尾定稿、狀態列與宣告生效（Jeff 原文，2026-10-11 21:09 美東）：「版本二，宣告 149 生效，同意合併提交；不 push。」
