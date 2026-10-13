@@ -7493,3 +7493,383 @@ class TestTicket148AuthorityLayerJudgesRenamedSource:
         assert rc == 1, u"rename 進原始碼目錄沒被權威層擋下:rc=%r\n%s" % (rc, err)
         assert "[R2" in err, err
         assert "[R10" not in err, err
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 票 152(M1-b)批一 —— Kotlin/Dart 原始碼真正進入 R3,配對不再依賴 Python 樣板
+# ══════════════════════════════════════════════════════════════════════════
+#
+# **Station 3a 紅燈站:本批只有測試,`gate.py` 一個字沒動。**
+# 驗收條件編號依規格 M1-B-NONPYTHON-ADAPTER-SPEC-v1 §7.1(AC-B1～AC-B13);
+# 類別(必須先紅 / 守住既有行為)依票 152 §4.2。
+#
+# 寫法約束(Station 3a 授權逐條):
+#   * 只透過既有公開行為斷言 —— `check()`(含 `trace`、`at_commit`)、`is_source_path()`、
+#     `mode_pre_commit()` 的輸出。**不呼叫規格暫名、尚未存在的新函式**
+#     (`r3_language` / `test_candidates` / `is_test_path`),命名留給實作站 ——
+#     紅的原因因此是「行為不對」,不是「名字不存在」。
+#   * 一律在 tmp git repo 裡跑;不讀寫真實 `.dev/`、`pipeline.json` 或帳本(票 18)。
+#   * 紅燈紀錄一律是**合成紀錄**,寫在 tmp repo 的 `.dev/test-runs.jsonl`。
+#   * 「守住既有行為」與控制格可以原本就綠,不刻意讓它失敗。
+
+_T152_TICKET = "152"
+_T152_FEATURE = "t152"
+_T152_SYNTH = u"<合成紀錄>"
+
+
+def _t152_git(root, *args):
+    return subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True)
+
+
+def _t152_write(root, rel_path, text):
+    p = pathlib.Path(str(root)).joinpath(*rel_path.split("/"))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with io.open(str(p), "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+    return p
+
+
+def _t152_repo(tmp_path, monkeypatch, stage="implement", commit=()):
+    """tmp git repo;`commit` 裡的 (路徑, 內容) 先提交進 HEAD。回 repo 根。
+
+    git 設定與使用者層隔離沿用 `_t148_env`;站別與票號以 `load_stage` 注入,
+    `RUN_LOG` / `LEGACY_LIST` 指進 tmp repo(後者不存在 ⇒ 沒有 legacy 豁免)。
+    `STAGES_DEF` 不 patch:寫入時點讀真 repo 現行定義(`_install_stage_defs` 的 docstring);
+    提交時點由 `_t152_pre_commit` 另行安裝進 index。
+    """
+    _t148_env(tmp_path, monkeypatch)
+    root = tmp_path / "repo"
+    root.mkdir()
+    _t152_git(root, "init", "-q")
+    _t152_git(root, "config", "user.email", "t@example.invalid")
+    _t152_git(root, "config", "user.name", "t")
+    _t152_write(root, "README.md", u"t152\n")
+    for rel_path, text in commit:
+        _t152_write(root, rel_path, text)
+    _t152_git(root, "add", "-A")
+    _t152_git(root, "commit", "-q", "-m", "base (t152)")
+    monkeypatch.setattr(gate, "ROOT", str(root))
+    monkeypatch.setattr(gate, "RUN_LOG", str(root / ".dev" / "test-runs.jsonl"))
+    monkeypatch.setattr(gate, "LEGACY_LIST", str(root / ".agents" / "legacy-no-redlight.txt"))
+    monkeypatch.setattr(gate, "load_stage", lambda: (stage, _T152_TICKET))
+    monkeypatch.setattr(gate, "load_feature", lambda: _T152_FEATURE)
+    monkeypatch.chdir(str(root))
+    return root
+
+
+def _t152_red(test_file, impl_file, **kw):
+    """一筆合成紅燈紀錄(既有 8 欄)。預設:本票、實作當時不存在。"""
+    rec = {"test_file": test_file, "time": "2026-10-13T00:00:00+00:00", "result": "red",
+           "failed_tests": [_T152_SYNTH], "impl_file": impl_file,
+           "impl_exists": False, "impl_hash": None, "ticket_id": _T152_TICKET}
+    rec.update(kw)
+    return rec
+
+
+def _t152_log(root, *recs):
+    d = pathlib.Path(str(root)) / ".dev"
+    d.mkdir(exist_ok=True)
+    with io.open(str(d / "test-runs.jsonl"), "w", encoding="utf-8") as f:
+        for r in recs:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+def _t152_head_hash(root, rel_path):
+    blob = _t152_git(root, "cat-file", "blob", "HEAD:" + rel_path).stdout
+    norm = blob.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(norm).hexdigest()
+
+
+def _t152_check(root, rel_path, content, at_commit=False):
+    """回 (msg, trace, exemptions)。路徑給絕對的(`rel()` 走 `abspath`)。"""
+    trace, used = [], []
+    p = str(pathlib.Path(str(root)).joinpath(*rel_path.split("/")))
+    msg = gate.check(p, content, at_commit=at_commit, trace=trace, exemptions=used)
+    return msg, trace, used
+
+
+def _t152_pre_commit(root, monkeypatch, capsys, staged):
+    """安裝站別定義進 index、`git add` 指定檔,停掉鄰居(同 `_d_silence_the_neighbours`
+    ＋ R6),跑真的 `mode_pre_commit()`。回 (rc, stderr)。"""
+    _install_stage_defs(root)
+    for rel_path in staged:
+        _t152_git(root, "add", "-f", "--", rel_path)
+    _d_silence_the_neighbours(monkeypatch, root)
+    monkeypatch.setattr(gate, "check_legacy_list", lambda path=None, cwd=None: [])
+    capsys.readouterr()
+    rc = gate.mode_pre_commit()
+    return rc, capsys.readouterr().err
+
+
+_T152_DART_IMPL = "lib/foo.dart"
+_T152_DART_TEST = "test/foo_test.dart"
+_T152_KT_IMPL = "app/src/main/kotlin/x/Foo.kt"
+_T152_KT_TEST = "app/src/test/kotlin/x/FooTest.kt"
+
+
+class TestTicket152JudgeSide:
+    """票 152 批一(規格 §7.1 判定端)。每條 docstring:AC / 類別 / 預期現行結果。"""
+
+    # ── AC-B1 / AC-B2:沒有測試的 Kotlin/Dart 實作要擋,訊息列出期望的測試檔 ──
+
+    def test_ac_b1_dart_impl_without_test_is_blocked_naming_the_test(self, tmp_path, monkeypatch):
+        """AC-B1|必須先紅|現行:放行、無訊息(`check()` 回 None,走 `gate.py:3119`)。
+        要求:implement 站寫 `lib/foo.dart`、無 `test/foo_test.dart` ⇒ 擋,訊息列出 `test/foo_test.dart`。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        msg, _trace, _used = _t152_check(root, _T152_DART_IMPL, u"int foo() => 1;\n")
+        assert msg is not None, u"AC-B1:沒有測試的 .dart 實作被靜默放行"
+        assert _T152_DART_TEST in msg, msg
+
+    def test_ac_b2_kotlin_impl_without_test_is_blocked_naming_the_test(self, tmp_path, monkeypatch):
+        """AC-B2|必須先紅|現行:放行、無訊息。
+        要求:擋,訊息列出 `app/src/test/kotlin/x/FooTest.kt`,不含 `tests/test_`。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        msg, _trace, _used = _t152_check(root, _T152_KT_IMPL, u"class Foo\n")
+        assert msg is not None, u"AC-B2:沒有測試的 .kt 實作被靜默放行"
+        assert _T152_KT_TEST in msg, msg
+        assert "tests/test_" not in msg, msg
+
+    # ── AC-B3～AC-B6:R3 兩半(紅燈紀錄)對 Kotlin/Dart 生效 ────────────────
+
+    def test_ac_b3_dart_impl_with_a_qualifying_red_passes_through_r3(self, tmp_path, monkeypatch):
+        """AC-B3|必須先紅|現行:放行(msg 為 None,這半原本就成立),但 trace 只有 R2(未經 R3)。
+        要求:放行,且 `trace` 含 `R3`。紅的是 trace 那一句。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        _t152_write(root, _T152_DART_TEST, u"void main() {}\n")
+        _t152_log(root, _t152_red(_T152_DART_TEST, _T152_DART_IMPL))
+        msg, trace, _used = _t152_check(root, _T152_DART_IMPL, u"int foo() => 1;\n")
+        assert msg is None, u"AC-B3:合格紅燈下仍被擋:%s" % msg
+        assert "R3" in trace, u"AC-B3:.dart 沒有進入 R3(trace=%r)" % trace
+
+    def test_ac_b4_a_red_for_another_same_named_impl_is_blocked(self, tmp_path, monkeypatch):
+        """AC-B4|必須先紅|現行:放行。
+        要求:紀錄的 `impl_file` 是另一支同名實作 ⇒ 擋(規格 D5:Kotlin/Dart 要求 `impl_file == r`)。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        _t152_write(root, _T152_DART_TEST, u"void main() {}\n")
+        _t152_log(root, _t152_red(_T152_DART_TEST, "packages/other/lib/foo.dart"))
+        msg, _trace, _used = _t152_check(root, _T152_DART_IMPL, u"int foo() => 1;\n")
+        assert msg is not None, u"AC-B4:別支同名實作的紅燈解鎖了 %s" % _T152_DART_IMPL
+        assert "[R3" in msg, msg
+
+    def test_ac_b5_a_red_from_another_ticket_is_blocked(self, tmp_path, monkeypatch):
+        """AC-B5|必須先紅|現行:放行。
+        要求:紀錄屬別張票 ⇒ 擋(沿用既有的票號訊息,訊息含當前票號)。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        _t152_write(root, _T152_DART_TEST, u"void main() {}\n")
+        _t152_log(root, _t152_red(_T152_DART_TEST, _T152_DART_IMPL, ticket_id="151"))
+        msg, _trace, _used = _t152_check(root, _T152_DART_IMPL, u"int foo() => 1;\n")
+        assert msg is not None, u"AC-B5:別張票的紅燈解鎖了本票的 .dart 實作"
+        assert _T152_TICKET in msg, msg
+
+    def test_ac_b6_existing_kotlin_with_a_red_not_against_head_is_blocked(self, tmp_path, monkeypatch):
+        """AC-B6|必須先紅|現行:放行。
+        要求:既有 `.kt`(在 HEAD)被修改,紀錄 `impl_hash` ≠ HEAD 內容 ⇒ 擋。"""
+        root = _t152_repo(tmp_path, monkeypatch, commit=[(_T152_KT_IMPL, u"class Foo\n")])
+        _t152_write(root, _T152_KT_TEST, u"class FooTest\n")
+        _t152_log(root, _t152_red(_T152_KT_TEST, _T152_KT_IMPL,
+                                  impl_exists=True, impl_hash="0" * 64))
+        msg, _trace, _used = _t152_check(root, _T152_KT_IMPL, u"class Foo { fun x() = 2 }\n")
+        assert msg is not None, u"AC-B6:對不上 HEAD 的紅燈解鎖了既有 .kt 的修改"
+        assert "[R3" in msg, msg
+
+    def test_ac_b6_control_a_red_against_head_passes(self, tmp_path, monkeypatch):
+        """AC-B6 對照格|控制案例(可以原本就綠)|現行:放行(未經 R3)。
+        要求:紀錄 `impl_hash` == HEAD 內容、`impl_file` == 實作 ⇒ 放行。"""
+        root = _t152_repo(tmp_path, monkeypatch, commit=[(_T152_KT_IMPL, u"class Foo\n")])
+        _t152_write(root, _T152_KT_TEST, u"class FooTest\n")
+        _t152_log(root, _t152_red(_T152_KT_TEST, _T152_KT_IMPL, impl_exists=True,
+                                  impl_hash=_t152_head_hash(root, _T152_KT_IMPL)))
+        msg, _trace, _used = _t152_check(root, _T152_KT_IMPL, u"class Foo { fun x() = 2 }\n")
+        assert msg is None, msg
+
+    # ── AC-B7a / AC-B7b:測試檔分類 ─────────────────────────────────────────
+
+    _T152_TEST_PATHS = [_T152_DART_TEST, "test/helpers/fake.dart", _T152_KT_TEST]
+    _T152_PRODUCT_TEST_DIRS = ["lib/test/foo.dart", "app/src/main/kotlin/test/Foo.kt"]
+
+    @pytest.mark.parametrize("path", _T152_TEST_PATHS)
+    def test_ac_b7a_test_files_are_not_source(self, path):
+        """AC-B7a|必須先紅|現行:`is_source_path` 回 True(`test`/`app` 都不在 NON_SOURCE_DIRS)。
+        要求:判為測試檔,不是原始碼(比照 Python `tests/`)。"""
+        assert gate.is_source_path(path) is False, u"AC-B7a:%s 仍被當成原始碼" % path
+
+    @pytest.mark.parametrize("path", _T152_TEST_PATHS)
+    def test_ac_b7a_test_files_skip_r2_at_a_non_writable_stage(self, tmp_path, monkeypatch, path):
+        """AC-B7a|必須先紅|現行:非可寫站(tickets)寫測試檔被 `[R2]` 擋。
+        要求:`check()` 內不經過 R2/R3 ⇒ 放行,trace 不含 R2/R3。"""
+        root = _t152_repo(tmp_path, monkeypatch, stage="tickets")
+        msg, trace, _used = _t152_check(root, path, u"// test\n")
+        assert msg is None, u"AC-B7a:非可寫站寫測試檔被擋:%s" % msg
+        assert "R2" not in trace and "R3" not in trace, trace
+
+    @pytest.mark.parametrize("path", _T152_TEST_PATHS)
+    def test_ac_b7a_control_test_files_pass_at_a_writable_stage(self, tmp_path, monkeypatch, path):
+        """AC-B7a 對照格|控制案例(可以原本就綠)|現行:implement 站放行。要求:放行。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        msg, _trace, _used = _t152_check(root, path, u"// test\n")
+        assert msg is None, msg
+
+    def test_ac_b7a_control_python_tests_dir_is_not_source(self):
+        """AC-B7a 對照格|守住既有行為(可以原本就綠)|現行:`tests/` 在 NON_SOURCE_DIRS ⇒ False。"""
+        assert gate.is_source_path("tests/test_thing.py") is False
+
+    @pytest.mark.parametrize("path", _T152_PRODUCT_TEST_DIRS)
+    def test_ac_b7b_control_a_product_dir_named_test_is_source(self, path):
+        """AC-B7b 對照格|控制案例(可以原本就綠)|現行:True。要求:產品目錄底下叫 test 的子資料夾仍是原始碼。"""
+        assert gate.is_source_path(path) is True
+
+    @pytest.mark.parametrize("path", _T152_PRODUCT_TEST_DIRS)
+    def test_ac_b7b_a_product_dir_named_test_is_held_by_r3(self, tmp_path, monkeypatch, path):
+        """AC-B7b|必須先紅|現行:implement 站缺測試仍放行(非 .py 不進 R3)。
+        要求:照原始碼處理 ⇒ 缺測試要被 R3 擋。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        msg, _trace, _used = _t152_check(root, path, u"// product code\n")
+        assert msg is not None, u"AC-B7b:產品目錄下的 %s 缺測試卻放行" % path
+        assert "[R3" in msg, msg
+
+    @pytest.mark.parametrize("path", _T152_PRODUCT_TEST_DIRS)
+    def test_ac_b7b_control_a_product_dir_named_test_is_held_by_r2(self, tmp_path, monkeypatch, path):
+        """AC-B7b 對照格|控制案例(可以原本就綠)|現行:非可寫站被 `[R2]` 擋。要求:同。"""
+        root = _t152_repo(tmp_path, monkeypatch, stage="tickets")
+        msg, _trace, _used = _t152_check(root, path, u"// product code\n")
+        assert msg is not None and "[R2]" in msg, msg
+
+    # ── AC-B8 / AC-B8b:形狀不符的 Kotlin/Dart ────────────────────────────
+
+    _T152_SHAPELESS = [("src/main/java/X.kt", "X"), ("bin/tool.dart", "tool")]
+
+    @pytest.mark.parametrize("path,base", _T152_SHAPELESS)
+    def test_ac_b8_a_shapeless_supported_file_is_blocked_without_pairing_rule(
+            self, tmp_path, monkeypatch, path, base):
+        """AC-B8|必須先紅|現行:放行。
+        要求:implement 站、無任何豁免 ⇒ 擋,`[R3/無配對規則]`;**不落入 P1**(trace 不得記 `R3:無配對規則語言`)。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        msg, trace, _used = _t152_check(root, path, u"// code\n")
+        assert msg is not None, u"AC-B8:形狀不符的 %s 被放行" % path
+        assert "[R3/無配對規則]" in msg, msg
+        assert u"R3:無配對規則語言" not in trace, trace
+
+    @pytest.mark.parametrize("path,base", _T152_SHAPELESS)
+    def test_ac_b8b_a_ticket_declared_untested_module_is_exempted_and_recorded(
+            self, tmp_path, monkeypatch, path, base):
+        """AC-B8b|必須先紅|現行:放行(這半原本就成立),但沒有任何豁免紀錄(未經 R3 的豁免鏈)。
+        要求:票內已宣告不測(已提交進 HEAD)⇒ 放行,並照現行方式記豁免(`reason="ticket-declared"`)。"""
+        ticket = "docs/tickets/%s/%s-t152-fixture.md" % (_T152_FEATURE, _T152_TICKET)
+        root = _t152_repo(tmp_path, monkeypatch, commit=[
+            (ticket, u"# 合成票\n\n**Untested by decision:** X, tool\n")])
+        msg, _trace, used = _t152_check(root, path, u"// code\n")
+        assert msg is None, msg
+        assert any(e.get("module") == base and e.get("reason") == "ticket-declared"
+                   and e.get("declared_in") == ticket for e in used), (
+            u"AC-B8b:放行了,但沒有照現行方式記豁免:%r" % used)
+
+    # ── AC-B9:權威層 ──────────────────────────────────────────────────────
+
+    def test_ac_b9_pre_commit_blocks_an_untested_kotlin_file(self, tmp_path, monkeypatch, capsys):
+        """AC-B9|必須先紅|現行:非前置站(review)提交一支無測試的 `.kt` ⇒ pre-commit 放行(rc 0)。
+        要求:pre-commit 擋(rc 1),擋下的是 R3。"""
+        root = _t152_repo(tmp_path, monkeypatch, stage="review")
+        _t152_write(root, _T152_KT_IMPL, u"class Foo\n")
+        rc, err = _t152_pre_commit(root, monkeypatch, capsys, [_T152_KT_IMPL])
+        assert rc == 1, u"AC-B9:無測試的 .kt 在權威層放行:rc=%r\n%s" % (rc, err)
+        assert "[R3" in err, err
+
+    def test_ac_b9_control_pre_commit_blocks_an_untested_python_file(self, tmp_path, monkeypatch, capsys):
+        """AC-B9 對照格|守住既有行為(可以原本就綠)|現行:無測試的 `.py` ⇒ rc 1、`[R3]`。"""
+        root = _t152_repo(tmp_path, monkeypatch, stage="review")
+        _t152_write(root, "pkg/thing.py", u"x = 1\n")
+        rc, err = _t152_pre_commit(root, monkeypatch, capsys, ["pkg/thing.py"])
+        assert rc == 1, err
+        assert "[R3]" in err, err
+
+    # ── AC-B10:R8 未檢查要看得見 ──────────────────────────────────────────
+
+    @pytest.mark.parametrize("path", [_T152_DART_IMPL, _T152_KT_IMPL])
+    def test_ac_b10_r8_unchecked_is_visible_in_trace(self, tmp_path, monkeypatch, path):
+        """AC-B10|必須先紅|現行:不判定、無紀錄(trace 只有 R2)。
+        要求:`trace` 記 `R8:未檢查`。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        _msg, trace, _used = _t152_check(root, path, u"// code\n")
+        assert u"R8:未檢查" in trace, u"AC-B10:trace 沒有 R8:未檢查(%r)" % trace
+
+    def test_ac_b10_r8_unchecked_is_listed_in_pre_commit_output(self, tmp_path, monkeypatch, capsys):
+        """AC-B10|必須先紅|現行:提交輸出沒有任何 R8 字樣(rc 0、stderr 無相關行)。
+        要求:合格提交(有本票合格紅燈)⇒ 放行,且提交輸出列出該檔與 R8;
+        任何提到 R8 的行不得出現「不適用」「豁免」。"""
+        root = _t152_repo(tmp_path, monkeypatch, stage="review")
+        _t152_write(root, _T152_KT_IMPL, u"class Foo\n")
+        _t152_write(root, _T152_KT_TEST, u"class FooTest\n")
+        _t152_log(root, _t152_red(_T152_KT_TEST, _T152_KT_IMPL))
+        rc, err = _t152_pre_commit(root, monkeypatch, capsys, [_T152_KT_IMPL])
+        assert rc == 0, err
+        assert _T152_KT_IMPL in err and "R8" in err, (
+            u"AC-B10:提交輸出沒有列出 R8 未檢查的檔案:\n%s" % err)
+        for line in err.splitlines():
+            if "R8" in line:
+                assert u"不適用" not in line and u"豁免" not in line, line
+
+    def test_ac_b10_control_python_still_enters_r8(self, tmp_path, monkeypatch):
+        """AC-B10 對照格|守住既有行為(可以原本就綠)|現行:`.py` 的 trace 含 `R8`。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        _msg, trace, _used = _t152_check(root, "pkg/thing.py", u"x = 1\n")
+        assert "R8" in trace, trace
+
+    # ── AC-B12:Python 樣板只剩配對表內 ────────────────────────────────────
+
+    def test_ac_b12_python_template_lives_only_in_the_pairing_table(self):
+        """AC-B12|必須先紅|現行:`gate.py` 有 6 行含 `test_%s.py`,分 3 處
+        (`:2157-2158` redlight_missing、`:3035-3037` cands、`:3113` [R3] 訊息)。
+        要求:只剩配對表內 Python 三條候選 —— 恰好 3 行,而且相鄰。
+        以讀取 `gate.py` 原文計數斷言(不呼叫任何新函式)。"""
+        src = io.open(str(ROOT / ".claude" / "hooks" / "gate.py"), encoding="utf-8").read()
+        hits = [i + 1 for i, line in enumerate(src.splitlines()) if "test_%s.py" in line]
+        assert len(hits) == 3, u"AC-B12:test_%%s.py 樣板有 %d 行(行號 %r),應只剩配對表內 3 行" % (
+            len(hits), hits)
+        assert hits == list(range(hits[0], hits[0] + 3)), hits
+
+    # ── AC-B13:無配對規則語言 —— 放行但可見(P1) ─────────────────────────
+
+    def test_ac_b13_an_unpaired_language_passes_but_is_visible_in_trace(self, tmp_path, monkeypatch):
+        """AC-B13|必須先紅|現行:可寫站放行(這半原本就成立)、trace 只有 R2、無訊息。
+        要求:放行,且 `trace` 記 `R3:無配對規則語言`;不得靜默。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        msg, trace, _used = _t152_check(root, "build.gradle.kts", u"plugins {}\n")
+        assert msg is None, msg
+        assert u"R3:無配對規則語言" in trace, u"AC-B13:trace 沒有記錄(%r)" % trace
+
+    def test_ac_b13_an_unpaired_language_is_listed_in_pre_commit_output(self, tmp_path, monkeypatch, capsys):
+        """AC-B13|必須先紅|現行:提交放行(rc 0),stderr 不提這個檔。
+        要求:放行(不改變擋或放),但提交輸出列出 `build.gradle.kts`。"""
+        root = _t152_repo(tmp_path, monkeypatch, stage="review")
+        _t152_write(root, "build.gradle.kts", u"plugins {}\n")
+        rc, err = _t152_pre_commit(root, monkeypatch, capsys, ["build.gradle.kts"])
+        assert rc == 0, err
+        assert "build.gradle.kts" in err, u"AC-B13:提交輸出沒有列出未完整檢查的檔案:\n%s" % err
+
+
+class TestTicket152PythonUnchanged:
+    """票 152 批一 AC-B11 的對照格|守住既有行為(可以原本就綠)。
+    AC-B11 本體是全套回歸(票 §4.3);這裡只在同一個 tmp repo 佈置下釘住 Python 的 R3 兩半與訊息。"""
+
+    def test_python_impl_without_test_is_blocked_naming_tests_test(self, tmp_path, monkeypatch):
+        """現行:`[R3]` 且訊息含 `tests/test_thing.py`。要求:不變。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        msg, trace, _used = _t152_check(root, "pkg/thing.py", u"x = 1\n")
+        assert msg is not None and "[R3]" in msg and "tests/test_thing.py" in msg, msg
+        assert "R3" in trace, trace
+
+    def test_python_impl_with_a_qualifying_red_passes(self, tmp_path, monkeypatch):
+        """現行:`tests/test_thing.py` 存在 + 本票紅燈(實作當時不存在)⇒ 放行。要求:不變。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        _t152_write(root, "tests/test_thing.py", u"def test_x(): pass\n")
+        _t152_log(root, _t152_red("tests/test_thing.py", "pkg/thing.py"))
+        msg, _trace, _used = _t152_check(root, "pkg/thing.py", u"x = 1\n")
+        assert msg is None, msg
+
+    def test_python_impl_with_a_red_from_another_ticket_is_blocked(self, tmp_path, monkeypatch):
+        """現行:紀錄屬別張票 ⇒ `[R3/紅燈]`。要求:不變。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        _t152_write(root, "tests/test_thing.py", u"def test_x(): pass\n")
+        _t152_log(root, _t152_red("tests/test_thing.py", "pkg/thing.py", ticket_id="151"))
+        msg, _trace, _used = _t152_check(root, "pkg/thing.py", u"x = 1\n")
+        assert msg is not None and "[R3/紅燈]" in msg, msg
