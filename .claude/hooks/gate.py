@@ -2122,12 +2122,20 @@ def head_content_hash(rel_path):
         return None
 
 
-def redlight_missing(base, also_accept=(), impl_rel=None, ticket=None):
+def redlight_missing(base, also_accept=(), impl_rel=None, ticket=None, lang=None):
     """R3 的另一半:這個模組的測試曾經在**這次的實作寫之前**紅過嗎?
 
-    also_accept:除 tests/test_<base>.py 外同樣算數的測試檔位置。兩半必須接受
-    同一組位置 —— 只認 tests/ 的話,pkg/foo.py 配 pkg/test_foo.py 會通過前半、
-    卡死後半,而且沒有任何合法解法。
+    also_accept:同樣算數的測試檔位置(`check()` 傳的是 `test_candidates()` 那一組)。
+    兩半必須接受同一組位置 —— 只認 tests/ 的話,pkg/foo.py 配 pkg/test_foo.py
+    會通過前半、卡死後半,而且沒有任何合法解法。
+
+    `lang`(票 152 D4 / D5):`None` 或 `R3_PYTHON` ⇒ Python 既有行為,一個字不變 ——
+    Python 第一條候選(`tests/test_<base>.py`)恆在接受集合內,呼叫端沒傳也一樣。
+    **本函式不再寫死那個樣板**,第一條候選由 `test_candidates()` 給(AC-B12)。
+    Kotlin / Dart ⇒ 接受集合**只來自** `also_accept`,而且紀錄的 `impl_file`
+    必須等於 `impl_rel`(D5):同名測試檔可能對應別支同名實作,不比對就會互相解鎖。
+    Python 紀錄**不比對** `impl_file`(K3:`find_implementation` 取第一個同名檔,
+    立刻要求相等可能誤擋既有 Python repo)。
 
     回 None 表示有合格紀錄;回訊息表示沒有 —— 呼叫端據此擋下。
 
@@ -2154,8 +2162,12 @@ def redlight_missing(base, also_accept=(), impl_rel=None, ticket=None):
     **全程 fail-closed**:紀錄檔不存在、讀不動、格式不對、欄位缺漏,一律當作沒有紀錄。
     讀不到就放行是 F-001 的形狀,在這裡不重演。
     """
-    wanted = {"tests/test_%s.py" % base} | {p.replace("\\", "/") for p in also_accept}
-    want = "tests/test_%s.py" % base
+    python = lang in (None, R3_PYTHON)
+    accept = [p.replace("\\", "/") for p in also_accept]
+    if python:
+        accept = test_candidates(base + ".py", R3_PYTHON)[:1] + accept
+    wanted = set(accept)
+    want = accept[0] if accept else "(無候選測試檔)"
     if not os.path.exists(RUN_LOG):
         return ("找不到紅燈紀錄檔 %s —— 無法證明測試曾經紅過。\n"
                 "     跑一次測試讓紀錄長出來;讀不到紀錄一律不放行。"
@@ -2166,6 +2178,7 @@ def redlight_missing(base, also_accept=(), impl_rel=None, ticket=None):
 
     saw_any = False
     saw_ticket_mismatch = False
+    saw_impl_mismatch = False
     try:
         for line in io.open(RUN_LOG, encoding="utf-8"):
             line = line.strip()
@@ -2182,6 +2195,9 @@ def redlight_missing(base, also_accept=(), impl_rel=None, ticket=None):
             if ticket is not None and rec.get("ticket_id") != ticket:
                 saw_ticket_mismatch = True
                 continue
+            if not python and rec.get("impl_file") != impl_rel:
+                saw_impl_mismatch = True    # D5:別支同名實作的紅燈不算數
+                continue
             if rec["impl_exists"] is False:
                 return None                 # 新檔案:紅燈時實作不存在
             if head is not None and rec.get("impl_hash") == head:
@@ -2193,12 +2209,131 @@ def redlight_missing(base, also_accept=(), impl_rel=None, ticket=None):
         return ("%s 有紅燈紀錄,但沒有一筆屬於當前票 %s。\n"
                 "     舊票的紅燈不解鎖後續修改 —— 每張票要有自己的紅燈。"
                 % (want, ticket))
+    if saw_impl_mismatch:
+        return ("%s 有本票的紅燈紀錄,但紀錄的 impl_file 都不是 %s。\n"
+                "     同名測試檔可能對應別支同名實作 —— 紅燈要對著這一支實作發生才算數。"
+                % (want, impl_rel))
     if saw_any:
         return ("%s 有執行紀錄,但沒有任何一筆是「紅燈,且發生在這次改動之前」。\n"
                 "     合格的形狀:實作當時不存在,或紅燈是對著這支檔案在 HEAD 的\n"
                 "     內容跑出來的。先寫實作再補跑紅燈不算 —— 那是補測試,不是紅綠燈。"
                 % want)
     return ("%s 沒有任何執行紀錄 —— 無法證明它曾經紅過。" % want)
+
+
+# ── 票 152(M1-b)D1 / D3:R3 的語言辨識、配對規則表、測試檔分類 ─────────────
+#
+# **R3 前後兩半只從這裡取資料**:`check()` 的前半(測試檔存在)與
+# `redlight_missing()` 的後半(紅燈紀錄)接受同一組候選,不各自組路徑。
+# 語言只看副檔名;`.kts`(例:`build.gradle.kts`)**不是** `.kt`,屬於「無配對規則語言」
+# (POLICY P1:放行但可見,見 `check()` 與 `mode_pre_commit()`)。
+R3_PYTHON = "python"
+R3_KOTLIN = "kotlin"
+R3_DART = "dart"
+_R3_EXT = ((".py", R3_PYTHON), (".kt", R3_KOTLIN), (".dart", R3_DART))
+
+# trace 標籤(D6 / D7)。字樣一律「未檢查」,**不得**寫成「不適用」「豁免」——
+# Kotlin / Dart 的 R8 是**還沒有實作辨識方法**,不是政策決定它不必檢查。
+TRACE_R8_UNCHECKED = u"R8:未檢查"
+TRACE_R3_UNPAIRED = u"R3:無配對規則語言"
+
+# Dart 的角色段:路徑中**第一個**出現的那一段決定這支檔案的角色。
+_DART_ROLES = ("lib", "test", "integration_test")
+_DART_TEST_ROLES = ("test", "integration_test")
+# Kotlin 的測試來源集:建置系統本身不會把它們打包進產品。
+_KOTLIN_TEST_SETS = (("src", "test"), ("src", "androidTest"))
+_KOTLIN_MAIN = ("src", "main", "kotlin")
+# `[R3/無配對規則]` 訊息裡的「期望形狀」(與 `test_candidates` 的表同義)。
+_R3_SHAPE_HINT = {
+    R3_DART: "<pkg>/lib/<sub>/<stem>.dart → <pkg>/test/<sub>/<stem>_test.dart",
+    R3_KOTLIN: "<module>/src/main/kotlin/<pkg>/<Name>.kt → <module>/src/test/kotlin/<pkg>/<Name>Test.kt",
+}
+
+
+def r3_language(rel_path):
+    """R3 認得的語言(`R3_PYTHON` / `R3_KOTLIN` / `R3_DART`);其他回 None。只看副檔名。"""
+    r = rel_path.replace("\\", "/")
+    for ext, lang in _R3_EXT:
+        if r.endswith(ext):
+            return lang
+    return None
+
+
+def _dart_role(parts):
+    """目錄段中第一個角色段的 (索引, 名稱);沒有回 (None, None)。檔名本身不算。"""
+    for i, seg in enumerate(parts[:-1]):
+        if seg in _DART_ROLES:
+            return i, seg
+    return None, None
+
+
+def _find_segments(parts, seq):
+    """`seq` 在目錄段中第一次連續出現的起點;沒有回 None。檔名本身不算。"""
+    dirs = parts[:-1]
+    n = len(seq)
+    for i in range(len(dirs) - n + 1):
+        if tuple(dirs[i:i + n]) == tuple(seq):
+            return i
+    return None
+
+
+def test_candidates(rel_path, lang):
+    """這支實作可接受的測試檔(repo 根相對 posix 路徑),依語言。
+
+    | 語言 | 實作形狀 | 候選 |
+    |---|---|---|
+    | Python | 任何 `.py` | 既有三條,一個字不改(第一條 `tests/test_<base>.py`) |
+    | Dart | 第一個角色段是 `lib`:`<pkg>/lib/<sub>/<stem>.dart` | `<pkg>/test/<sub>/<stem>_test.dart` |
+    | Kotlin | 含 `src/main/kotlin/`:`<module>/src/main/kotlin/<pkg>/<Name>.kt` | `<module>/src/test/kotlin/<pkg>/<Name>Test.kt` |
+
+    **形狀不符回空清單**(不是 None、不改走其他語言)—— 呼叫端據此以
+    `[R3/無配對規則]` 擋下(D2)。Kotlin / Dart 只有一條候選:鏡像、不接受備援位置,
+    避免同名混淆。
+    """
+    r = rel_path.replace("\\", "/")
+    base = os.path.splitext(posixpath.basename(r))[0]
+    d = posixpath.dirname(r)
+    if lang == R3_PYTHON:
+        return [
+            "tests/test_%s.py" % base,
+            posixpath.join(d, "test_%s.py" % base),
+            posixpath.join("tests", d, "test_%s.py" % base),
+        ]
+    parts = r.split("/")
+    if lang == R3_DART:
+        i, role = _dart_role(parts)
+        if role != "lib":
+            return []
+        return ["/".join(parts[:i] + ["test"] + parts[i + 1:-1] + [base + "_test.dart"])]
+    if lang == R3_KOTLIN:
+        j = _find_segments(parts, _KOTLIN_MAIN)
+        if j is None:
+            return []
+        return ["/".join(parts[:j] + ["src", "test", "kotlin"]
+                         + parts[j + 3:-1] + [base + "Test.kt"])]
+    return []
+
+
+def is_test_path(rel_path):
+    """Kotlin / Dart 的測試檔(D3)。**純路徑判定**,範圍限於建置系統不打包進產品的位置。
+
+    - Dart:`.dart`,而且路徑中**第一個**角色段是 `test` 或 `integration_test`
+      (`lib/test/foo.dart` 的第一個角色段是 `lib` ⇒ 原始碼)。
+    - Kotlin:`.kt`,而且路徑含 `src/test/` 或 `src/androidTest/`
+      (`src/main/kotlin/test/Foo.kt` ⇒ 原始碼)。
+
+    判為測試檔者在 `is_source_path()` 回 False,與 Python `tests/` 處理方式相同
+    (ADR 0004:寫測試不需要先解鎖任何東西)。**不把 `test` 加進 `NON_SOURCE_DIRS`** ——
+    那份只比第一段目錄,範圍過大。
+    """
+    r = rel_path.replace("\\", "/")
+    lang = r3_language(r)
+    parts = r.split("/")
+    if lang == R3_DART:
+        return _dart_role(parts)[1] in _DART_TEST_ROLES
+    if lang == R3_KOTLIN:
+        return any(_find_segments(parts, s) is not None for s in _KOTLIN_TEST_SETS)
+    return False
 
 
 def is_source_path(rel_path):
@@ -2227,7 +2362,8 @@ def is_source_path(rel_path):
     return not (top in NON_SOURCE_DIRS
                 or PROTOTYPE_RE.match(r)
                 or r.endswith(tuple(NON_SOURCE_EXT))
-                or os.path.basename(r) in NON_SOURCE_NAMES)
+                or os.path.basename(r) in NON_SOURCE_NAMES
+                or is_test_path(r))
 
 
 def legacy_no_redlight(path=None, cwd=None):
@@ -2906,19 +3042,30 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
                 "     **不得退回白名單** —— 三次 fail-open 缺陷都源自白名單思維(docs/adr/0003)"
                 % (r, stage, "/".join(sorted(writable)) or "(無)", flow, exemption_hint(r)))
 
-    # R3 對應測試檔須先存在
-    if r.endswith(".py"):
+    # R3 對應測試檔須先存在 —— 依語言分派(票 152 D2)。
+    # 原本是 `if r.endswith(".py"):`,於是 `.kt` / `.dart` 被判成原始碼、過了 R2,
+    # 然後**整段跳過 R3 / R8 落到 `return None`**:不擋、不出聲、trace 也不記。
+    lang = r3_language(r)
+    if lang is None:
+        # POLICY P1(Jeff 2026-10-13):沒有配對規則的語言(`.kts`、`gradlew`、`.sh`…)
+        # **放行,但可見** —— trace 記下,提交輸出列出(`mode_pre_commit`)。
+        # 改成擋會影響所有現有下游,超出 M1-b 的目標句。
+        if trace is not None:
+            trace.append(TRACE_R3_UNPAIRED)
+    else:
         # trace 的語意是「這條規則的職責範圍被進入」,不是「它做出了判決」。
         # 記錄點必須在判定之前 —— 跳過判定就等於跳過記錄,偵測「規則被跳過」的
         # 機制自己會被同一個跳過略過。
         if trace is not None:
             trace.append("R3")
-            trace.append("R8")
+            trace.append("R8" if lang == R3_PYTHON else TRACE_R8_UNCHECKED)
 
         # R8:生產程式碼(非 research/)不得 import research/。
         # 反方向放行(research 可 import 生產資料層),所以只擋生產這一側。
         # **邊界比對**:研究套件是 `research`,不是 `research_utils`(F-051,在 imports_research 裡)。
-        if not _under_research(r):
+        # **只對 Python**(POLICY P2):Kotlin / Dart 尚未提供檢查,trace 記「R8:未檢查」——
+        # 原樣套 Python 語法樹會把每一支 .kt / .dart 都判成解析失敗而全擋。
+        if lang == R3_PYTHON and not _under_research(r):
             # 判定對象是**套用編輯後的整檔結果**,不是編輯片段(票 07 / F-046)。
             #
             # content 為 None = 呼叫端算不出結果。**而那有兩種,對象不同**
@@ -3031,11 +3178,10 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
         if at_commit and logged_exemption_backed(r, base):
             return None
 
-        cands = [
-            os.path.join(ROOT, "tests", "test_%s.py" % base),
-            os.path.join(ROOT, os.path.dirname(r), "test_%s.py" % base),
-            os.path.join(ROOT, "tests", os.path.dirname(r), "test_%s.py" % base),
-        ]
+        # 候選只有一個來源(票 152 D1):`test_candidates()`,repo 根相對 posix 路徑。
+        # Python 那三條在函式裡一個字不改;前半看存在、後半當接受集合,兩半同一組。
+        cands = test_candidates(r, lang)
+        cand_files = [os.path.join(ROOT, *c.split("/")) for c in cands]
         # R3 的另一半:紅燈紀錄。豁免的是**列在凍結清單裡的既有檔案**,
         # 不是「檔案已存在」—— 後者 agent 自己造得出來(建個空檔就進豁免集合),
         # 等於規則自帶開關。清單的入場券是「在機制上線 commit 的樹裡」,偽造不了。
@@ -3095,26 +3241,38 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
         # **沿用上面那一次讀取的結果**(票 133 批二 #10)——
         # 原本這裡是第二次 `legacy_no_redlight(path=LEGACY_LIST)`,
         # 而**兩次讀取之間來源可以不一致**;共用一個結果,那個狀態就構造不出來。
-        if not legacy_ok and any(os.path.exists(c) for c in cands):
+        # 票 152 D2:支援語言但**形狀不符**(`src/main/java/X.kt`、`bin/tool.dart`)。
+        # 走完既有豁免鏈仍沒有出口 ⇒ 擋。**不落入 P1** —— 它已被認定為支援語言,
+        # 放行它等於讓「放錯目錄」變成繞過 R3 的方法。
+        if not cands:
+            return with_stage_def_source(
+                "[R3/無配對規則] %s:%s 檔的位置不符合配對規則,找不到對應的測試檔位置。\n"
+                "     期望的形狀:%s\n"
+                "     若這支檔案確定不測:在本票宣告「%s %s」(票要先 commit),\n"
+                "     那是合法出口;不要把檔案搬去規則看不到的地方。票號:%s"
+                % (r, lang, _R3_SHAPE_HINT.get(lang, "(無)"),
+                   _UNTESTED_PREFIX, base, ticket or "未設定"),
+                at_commit)
+
+        if not legacy_ok and any(os.path.exists(c) for c in cand_files):
             # 後半接受的位置必須與前半的 cands 完全相同,否則會出現通過前半、
             # 卡死後半、且無合法解法的死路。
-            why = redlight_missing(base, [os.path.relpath(c, ROOT).replace(os.sep, "/")
-                                          for c in cands],
-                                   impl_rel=r, ticket=ticket)
+            why = redlight_missing(base, cands, impl_rel=r, ticket=ticket, lang=lang)
             if why:
                 return ("[R3/紅燈] %s:測試檔存在,但沒有合格的紅燈紀錄。\n"
                         "     %s\n"
                         "     先跑測試確認它在實作不存在時是紅的,再回來寫功能碼。" % (r, why))
 
-        if not any(os.path.exists(c) for c in cands):
+        if not any(os.path.exists(c) for c in cand_files):
             # 提交時點附來源提示:這一格會不會擋,取決於 `exempts_r3_in_scope`,
             # 而那個欄位**這次是從 index 讀的** —— 人要知道自己在看哪一份定義。
+            # 訊息列**候選第一條**,不寫死 Python 樣板(Python 的第一條就是原本那個字串)。
             return with_stage_def_source(
-                "[R3] %s:找不到對應測試(tests/test_%s.py),不可先寫功能碼。\n"
+                "[R3] %s:找不到對應測試(%s),不可先寫功能碼。\n"
                 "     請先寫測試、執行它、確認紅燈,再回來寫功能碼。票號:%s\n"
                 "     若這不是原始碼(誤擋):把它的目錄加進 %s;\n"
                 "     **不得退回白名單**(docs/adr/0003)"
-                % (r, base, ticket or "未設定", exemption_hint(r)),
+                % (r, cands[0], ticket or "未設定", exemption_hint(r)),
                 at_commit)
     return None
 
@@ -4145,6 +4303,22 @@ def check_extension_integrity(staged_names=None):
     return res
 
 
+def incomplete_check_note(incomplete):
+    """提交輸出最後那一段:本次 staged 裡**未完整檢查**的檔案(票 152 D7)。
+
+    `incomplete` 是 `[(路徑, [trace 標籤…])]`。空 ⇒ 回空字串(什麼都不印)。
+    **只提示,不改變擋或放的結果** —— 呼叫端在決定 rc 之後才印它。
+    要它存在的理由:「放行但沒檢查完」與「檢查完而放行」在 rc 上長得一樣,
+    不印出來的話,前者就是一個靜默的缺口(P1 / P2 的「可見」就是指這一段)。
+    """
+    if not incomplete:
+        return ""
+    lines = [u"\n[六站閘門/pre-commit] 以下檔案未完整檢查(只提示,不影響本次結果):\n"]
+    for path, marks in incomplete:
+        lines.append(u"  %s —— %s\n" % (path, u"、".join(marks)))
+    return u"".join(lines)
+
+
 def mode_pre_commit():
     """權威判定:掃 staged 檔案 + R4 副本一致性 + R5 第三軸掛載點。"""
     # **票 89:放在最前面,而且刻意不進 `violations`。**
@@ -4179,9 +4353,14 @@ def mode_pre_commit():
         _err(u"[R10/policy-only] policy-only commit（policy_source=index）：staged 候選 policy 對現場成立"
              u"（DECLARED_OK；runtime 仍 UNPROVEN）。這是候選驗證，不是 HEAD 已生效的 policy。\n")
     violations = list(ext["violations"])
+    incomplete = []      # 票 152 D7:未完整檢查的檔案 —— 只提示,不改變擋或放
     for f in staged:
         used = []
-        m = check(f, None, at_commit=True, exemptions=used)
+        seen = []
+        m = check(f, None, at_commit=True, trace=seen, exemptions=used)
+        marks = [t for t in seen if t in (TRACE_R8_UNCHECKED, TRACE_R3_UNPAIRED)]
+        if marks:
+            incomplete.append((f.replace("\\", "/"), marks))
         # 提交時 content 未知(檔案已經寫進去了),所以 changes_bytes 記 None ——
         # 「不知道有沒有變」不得寫成「確定沒變」。
         log_exemptions(used, verdict=m, at_commit=True, content=None,
@@ -4200,6 +4379,7 @@ def mode_pre_commit():
                 log_shadow(v, at_commit=True)
             _err("[六站閘門/影子] %d 項本該擋下,已寫進 %s(影子模式:不擋)。\n"
                  % (len(violations), rel(SHADOW_LOG)))
+            _err(incomplete_check_note(incomplete))
             return 0
         _err("\n[六站閘門/pre-commit] commit 已擋下,%d 項違規:\n\n" % len(violations))
         for v in violations:
@@ -4219,7 +4399,9 @@ def mode_pre_commit():
         #
         # 真的需要逃生門的話,它要有**真的會留痕**的機制,而不是一句宣稱。
         _err("\n上面每一項都指出了是哪一個前提沒滿足 —— 修掉它們再提交。\n")
+        _err(incomplete_check_note(incomplete))
         return 1
+    _err(incomplete_check_note(incomplete))
     return 0
 
 
