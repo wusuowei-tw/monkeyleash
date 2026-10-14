@@ -2241,7 +2241,9 @@ TRACE_R3_UNPAIRED = u"R3:無配對規則語言"
 _DART_ROLES = ("lib", "test", "integration_test")
 _DART_TEST_ROLES = ("test", "integration_test")
 # Kotlin 的測試來源集:建置系統本身不會把它們打包進產品。
-_KOTLIN_TEST_SETS = (("src", "test"), ("src", "androidTest"))
+# 比的是**第一個** `src` 段後面緊接的那一段(規格 v2 D3)—— 不是「任何位置的 `src/test`」:
+# 主來源集內部的 `src/main/kotlin/x/src/test/Foo.kt` 會進產品(獨立審查 F1)。
+_KOTLIN_TEST_SETS = ("test", "androidTest")
 _KOTLIN_MAIN = ("src", "main", "kotlin")
 # `[R3/無配對規則]` 訊息裡的「期望形狀」(與 `test_candidates` 的表同義)。
 _R3_SHAPE_HINT = {
@@ -2319,8 +2321,9 @@ def is_test_path(rel_path):
 
     - Dart:`.dart`,而且路徑中**第一個**角色段是 `test` 或 `integration_test`
       (`lib/test/foo.dart` 的第一個角色段是 `lib` ⇒ 原始碼)。
-    - Kotlin:`.kt`,而且路徑含 `src/test/` 或 `src/androidTest/`
-      (`src/main/kotlin/test/Foo.kt` ⇒ 原始碼)。
+    - Kotlin:`.kt`,而且目錄段中**第一個** `src` 後面緊接的那一段是 `test` 或 `androidTest`
+      (`src/main/kotlin/test/Foo.kt` ⇒ 原始碼;`app/src/main/kotlin/x/src/test/Foo.kt`
+      的第一個 `src/<來源集>` 是 `src/main` ⇒ 原始碼 —— 與 Dart「第一個角色段」同一個做法)。
 
     判為測試檔者在 `is_source_path()` 回 False,與 Python `tests/` 處理方式相同
     (ADR 0004:寫測試不需要先解鎖任何東西)。**不把 `test` 加進 `NON_SOURCE_DIRS`** ——
@@ -2332,7 +2335,11 @@ def is_test_path(rel_path):
     if lang == R3_DART:
         return _dart_role(parts)[1] in _DART_TEST_ROLES
     if lang == R3_KOTLIN:
-        return any(_find_segments(parts, s) is not None for s in _KOTLIN_TEST_SETS)
+        dirs = parts[:-1]
+        if "src" not in dirs:
+            return False
+        i = dirs.index("src")
+        return i + 1 < len(dirs) and dirs[i + 1] in _KOTLIN_TEST_SETS
     return False
 
 
