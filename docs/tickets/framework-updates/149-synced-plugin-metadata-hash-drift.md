@@ -321,6 +321,7 @@
    - `id`:字串,以 `marketplace_` 開頭;sha256(解析後字串的 UTF-8 bytes)等於 Jeff 核准值 `41e3e4753c1d07398036cde9eb538cfda495c2a6deccd5899dc38458141a1e70`。
    - `etag`(允許變動):長度 1–128;只含可列印 ASCII;不含空白與控制字元。
    - `updated_at`(允許變動):完全符合 `YYYY-MM-DDTHH:MM:SS.ffffffZ`(小數 6 位、Z 結尾),且日期時間真實存在。
+      - **票 153 更正（2026-10-14，提交 `2344bb6`）**：本條「小數 6 位」已放寬為「小數秒可省略；若有，1–6 位 ASCII 數字」（票 153 P1=A）；其餘條件不變，契約名稱仍為 `synced-marketplaces-v1`（P2=A）。見 `153-synced-marketplaces-updated-at-fraction-digits.md`。
 4. **`.last-complete-round`**
    - 一般檔,剛好 37 bytes,ASCII。
    - 前 36 字元為全小寫 UUID;版本位 `4`;variant 位屬於 `8`/`9`/`a`/`b`。
@@ -356,6 +357,7 @@
    5. 型別錯誤 ⇒ 擋:`parserVersion` 為 `true` 或 `"1002"`、`rows` 為物件、`rows[0]` 為陣列、`source` 為字串、`source.source` 不是字串、`name` 為數字、`id` 不是字串。
    6. `id`:沒有 `marketplace_` 前綴、hash 不等於核准值 ⇒ 擋;含跳脫字元的 `id` 以解析後的值算 hash,不符即擋。
    7. `etag` 違反長度 1–128,或含空白、控制字元、非 ASCII ⇒ 擋;`updated_at` 不符合精確格式或日期不存在 ⇒ 擋。
+      - **票 153 更正（2026-10-14）**：「精確格式」依上方第 3 節 `updated_at` 的更正；對應測試見 `tests/test_redlight.py::TestTicket153UpdatedAtFraction`，原 `test_item07_format_blocks[updated_at-5digits]` 一格已移除（Jeff 核准）。
    8. `rows` 為 0 筆或 2 筆 ⇒ 擋。
    9. 不是 UTF-8、不是 JSON、頂層不是物件 ⇒ 擋。
    10. 實際讀到的大小超過上限(包括開檔前看起來小、讀的時候變大)⇒ 擋。
