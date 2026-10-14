@@ -1434,7 +1434,8 @@ def _inventory_check(doc):
 
 # ── 票 149 A1:synced 兩個 metadata 檔的內容契約(契約 v3 第 2–4 節)──────────────────
 
-_CONTRACT_UPDATED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z", re.ASCII)
+# 票 153(P1=A):小數秒可省略;若有,1–6 位 ASCII 數字(原為正好 6 位)。其餘格式條件不變。
+_CONTRACT_UPDATED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z", re.ASCII)
 _CONTRACT_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
                             re.ASCII)
 _CONTRACT_MJ_FIXED = (("name", "anthropic-plugin-directory"), ("display_name", "Anthropic Directory"),
@@ -1544,10 +1545,12 @@ def _contract_read(path, cap, lstat, fstat):
 
 
 def _contract_timestamp_ok(text):
+    """票 153:格式先過 `_CONTRACT_UPDATED_AT`,再依有無小數秒選 strptime 格式,確認日期時間真實存在。"""
     if _CONTRACT_UPDATED_AT.fullmatch(text) is None:
         return False
+    fmt = "%Y-%m-%dT%H:%M:%S.%fZ" if "." in text else "%Y-%m-%dT%H:%M:%SZ"
     try:
-        datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%fZ")
+        datetime.strptime(text, fmt)
     except ValueError:
         return False
     return True

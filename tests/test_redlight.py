@@ -4730,3 +4730,71 @@ class TestTicket151SkillsLastRound:
         res = _t151_check(tmp_path, _t151_bytes(b"zz;x"))
         assert res == {"category": "contract_format", "field": "tail"}, res
         assert set(res) == {"category", "field"}, res
+
+
+# ── 票 153 第三站紅燈:synced-marketplaces-v1 的 `updated_at` 小數秒位數放寬 ───────────────
+# 規格:票 153 v1(P1=A:小數秒可省略,有就 1–6 位;其餘格式條件不變)。
+# 走與票 149 段相同的公開路徑(`synced_contract_check` 經 `_t149_api` 取得);資料全部合成,只改 `updated_at`。
+
+_T153_DT = "2026-10-14T12:20:14"
+_T153_AC2 = [(".1Z", "1digit"), (".12Z", "2digits"), (".123Z", "3digits"), (".1234Z", "4digits")]
+_T153_AC4 = [(_T153_DT + ".931090Z", "6digits"), (_T153_DT + ".000001Z", "6digits-000001")]
+_T153_AC5 = [
+    (_T153_DT + ".1234567Z", "7digits"),
+    (_T153_DT + ".Z", "dot-no-digits"),
+    (_T153_DT + ".93109", "no-Z"),
+    (_T153_DT + ".93109+00:00", "offset"),
+    ("2026-10-14t12:20:14.93109Z", "lower-t"),
+    (_T153_DT + ".93109z", "lower-z"),
+    ("2026-02-30T12:20:14.93109Z", "feb30-fraction"),
+    ("2026-02-30T12:20:14Z", "feb30-no-fraction"),
+    (_T153_DT + ".９３１０９Z", "fullwidth-fraction"),
+    ("２０２６-10-14T12:20:14Z", "fullwidth-year"),
+]
+
+
+def _t153_check(tmp_path, updated_at):
+    doc = json.loads(_T149_DATA[_T149_MJ].decode("utf-8"))
+    doc["rows"][0]["updated_at"] = updated_at
+    p = tmp_path / "f" / _T149_FNAME[_T149_MJ]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(json.dumps(doc).encode("utf-8"))
+    fn = _t149_api("synced_contract_check")
+    return fn(_T149_MJ, str(p), dict(_T149_PINS[_T149_MJ]))
+
+
+class TestTicket153UpdatedAtFraction:
+    """票 153 第三站紅燈。AC1–AC3 必須先紅(共 6 個 node);AC4–AC6 守住既有行為。"""
+
+    def test_t153_ac1_five_digits_passes(self, tmp_path):
+        """AC1(必須先紅):實際觀測值 5 位小數 `2026-10-14T12:20:14.93109Z` ⇒ 放行。"""
+        res = _t153_check(tmp_path, _T153_DT + ".93109Z")
+        assert res is None, res
+
+    @pytest.mark.parametrize("suffix", [c[0] for c in _T153_AC2], ids=[c[1] for c in _T153_AC2])
+    def test_t153_ac2_one_to_four_digits_passes(self, tmp_path, suffix):
+        """AC2(必須先紅):1、2、3、4 位小數 ⇒ 放行。"""
+        res = _t153_check(tmp_path, _T153_DT + suffix)
+        assert res is None, res
+
+    def test_t153_ac3_no_fraction_passes(self, tmp_path):
+        """AC3(必須先紅):沒有小數 `2026-10-14T12:20:14Z` ⇒ 放行。"""
+        res = _t153_check(tmp_path, _T153_DT + "Z")
+        assert res is None, res
+
+    @pytest.mark.parametrize("value", [c[0] for c in _T153_AC4], ids=[c[1] for c in _T153_AC4])
+    def test_t153_ac4_six_digits_passes(self, tmp_path, value):
+        """AC4(守住):6 位小數(含 `.000001`)⇒ 放行。"""
+        res = _t153_check(tmp_path, value)
+        assert res is None, res
+
+    @pytest.mark.parametrize("value", [c[0] for c in _T153_AC5], ids=[c[1] for c in _T153_AC5])
+    def test_t153_ac5_bad_format_blocks(self, tmp_path, value):
+        """AC5(守住):7 位以上、`.Z`、無 Z、`+00:00`、小寫 t/z、2 月 30 日(有無小數)、全形數字 ⇒ contract_format。"""
+        res = _t153_check(tmp_path, value)
+        assert res == {"category": "contract_format", "field": "rows[0].updated_at"}, res
+
+    def test_t153_ac6_non_string_blocks(self, tmp_path):
+        """AC6(守住):非字串(整數)⇒ contract_type。"""
+        res = _t153_check(tmp_path, 20261014122014)
+        assert res == {"category": "contract_type", "field": "rows[0].updated_at"}, res
