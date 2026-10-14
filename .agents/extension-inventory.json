@@ -395,7 +395,7 @@
     },
     {
       "path": "skills/<bucket>/google-workspace/SKILL.md",
-      "sha256": "bb860cdb59a328a9ed37314e4f5038681f2c2b880112014aceb7b4d110de18b8",
+      "sha256": "073e4f759b4aa054be72a4f5bb9d8f51d3df3f8e02149605cf5c5dad3412bc83",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -405,12 +405,12 @@
     },
     {
       "path": "skills/<bucket>/google-workspace/references/docs.md",
-      "sha256": "a24742b34557fe6b6afad80a137db0eca34b3461bf6eb444786c84e60335f6d4",
+      "sha256": "1a0bc6a8cbd98590aaaf2afe295d7332b0019717e7aefb85234675059d2a5554",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/google-workspace/references/sheets.md",
-      "sha256": "1fbfc448a95aa988372d5cae85a318e06f16c5ff19b4cba5128201af07d5e987",
+      "sha256": "d29f5223f3cf5e1aed270df55d4ba750d92c587e56b5f10f6755e9afdc536de8",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -445,7 +445,7 @@
     },
     {
       "path": "skills/<bucket>/manifest.json",
-      "sha256": "242facb747086153b6ba80cf938e15d524a5d5de58533ce7e39b821f91d00860",
+      "sha256": "4d60451e560b938fbbce1ab4a55051f390950a6fd25905dd65c448b237a8f688",
       "note": "Jeff 核准 2026-10-08 第六次"
     },
     {
