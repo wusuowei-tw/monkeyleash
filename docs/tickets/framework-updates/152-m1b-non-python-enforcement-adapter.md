@@ -5,9 +5,9 @@
 **優先度**：高（Jeff 2026-10-13）。
 **立案**：2026-10-13（美東）。票號 152 由 Jeff 2026-10-13 指定（立案前確認 `docs/tickets/framework-updates/` 內無 152 開頭的檔案）。
 **性質**：甲路線 M1-b 的正式實作票。
-**規格**：`C:\specs\lifeapp\M1-B-NONPYTHON-ADAPTER-SPEC-v1.md`（sha256 `d2bcd59e…73bd`，2026-10-13 存檔）。本票不重述規格；以「規格 §x／D-x／E-x／AC-Bxx」引用。第二輪起依 v2（`…-SPEC-v2.md`，sha256 `922c1adf…8382`）；v3（`…-SPEC-v3.md`，sha256 `af735dbd…cf3f`，2026-10-14 存檔）只新增已知限制 K10、K11，要求與驗收條件與 v2 相同。
+**規格**：`<path>\M1-B-NONPYTHON-ADAPTER-SPEC-v1.md`（sha256 `d2bcd59e…73bd`，2026-10-13 存檔）。本票不重述規格；以「規格 §x／D-x／E-x／AC-Bxx」引用。第二輪起依 v2（`…-SPEC-v2.md`，sha256 `922c1adf…8382`）；v3（`…-SPEC-v3.md`，sha256 `af735dbd…cf3f`，2026-10-14 存檔）只新增已知限制 K10、K11，要求與驗收條件與 v2 相同。
 **政策裁定**：P1～P5 已由 Jeff 2026-10-13 約 18:20（美東）裁定，全部採規格方案（規格 §8）。
-**交叉引用**：〔R0〕`.dev/reports/2026-10-13T190722Z-m1b-r0-recon.md`；〔R-M1〕`C:\specs\lifeapp\RECON-NONPYTHON-SIX-STATION-M1.md` §一 M1-b、§四～§七；票 145（M1-a，不得與本票合併，〔R-M1〕§五）。
+**交叉引用**：〔R0〕`.dev/reports/2026-10-13T190722Z-m1b-r0-recon.md`；〔R-M1〕`<path>\RECON-NONPYTHON-SIX-STATION-M1.md` §一 M1-b、§四～§七；票 145（M1-a，不得與本票合併，〔R-M1〕§五）。
 
 ---
 
@@ -111,7 +111,7 @@
 
 ### 4.5 批一第二輪（獨立審查回饋，2026-10-13）
 
-依據：獨立審查 `.dev/reports/2026-10-14T002207Z-ticket152-s5-1-independent-review.md`（有條件通過、阻擋 0）；規格 `C:\specs\lifeapp\M1-B-NONPYTHON-ADAPTER-SPEC-v2.md`（sha256 `922c1adf…8382`）。
+依據：獨立審查 `.dev/reports/2026-10-14T002207Z-ticket152-s5-1-independent-review.md`（有條件通過、阻擋 0）；規格 `<path>\M1-B-NONPYTHON-ADAPTER-SPEC-v2.md`（sha256 `922c1adf…8382`）。
 Jeff 2026-10-13 約 20:45（美東）裁定（裁決助手記錄，非逐字原話）：F1 選 B（批一內收緊 Kotlin 測試檔判定）；Dart `bin/test/`、`tool/test/` 記為 K9；F2／F4 併入本輪補測試（只新增、不改既有斷言）。F3 的路徑格式要求屬批二（規格 v2 E1），不在本輪實作。
 
 **新增測試對照表**（類別：必須先紅＝現行 `8ce93a9` 上必須失敗；補強覆蓋＝現行可以原本就通過，不刻意製造紅燈）
