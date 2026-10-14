@@ -1,6 +1,6 @@
 # 票 152 —— M1-b：Kotlin／Dart 原始碼真正進入 R3，配對不再依賴 Python 樣板
 
-**狀態**：~~**立案；批一紅燈站（Station 3）進行中；Station 4 未開始。**~~ ~~**批一紅燈已驗收（Jeff 2026-10-13）；Station 4a 實作進行中。**~~ **批一實作已在本機提交；待 Station 5 審查。**
+**狀態**：~~**立案；批一紅燈站（Station 3）進行中；Station 4 未開始。**~~ ~~**批一紅燈已驗收（Jeff 2026-10-13）；Station 4a 實作進行中。**~~ ~~**批一實作已在本機提交；待 Station 5 審查。**~~ ~~**批一獨立審查有條件通過（F1 選 B）；第二輪紅燈站（Station 3b）進行中。**~~ **第二輪紅燈已驗收（Jeff 2026-10-13）；Station 4d 實作進行中。**
 **時鐘**：App 第一支 Kotlin／Dart 程式要在閘門下開工前 —— 屆時 `.kt`／`.dart` 仍會靜默放行，裝上去全綠而綠是假的。（Jeff 2026-10-13 選定事件型時鐘）
 **優先度**：高（Jeff 2026-10-13）。
 **立案**：2026-10-13（美東）。票號 152 由 Jeff 2026-10-13 指定（立案前確認 `docs/tickets/framework-updates/` 內無 152 開頭的檔案）。
@@ -107,6 +107,41 @@
 - 「必須先紅」的各條轉綠；「守住既有行為」的各條維持綠。
 - 4.3 的回歸比較通過。
 - 獨立審查（Station 5）通過。
+
+### 4.5 批一第二輪（獨立審查回饋，2026-10-13）
+
+依據：獨立審查 `.dev/reports/2026-10-14T002207Z-ticket152-s5-1-independent-review.md`（有條件通過、阻擋 0）；規格 `C:\specs\lifeapp\M1-B-NONPYTHON-ADAPTER-SPEC-v2.md`（sha256 `922c1adf…8382`）。
+Jeff 2026-10-13 約 20:45（美東）裁定（裁決助手記錄，非逐字原話）：F1 選 B（批一內收緊 Kotlin 測試檔判定）；Dart `bin/test/`、`tool/test/` 記為 K9；F2／F4 併入本輪補測試（只新增、不改既有斷言）。F3 的路徑格式要求屬批二（規格 v2 E1），不在本輪實作。
+
+**新增測試對照表**（類別：必須先紅＝現行 `8ce93a9` 上必須失敗；補強覆蓋＝現行可以原本就通過，不刻意製造紅燈）
+
+| 編號 | 來源 | 預期行為 | 類別 | 測試（`tests/test_gate.py::TestTicket152Round2::` 底下） |
+|---|---|---|---|---|
+| R2-1 | F1／AC-B7c | `app/src/main/kotlin/x/src/test/Foo.kt`、`app/src/main/kotlin/src/androidTest/Foo.kt` 判為原始碼（`is_source_path` 為 True） | 必須先紅 | `test_ac_b7c_src_test_inside_main_source_set_is_source[…]`（兩格） |
+| R2-2 | F1／AC-B7c | 同上兩個路徑，在 `tickets` 站寫入被 `[R2]` 擋下 | 必須先紅 | `test_ac_b7c_src_test_inside_main_source_set_is_held_by_r2[…]`（兩格） |
+| R2-3 | F1／AC-B7c 對照 | `app/src/test/kotlin/x/FooTest.kt`、`app/src/androidTest/kotlin/x/FooTest.kt` 仍判為測試檔 | 補強覆蓋 | `test_ac_b7c_control_real_test_source_sets_stay_tests[…]`（兩格） |
+| R2-4 | F2（AC-B4） | 紀錄 `impl_file` 是別支實作時，擋下訊息是 D5 的專屬訊息（含「impl_file 都不是」與正在判的路徑） | 補強覆蓋 | `test_f2_ac_b4_block_message_is_the_d5_impl_file_message` |
+| R2-5 | F2（AC-B10） | pre-commit 提示段中，該 `.kt` 檔那一行含「R8:未檢查」字樣，且整段輸出不含「不適用」「豁免」 | 補強覆蓋 | `test_f2_ac_b10_pre_commit_note_says_r8_unchecked` |
+| R2-6 | F2（AC-B12） | `gate.py` 中 `test_%s.py` 樣板的出現次數，等於它在 `test_candidates` 函式原始碼內的出現次數（都是 3） | 補強覆蓋 | `test_f2_ac_b12_template_occurrences_are_all_inside_test_candidates` |
+| R2-7 | F2（AC-B13） | `build.gradle.kts` 出現在 pre-commit 輸出的**提示段之後**（不是出現在其他訊息裡） | 補強覆蓋 | `test_f2_ac_b13_unpaired_file_is_listed_inside_the_note_section` |
+| R2-8 | F4（D7 擋下出口） | 有違規時 rc 仍為 1；提示段出現在違規訊息之後 | 補強覆蓋 | `test_f4_d7_block_exit_keeps_rc_and_appends_note` |
+| R2-9 | F4（D7 影子出口） | 影子模式 rc 為 0、影子紀錄一筆；提示段出現在影子訊息之後 | 補強覆蓋 | `test_f4_d7_shadow_exit_keeps_rc_and_appends_note` |
+| R2-10 | F4（D3） | `integration_test/a_test.dart`、`app/src/androidTest/kotlin/x/FooTest.kt` 不是原始碼 | 補強覆蓋 | `test_f4_d3_integration_test_and_android_test_are_tests[…]`（兩格） |
+| R2-11 | F4（AC-B3 另一語言） | Kotlin 實作有合格紅燈時放行，且 trace 含 `R3` | 補強覆蓋 | `test_f4_ac_b3_kotlin_impl_with_a_qualifying_red_passes_through_r3` |
+| R2-12 | F4（AC-B6 另一語言） | 既有 `.dart` 被修改、紀錄 `impl_hash` ≠ HEAD 內容 ⇒ 擋 | 補強覆蓋 | `test_f4_ac_b6_existing_dart_with_a_red_not_against_head_is_blocked` |
+| R2-13 | F4（AC-B5 另一語言） | Kotlin 紀錄屬別張票 ⇒ 擋，訊息含當前票號 | 補強覆蓋 | `test_f4_ac_b5_kotlin_red_from_another_ticket_is_blocked` |
+| R2-14 | F4（AC-B9 另一語言） | 非前置站提交，staged 一支無測試的 `lib/foo.dart` ⇒ pre-commit 擋 | 補強覆蓋 | `test_f4_ac_b9_pre_commit_blocks_an_untested_dart_file` |
+| R2-15 | F4（D5 路徑格式） | 紀錄 `impl_file` 為 `lib\foo.dart` 或 `./lib/foo.dart` 時不算合格（fail-closed） | 補強覆蓋 | `test_f4_d5_non_posix_impl_file_is_not_qualifying[…]`（兩格） |
+
+測試名稱可在紅燈站微調，但報告必須逐條對回本表編號。
+
+**計數**：15 是情境組數，不是 pytest 測試數。依本表設計，R2-1、R2-2、R2-3、R2-10、R2-15 五組各參數化兩例，其餘十組各一例，預期新增 **20 個 nodeid**：必須先紅 **4** 個（R2-1、R2-2 各兩例）、補強覆蓋 **16** 個。紅燈站以實際收集清單核對；與預期不同時照實列出差異與原因。
+
+**複審範圍**（本輪實作後的 Station 5）：
+
+1. 聚焦：D3 的 Kotlin 條件改動、R2-1～R2-15。
+2. 仍須核對：D1～D7 全部回歸（批一 39 條＋本輪新增全部通過）、全套 nodeid 逐條比對、完整改動清單（`git diff --stat` 與 `gate.py` diff 只限 D3 Kotlin 分支；其他函式若有變動須逐處說明）。
+3. 不在範圍：批二、階段 3、K9。
 
 ---
 

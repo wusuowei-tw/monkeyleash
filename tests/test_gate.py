@@ -7873,3 +7873,195 @@ class TestTicket152PythonUnchanged:
         _t152_log(root, _t152_red("tests/test_thing.py", "pkg/thing.py", ticket_id="151"))
         msg, _trace, _used = _t152_check(root, "pkg/thing.py", u"x = 1\n")
         assert msg is not None and "[R3/紅燈]" in msg, msg
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#
+# **票 152 批一第二輪紅燈站(Station 3b):本批只有測試,`gate.py` 一個字沒動。**
+# 編號 R2-1～R2-15 依票面 §4.5 的新增測試對照表;來源是獨立審查
+# `.dev/reports/2026-10-14T002207Z-ticket152-s5-1-independent-review.md` 的 F1 / F2 / F4。
+# 類別:必須先紅(現行 `8ce93a9` 上必須失敗)/ 補強覆蓋(可以原本就通過,不刻意製造紅燈)。
+#
+# 寫法約束同 Station 3a:只透過既有公開行為斷言;一律在 tmp git repo 裡跑;
+# 紅燈紀錄一律是合成紀錄;不讀寫真實 `.dev/`(票 18)。既有 `_t152_*` 輔助一個字不動。
+
+_T152R2_NOTE = u"以下檔案未完整檢查"
+_T152R2_IN_MAIN = ["app/src/main/kotlin/x/src/test/Foo.kt",
+                   "app/src/main/kotlin/src/androidTest/Foo.kt"]
+
+
+def _t152r2_pre_commit(root, monkeypatch, capsys, staged, shadow=False):
+    """同 `_t152_pre_commit`,另外:帳本 / 影子日誌路徑指進 tmp repo,`log_shadow` 換成收集器,
+    可開影子模式。回 (rc, stderr, 影子紀錄串列)。"""
+    _install_stage_defs(root)
+    for rel_path in staged:
+        _t152_git(root, "add", "-f", "--", rel_path)
+    _d_silence_the_neighbours(monkeypatch, root)
+    monkeypatch.setattr(gate, "check_legacy_list", lambda path=None, cwd=None: [])
+    monkeypatch.setattr(gate, "EXEMPTION_LOG", str(root / ".dev" / "gate-exemptions.jsonl"))
+    monkeypatch.setattr(gate, "SHADOW_LOG", str(root / ".dev" / "shadow-log.jsonl"))
+    shadow_logged = []
+    monkeypatch.setattr(gate, "log_shadow",
+                        lambda msg, at_commit=False, command=None: shadow_logged.append(msg))
+    monkeypatch.setattr(gate, "shadow_active", lambda *a, **k: shadow)
+    capsys.readouterr()
+    rc = gate.mode_pre_commit()
+    return rc, capsys.readouterr().err, shadow_logged
+
+
+class TestTicket152Round2:
+    """票 152 批一第二輪(票面 §4.5)。每條 docstring:編號 / 來源 / 類別 / 預期現行結果。"""
+
+    # ── R2-1～R2-3:F1 / AC-B7c —— 主來源集內部的 src/test 段不是測試來源集 ──
+
+    @pytest.mark.parametrize("path", _T152R2_IN_MAIN)
+    def test_ac_b7c_src_test_inside_main_source_set_is_source(self, path):
+        """R2-1|F1／AC-B7c|必須先紅|現行:`is_source_path` 回 False(`src/test` 任意位置都命中)。
+        要求:主來源集 `src/main/kotlin/` 內部的 `src/test`、`src/androidTest` 段 ⇒ 原始碼(True)。"""
+        assert gate.is_source_path(path) is True, u"R2-1:%s 被當成測試檔,脫離 R2/R3" % path
+
+    @pytest.mark.parametrize("path", _T152R2_IN_MAIN)
+    def test_ac_b7c_src_test_inside_main_source_set_is_held_by_r2(self, tmp_path, monkeypatch, path):
+        """R2-2|F1／AC-B7c|必須先紅|現行:`tickets` 站寫入放行(`check()` 回 None,trace 空)。
+        要求:`tickets` 站寫入 ⇒ `[R2]` 擋下。"""
+        root = _t152_repo(tmp_path, monkeypatch, stage="tickets")
+        msg, trace, _used = _t152_check(root, path, u"class Foo\n")
+        assert msg is not None and "[R2]" in msg, u"R2-2:%s 在 tickets 站沒被 R2 擋(trace=%r):%s" % (
+            path, trace, msg)
+
+    @pytest.mark.parametrize("path", ["app/src/test/kotlin/x/FooTest.kt",
+                                      "app/src/androidTest/kotlin/x/FooTest.kt"])
+    def test_ac_b7c_control_real_test_source_sets_stay_tests(self, path):
+        """R2-3|F1／AC-B7c 對照|補強覆蓋|現行:False。要求:真正的測試來源集仍判為測試檔(False)。"""
+        assert gate.is_source_path(path) is False, u"R2-3:%s 被當成原始碼" % path
+
+    # ── R2-4～R2-7:F2 —— 收緊批一斷言(只新增,不改既有) ─────────────────
+
+    def test_f2_ac_b4_block_message_is_the_d5_impl_file_message(self, tmp_path, monkeypatch):
+        """R2-4|F2(AC-B4)|補強覆蓋|現行:擋下訊息是 D5 專屬訊息。
+        要求:紀錄 `impl_file` 是別支實作 ⇒ 訊息含「impl_file 都不是」與正在判的路徑。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        _t152_write(root, _T152_DART_TEST, u"void main() {}\n")
+        _t152_log(root, _t152_red(_T152_DART_TEST, "packages/other/lib/foo.dart"))
+        msg, _trace, _used = _t152_check(root, _T152_DART_IMPL, u"int foo() => 1;\n")
+        assert msg is not None, u"R2-4:別支實作的紅燈解鎖了 %s" % _T152_DART_IMPL
+        assert u"impl_file 都不是" in msg and _T152_DART_IMPL in msg, msg
+
+    def test_f2_ac_b10_pre_commit_note_says_r8_unchecked(self, tmp_path, monkeypatch, capsys):
+        """R2-5|F2(AC-B10)|補強覆蓋|現行:提示段該 `.kt` 行含「R8:未檢查」。
+        要求:提示段中該 `.kt` 檔那一行含「R8:未檢查」;整段輸出不含「不適用」「豁免」。"""
+        root = _t152_repo(tmp_path, monkeypatch, stage="review")
+        _t152_write(root, _T152_KT_IMPL, u"class Foo\n")
+        _t152_write(root, _T152_KT_TEST, u"class FooTest\n")
+        _t152_log(root, _t152_red(_T152_KT_TEST, _T152_KT_IMPL))
+        rc, err, _sh = _t152r2_pre_commit(root, monkeypatch, capsys, [_T152_KT_IMPL])
+        assert rc == 0, err
+        assert _T152R2_NOTE in err, u"R2-5:沒有提示段:\n%s" % err
+        note = err[err.index(_T152R2_NOTE):]
+        lines = [ln for ln in note.splitlines() if _T152_KT_IMPL in ln]
+        assert lines and all(u"R8:未檢查" in ln for ln in lines), u"R2-5:提示段:\n%s" % note
+        assert u"不適用" not in err and u"豁免" not in err, err
+
+    def test_f2_ac_b12_template_occurrences_are_all_inside_test_candidates(self):
+        """R2-6|F2(AC-B12)|補強覆蓋|現行:兩者都是 3。
+        要求:`gate.py` 中 `test_%s.py` 樣板的出現次數 == 它在 `test_candidates` 原始碼內的出現次數 == 3。"""
+        import inspect
+        src = io.open(str(ROOT / ".claude" / "hooks" / "gate.py"), encoding="utf-8").read()
+        inside = inspect.getsource(gate.test_candidates).count("test_%s.py")
+        total = src.count("test_%s.py")
+        assert total == inside == 3, u"R2-6:全檔 %d 次、test_candidates 內 %d 次" % (total, inside)
+
+    def test_f2_ac_b13_unpaired_file_is_listed_inside_the_note_section(self, tmp_path, monkeypatch, capsys):
+        """R2-7|F2(AC-B13)|補強覆蓋|現行:`build.gradle.kts` 只出現在提示段。
+        要求:`build.gradle.kts` 出現在提示段之後,不出現在提示段之前的其他訊息裡。"""
+        root = _t152_repo(tmp_path, monkeypatch, stage="review")
+        _t152_write(root, "build.gradle.kts", u"plugins {}\n")
+        rc, err, _sh = _t152r2_pre_commit(root, monkeypatch, capsys, ["build.gradle.kts"])
+        assert rc == 0, err
+        assert _T152R2_NOTE in err, u"R2-7:沒有提示段:\n%s" % err
+        i = err.index(_T152R2_NOTE)
+        assert "build.gradle.kts" in err[i:], err
+        assert "build.gradle.kts" not in err[:i], err
+
+    # ── R2-8～R2-15:F4 —— 覆蓋缺口 ─────────────────────────────────────────
+
+    def test_f4_d7_block_exit_keeps_rc_and_appends_note(self, tmp_path, monkeypatch, capsys):
+        """R2-8|F4(D7 擋下出口)|補強覆蓋|現行:rc 1,提示段在違規訊息之後。
+        要求:`.kts`(P1)+ 無測試 `.py` ⇒ rc 仍為 1;提示段出現在違規訊息之後。"""
+        root = _t152_repo(tmp_path, monkeypatch, stage="review")
+        _t152_write(root, "build.gradle.kts", u"plugins {}\n")
+        _t152_write(root, "pkg/thing.py", u"x = 1\n")
+        rc, err, _sh = _t152r2_pre_commit(root, monkeypatch, capsys,
+                                          ["build.gradle.kts", "pkg/thing.py"])
+        assert rc == 1, err
+        assert "[R3]" in err and _T152R2_NOTE in err, err
+        assert err.index(_T152R2_NOTE) > err.index("[R3]"), err
+        assert "build.gradle.kts" in err[err.index(_T152R2_NOTE):], err
+
+    def test_f4_d7_shadow_exit_keeps_rc_and_appends_note(self, tmp_path, monkeypatch, capsys):
+        """R2-9|F4(D7 影子出口)|補強覆蓋|現行:rc 0、影子紀錄 1 筆、提示段在影子訊息之後。
+        要求:同上佈置但影子模式開 ⇒ rc 0;影子紀錄一筆;提示段出現在影子訊息之後。"""
+        root = _t152_repo(tmp_path, monkeypatch, stage="review")
+        _t152_write(root, "build.gradle.kts", u"plugins {}\n")
+        _t152_write(root, "pkg/thing.py", u"x = 1\n")
+        rc, err, shadow_logged = _t152r2_pre_commit(root, monkeypatch, capsys,
+                                                    ["build.gradle.kts", "pkg/thing.py"],
+                                                    shadow=True)
+        assert rc == 0, err
+        assert len(shadow_logged) == 1, shadow_logged
+        assert u"[六站閘門/影子]" in err and _T152R2_NOTE in err, err
+        assert err.index(_T152R2_NOTE) > err.index(u"[六站閘門/影子]"), err
+
+    @pytest.mark.parametrize("path", ["integration_test/a_test.dart",
+                                      "app/src/androidTest/kotlin/x/FooTest.kt"])
+    def test_f4_d3_integration_test_and_android_test_are_tests(self, path):
+        """R2-10|F4(D3)|補強覆蓋|現行:False。要求:不是原始碼。"""
+        assert gate.is_source_path(path) is False, u"R2-10:%s 被當成原始碼" % path
+
+    def test_f4_ac_b3_kotlin_impl_with_a_qualifying_red_passes_through_r3(self, tmp_path, monkeypatch):
+        """R2-11|F4(AC-B3 另一語言)|補強覆蓋|現行:放行、trace 含 R3。
+        要求:Kotlin 實作有本票合格紅燈(實作當時不存在)⇒ 放行,且 trace 含 `R3`。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        _t152_write(root, _T152_KT_TEST, u"class FooTest\n")
+        _t152_log(root, _t152_red(_T152_KT_TEST, _T152_KT_IMPL))
+        msg, trace, _used = _t152_check(root, _T152_KT_IMPL, u"class Foo\n")
+        assert msg is None, msg
+        assert "R3" in trace, trace
+
+    def test_f4_ac_b6_existing_dart_with_a_red_not_against_head_is_blocked(self, tmp_path, monkeypatch):
+        """R2-12|F4(AC-B6 另一語言)|補強覆蓋|現行:擋。
+        要求:既有 `.dart`(在 HEAD)被修改,紀錄 `impl_hash` ≠ HEAD 內容 ⇒ 擋。"""
+        root = _t152_repo(tmp_path, monkeypatch, commit=[(_T152_DART_IMPL, u"int foo() => 1;\n")])
+        _t152_write(root, _T152_DART_TEST, u"void main() {}\n")
+        _t152_log(root, _t152_red(_T152_DART_TEST, _T152_DART_IMPL,
+                                  impl_exists=True, impl_hash="0" * 64))
+        msg, _trace, _used = _t152_check(root, _T152_DART_IMPL, u"int foo() => 2;\n")
+        assert msg is not None and "[R3" in msg, msg
+
+    def test_f4_ac_b5_kotlin_red_from_another_ticket_is_blocked(self, tmp_path, monkeypatch):
+        """R2-13|F4(AC-B5 另一語言)|補強覆蓋|現行:擋,訊息含當前票號。
+        要求:Kotlin 紀錄屬別張票 ⇒ 擋,訊息含當前票號。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        _t152_write(root, _T152_KT_TEST, u"class FooTest\n")
+        _t152_log(root, _t152_red(_T152_KT_TEST, _T152_KT_IMPL, ticket_id="151"))
+        msg, _trace, _used = _t152_check(root, _T152_KT_IMPL, u"class Foo\n")
+        assert msg is not None and _T152_TICKET in msg, msg
+
+    def test_f4_ac_b9_pre_commit_blocks_an_untested_dart_file(self, tmp_path, monkeypatch, capsys):
+        """R2-14|F4(AC-B9 另一語言)|補強覆蓋|現行:rc 1、R3。
+        要求:非前置站(review)提交一支無測試的 `lib/foo.dart` ⇒ pre-commit 擋。"""
+        root = _t152_repo(tmp_path, monkeypatch, stage="review")
+        _t152_write(root, _T152_DART_IMPL, u"int foo() => 1;\n")
+        rc, err, _sh = _t152r2_pre_commit(root, monkeypatch, capsys, [_T152_DART_IMPL])
+        assert rc == 1, err
+        assert "[R3" in err, err
+
+    @pytest.mark.parametrize("impl_file", ["lib\\foo.dart", "./lib/foo.dart"])
+    def test_f4_d5_non_posix_impl_file_is_not_qualifying(self, tmp_path, monkeypatch, impl_file):
+        """R2-15|F4(D5 路徑格式)|補強覆蓋|現行:擋(逐字比對,fail-closed)。
+        要求:紀錄 `impl_file` 不是 repo 根相對 posix 路徑 ⇒ 不算合格紅燈。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        _t152_write(root, _T152_DART_TEST, u"void main() {}\n")
+        _t152_log(root, _t152_red(_T152_DART_TEST, impl_file))
+        msg, _trace, _used = _t152_check(root, _T152_DART_IMPL, u"int foo() => 1;\n")
+        assert msg is not None and "[R3/紅燈]" in msg, msg
