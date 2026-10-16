@@ -1,0 +1,110 @@
+// redlight_gradle_init.gradle —— 票 152 批二:Gradle 初始化腳本(產出端)
+//
+// **本檔未經真實 Gradle 執行;協定為暫定,改動需規格＋測試。**
+//   協定權威全文:tests/test_redlight_run.py 的模組 docstring(Kotlin 暫定協定)。
+//   本檔不宣稱任何 Gradle / Kotlin Gradle Plugin 版本相容性。
+//
+// 由 .claude/hooks/redlight_run.py 帶入,不修改任何建置檔:
+//   <gradle 或 gradlew> -I <本檔> -PredlightRunDir=<本次輸出目錄> <專案>:test --tests <類別>
+// 只寫 <本次輸出目錄>/kotlin-result.json(先寫暫存檔再改名);沒有 -PredlightRunDir 時什麼都不做。
+//
+// 任務分類(待階段 3 實測):
+//   名稱 compileKotlin      -> kind "main_compile"
+//   名稱 compileTestKotlin  -> kind "test_compile"
+//   型別 Test 且名稱 test   -> kind "test"
+//   其他任務不記。Android 變體(compileDebugKotlin 等)沒有對應 —— 待階段 3。
+//
+// executed / outcome 對應 TaskState(全部待階段 3 實測):
+//   state.failure != null                 -> "failed",     executed true
+//   state.upToDate 且 skipMessage 為 FROM-CACHE -> "from_cache", executed false
+//   state.noSource                        -> "no_source",  executed false
+//   state.upToDate                        -> "up_to_date", executed false
+//   state.skipped(其他)                   -> "skipped",    executed false
+//   state.executed(含 didWork 為 false)   -> "success",    executed true
+//   在任務圖裡但沒有收到結束事件          -> "not_run",    executed false
+//
+// compile_errors:編譯任務的 logging 標準輸出 / 標準錯誤原文(待階段 3 實測錯誤訊息的真實路徑格式)。
+// tests:Test 任務的測試監聽器 afterTest;結果 SUCCESS / FAILURE / SKIPPED -> success / failure / skipped。
+// complete:只在 buildFinished 寫入時為 true;建置被中斷時本檔不會寫出輸出(包裝器據此不寫紀錄)。
+// 本檔用到的 taskGraph.afterTask / buildFinished / addTestListener 在較新的 Gradle 版本可能已標為
+// deprecated 或與 configuration cache 不相容 —— 待階段 3 實測。
+
+import groovy.json.JsonOutput
+
+def runDirPath = gradle.startParameter.projectProperties.get("redlightRunDir")
+if (runDirPath == null) {
+    return
+}
+
+def kinds = [compileKotlin: "main_compile", compileTestKotlin: "test_compile"]
+def taskRows = [:]                    // task path -> row
+def testRows = []
+def compileErrors = new StringBuffer()
+
+def kindOf = { task ->
+    if (kinds.containsKey(task.name)) {
+        return kinds[task.name]
+    }
+    if (task instanceof org.gradle.api.tasks.testing.Test && task.name == "test") {
+        return "test"
+    }
+    return null
+}
+
+gradle.taskGraph.whenReady { graph ->
+    graph.allTasks.each { task ->
+        def kind = kindOf(task)
+        if (kind == null) {
+            return
+        }
+        taskRows[task.path] = [path: task.path, project: task.project.path, kind: kind,
+                               executed: false, outcome: "not_run"]
+        if (kind != "test") {
+            def listener = { CharSequence text -> compileErrors.append(text) } as StandardOutputListener
+            task.logging.addStandardOutputListener(listener)
+            task.logging.addStandardErrorListener(listener)
+        } else {
+            task.addTestListener(new TestListener() {
+                void beforeSuite(TestDescriptor suite) {}
+                void afterSuite(TestDescriptor suite, TestResult result) {}
+                void beforeTest(TestDescriptor test) {}
+                void afterTest(TestDescriptor test, TestResult result) {
+                    def mapped = [SUCCESS: "success", FAILURE: "failure", SKIPPED: "skipped"][result.resultType.name()]
+                    testRows << [project: task.project.path, class: test.className, method: test.name,
+                                 result: mapped]
+                }
+            })
+        }
+    }
+}
+
+gradle.taskGraph.afterTask { Task task, TaskState state ->
+    def row = taskRows[task.path]
+    if (row == null) {
+        return
+    }
+    if (state.failure != null) {
+        row.outcome = "failed"; row.executed = true
+    } else if (state.upToDate && state.skipMessage == "FROM-CACHE") {
+        row.outcome = "from_cache"; row.executed = false
+    } else if (state.noSource) {
+        row.outcome = "no_source"; row.executed = false
+    } else if (state.upToDate) {
+        row.outcome = "up_to_date"; row.executed = false
+    } else if (state.skipped) {
+        row.outcome = "skipped"; row.executed = false
+    } else if (state.executed) {
+        row.outcome = "success"; row.executed = true
+    }
+}
+
+gradle.buildFinished { result ->
+    def doc = [complete: true, tasks: taskRows.values().toList(), compile_errors: compileErrors.toString(),
+               tests: testRows]
+    def dir = new File(runDirPath)
+    def tmp = new File(dir, "kotlin-result.json.tmp")
+    tmp.setText(JsonOutput.toJson(doc), "UTF-8")
+    if (!tmp.renameTo(new File(dir, "kotlin-result.json"))) {
+        throw new GradleException("redlight: 無法寫出 kotlin-result.json")
+    }
+}

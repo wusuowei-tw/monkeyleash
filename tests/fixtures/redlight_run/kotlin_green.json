@@ -1,0 +1,12 @@
+{
+  "complete": true,
+  "tasks": [
+    {"path": ":app:compileKotlin", "project": ":app", "kind": "main_compile", "executed": true, "outcome": "success"},
+    {"path": ":app:compileTestKotlin", "project": ":app", "kind": "test_compile", "executed": true, "outcome": "success"},
+    {"path": ":app:test", "project": ":app", "kind": "test", "executed": true, "outcome": "success"}
+  ],
+  "compile_errors": "",
+  "tests": [
+    {"project": ":app", "class": "x.FooTest", "method": "returnsOne", "result": "success"}
+  ]
+}

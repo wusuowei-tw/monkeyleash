@@ -1,0 +1,10 @@
+{
+  "complete": true,
+  "tasks": [
+    {"path": ":app:compileKotlin", "project": ":app", "kind": "main_compile", "executed": true, "outcome": "success"},
+    {"path": ":app:compileTestKotlin", "project": ":app", "kind": "test_compile", "executed": true, "outcome": "failed"},
+    {"path": ":app:test", "project": ":app", "kind": "test", "executed": false, "outcome": "not_run"}
+  ],
+  "compile_errors": "e: file:///{ROOT}/app/src/test/kotlin/x/FooTest.kt:5:16 Unresolved reference 'Foo'.\n",
+  "tests": []
+}

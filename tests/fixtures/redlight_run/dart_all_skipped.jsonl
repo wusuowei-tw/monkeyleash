@@ -1,0 +1,8 @@
+{"protocolVersion":"0.1.1","runnerVersion":"synthetic","pid":1,"type":"start","time":0}
+{"count":1,"type":"allSuites","time":0}
+{"suite":{"id":0,"platform":"vm","path":"test/foo_test.dart"},"type":"suite","time":1}
+{"test":{"id":1,"name":"loading test/foo_test.dart","suiteID":0,"groupIDs":[],"metadata":{"skip":false,"skipReason":null},"line":null,"column":null,"url":null},"type":"testStart","time":2}
+{"testID":1,"result":"success","skipped":false,"hidden":true,"type":"testDone","time":3}
+{"test":{"id":2,"name":"foo returns 1","suiteID":0,"groupIDs":[],"metadata":{"skip":true,"skipReason":"synthetic skip"},"line":5,"column":3,"url":"file:///synthetic/test/foo_test.dart"},"type":"testStart","time":4}
+{"testID":2,"result":"success","skipped":true,"hidden":false,"type":"testDone","time":5}
+{"success":true,"type":"done","time":6}
