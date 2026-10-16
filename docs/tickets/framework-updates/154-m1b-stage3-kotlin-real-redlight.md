@@ -1,6 +1,6 @@
 # 票 154 —— M1-b 階段 3（Kotlin）：受控環境真實工具鏈紅燈驗收
 
-**狀態**：**立案；Q-ENV 環境工作包已由 Jeff 2026-10-16 核准；環境準備中，紅燈流程未開始。**
+**狀態**：**立案；JDK／Gradle 已由 Jeff 人工準備並核對；框架已部署到範例 repo，`verify()` 補驗證通過；安裝後續步驟（main() 在 verify 之後的部分、bootstrap.sh）與實際 hook 生效方式待確認；Kotlin／JUnit 相依套件尚未下載；紅燈流程未開始。**
 **時鐘**：LifeApp 以 Kotlin 開發之前 —— 依規格 :244（R-DEP 第 3 條），某語言的階段 3 通過前，不得在 App 以該語言開發。（事件型時鐘；Jeff 2026-10-16 確認採用）
 **優先度**：高（Jeff 2026-10-16）。
 **立案**：2026-10-16（美東）。票號 154 由 Jeff 2026-10-16 指定（立案前確認 `docs/tickets/framework-updates/` 內無 154 開頭的檔案）。
@@ -51,11 +51,11 @@
 - 拋棄式範例 repo，放在**本機、agent-gates 之外**。
 - **不得**放在規格資料夾 `<path>`（該處沒有 `.git`，有 G-08 風險），也**不得**放在任何現有 repo 內。
 - 確切路徑：`C:\projects\t154-kotlin-sandbox`（Jeff 2026-10-16 同意）。
-- 範例 repo 裝含 M1-b 的上游版本（`install.py`）；**票面記錄所裝上游的 commit sha**：UNKNOWN（開工時填）。
+- 範例 repo 裝含 M1-b 的上游版本（`install.py`）；**票面記錄所裝上游的 commit sha**：`70f732f02eea1b3c891b9ce45426b49b4f8b8d31`（安裝時 agent-gates 工作樹僅帳本一行未提交，帳本不隨安裝帶出（E3 讀碼））。
 
 ---
 
-## 三｜Q-ENV 環境工作包（只列，不執行）
+## 三｜Q-ENV 環境工作包（已核准；JDK、Gradle 已就位，相依套件尚未下載；見第三節之二）
 
 **整包由 Jeff 一次授權**；之後只有**超出工作包範圍**的動作才再問。超出的例子：不同版本、其他下載來源、包外指令、改動範例 repo 以外的位置。
 
@@ -63,8 +63,8 @@ Jeff 2026-10-16 約 13:20（美東）核准下列工作包（見修正紀錄）�
 
 | 項目 | 版本 | 下載來源 | 大小 | 安裝位置 |
 |---|---|---|---|---|
-| JDK | Eclipse Temurin 21 LTS，Windows x64 **zip**，取下載當下官方最新 GA 修補版。確切版本：下載時記錄（見 E1 報告與後續修正紀錄） | adoptium.net 官方，經 `api.adoptium.net` 取得連結與 checksum；實際檔案在 GitHub `adoptium` 官方 release | 約 200 MB | `C:\tools\stage3\jdk-21\` |
-| Gradle（安裝版） | **9.7.0**，`gradle-9.7.0-bin.zip` | `https://services.gradle.org/distributions/`（同目錄的 `.sha256`） | 約 130～150 MB | `C:\tools\stage3\gradle-9.7.0\` |
+| JDK | Eclipse Temurin 21 LTS，Windows x64 **zip**，取下載當下官方最新 GA 修補版。確切版本：`Temurin 21.0.12.1+1`，檔名 `OpenJDK21U-jdk_x64_windows_hotspot_21.0.12.1_1.zip`，sha256 `f9d6e191ab098c0d416e7d588a24420a8621cd2f4720dab2459b8b7b2d2d8b4e`，size `205073461` | adoptium.net 官方，經 `api.adoptium.net` 取得連結與 checksum；實際檔案在 GitHub `adoptium` 官方 release | 約 200 MB | `C:\tools\stage3\jdk-21\` |
+| Gradle（安裝版） | **9.7.0**，`gradle-9.7.0-bin.zip`，sha256 `84fbba45c7f4c64abc77460e1c00f541e9f960e3c7ed2538f1ede19eacd873ae` | `https://services.gradle.org/distributions/`（同目錄的 `.sha256`） | 約 130～150 MB | `C:\tools\stage3\gradle-9.7.0\` |
 | Kotlin Gradle 外掛／kotlin-stdlib／JUnit 相依 | Kotlin Gradle 外掛與 stdlib **2.4.21**；JUnit 5 版本於紅燈站設計時定 | Gradle Plugin Portal、Maven Central，由 Gradle 首次建置時自動取得 | 約 100～300 MB | `GRADLE_USER_HOME=C:\tools\stage3\gradle-home` |
 
 | 項目 | 內容 |
@@ -95,6 +95,26 @@ Jeff 2026-10-16 約 13:20（美東）核准下列工作包（見修正紀錄）�
 - 刪除任何東西（刪除要另問 Jeff）。
 
 agent-gates 本身需要修改時：先回報，不動手。
+
+---
+
+## 三之二｜環境準備實際經過
+
+1. **E1／E1b**（`.dev/reports/2026-10-16T172711Z-ticket154-e1-env-setup.md`、`.dev/reports/2026-10-16T173748Z-ticket154-e1b-env-setup.md`）：A 段入票、推送 `70f732f`。B 段 AI 用指令在 repo 外建目錄，被 R7 擋下；R7 這次判斷的目標就是指令真正要寫的位置。
+2. 裁決助手查了 `gate.py:530-564`、`:1143-1175`、ADR 0008、`CLAUDE.md`、`docs/adr/`：**沒有**「AI 在 repo 外準備環境、建立下游 repo、對外部目標執行安裝器」的正規入口或明確授權。換視窗屬於繞過，所以 E2 撤回、未執行。
+3. 因此下載、核對、解壓、建立範例 repo、安裝、補登記冊、補驗證，**全部由 Jeff 人工執行**。AI 只做唯讀核對（`.dev/reports/2026-10-16T185419Z-ticket154-e3-verify.md`、`.dev/reports/2026-10-16T190652Z-ticket154-e4-install-diagnosis.md`）。
+4. 安裝程式退出碼 1：`verify()` 第一項被 R10 hard_block。範例 repo 的登記冊是安裝程式產生的空清單；使用者層有 synced 230 筆、user-commands 1 筆未登記（E4，已證實）。`verify()` 的另外兩項檢查沒有執行。
+5. Jeff 照抄 agent-gates 的兩份登記冊（範例 repo 與 agent-gates 兩份的 SHA256 相同），以只含兩份 policy 的提交 `41313ac` 通過 R10（紀錄中出現 `[R10/policy-only]`），再補跑 `install.verify()`，退出碼 0（紀錄中 `VERIFY-OK` 1 次）。
+6. **安裝程式 `main()` 在 `verify()` 之後的步驟沒有執行**：`docs/decisions-pending.md` 不存在，完成報告沒有產生。`bootstrap.sh` 未跑（範例 repo `core.hooksPath` 未設）。目前在範例 repo 有檔案的是 `.git/hooks/pre-commit`。
+7. 讀取範圍：Jeff 先接受「僅該次安裝」的驗證讀取；之後在「R10 會讀擴充檔內容計算指紋、核對格式，但不輸出名稱與內容」的正確說法下，接受「限票 154 範例 repo」的 R10 讀取。
+8. 範例 repo 的提交身分是 local `gate@local`，不 push。
+
+## 三之三｜本票期間的發現（候選，不在本票範圍）
+
+1. **R7 運算元判讀**：`cp <來源> <目的>` 的擋下訊息把**來源**（只被讀取）列為寫入目標（E1 報告）。是否為判讀錯誤，待另查。
+2. **安裝驗證與未登記擴充**：安裝程式產生空的登記冊（`install.py:440-485`）。本次觀測到的未登記擴充（synced 230 筆、user-commands 1 筆）使 `verify()`（`install.py:552-559`）被 R10 擋下；擋下時兩個安裝提交已經建立（`install.py:649`、`:655` 早於 `:658`；E4 報告）。是否所有環境都會如此：待確認。是否屬預期設計：UNKNOWN。
+3. **安裝輸出編碼**：失敗訊息走 stderr，在 cmd 轉向下是 cp950；成功路徑 `_out()`（`install.py:58-60`）是 UTF-8（E4 讀碼推論）。
+4. **MCP `latest_report` 排序**：`.dev/reports/` 有兩份檔名不含 `-` 的舊報告（`20261009T…`、`20261013T…`），以字典序會排在最後，工具因此回傳舊報告（裁決助手 2026-10-16 實際碰到）。
 
 ---
 
@@ -187,3 +207,4 @@ agent-gates 本身需要修改時：先回報，不動手。
   4. 票號用 154，放在 `docs/tickets/framework-updates/`。
 - 定稿（2026-10-16，裁決助手記錄，非逐字原話）：Jeff 2026-10-16 約 13:05（美東）確認：時鐘「LifeApp 以 Kotlin 開發之前」採用；優先度高；票號 155 確認；授權提交並 push（範圍只有票 154、155 兩個票檔，合成一個提交）。裁決助手要求：repo 公開，票面上的本機路徑一律遮成 `<path>`（比照票 152）。
 - Q-ENV 核准（2026-10-16，裁決助手記錄，非逐字原話）：Jeff 2026-10-16 約 13:20（美東）核准第三節的環境工作包（一次授權），並同意範例 repo 位置 `C:\projects\t154-kotlin-sandbox`。`9398cc3` 的 CI 綠燈由 Jeff 目視確認（約 13:15，美東）。選版依據：kotlinlang.org 的 Kotlin Gradle 外掛相容表中，KGP 2.4.20–2.4.21 完整支援的 Gradle 範圍是 7.6.3–9.7.0；docs.gradle.org 的 compatibility 頁寫明 Gradle 9.x 需要 JVM 17–27。
+- 環境準備完成（2026-10-16，裁決助手記錄，非逐字原話）：Jeff 2026-10-16（美東）約 14:25 選擇人工準備 JDK／Gradle；約 15:00 接受「僅該次安裝」的驗證讀取；約 15:12 選擇照抄 agent-gates 的兩份登記冊；約 15:15 在正確說法下接受「限票 154 範例 repo」的 R10 讀取；約 15:20 授權本次提交並 push。經過見第三節之二。
