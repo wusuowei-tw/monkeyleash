@@ -1,6 +1,6 @@
 # 票 154 —— M1-b 階段 3（Kotlin）：受控環境真實工具鏈紅燈驗收
 
-**狀態**：**立案；未開工。安裝、下載與執行均未授權（Q-ENV 待授權）。**
+**狀態**：**立案；Q-ENV 環境工作包已由 Jeff 2026-10-16 核准；環境準備中，紅燈流程未開始。**
 **時鐘**：LifeApp 以 Kotlin 開發之前 —— 依規格 :244（R-DEP 第 3 條），某語言的階段 3 通過前，不得在 App 以該語言開發。（事件型時鐘；Jeff 2026-10-16 確認採用）
 **優先度**：高（Jeff 2026-10-16）。
 **立案**：2026-10-16（美東）。票號 154 由 Jeff 2026-10-16 指定（立案前確認 `docs/tickets/framework-updates/` 內無 154 開頭的檔案）。
@@ -50,7 +50,7 @@
 
 - 拋棄式範例 repo，放在**本機、agent-gates 之外**。
 - **不得**放在規格資料夾 `<path>`（該處沒有 `.git`，有 G-08 風險），也**不得**放在任何現有 repo 內。
-- 確切路徑：在 Q-ENV 授權時由 Jeff 指定。
+- 確切路徑：`C:\projects\t154-kotlin-sandbox`（Jeff 2026-10-16 同意）。
 - 範例 repo 裝含 M1-b 的上游版本（`install.py`）；**票面記錄所裝上游的 commit sha**：UNKNOWN（開工時填）。
 
 ---
@@ -59,26 +59,42 @@
 
 **整包由 Jeff 一次授權**；之後只有**超出工作包範圍**的動作才再問。超出的例子：不同版本、其他下載來源、包外指令、改動範例 repo 以外的位置。
 
-本站各欄一律 UNKNOWN，由下一站補齊。
+Jeff 2026-10-16 約 13:20（美東）核准下列工作包（見修正紀錄）。
 
 | 項目 | 版本 | 下載來源 | 大小 | 安裝位置 |
 |---|---|---|---|---|
-| JDK | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN |
-| Gradle（安裝版或 wrapper，擇一） | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN |
-| Kotlin Gradle 外掛／kotlin-stdlib／JUnit 相依 | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN |
+| JDK | Eclipse Temurin 21 LTS，Windows x64 **zip**，取下載當下官方最新 GA 修補版。確切版本：下載時記錄（見 E1 報告與後續修正紀錄） | adoptium.net 官方，經 `api.adoptium.net` 取得連結與 checksum；實際檔案在 GitHub `adoptium` 官方 release | 約 200 MB | `C:\tools\stage3\jdk-21\` |
+| Gradle（安裝版） | **9.7.0**，`gradle-9.7.0-bin.zip` | `https://services.gradle.org/distributions/`（同目錄的 `.sha256`） | 約 130～150 MB | `C:\tools\stage3\gradle-9.7.0\` |
+| Kotlin Gradle 外掛／kotlin-stdlib／JUnit 相依 | Kotlin Gradle 外掛與 stdlib **2.4.21**；JUnit 5 版本於紅燈站設計時定 | Gradle Plugin Portal、Maven Central，由 Gradle 首次建置時自動取得 | 約 100～300 MB | `GRADLE_USER_HOME=C:\tools\stage3\gradle-home` |
 
 | 項目 | 內容 |
 |---|---|
-| 範例 repo 位置 | UNKNOWN |
+| 範例 repo 位置 | `C:\projects\t154-kotlin-sandbox\`；本機 `git init`，不設 remote，不 push |
 
-**允許執行的指令清單**：
+**允許的動作**：
 
-| 指令 | 執行目錄 | 用途 |
-|---|---|---|
-| `gradle`（或範例 repo 的 `gradlew`） | UNKNOWN | UNKNOWN |
-| `java` | UNKNOWN | UNKNOWN |
-| `install.py` | UNKNOWN | UNKNOWN |
-| `redlight_run.py` | UNKNOWN | UNKNOWN |
+| 動作 | 位置 |
+|---|---|
+| 下載上表的檔案；核對 sha256 | `C:\tools\stage3\downloads\` |
+| 用 PowerShell `Expand-Archive` 解壓 | `C:\tools\stage3\` |
+| `git init`／`add`／`commit`（只在本機） | 範例 repo |
+| 用 agent-gates 的 `install.py` 安裝 | 目標：範例 repo |
+| 執行 `redlight_run.py`、`gradle`、`java` | 範例 repo（`gradle --version` 版本確認在 `C:\tools\stage3`） |
+| `gradle.properties` 設 `org.gradle.daemon=false`、`org.gradle.configuration-cache=false` | 範例 repo 自己的 `gradle.properties` |
+
+- **環境變數只在單一指令內設定**：每一次執行 Gradle（包括 `gradle --version`）都必須同時設定 `JAVA_HOME=<JDK 根>` 與 `GRADLE_USER_HOME=C:/tools/stage3/gradle-home`，並在核准的工作目錄內執行。目的是讓 Gradle 使用隔離目錄，不用真實家目錄的 `.gradle`。
+- `org.gradle.daemon=false` **不保證**完全不啟動背景 JVM；Gradle 仍可能為本次建置啟動一個專用 daemon，建置結束後停止。
+
+**不做**：
+
+- msi 或其他安裝程式；
+- 改系統或使用者層的環境變數、登錄檔；
+- Android SDK、IDE；
+- 其他版本；
+- push 範例 repo；
+- 刪除任何東西（刪除要另問 Jeff）。
+
+agent-gates 本身需要修改時：先回報，不動手。
 
 ---
 
@@ -170,3 +186,4 @@
   3. Flutter 另開候選票，先不排程（候選票 155）。
   4. 票號用 154，放在 `docs/tickets/framework-updates/`。
 - 定稿（2026-10-16，裁決助手記錄，非逐字原話）：Jeff 2026-10-16 約 13:05（美東）確認：時鐘「LifeApp 以 Kotlin 開發之前」採用；優先度高；票號 155 確認；授權提交並 push（範圍只有票 154、155 兩個票檔，合成一個提交）。裁決助手要求：repo 公開，票面上的本機路徑一律遮成 `<path>`（比照票 152）。
+- Q-ENV 核准（2026-10-16，裁決助手記錄，非逐字原話）：Jeff 2026-10-16 約 13:20（美東）核准第三節的環境工作包（一次授權），並同意範例 repo 位置 `C:\projects\t154-kotlin-sandbox`。`9398cc3` 的 CI 綠燈由 Jeff 目視確認（約 13:15，美東）。選版依據：kotlinlang.org 的 Kotlin Gradle 外掛相容表中，KGP 2.4.20–2.4.21 完整支援的 Gradle 範圍是 7.6.3–9.7.0；docs.gradle.org 的 compatibility 頁寫明 Gradle 9.x 需要 JVM 17–27。
