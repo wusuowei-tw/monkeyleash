@@ -1,6 +1,6 @@
 # 票 154 —— M1-b 階段 3（Kotlin）：受控環境真實工具鏈紅燈驗收
 
-**狀態**：**立案；JDK／Gradle 已由 Jeff 人工準備並核對；框架已部署到範例 repo，`verify()` 補驗證通過；安裝後續步驟（main() 在 verify 之後的部分、bootstrap.sh）與實際 hook 生效方式待確認；Kotlin／JUnit 相依套件尚未下載；紅燈流程未開始。**
+**狀態**：**範例 repo 實測完成（限定範圍，見下）；待收票裁決。**（範圍見第四節之一「範圍聲明」；結果見第四節之一，上游候選見第四節之二。）
 **時鐘**：LifeApp 以 Kotlin 開發之前 —— 依規格 :244（R-DEP 第 3 條），某語言的階段 3 通過前，不得在 App 以該語言開發。（事件型時鐘；Jeff 2026-10-16 確認採用）
 **優先度**：高（Jeff 2026-10-16）。
 **立案**：2026-10-16（美東）。票號 154 由 Jeff 2026-10-16 指定（立案前確認 `docs/tickets/framework-updates/` 內無 154 開頭的檔案）。
@@ -100,12 +100,15 @@ agent-gates 本身需要修改時：先回報，不動手。
 
 ## 三之二｜環境準備實際經過
 
+> **〔更正，2026-10-19〕** 提交 `e1564b0`（本節、第三節之三與修正紀錄「環境準備完成」一條由該提交加入）：該提交標題中的『完成』過度宣告；實際當時只完成環境記錄，見本節。（原文不改。）
+
 1. **E1／E1b**（`.dev/reports/2026-10-16T172711Z-ticket154-e1-env-setup.md`、`.dev/reports/2026-10-16T173748Z-ticket154-e1b-env-setup.md`）：A 段入票、推送 `70f732f`。B 段 AI 用指令在 repo 外建目錄，被 R7 擋下；R7 這次判斷的目標就是指令真正要寫的位置。
 2. 裁決助手查了 `gate.py:530-564`、`:1143-1175`、ADR 0008、`CLAUDE.md`、`docs/adr/`：**沒有**「AI 在 repo 外準備環境、建立下游 repo、對外部目標執行安裝器」的正規入口或明確授權。換視窗屬於繞過，所以 E2 撤回、未執行。
 3. 因此下載、核對、解壓、建立範例 repo、安裝、補登記冊、補驗證，**全部由 Jeff 人工執行**。AI 只做唯讀核對（`.dev/reports/2026-10-16T185419Z-ticket154-e3-verify.md`、`.dev/reports/2026-10-16T190652Z-ticket154-e4-install-diagnosis.md`）。
 4. 安裝程式退出碼 1：`verify()` 第一項被 R10 hard_block。範例 repo 的登記冊是安裝程式產生的空清單；使用者層有 synced 230 筆、user-commands 1 筆未登記（E4，已證實）。`verify()` 的另外兩項檢查沒有執行。
 5. Jeff 照抄 agent-gates 的兩份登記冊（範例 repo 與 agent-gates 兩份的 SHA256 相同），以只含兩份 policy 的提交 `41313ac` 通過 R10（紀錄中出現 `[R10/policy-only]`），再補跑 `install.verify()`，退出碼 0（紀錄中 `VERIFY-OK` 1 次）。
 6. **安裝程式 `main()` 在 `verify()` 之後的步驟沒有執行**：`docs/decisions-pending.md` 不存在，完成報告沒有產生。`bootstrap.sh` 未跑（範例 repo `core.hooksPath` 未設）。目前在範例 repo 有檔案的是 `.git/hooks/pre-commit`。
+   - **〔已過期，2026-10-19 更正〕** 本點「bootstrap 未跑／hooksPath 未設」已過期：10/16 Jeff 親手執行 bootstrap，exit 0，`core.hooksPath=.githooks`。（上游候選 U9；原文不改。）
 7. 讀取範圍：Jeff 先接受「僅該次安裝」的驗證讀取；之後在「R10 會讀擴充檔內容計算指紋、核對格式，但不輸出名稱與內容」的正確說法下，接受「限票 154 範例 repo」的 R10 讀取。
 8. 範例 repo 的提交身分是 local `gate@local`，不 push。
 
@@ -138,6 +141,102 @@ agent-gates 本身需要修改時：先回報，不動手。
 - **初始化腳本第一次跑壞，不得據此判定語言不可行。**
 - 任何情況都不得用放寬 R3 的方式收場。
 - **允許的完成宣告**只限 R0 方案表 B 欄「做完能說」的範圍：Kotlin、JVM 外掛、本機 Windows、票面記錄的 Gradle／JDK 版本。不得延伸到 Dart、Flutter、Android、其他版本或其他作業系統。
+
+---
+
+## 四之一｜實測結果（2026-10-16～19）
+
+**範圍聲明**：本次完成宣告**只限**：Windows、Kotlin JVM、Temurin JDK 21.0.12.1+1、Gradle 9.7.0（經 Wrapper，指向本機 zip）、Kotlin 外掛 2.4.21、JUnit 5.13.4。**不包含** Android、Flutter、純 Dart、其他作業系統或其他版本；各自後續歸屬依另案裁定。（票 155 只是 Flutter 候選票；純 Dart 的階段 3 仍為「另議、未開票」。）
+
+- 實測地點：範例 repo `C:\projects\t154-kotlin-sandbox`；各站報告在該 repo 的 `.dev/reports/`。以下證據欄只寫報告檔名。
+- 整票結果表引自 `2026-10-19T132037Z-ticket154-fin-closing.md`（以下稱 FIN）第 6 節；AC-B44 引自 FIN 第 2 節。日期為 UTC。
+- 標「裁決助手核對」者：判定由裁決助手讀結果檔核對，FIN 視窗只引用其記錄，沒有自己讀 `.dev/runs/`（FIN 第 6 節〔註〕）。
+- 範例 repo 收尾：HEAD `b0bcc21`；帳本 `.dev/test-runs.jsonl` 7 行，保留不提交；Wrapper 4 檔未進版控（見 U4）；站別已由 Jeff 切回 idle（`current_stage: "idle"`、`ticket_id: null`）。（裁決助手讀檔核對，記於本站指令。）
+
+### §5 步驟 1～5（主流程，AC-B40／B42）
+
+| 步驟 | 日期（UTC） | 判定 | 證據 |
+|---|---|---|---|
+| 1 寫測試（D3） | 2026-10-16／17 | 放行 | `2026-10-16T234111Z-ticket154-s1-first-run.md`（GreeterTest）、`2026-10-17T005351Z-ticket154-s2b-seed-test-first.md`（SeedTest） |
+| 2 試寫實作 → R3 擋 | 2026-10-16／17 | 擋（`[R3/紅燈]`） | 同上兩份 |
+| 3 包裝器紅燈 | 2026-10-17 | Seed：執行期紅燈（帳本第 1 行）；Greeter：編譯紅燈（帳本第 3 行） | `2026-10-17T011129Z-ticket154-s3-seed-impl.md`（Seed）、`2026-10-17T015600Z-ticket154-s4-greeter-impl.md`（Greeter）；執行結果由裁決助手核對，記於該站指令來源段 |
+| 4 寫實作 → R3 放行 | 2026-10-17 | 放行（無 trace，放行依據為〔讀碼推論〕） | `2026-10-17T011129Z-ticket154-s3-seed-impl.md`、`2026-10-17T015600Z-ticket154-s4-greeter-impl.md` |
+| 5 包裝器綠燈 | 2026-10-17 | Seed、Greeter 各綠（帳本第 2、4 行） | 範例 repo 無對應報告；記於 S4、RC1 指令來源段 |
+
+E2 ①～④（AC-B42）：Greeter 帳本第 3 行為 `impl_exists:false`、`failed_tests:["<compile error>"]`；`compileKotlin up_to_date`、`compileTestKotlin failed/executed`、`compile_errors` 含測試檔路徑、單一 `--test`（依 S4 指令所記的裁決助手核對）。**限制**：只在產品來源集非空（已有 `Seed.kt`）時觀測到；空專案時被 `no_source` 拒絕（見 U2）。
+
+### §5 步驟 6 反向①～④（AC-B41）
+
+| 項目 | 日期（UTC） | 判定 | 證據 |
+|---|---|---|---|
+| 反向①：無紅燈、無豁免先寫實作 | 2026-10-17 | 擋下（`[R3]` 找不到對應測試），符合預測 | `2026-10-17T021046Z-ticket154-rc1-orphan.md` |
+| 反向②：實作已存在才跑紅燈 | 2026-10-19 | 實驗組（紅燈對 H1）擋下、對照組（紅燈對 H0）放行 | `2026-10-19T124047Z-ticket154-rc2-impl-exists-red.md`（含 D 段） |
+| 反向③：執行中改實作 | 2026-10-19 | 通過（`reasons`「執行前後實作狀態不同」、`records` 空；裁決助手核對） | `2026-10-19T122129Z-ticket154-rc3-modify-during-run.md`（還原證據）；判定記於 RC2 指令來源段 |
+| 反向④：重用輸出目錄 | 2026-10-17 | 通過（退出碼 2、`aborted:true`、帳本不變；裁決助手核對） | 範例 repo 無對應報告；記於 B45S 指令來源段 |
+
+- **反向② 結論**：H1 紅燈時擋下、H0 紅燈時放行，提供支持『版本綁定影響判定』的實測證據；不能單憑此證明唯一原因。
+- 註：實驗組的擋下訊息與事實不符（印出「沒有一筆屬於當前票」，而本票其實有紅燈、只是不合格）；見 U7。
+
+### AC-B45 四種
+
+| 情形 | 日期（UTC） | 判定 | 證據 |
+|---|---|---|---|
+| 不需重跑 | 2026-10-17 | 通過（三任務 `up_to_date`、不寫紀錄；裁決助手核對） | 範例 repo 無對應報告；記於 B45S 指令來源段 |
+| 沿用快取 | 2026-10-17 | 通過（`from_cache`、不寫紀錄；裁決助手核對）。前置綠燈為帳本第 5 行（真實執行） | 範例 repo 無對應報告；記於 B45S 指令來源段 |
+| 跳過 | 2026-10-17 | 通過（`skipped`、`records` 空；裁決助手核對）；測試已還原 | `2026-10-17T024014Z-ticket154-b45-skip.md`（還原證據）；判定記於 B45I 指令來源段 |
+| 中斷 | 2026-10-19 | 通過（沒有 `kotlin-result.json`、`records` 空；裁決助手核對） | `2026-10-19T120646Z-ticket154-b45-interrupt.md`（還原證據）；判定記於 RC3 指令來源段 |
+
+- 「中斷」的兩點限定：
+  1. 終止的是唯一確認身分的建置程序。
+  2. 「測試工作程序存在」不能直接證明已進入 sleep。
+- 「中斷」用的是硬殺（`buildFinished` 不執行）；Gradle 正常取消的情形未製造，見第四節之二 R-6。
+
+### AC-B44（建置檔前後不變）
+
+| 檔案 | `git hash-object` | S1 基準 | 判定 |
+|---|---|---|---|
+| `gradle.properties` | `6b18fd1b2e16b8e7527182aaf12c156e0b6afbfc` | `6b18fd1b2e16b8e7527182aaf12c156e0b6afbfc` | 相同 |
+| `settings.gradle.kts` | `11a59628007edcd88b47cfe1382ccfe0a3635b4c` | `11a59628007edcd88b47cfe1382ccfe0a3635b4c` | 相同 |
+| `app/build.gradle.kts` | `b6001e3081f77acfd41b8da37327ad5924edf1f6` | `b6001e3081f77acfd41b8da37327ad5924edf1f6` | 相同 |
+| `.gitignore` | `d92a3501a263b91bdb73d8e08ba16c653e01dd99` | `d92a3501a263b91bdb73d8e08ba16c653e01dd99` | 相同 |
+
+- 證據：`2026-10-19T132037Z-ticket154-fin-closing.md` 第 2 節（基準見 `2026-10-16T234111Z-ticket154-s1-first-run.md`）；`git diff --exit-code` 對這 4 檔退出碼 0。
+- 限制（照 FIN）：這是「收尾時」與基準相同，不是每一次包裝器執行前後都量過；中間是否有變動又改回，FIN 無法排除。這 4 檔不含 Wrapper 檔（未進版控，沒有基準可比）。
+- 初始化腳本 `redlight_gradle_init.gradle` 與包裝器 `redlight_run.py` 收尾時與範例 repo HEAD 相同（FIN 第 3 節）。
+
+---
+
+## 四之二｜上游候選
+
+內容依 FIN 第 7 節；是否開上游票待裁（見第四節之四）。
+
+| # | 內容 | 性質 | 來源報告 |
+|---|---|---|---|
+| U1 | `redlight_run.py` :442-443、:461：無 `gradlew.bat` 時以裸 `"gradle"` 呼叫，Windows 上 `FileNotFoundError`（R-1，Jeff 實測成立） | 包裝器缺陷 | `2026-10-16T230449Z-ticket154-r1-design.md`（預測）；實測記於 S2 指令來源段 |
+| U2 | 產品來源集為空時 `main_compile='no_source'`，編譯失敗路徑不寫紅燈（R-2，Jeff 實測成立；範圍限空專案＋編譯失敗路徑） | 包裝器／規格待裁 | `2026-10-16T230449Z-ticket154-r1-design.md`（預測）；實測記於 S2 指令來源段 |
+| U3 | R7 許可前綴不認 `VAR=value` 開頭的指令，`python .claude/` 包裝器在帶環境變數時只因「看不出寫入」而放行；ADR 0008 無明示管道、下游無登記位置 | 規則／程序 | `2026-10-16T234111Z-ticket154-s1-first-run.md` |
+| U4 | `leak_scan` 把 `gradle-wrapper.jar` 判為「讀不到內容」擋下（`scanner.py` `SKIP_SUFFIX` 收 `.zip` 未收 `.jar`，裁決助手讀碼）；放行方式待裁 | 掃描器 | `2026-10-17T003922Z-ticket154-s2-wrapper-seed.md` |
+| U5 | `exemption_hint` 對 Kotlin 實作檔建議「`NON_SOURCE_EXT` 加一筆 `'.kt'`」，照做會讓 R2／R3 對全部 `.kt` 失效 | 訊息 | `2026-10-17T021046Z-ticket154-rc1-orphan.md` |
+| U6 | 硬中斷建置程序後，測試工作程序與 Kotlin daemon 成為孤兒、不自行退出 | 包裝器／環境 | 範例 repo 無對應報告；記於 RC3 指令來源段 |
+| U7 | `redlight_missing` 訊息優先序：本票有紅燈但不合格、同時有舊票紅燈時，印出「沒有一筆屬於當前票」，與事實不符 | 訊息 | `2026-10-19T124047Z-ticket154-rc2-impl-exists-red.md` |
+| U8 | Gradle 輸出「已棄用功能，與 Gradle 10 不相容」，來源 UNKNOWN（初始化腳本的 `buildFinished`／`afterTask`／執行期 `Task.project` 為候選，R1 R-4／R-5，未證實） | 初始化腳本（待查） | 記於 S3 指令來源段；`2026-10-16T230449Z-ticket154-r1-design.md` G 節 |
+| U9 | 本票 §三之二第 6 點「`core.hooksPath` 未設」已過期（已於該點加更正註記） | 文件 | `2026-10-16T230449Z-ticket154-r1-design.md` A 節 |
+
+- 未驗證風險 R-6：Gradle 正常取消時，是否可能輸出 `complete:true` 並被包裝器誤記；本票未實測。
+
+---
+
+## 四之三｜小觀察：換行現象
+
+`git restore` 後 `pipeline.json` 與 `GreeterTest.kt` 在 `git status` 顯示 M；原始位元組不同（工作區為 CRLF），LF 正規化後與 HEAD 相同，`pipeline.json` 的 JSON 內容為 idle。這支持『沒有語意變更』；自動轉換的原因屬推論，不概括為所有情況都無害。
+
+---
+
+## 四之四｜後續
+
+1. 收票裁決（Jeff）。
+2. U1～U9 是否開上游票（Jeff）。
+3. 「AI 正式執行管道」列為減少摩擦的第一優先（Jeff 10/17 決定順序）。
 
 ---
 
@@ -208,3 +307,9 @@ agent-gates 本身需要修改時：先回報，不動手。
 - 定稿（2026-10-16，裁決助手記錄，非逐字原話）：Jeff 2026-10-16 約 13:05（美東）確認：時鐘「LifeApp 以 Kotlin 開發之前」採用；優先度高；票號 155 確認；授權提交並 push（範圍只有票 154、155 兩個票檔，合成一個提交）。裁決助手要求：repo 公開，票面上的本機路徑一律遮成 `<path>`（比照票 152）。
 - Q-ENV 核准（2026-10-16，裁決助手記錄，非逐字原話）：Jeff 2026-10-16 約 13:20（美東）核准第三節的環境工作包（一次授權），並同意範例 repo 位置 `C:\projects\t154-kotlin-sandbox`。`9398cc3` 的 CI 綠燈由 Jeff 目視確認（約 13:15，美東）。選版依據：kotlinlang.org 的 Kotlin Gradle 外掛相容表中，KGP 2.4.20–2.4.21 完整支援的 Gradle 範圍是 7.6.3–9.7.0；docs.gradle.org 的 compatibility 頁寫明 Gradle 9.x 需要 JVM 17–27。
 - 環境準備完成（2026-10-16，裁決助手記錄，非逐字原話）：Jeff 2026-10-16（美東）約 14:25 選擇人工準備 JDK／Gradle；約 15:00 接受「僅該次安裝」的驗證讀取；約 15:12 選擇照抄 agent-gates 的兩份登記冊；約 15:15 在正確說法下接受「限票 154 範例 repo」的 R10 讀取；約 15:20 授權本次提交並 push。經過見第三節之二。
+- 實測期間決定紀錄（2026-10-16～19，裁決助手記錄，非逐字原話）：
+  1. 包裝器由 Jeff 親手執行（10/16 選乙）。
+  2. Q7 原記錄「不製造 from_cache」有誤，已依 AC-B45 更正並實際製造（結果見第四節之一 AC-B45「沿用快取」）。
+  3. Wrapper 因 U4 未提交。
+  4. 反向② 加了對照組（紅燈對 H0）。
+- 實測結果寫回（2026-10-19，裁決助手記錄，非逐字原話）：Jeff 2026-10-19 約 09:51（美東）決定一次寫回本票：實測結果、U1～U9、未驗證的 R-6、兩處更正、換行現象；不重跑工具鏈；push 前停下等 Jeff 確認。
