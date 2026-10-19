@@ -1,6 +1,6 @@
 # 票 154 —— M1-b 階段 3（Kotlin）：受控環境真實工具鏈紅燈驗收
 
-**狀態**：**範例 repo 實測完成（限定範圍，見下）；待收票裁決。**（範圍見第四節之一「範圍聲明」；結果見第四節之一，上游候選見第四節之二。）
+**狀態**：~~**範例 repo 實測完成（限定範圍，見下）；待收票裁決。**（範圍見第四節之一「範圍聲明」；結果見第四節之一，上游候選見第四節之二。）~~ **已結案（2026-10-19，限定範圍，見第四節之一）。**
 **時鐘**：LifeApp 以 Kotlin 開發之前 —— 依規格 :244（R-DEP 第 3 條），某語言的階段 3 通過前，不得在 App 以該語言開發。（事件型時鐘；Jeff 2026-10-16 確認採用）
 **優先度**：高（Jeff 2026-10-16）。
 **立案**：2026-10-16（美東）。票號 154 由 Jeff 2026-10-16 指定（立案前確認 `docs/tickets/framework-updates/` 內無 154 開頭的檔案）。
@@ -211,19 +211,20 @@ E2 ①～④（AC-B42）：Greeter 帳本第 3 行為 `impl_exists:false`、`fai
 
 內容依 FIN 第 7 節；是否開上游票待裁（見第四節之四）。
 
-| # | 內容 | 性質 | 來源報告 |
-|---|---|---|---|
-| U1 | `redlight_run.py` :442-443、:461：無 `gradlew.bat` 時以裸 `"gradle"` 呼叫，Windows 上 `FileNotFoundError`（R-1，Jeff 實測成立） | 包裝器缺陷 | `2026-10-16T230449Z-ticket154-r1-design.md`（預測）；實測記於 S2 指令來源段 |
-| U2 | 產品來源集為空時 `main_compile='no_source'`，編譯失敗路徑不寫紅燈（R-2，Jeff 實測成立；範圍限空專案＋編譯失敗路徑） | 包裝器／規格待裁 | `2026-10-16T230449Z-ticket154-r1-design.md`（預測）；實測記於 S2 指令來源段 |
-| U3 | R7 許可前綴不認 `VAR=value` 開頭的指令，`python .claude/` 包裝器在帶環境變數時只因「看不出寫入」而放行；ADR 0008 無明示管道、下游無登記位置 | 規則／程序 | `2026-10-16T234111Z-ticket154-s1-first-run.md` |
-| U4 | `leak_scan` 把 `gradle-wrapper.jar` 判為「讀不到內容」擋下（`scanner.py` `SKIP_SUFFIX` 收 `.zip` 未收 `.jar`，裁決助手讀碼）；放行方式待裁 | 掃描器 | `2026-10-17T003922Z-ticket154-s2-wrapper-seed.md` |
-| U5 | `exemption_hint` 對 Kotlin 實作檔建議「`NON_SOURCE_EXT` 加一筆 `'.kt'`」，照做會讓 R2／R3 對全部 `.kt` 失效 | 訊息 | `2026-10-17T021046Z-ticket154-rc1-orphan.md` |
-| U6 | 硬中斷建置程序後，測試工作程序與 Kotlin daemon 成為孤兒、不自行退出 | 包裝器／環境 | 範例 repo 無對應報告；記於 RC3 指令來源段 |
-| U7 | `redlight_missing` 訊息優先序：本票有紅燈但不合格、同時有舊票紅燈時，印出「沒有一筆屬於當前票」，與事實不符 | 訊息 | `2026-10-19T124047Z-ticket154-rc2-impl-exists-red.md` |
-| U8 | Gradle 輸出「已棄用功能，與 Gradle 10 不相容」，來源 UNKNOWN（初始化腳本的 `buildFinished`／`afterTask`／執行期 `Task.project` 為候選，R1 R-4／R-5，未證實） | 初始化腳本（待查） | 記於 S3 指令來源段；`2026-10-16T230449Z-ticket154-r1-design.md` G 節 |
-| U9 | 本票 §三之二第 6 點「`core.hooksPath` 未設」已過期（已於該點加更正註記） | 文件 | `2026-10-16T230449Z-ticket154-r1-design.md` A 節 |
+| # | 內容 | 性質 | 來源報告 | 分流去向（Jeff 2026-10-19） |
+|---|---|---|---|---|
+| U1 | `redlight_run.py` :442-443、:461：無 `gradlew.bat` 時以裸 `"gradle"` 呼叫，Windows 上 `FileNotFoundError`（R-1，Jeff 實測成立） | 包裝器缺陷 | `2026-10-16T230449Z-ticket154-r1-design.md`（預測）；實測記於 S2 指令來源段 | 合併為一張「包裝器與閘門訊息」上游票（票號待 Jeff 指定），fixture 一併處理 |
+| U2 | 產品來源集為空時 `main_compile='no_source'`，編譯失敗路徑不寫紅燈（R-2，Jeff 實測成立；範圍限空專案＋編譯失敗路徑） | 包裝器／規格待裁 | `2026-10-16T230449Z-ticket154-r1-design.md`（預測）；實測記於 S2 指令來源段 | 合併為一張「包裝器與閘門訊息」上游票（票號待 Jeff 指定），fixture 一併處理 |
+| U3 | R7 許可前綴不認 `VAR=value` 開頭的指令，`python .claude/` 包裝器在帶環境變數時只因「看不出寫入」而放行；ADR 0008 無明示管道、下游無登記位置 | 規則／程序 | `2026-10-16T234111Z-ticket154-s1-first-run.md` | 併入「AI 正式執行管道」票（票號待指定） |
+| U4 | `leak_scan` 把 `gradle-wrapper.jar` 判為「讀不到內容」擋下（`scanner.py` `SKIP_SUFFIX` 收 `.zip` 未收 `.jar`，裁決助手讀碼）；放行方式待裁 | 掃描器 | `2026-10-17T003922Z-ticket154-s2-wrapper-seed.md` | 單獨一張上游票（`.jar` 掃描，票號待指定） |
+| U5 | `exemption_hint` 對 Kotlin 實作檔建議「`NON_SOURCE_EXT` 加一筆 `'.kt'`」，照做會讓 R2／R3 對全部 `.kt` 失效 | 訊息 | `2026-10-17T021046Z-ticket154-rc1-orphan.md` | 合併為一張「包裝器與閘門訊息」上游票（票號待 Jeff 指定），fixture 一併處理 |
+| U6 | 硬中斷建置程序後，測試工作程序與 Kotlin daemon 成為孤兒、不自行退出 | 包裝器／環境 | 範例 repo 無對應報告；記於 RC3 指令來源段 | 合併為一張「包裝器與閘門訊息」上游票（票號待 Jeff 指定），fixture 一併處理 |
+| U7 | `redlight_missing` 訊息優先序：本票有紅燈但不合格、同時有舊票紅燈時，印出「沒有一筆屬於當前票」，與事實不符 | 訊息 | `2026-10-19T124047Z-ticket154-rc2-impl-exists-red.md` | 合併為一張「包裝器與閘門訊息」上游票（票號待 Jeff 指定），fixture 一併處理 |
+| U8 | Gradle 輸出「已棄用功能，與 Gradle 10 不相容」，來源 UNKNOWN（初始化腳本的 `buildFinished`／`afterTask`／執行期 `Task.project` 為候選，R1 R-4／R-5，未證實） | 初始化腳本（待查） | 記於 S3 指令來源段；`2026-10-16T230449Z-ticket154-r1-design.md` G 節 | 只記錄，待查 |
+| U9 | 本票 §三之二第 6 點「`core.hooksPath` 未設」已過期（已於該點加更正註記） | 文件 | `2026-10-16T230449Z-ticket154-r1-design.md` A 節 | 已於本票更正，結案 |
 
 - 未驗證風險 R-6：Gradle 正常取消時，是否可能輸出 `complete:true` 並被包裝器誤記；本票未實測。
+  - 分流去向（Jeff 2026-10-19）：併入包裝器票，列為待驗證。
 
 ---
 
@@ -235,9 +236,44 @@ E2 ①～④（AC-B42）：Greeter 帳本第 3 行為 `impl_exists:false`、`fai
 
 ## 四之四｜後續
 
-1. 收票裁決（Jeff）。
-2. U1～U9 是否開上游票（Jeff）。
-3. 「AI 正式執行管道」列為減少摩擦的第一優先（Jeff 10/17 決定順序）。
+1. 收票：已完成，見第四節之五。
+2. U 分流：已裁，見第四節之二。
+3. AI 正式執行管道為下一個優先事項（「AI 正式執行管道」列為減少摩擦的第一優先；Jeff 10/17 決定順序）。
+
+---
+
+## 四之五｜收票裁決（2026-10-19）
+
+依 FIN、REC、REC2、P 報告對照第四節「完成條件」，不另開收票檢查站（裁決助手建議，Jeff 2026-10-19 裁定）。FIN 在範例 repo `<sandbox>` 的 `.dev/reports/`；REC、REC2、P 在 agent-gates 本機 `.dev/reports/`（不進版控）。推送：`0462704707e1daffbd409a1953b14ab80dba9afa` 已推上遠端；該 SHA 的 push 事件 CI 綠燈由 Jeff 2026-10-19 約 12:57（美東）目視確認（未獨立查證）。
+
+### 完成條件對照
+
+| 條件 | 判定 | 說明 | 證據 |
+|---|---|---|---|
+| §5 步驟 1～5（AC-B40） | 完成 | 「可重現」依據留存的各站指令與報告，未重做第二次 | `2026-10-19T132037Z-ticket154-fin-closing.md` 第 6 節；各站報告見第四節之一 |
+| §5 步驟 6 反向①～④（AC-B41） | 完成 | 同上 | `2026-10-19T132037Z-ticket154-fin-closing.md` 第 6 節；`2026-10-17T021046Z-ticket154-rc1-orphan.md`、`2026-10-19T124047Z-ticket154-rc2-impl-exists-red.md`、`2026-10-19T122129Z-ticket154-rc3-modify-during-run.md` |
+| AC-B42（E2 ①～④） | 判滿足（見下） | 產品來源集非空時 ①～④ 全部量到；空專案的第一支檔被 `no_source` 拒絕（U2） | `2026-10-19T132037Z-ticket154-fin-closing.md` 第 6 節；`2026-10-17T015600Z-ticket154-s4-greeter-impl.md` |
+| AC-B44（建置檔不變） | 完成 | 不是每次執行前後都有量，FIN 已註明 | `2026-10-19T132037Z-ticket154-fin-closing.md` 第 2 節 |
+| AC-B45（四種情形） | 完成 | 四種情況都已製造，都沒有寫入合格紀錄；AC-B33 辨識方式定案見下 | `2026-10-19T132037Z-ticket154-fin-closing.md` 第 6 節；`2026-10-17T024014Z-ticket154-b45-skip.md`、`2026-10-19T120646Z-ticket154-b45-interrupt.md` |
+
+### AC-B42 判定
+
+判滿足（Jeff 2026-10-19）。限制：產品來源集為空時，編譯失敗紅燈被 `no_source` 拒絕；空專案的第一支 Kotlin 檔須先走執行期失敗紅燈（Seed 型）取得紅燈。U2 另開上游票。未放寬 R3。
+
+### AC-B33 定案（依 AC-B45 實測）
+
+Kotlin 包裝器『不寫合格紀錄』的辨識方式，依本票實測：
+
+- ① `:app:test` 為 `up_to_date`、`executed:false` → 原因『測試任務沒有本次執行證據(test='up_to_date')』；
+- ② `:app:test` 為 `from_cache`、`executed:false` → 原因『測試任務沒有本次執行證據(test='from_cache')』；
+- ③ 測試任務本次執行，但該類別的測試全部為 `skipped` → 原因『該測試檔的測試全部被跳過』；
+- ④ 建置程序被硬中斷、本次輸出目錄沒有 `kotlin-result.json` → 原因『本次輸出目錄裡沒有 kotlin-result.json(工具沒有寫出輸出)』。
+
+以上四種，帳本均未新增紀錄。未驗證：Gradle 正常取消（R-6）、任務層級 SKIPPED（需改建置檔或包裝器參數，本票未製造）。
+
+### fixture
+
+真實輸出是否收回 agent-gates 當測試樣本：不擋結案，併入 U 分流的包裝器票，後續再裁（Jeff 2026-10-19）。
 
 ---
 
@@ -292,7 +328,7 @@ E2 ①～④（AC-B42）：Greeter 帳本第 3 行為 `impl_exists:false`、`fai
 
 ## 七｜未決事項
 
-- **真實輸出要不要收回 agent-gates 當 fixture**：等 Kotlin 份通過後再裁。R0 問題 4，VS（R0 所在的 VS Code 視窗）建議 (a)；**Jeff 尚未裁**。
+- **真實輸出要不要收回 agent-gates 當 fixture**：等 Kotlin 份通過後再裁。R0 問題 4，VS（R0 所在的 VS Code 視窗）建議 (a)；**Jeff 尚未裁**。〔2026-10-19 加註〕→ 見第四節之五，併入後續。
 - **規格 v4 是否存在**：UNKNOWN（票 152 §6 K12 提到「規格 v4 定案」）。
 - 時鐘、優先度已由 Jeff 2026-10-16 確認（見修正紀錄）。
 
@@ -315,3 +351,9 @@ E2 ①～④（AC-B42）：Greeter 帳本第 3 行為 `impl_exists:false`、`fai
   4. 反向② 加了對照組（紅燈對 H0）。
 - 實測結果寫回（2026-10-19，裁決助手記錄，非逐字原話）：Jeff 2026-10-19 約 09:51（美東）決定一次寫回本票：實測結果、U1～U9、未驗證的 R-6、兩處更正、換行現象；不重跑工具鏈；push 前停下等 Jeff 確認。
 - 路徑遮罩（2026-10-19，裁決助手記錄，非逐字原話）：依定稿「本機路徑一律遮成 <path>」，把票面本機路徑改為代稱 <sandbox>／<tools>（其中 1 處由 b098328 加入，係 REC 指令允許所致）；§三標題「相依套件尚未下載」已過期，一併更正。已 push 的舊版本留在歷史中，不改寫歷史。
+- 收票裁決（2026-10-19，裁決助手記錄，非逐字原話）：`0462704707e1daffbd409a1953b14ab80dba9afa` 已推上遠端，Jeff 2026-10-19 約 12:57（美東）目視確認該 SHA 的 push 事件 CI 為綠燈（未獨立查證）。Jeff 約 13:05（美東）裁定：
+  1. AC-B42 判滿足，限制記入票面：空專案的第一支 Kotlin 檔，必須先走執行期失敗紅燈（Seed 型）；U2 另開上游票處理。不放寬 R3。
+  2. AC-B33 照實測結果寫定案：只寫實測過的四種；R-6 標為未驗證。
+  3. fixture（真實輸出是否收回 agent-gates）不擋結案：併入 U 分流，後續再裁。
+  4. U1～U9 照建議分流（見第四節之二）。票號日後由 Jeff 指定；本次只寫分流去向，不建立新票檔。
+  收票後的下一個優先事項為「AI 正式執行管道」（10/17 決定的順序）。結果見第四節之五。
