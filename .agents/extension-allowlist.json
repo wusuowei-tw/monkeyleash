@@ -11,7 +11,8 @@
     }
   ],
   "project_settings_hook_commands": [
-    "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py\""
+    "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py\"",
+    "sh \"$CLAUDE_PROJECT_DIR/.claude/bin/gatepy\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py\""
   ],
   "mcp_json_servers": []
 }
