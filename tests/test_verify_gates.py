@@ -536,7 +536,7 @@ class TestTicket146Cleanroom:
         seen = {}
 
         def fake_main(target):
-            os.makedirs(os.path.join(target, ".git", "hooks"))
+            os.makedirs(os.path.join(target, ".git", "hooks"), exist_ok=True)  # 票 156 D-11:target 先由 prepare_target_env 備好(git init),不再假定為空
             with open(os.path.join(target, ".git", "hooks", "pre-commit"), "w", encoding="utf-8") as f:
                 f.write("#!/bin/sh\npython .claude/portable/leak_scan.py --staged\n")
             with open(os.path.join(target, ".gitignore"), "w", encoding="utf-8") as f:

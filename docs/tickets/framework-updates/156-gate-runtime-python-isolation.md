@@ -93,6 +93,17 @@
   - D-11（兩層）：
     1. **核心**（verify_gates 與 RT 測試）：用 fixture、tmp repo、monkeypatch 或假的安裝步驟，**沒有網路也必須能完整驗證控制流程與 fail-closed 行為**；一般 `verify_gates` 必須能離線、可重現地綠燈，PyPI／網路是否可用不得是它綠燈的必要條件。
     2. **真實 bootstrap 整合**：照帶 hash 的鎖定檔真的建出 `.venv-gates`。CI 可在**明確允許網路**的整合步驟／job 執行；本機執行須 Jeff 明確授權；至少成功一次才算滿足驗收 9。CI 已有合適 job 就用它，沒有就設計最小的一條，不趁機重構 CI。
+- **S4a 裁決（D-S4-1～D-S4-8）**：實作分八站 S4b → S4c → S4c′（金絲雀）→ S4d → S4e-1 → S4e-2 → S4f → S4g，D-S4-1～8 全照 S4a 建議，其中三條加邊界。（Jeff 2026-10-19 約 21:15（美東），裁決助手記錄，非逐字原話）
+  - D-S4-1：身分檢查只在「正式直接執行 `gate.py`」時啟動（接在 `__main__`），`import gate` 本身不得觸發；同意在 S4e-2 修改真的會啟動 gate.py 子行程的 3 條既有測試（T146-59／60／60b 的 `_t146_pre_commit`）改用 target 的 `.venv-gates`，但只能讓測試符合新契約，不得 monkeypatch 掉、繞過或放寬正式身分檢查。
+  - D-S4-4：S4b～S4g 每站一筆本機提交（錨點 A1～A7）；push 延到全部本機驗證完成後，push 前仍須核對遠端基線、提交範圍與最終 diff，不得盲推。
+  - D-S4-7：不預先修改 R7；以 `.venv-gates` 的 Python 跑測試若被 R7 擋，立即停、保留原始拒絕訊息，回來裁決。
+  - 其餘照建議：D-S4-2（S4e 拆兩段，中間重開 session）、D-S4-3（加 S4c′）、D-S4-5（鎖定檔照 P3 六步）、D-S4-6（`PyYAML==6.0.3`）、D-S4-8（D-4 觀測不符即停，不擴大清單）。
+- **S4b 裁決（甲案兩處、帳本 append-only）**：（Jeff 2026-10-20 約 08:21（美東）裁決，裁決助手記錄，非逐字原話）
+  - 甲案兩處：`tests/test_install.py:79-81` 的 framework 清單期望值加入 `.venv-gates/`（Jeff 2026-10-19 約 21:29（美東）裁）；`tests/test_verify_gates.py` 的 `test_t146_52b` 假安裝程式改為 `os.makedirs(…, exist_ok=True)`（Jeff 2026-10-20 約 08:21（美東）裁）。理由：兩處都是讓舊測試對齊 D-11／G4 的新契約（target 在 install 前先備好），不是放寬檢查；授權只限這兩處，再出現就停下等裁決。
+  - 帳本 append-only 驗收：`gate.py` 合法自我修改時 `.dev/gate-exemptions.jsonl` 會自動追加紀錄，屬既有機制的正常證據。驗收改為嚴格 append-only：原始基線 319 行（sha256 `2a72d6976e1812e536a08d68ea25dedec8897e98092b86a4dc9f3505964e870e`）位元組完全不變；只允許在 EOF 之後追加、且只能是票 156 本次 `gate.py` 自我修改產生的紀錄，逐欄核對；提交時既有機制最多再追加一筆，同樣逐欄核對；不得有刪除、改寫、插入或任何不相關的額外紀錄；筆數或內容異常立即停下，不得解釋成正常自動紀錄；帳本永遠不 stage、不 commit、不 restore。
+  - `setup_gates_env.main(argv, install_step=None)`：多出的注入參數預設就是真正的安裝步驟（`_install_lock`）；用途是讓 verify_gates 的核心模式傳入離線假步驟，而不必在正式程式裡改模組屬性。
+  - `gatepy` 判斷候選直譯器只用 `-f`、不用 `-x`：Windows 沒有執行位元；就算命中一個不可執行的檔，`exec` 也會失敗，結果仍是擋下，不會放行。
+  - **留給 S4f 的待裁**：核心模式下暫存 target 的 `.venv-gates` 是空的，install 的事前檢查（downstream profile 需要 pyyaml、pytest）預期會失敗；核心模式要怎麼通過這一關，S4f 再裁。
 
 ---
 
@@ -354,3 +365,4 @@
 - G1～G4 補入（2026-10-19，裁決助手記錄，非逐字原話）；設計契約封版。
 - F0c (a)(b)(c) 補入；票面封版（2026-10-19，裁決助手記錄，非逐字原話）。
 - S3b 紅燈與 D-1～D-11 補入（2026-10-19，裁決助手記錄，非逐字原話）。
+- S4a 裁決（D-S4-1～8）與 S4b 裁決（甲案兩處、帳本 append-only、`install_step` 參數、gatepy 只用 `-f`、S4f 待裁）補入；S4b 離線實作（錨點 A1）（2026-10-20，裁決助手記錄，非逐字原話）。

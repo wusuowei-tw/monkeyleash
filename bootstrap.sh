@@ -75,6 +75,33 @@ if [ "$mode" != "100755" ]; then
     exit 1
 fi
 
+# ── 票 156 D-9:閘門專用環境 —— **只驗證、不安裝** ────────────────────────
+# hook 經 .claude/bin/gatepy 只認 .venv-gates;那個環境不在或身分不合法時,
+# 設下 core.hooksPath 等於把每一次 commit 都鎖死(gatepy exit 2)。所以同樣檢查在設定之前。
+# 建立環境是 setup_gates_env.py 的事(要連網),不在這裡做。
+venv_py=""
+for cand in ".venv-gates/Scripts/python.exe" ".venv-gates/bin/python"; do
+    if [ -f "$cand" ]; then
+        venv_py="$cand"
+        break
+    fi
+done
+if [ -z "$venv_py" ]; then
+    echo "[bootstrap/fail-closed] 找不到 .venv-gates 的直譯器(查過 .venv-gates/Scripts/python.exe、.venv-gates/bin/python)—— 拒絕設定 core.hooksPath。" >&2
+    echo "     新的 hook 經 gatepy 只認 .venv-gates;先從上游執行 setup_gates_env.py <repo>(票 156)。" >&2
+    exit 1
+fi
+
+# profile:上游測試鎖定檔只存在於上游(manifest 標 skip,不隨安裝出貨)。
+profile="downstream"
+if [ -f ".claude/portable/gates-lock-upstream-tests.txt" ]; then
+    profile="upstream"
+fi
+if ! sh "$root/.claude/bin/gatepy" "$root/.claude/portable/runtime_identity.py" --whoami --repo "$root" --profile "$profile"; then
+    echo "[bootstrap/fail-closed] .venv-gates 的身分檢查(runtime_identity.py --whoami,profile=$profile)不合法 —— 拒絕設定 core.hooksPath。" >&2
+    exit 1
+fi
+
 git config core.hooksPath .githooks
 
 echo "[bootstrap] core.hooksPath -> .githooks"

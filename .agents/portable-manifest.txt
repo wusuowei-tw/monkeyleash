@@ -87,6 +87,14 @@ bootstrap.sh                    skip
 .claude/portable/               copy
 .claude/patches/                copy
 .claude/settings.json           copy
+# 票 156(G1):閘門專用 Python 環境。**逐檔明確標記,不靠 `.claude/portable/` 的前綴推斷。**
+# 啟動器與核心鎖定檔、身分自檢、setup 是每個 repo 共用的框架事實 ⇒ copy;
+# 上游測試鎖定檔(mcp / anyio)只給上游自己的 MCP 測試用 ⇒ skip(D9:下游 .venv-gates 不裝 mcp / anyio)。
+.claude/bin/gatepy              copy
+.claude/portable/gates-lock.txt copy
+.claude/portable/runtime_identity.py copy
+.claude/portable/setup_gates_env.py copy
+.claude/portable/gates-lock-upstream-tests.txt skip
 .agents/pipeline-stages.yaml    copy
 .agents/skills/                 copy
 # 使用者層分類表(票 22 Phase 2)。**copy 而不是 generate**:它列的是
@@ -281,6 +289,15 @@ tests/test_synced_platform_149.py copy
 # 它的測試與合成樣本一起出貨。**標記不等於同步**:下游同步仍未授權(規格 R-DEP)。
 tests/test_redlight_run.py      copy
 tests/fixtures/redlight_run/    copy
+# 票 156(D-5,S3a 6-7):身分自檢與 setup 的測試出貨(它們只用 fixture 與核心鎖定檔);
+# hook 範本 fixture 出貨(`--rehook` 的測試要用)。
+# **不出貨**:`test_runtime_identity_upstream.py` 讀上游測試鎖定檔與上游自己的 manifest / .gitignore;
+# `test_gatepy.py` 載入 skip 檔 `test_bootstrap.py` 的 find_sh,並讀上游的 `.githooks/pre-commit` 與歷史。
+tests/test_runtime_identity.py  copy
+tests/test_runtime_identity_upstream.py skip
+tests/test_setup_gates_env.py   copy
+tests/test_gatepy.py            skip
+tests/fixtures/hooks/           copy
 # **不出貨**:「每一筆追蹤檔案都要有標記」是上游的性質,不是每個 repo 的。
 # 出貨的話,任何有自己專案檔案的 repo 都天生帶紅 —— 而出生即紅會訓練人
 # 忽略訊號(F-031),被訓練出來的習慣下次會濾掉一條真的紅。

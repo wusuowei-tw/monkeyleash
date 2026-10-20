@@ -1,0 +1,25 @@
+#!/bin/sh
+# 閘門專用直譯器啟動器(票 156)。
+#
+# 只認 <repo>/.venv-gates 的直譯器 —— Scripts/python.exe(Windows 版面)、bin/python(POSIX)。
+# 找不到就 exit 2;**絕不**退回 .venv 或 PATH 上的直譯器(約束 1)。
+# repo 根只從本檔自己的位置推出(.claude/bin/ 往上兩層),不問 git、不看 CLAUDE_PROJECT_DIR。
+# 唯一職責是選定直譯器並原樣轉交參數;身分判定在 runtime_identity.py(D-3)。
+
+self=$0
+dir=${self%[/\\]*}
+if [ "$dir" = "$self" ]; then
+    dir=.
+fi
+here=$(cd "$dir" && pwd -P) || exit 2
+root=$(cd "$here/../.." && pwd -P) || exit 2
+
+for cand in "$root/.venv-gates/Scripts/python.exe" "$root/.venv-gates/bin/python"; do
+    if [ -f "$cand" ]; then
+        exec "$cand" "$@"
+    fi
+done
+
+echo "[gatepy] 找不到 $root/.venv-gates 的直譯器(查過 .venv-gates/Scripts/python.exe、.venv-gates/bin/python)。" >&2
+echo "         本啟動器不退回 .venv 或 PATH 上的直譯器。建立方式:從上游 checkout 執行 setup_gates_env.py <repo>(票 156)。" >&2
+exit 2

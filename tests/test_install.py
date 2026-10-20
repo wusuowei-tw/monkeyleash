@@ -77,7 +77,8 @@ class TestInstallerDefaults:
     def test_framework_ignores_unchanged(self, install_mod):
         """框架垃圾清單不因秘密清單的加入而變動(前導斜線語意見 install.py 註解)。"""
         assert install_mod.GITIGNORE_FRAMEWORK == (
-            "__pycache__/", ".cache/", "/.claude/skills/", "/skills/")
+            "__pycache__/", ".cache/", "/.claude/skills/", "/skills/",
+            ".venv-gates/")  # 票 156 G4:framework 清單含 .venv-gates/
 
 
 class TestEnumerationDoesNotLoseFilesToGitignore:

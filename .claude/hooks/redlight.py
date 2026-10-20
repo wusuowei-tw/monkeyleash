@@ -89,7 +89,7 @@ def current_ticket():
 # 把本份併過去會讓 `.scratch/` 底下的碼脫離站別限制(R7 的官方出口就指向那裡),
 # 並讓 `gate.PROTOTYPE_RE` 靜默變死碼。
 # 差集由 `tests/test_non_source_list_parity.py` 釘住 —— **對的是差集,不是相等。**
-_SEARCH_SKIP = {".git", ".venv", "node_modules", "__pycache__", ".cache",
+_SEARCH_SKIP = {".git", ".venv", ".venv-gates", "node_modules", "__pycache__", ".cache",
                 ".scratch", ".dev", "tests", "docs", ".agents", "skills",
                 "build", "logs", "assets", "tradingagents.egg-info"}
 

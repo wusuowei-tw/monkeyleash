@@ -65,14 +65,26 @@ HOOK = ("#!/bin/sh\n"
         "# 洩漏偵測在前:秘密一旦進了歷史,擋下 commit 是唯一便宜的時點。\n"
         "# 之前只接 gate.py —— 裝出來的 repo 對真 key 的 commit 完全放行(負控實測),\n"
         "# 而 F-055 說的就是洩漏 hook 不會自己跟過去。接線是安裝器的責任。\n"
+        "# 直譯器只經 .claude/bin/gatepy 取 .venv-gates(票 156);不退回 .venv 或 PATH 上的 python。\n"
         'root="$(git rev-parse --show-toplevel)"\n'
-        'python "$root/.claude/portable/leak_scan.py" --staged || exit 1\n'
-        'exec python "$root/.claude/hooks/gate.py" --pre-commit\n')
+        'sh "$root/.claude/bin/gatepy" "$root/.claude/portable/leak_scan.py" --staged || exit 1\n'
+        'exec sh "$root/.claude/bin/gatepy" "$root/.claude/hooks/gate.py" --pre-commit\n')
+
+# 已知的 agent-gates HOOK 範本(票 156 第三節第 7 條第 6 點):版本 ID → sha256(LF 標準形,UTF-8)。
+# `--rehook` 只認這張表裡的內容(比對前唯一允許的正規化是 CRLF→LF,G2)。
+# fixture 在 tests/fixtures/hooks/;表與範本不漂移由 tests/test_install.py 守。
+KNOWN_HOOKS = {
+    "hook-v1-bare-python": "eb6ee62cfb31803c26c3547822ba76b8104d111f759a960774d425a6b1f1c807",
+    "hook-v2-gatepy": "091c0290f0e9c43441678f3c33391a31d8260c84764c9c86270e688fa1ccd83d",
+}
+VENV_GATES = ".venv-gates"
 
 # 安裝出的 repo 的 .gitignore 必帶兩組:框架垃圾 + 秘密檔。
 # 秘密那組是預設值問題:框架裝好的新專案,第一個放進去的秘密(.env)
 # 原本不被任何規則守著 —— 不是使用者疏忽,是安裝器沒給預設。
-GITIGNORE_FRAMEWORK = ("__pycache__/", ".cache/", "/.claude/skills/", "/skills/")
+# `.venv-gates/`(票 156 G4):閘門專用 venv,新下游由 setup_gates_env 先登記在 .git/info/exclude,
+# 正式安裝時由這裡永久寫進 .gitignore。
+GITIGNORE_FRAMEWORK = ("__pycache__/", ".cache/", "/.claude/skills/", "/skills/", ".venv-gates/")
 # 憑證副檔名用組裝而不寫死 —— 寫死的話 leak_scan 的通用 pattern 會擋住
 # 本檔自己的 commit(防禦清單長得像洩漏)。與 tests/test_leak_scan.py 同一手法。
 GITIGNORE_SECRETS = ((".env", ".env.*", "!.env.example", "credentials.json",
@@ -544,12 +556,156 @@ def write_decisions_pending(target, buckets, carried_untracked, unmarked, policy
     return path
 
 
+def target_venv_python(target):
+    """`<target>/.venv-gates` 的直譯器(Windows 版面優先,其次 POSIX)。沒有回 None —— **不找別的**。"""
+    for rel in (("Scripts", "python.exe"), ("bin", "python")):
+        p = os.path.join(target, VENV_GATES, *rel)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _run_target_identity(target):
+    """事前檢查唯一的子行程入口(票 156 D-10 / F0c (b))。回 `(ok, 輸出)`。
+
+    用 **target 自己的** `.venv-gates` 直譯器,執行**上游**(本檔所在 repo)的 `runtime_identity.py`,
+    明確帶 `--repo <target> --profile downstream`。不用本行程的 `sys.executable`,
+    不另寫第二套環境驗證邏輯 —— 身分判定只有 runtime_identity 那一份。
+    """
+    py = target_venv_python(target)
+    if py is None:
+        return False, "沒有 %s 的直譯器" % os.path.join(target, VENV_GATES)
+    argv = [py, os.path.join(SRC_ROOT, ".claude", "portable", "runtime_identity.py"),
+            "--repo", target, "--profile", "downstream"]
+    p = subprocess.run(argv, capture_output=True)
+    out = ((p.stdout or b"") + (p.stderr or b"")).decode("utf-8", "replace")
+    return p.returncode == 0, out
+
+
+def precheck(target):
+    """`main()` 在**任何寫入之前**的檢查(G4)。不合法就結束,target 一個位元組都不動。
+
+    target 必須已存在(`os.makedirs(target)` 本身就是寫入,所以排在它之前)、
+    `.venv-gates` 的直譯器存在、身分檢查與 downstream(core)profile 都合法。
+    新下游的順序是:從上游執行 `setup_gates_env.py <target>` → 驗身分 → 才執行本檔。
+    """
+    if not os.path.isdir(target):
+        raise SystemExit("[安裝/事前檢查] %s 不存在 —— 不替你建立。新下游請先從上游執行 "
+                         "setup_gates_env.py <target>(它要求 target 已 git init)。" % target)
+    if target_venv_python(target) is None:
+        raise SystemExit("[安裝/事前檢查] %s 沒有 .venv-gates 的直譯器 —— 拒絕安裝,target 未被寫入。\n"
+                         "     先從上游執行:python .claude/portable/setup_gates_env.py %s" % (target, target))
+    ok, out = _run_target_identity(target)
+    if not ok:
+        raise SystemExit("[安裝/事前檢查] %s/.venv-gates 的身分檢查不合法 —— 拒絕安裝,target 未被寫入:\n%s"
+                         % (target, out))
+
+
+# ── `--rehook`(票 156 D11)──────────────────────────────────────────────────────
+#
+# 只寫 `.git/hooks/pre-commit` 與 `.githooks/pre-commit`,其他檔一律不碰;不自動提交。
+# 兩支**分別**判定所有權:存在就必須(CRLF→LF 之後)逐位元組等於 KNOWN_HOOKS 的某一版。
+# 任何一支不認得、缺一支 ⇒ 整次 fail-closed,兩支都不寫。
+# 更新是**全有或全無**:先保存兩支原始內容與 metadata,替換失敗就把已換掉的復原。
+# 這是以保存與復原達成的全有或全無,**不是**檔案系統層的跨檔原子交易。
+
+_REHOOK_PATHS = ((".git", "hooks", "pre-commit"), (".githooks", "pre-commit"))
+
+
+def _lf(data):
+    """唯一允許的正規化(G2):CRLF → LF。不刪空白、不動 BOM、不改編碼。"""
+    return data.replace(b"\r\n", b"\n")
+
+
+def _known_hook_id(data):
+    import hashlib
+    digest = hashlib.sha256(_lf(data)).hexdigest()
+    for vid, sha in KNOWN_HOOKS.items():
+        if sha == digest:
+            return vid
+    return None
+
+
+def _replace_hook(path, data):
+    """替換單一 hook 檔(同目錄暫存檔 + `os.replace`),保留原本的 mode。RT8(i) 的注入點。"""
+    mode = os.stat(path).st_mode
+    tmp = path + ".rehook-tmp"
+    try:
+        with io.open(tmp, "wb") as f:
+            f.write(data)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def _restore_hook(path, saved):
+    data, mode, atime_ns, mtime_ns = saved
+    with io.open(path, "wb") as f:
+        f.write(data)
+    os.chmod(path, mode)
+    os.utime(path, ns=(atime_ns, mtime_ns))
+
+
+def rehook(target):
+    """已安裝的下游**只刷新 pre-commit**。回 `"updated"` 或 `"no-op"`;拒絕 ⇒ SystemExit。"""
+    target = os.path.abspath(target)
+    for rel in ((".claude", "hooks", "gate.py"), (".agents", "extension-allowlist.json")):
+        if not os.path.isfile(os.path.join(target, *rel)):
+            raise SystemExit("[rehook] %s 沒有裝過 agent-gates(缺 %s)—— 拒絕。"
+                             % (target, "/".join(rel)))
+    if target_venv_python(target) is None:
+        raise SystemExit("[rehook] %s 沒有 .venv-gates 的直譯器 —— 拒絕(新 hook 經 gatepy 只認 .venv-gates)。"
+                         % target)
+    paths = [os.path.join(target, *rel) for rel in _REHOOK_PATHS]
+    missing = [p for p in paths if not os.path.isfile(p)]
+    if missing:
+        raise SystemExit("[rehook] 缺 %s —— 現行安裝契約一定同時寫這兩支,缺一支不是它會產生的狀態;"
+                         "fail-closed,兩支都不寫。" % "、".join(missing))
+    bodies = []
+    for p in paths:
+        with io.open(p, "rb") as f:
+            bodies.append(f.read())
+    unknown = [p for p, b in zip(paths, bodies) if _known_hook_id(b) is None]
+    if unknown:
+        raise SystemExit("[rehook] 這些 hook 的內容不是已登記的 agent-gates 範本(手工改過或自訂):%s"
+                         " —— fail-closed,兩支都不寫。" % "、".join(unknown))
+    desired = HOOK.encode("utf-8")
+    if all(_lf(b) == desired for b in bodies):
+        return "no-op"
+    saved = {}
+    for p, b in zip(paths, bodies):
+        st = os.stat(p)
+        saved[p] = (b, st.st_mode, st.st_atime_ns, st.st_mtime_ns)
+    done = []
+    try:
+        for p, b in zip(paths, bodies):
+            if _lf(b) == desired:
+                continue
+            _replace_hook(p, desired)
+            done.append(p)
+    except BaseException:
+        for p in done:
+            _restore_hook(p, saved[p])
+        raise
+    return "updated"
+
+
 def verify(target):
     """安裝時**強制**跑一次。不通過就不算安裝完成。
 
     票 01 只驗 R2(最薄的端到端);全規則機器列舉的版本是票 02。
+
+    **直譯器(票 156 D-10)**:明確取 `<target>/.venv-gates` 的那一支執行 gate ——
+    不經 sh 或 gatepy(從 PowerShell 跑安裝時 PATH 上通常沒有 sh)、
+    不用裸 `python`、不用本行程的 `sys.executable`、不退回 PATH。
     """
-    rc, out = run(["python", os.path.join(".claude", "hooks", "gate.py"), "--pre-commit"],
+    py = target_venv_python(target)
+    if py is None:
+        raise SystemExit("安裝後驗證找不到 %s 的直譯器 —— 拒絕(不退回其他 Python)。"
+                         % os.path.join(target, VENV_GATES))
+    rc, out = run([py, os.path.join(".claude", "hooks", "gate.py"), "--pre-commit"],
                   target, check=False)
     if rc != 0:
         hint = ""
@@ -622,6 +778,7 @@ def refuse_if_dirty(target):
 
 def main(target):
     target = os.path.abspath(target)
+    precheck(target)              # 票 156 G4:任何寫入之前(含下一行的 makedirs)
     os.makedirs(target, exist_ok=True)
     refuse_if_dirty(target)
     if not os.path.isdir(os.path.join(target, ".git")):
@@ -703,6 +860,10 @@ def main(target):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit("用法:python .claude/portable/install.py <目標目錄>")
+    if len(sys.argv) == 3 and sys.argv[1] == "--rehook":
+        _out("[rehook] %s" % rehook(sys.argv[2]))
+        sys.exit(0)
+    if len(sys.argv) != 2 or sys.argv[1].startswith("--"):
+        raise SystemExit("用法:python .claude/portable/install.py <目標目錄>\n"
+                         "      python .claude/portable/install.py --rehook <已安裝的目標目錄>")
     main(sys.argv[1])

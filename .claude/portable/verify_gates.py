@@ -37,6 +37,8 @@ sys.path.insert(0, HERE)
 
 import install  # noqa: E402
 import friction_heading  # noqa: E402  (發號標題判準,與 sync 同一份)
+import runtime_identity  # noqa: E402  (票 156:鎖定檔與 profile 只有一個定義處;import 時不讀鎖定檔)
+import setup_gates_env  # noqa: E402  (票 156 D-11:暫存 target 的 .venv-gates 由同一支 setup 建立)
 
 
 def _out(text):
@@ -531,22 +533,26 @@ def _ev_set_ticket(target, ticket):
 
 
 def _ev_matching_policy(target):
-    """正二的 policy:值 = 當下環境 ∩ 框架能力邊界(規劃檔 P5)。不在邊界內的環境 ⇒ 對應欄位為空,
-    正二會因此不成立 —— 那是正確的(那個環境本來就退不了紅),而失敗訊息會點名正二。"""
-    from importlib import metadata
+    """正二的 policy:值 = **upstream profile 的有效集合** ∩ 框架能力邊界(票 156 D-11 (c))。
+
+    ~~值 = 當下環境 ∩ 能力邊界~~:那讓政策跟著「這台機器剛好裝了什麼」走(R0 根因:全域環境
+    由多個 repo 共用)。改成取自上游兩份鎖定檔、依當下平台評估 marker 後的有效集合 ——
+    與 `runtime_identity` 同一套評估規則,不讀全域環境。
+    **鎖定檔讀不到 ⇒ fail-closed,說出缺哪一份**;只有需要政策的這條路徑會因此失敗(S4b C2)。
+    """
     rl = load_target_redlight(target)
     here = "%d.%d" % tuple(sys.version_info[:2])
-    try:
-        pytest_version = metadata.version("pytest")
-    except Exception:
-        pytest_version = None
-    dists = []
-    for name, version in rl.KNOWN_DISTS:
-        try:
-            if metadata.version(name) == version:
-                dists.append([name, version])
-        except Exception:
-            pass
+    locks = runtime_identity.load_locks(SRC_ROOT)
+    missing = [rel for key, rel in (("core", runtime_identity.LOCK_CORE_REL),
+                                    ("upstream_tests", runtime_identity.LOCK_UPSTREAM_TESTS_REL))
+               if not locks.get(key)]
+    if missing:
+        raise SystemExit("[verify_gates] 正二政策需要上游鎖定檔,讀不到:%s —— fail-closed。" % "、".join(missing))
+    expected = runtime_identity.expected_set([locks["core"], locks["upstream_tests"]],
+                                             runtime_identity._marker_env())
+    pytest_version = expected.get("pytest")
+    dists = [[name, version] for name, version in rl.KNOWN_DISTS
+             if expected.get(runtime_identity.normalize(name)) == version]
     return {"schema": rl.POLICY_SCHEMAS[0][0], "version": rl.POLICY_SCHEMAS[0][1],
             "config_file": rl.FRAMEWORK_CONFIG_FILES[0],
             "committed_overrides": [],
@@ -731,6 +737,26 @@ def run_scenario(target, code, iso=None):
     return blocked, out
 
 
+def _core_install_offline(python, locks):
+    """核心模式的**假安裝步驟**(D-11):不連網、不照鎖定檔安裝。
+    真的照帶 hash 的鎖定檔建 `.venv-gates`,是 CI 整合步驟(`id: gates-bootstrap-integration`)的事。"""
+    _out("    (核心模式:.venv-gates 已建立,鎖定檔安裝步驟以離線假步驟代替 —— D-11)")
+
+
+def prepare_target_env(target):
+    """在 `install.main` 之前,對暫存 target 照新下游流程(G4)先備好 `.venv-gates`。
+
+    target 必須是已 `git init` 的 repo(setup 要登記 `.git/info/exclude`);
+    沒有 `.git` 時在這裡 init,提交身分沿用安裝器的設定值(`install.py` 只在它自己 init 時才設)。
+    **核心模式**:安裝步驟是離線假步驟,真正的 `setup_gates_env._install_lock` 一次都不呼叫。
+    """
+    os.makedirs(target, exist_ok=True)
+    if not os.path.isdir(os.path.join(target, ".git")):
+        for args in (["init", "-q"], ["config", "user.email", "gate@local"], ["config", "user.name", "gate"]):
+            subprocess.run(["git"] + args, cwd=target, capture_output=True, check=True)
+    setup_gates_env.main([target], install_step=_core_install_offline)
+
+
 def main(workdir):
     target = os.path.abspath(os.path.join(workdir, "verify-gates-repo"))
     if os.path.exists(target):
@@ -755,6 +781,8 @@ def _main_isolated(target, iso):
     # 實測那 21 個沒有一個含 cp950 編不出的字,所以它不會炸;
     # 但它的輸出仍走文字層,**於是淨室的輸出在這一段仍是 locale 編碼**。
     # 登記在票 62 第二刀的票面上,不在這裡順手擴大範圍。
+    # 票 156 G4:先建環境、再安裝 —— install 在任何寫入之前會驗 target 的 .venv-gates。
+    prepare_target_env(target)
     install.main(target)
 
     # 安裝器預設值(F-062):這兩項少任何一個,新 repo 的第一個秘密就沒人守。
