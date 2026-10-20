@@ -297,6 +297,8 @@ tests/test_runtime_identity.py  copy
 tests/test_runtime_identity_upstream.py skip
 tests/test_setup_gates_env.py   copy
 tests/test_gatepy.py            skip
+# **不出貨**(S4f-丁):`test_verify_gates_core_copy.py` 讀上游 repo 自己已安裝的 `.venv-gates`(核心模式的複製來源),上游專屬。
+tests/test_verify_gates_core_copy.py skip
 tests/fixtures/hooks/           copy
 # **不出貨**:「每一筆追蹤檔案都要有標記」是上游的性質,不是每個 repo 的。
 # 出貨的話,任何有自己專案檔案的 repo 都天生帶紅 —— 而出生即紅會訓練人

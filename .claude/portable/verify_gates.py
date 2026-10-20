@@ -19,6 +19,7 @@ S5「安裝流程不另測」的涵蓋就是假的 —— 那是 F-018 的形狀
 """
 
 import contextlib
+import glob
 import importlib.util
 import io
 import re
@@ -737,10 +738,149 @@ def run_scenario(target, code, iso=None):
     return blocked, out
 
 
+# ── 核心模式的離線複製(票 156 S4f-甲,方案 (d))──────────────────────────────
+#
+# **核心證明的是自洽**:上游 repo 已安裝的 `.venv-gates` 的子集,能通過 downstream 身分檢查。
+# 鎖定檔「真的裝得起來」不在這裡證 —— 那是 CI 整合步驟(`id: gates-bootstrap-integration`)的事。
+_CORE = "[verify_gates/核心]"
+
+
+def _core_source_venv():
+    """複製來源:**上游 repo**(本檔所在 repo)根目錄下已安裝的 `.venv-gates`。不是 `sys.prefix`。"""
+    return os.path.join(SRC_ROOT, setup_gates_env.VENV_DIRNAME)
+
+
+def _venv_site(venv_dir):
+    """venv 的 site-packages(Windows / POSIX 版面)。不是恰好一個 ⇒ fail-closed。"""
+    if os.name == "nt":
+        cands = [os.path.join(venv_dir, "Lib", "site-packages")]
+    else:
+        cands = sorted(glob.glob(os.path.join(venv_dir, "lib", "python3.*", "site-packages")))
+    cands = [c for c in cands if os.path.isdir(c)]
+    if len(cands) != 1:
+        raise SystemExit("%s 找不到 %s 唯一的 site-packages:%r" % (_CORE, venv_dir, cands))
+    return cands[0]
+
+
+def _within(root, candidate):
+    """`candidate` 是否位於 `root` 之內 —— 兩者先 realpath + normcase,再以**路徑元件**比。
+
+    不用字串前綴:`…\\site-packages-evil\\x` 的開頭和 `…\\site-packages` 相同,卻不在它裡面。
+    比不了(跨磁碟機時 `commonpath` 丟 ValueError)一律當成「不在之內」。
+    """
+    r = os.path.normcase(os.path.realpath(root))
+    c = os.path.normcase(os.path.realpath(candidate))
+    try:
+        return c != r and os.path.commonpath([r, c]) == r
+    except ValueError:
+        return False
+
+
+def _core_payload(src_site):
+    """downstream 有效集合在來源 site-packages 內**允許複製的檔案**:`[(套件, 相對路徑)]`。
+
+    **複製與完整性驗證共用這一份** —— 兩邊對「哪些檔案應該存在」的定義不得分岔。
+    RECORD 可能含 `../../../Scripts/x.exe`,所以不拿它的字串去拼目的地:
+    先解析出來源實際路徑、確認在來源 site 之內(Scripts / bin 就在這一步被排除),
+    相對路徑再由**已驗證的實際路徑**重新計算。
+    """
+    import importlib.metadata as md
+    core = runtime_identity.load_locks().get("core")
+    if not core:
+        raise SystemExit("%s 讀不到核心鎖定檔(%s)—— 判不出 downstream 有效集合" % (_CORE, runtime_identity.LOCK_CORE_REL))
+    try:
+        expected = runtime_identity.expected_set([core], runtime_identity._marker_env())
+    except Exception as e:
+        raise SystemExit("%s downstream 有效集合算不出來(%s:%s)" % (_CORE, type(e).__name__, e))
+    dists = {}
+    for d in md.distributions(path=[src_site]):
+        name = d.metadata.get("Name") if d.metadata else None
+        if name:
+            dists.setdefault(runtime_identity.normalize(name), d)
+    real_site = os.path.realpath(src_site)
+    out = []
+    for name in sorted(expected):
+        d = dists.get(name)
+        if d is None:
+            raise SystemExit("%s 來源 %s 沒有 %s(downstream 有效集合)" % (_CORE, src_site, name))
+        if d.files is None:
+            raise SystemExit("%s 來源的 %s 沒有 RECORD —— 判不出它的 payload" % (_CORE, name))
+        for f in d.files:
+            src = os.path.realpath(str(d.locate_file(f)))
+            if not _within(real_site, src) or not os.path.isfile(src):
+                continue
+            rel = os.path.relpath(src, real_site)
+            if "__pycache__" in rel.split(os.sep):
+                continue
+            out.append((name, rel))
+    return out
+
+
+def _core_dest(dst_site, rel):
+    """目的地 = target site + 相對路徑;解析後不在 target site 之內 ⇒ fail-closed,不寫到外面。"""
+    dst = os.path.join(dst_site, rel)
+    if not _within(dst_site, dst):
+        raise SystemExit("%s 目的地 %s 不在 target 的 site-packages 之內 —— 拒絕寫入" % (_CORE, dst))
+    return dst
+
+
+def _run_identity(python, repo, profile):
+    """D-10:指定直譯器跑**上游**的 runtime_identity。回 `(退出碼, 輸出)`。"""
+    argv = [python, os.path.join(SRC_ROOT, ".claude", "portable", "runtime_identity.py"),
+            "--whoami", "--repo", repo, "--profile", profile]
+    p = subprocess.run(argv, capture_output=True)
+    return p.returncode, ((p.stdout or b"") + (p.stderr or b"")).decode("utf-8", "replace")
+
+
+def _core_check_source():
+    """複製之前:來源的直譯器要存在,而且通過 upstream profile 的身分檢查。"""
+    py = setup_gates_env.venv_python(_core_source_venv())
+    if not os.path.isfile(py):
+        raise SystemExit("%s 上游沒有 .venv-gates 的直譯器(%s)—— 核心模式沒有複製來源,拒絕。\n"
+                         "     先在上游執行 setup_gates_env.py(整合步驟,要連網)。" % (_CORE, py))
+    rc, out = _run_identity(py, SRC_ROOT, "upstream")
+    if rc != 0:
+        raise SystemExit("%s 上游 .venv-gates 的身分(upstream profile)不合法 —— 拒絕複製:\n%s" % (_CORE, out))
+
+
 def _core_install_offline(python, locks):
-    """核心模式的**假安裝步驟**(D-11):不連網、不照鎖定檔安裝。
-    真的照帶 hash 的鎖定檔建 `.venv-gates`,是 CI 整合步驟(`id: gates-bootstrap-integration`)的事。"""
-    _out("    (核心模式:.venv-gates 已建立,鎖定檔安裝步驟以離線假步驟代替 —— D-11)")
+    """核心模式的**假安裝步驟**(D-11;S4f-甲 方案 (d)):不連網、不跑 pip ——
+    從上游已安裝的 `.venv-gates` 把 downstream 有效集合逐檔複製進 target 的 venv。
+
+    **核心證明的是自洽**(上游 venv 的子集能通過 downstream 身分檢查);
+    鎖定檔真的裝得起來,由 CI 整合步驟(`id: gates-bootstrap-integration`)證明。
+    `locks` 不讀:集合由上游的核心鎖定檔算,與 runtime_identity 同一份定義。
+    """
+    src_site = _venv_site(_core_source_venv())
+    dst_site = _venv_site(os.path.dirname(os.path.dirname(python)))
+    real_src = os.path.realpath(src_site)
+    for _name, rel in _core_payload(src_site):
+        dst = _core_dest(dst_site, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(os.path.join(real_src, rel), dst)
+    _out("    (核心模式:從上游 .venv-gates 離線複製 downstream 有效集合 —— 不連網、不跑 pip;S4f-甲)")
+
+
+def _core_verify_target(target):
+    """宣告成功之前的驗證 —— **放在被替換的 seam 之外**:負控會把 `_core_install_offline`
+    整個換掉,驗證寫在它裡面就會被一起換掉。
+
+    (a) 完整性(先做):共用的 `_core_payload` 列出的每個檔,target 都要有,且解析後仍在 target site 之內。
+        只有 `*.dist-info` 時 `identity: ok` 仍可能成立,所以光靠 (b) 不夠。
+    (b) 身分(D-10):target 的直譯器跑上游 runtime_identity,downstream profile。
+    """
+    venv = os.path.join(target, setup_gates_env.VENV_DIRNAME)
+    dst_site = _venv_site(venv)
+    missing = []
+    for name, rel in _core_payload(_venv_site(_core_source_venv())):
+        if not os.path.isfile(_core_dest(dst_site, rel)):
+            missing.append("%s:%s" % (name, rel))
+    if missing:
+        raise SystemExit("%s target 的 .venv-gates 缺 %d 個檔(前 10 個):\n    %s"
+                         % (_CORE, len(missing), "\n    ".join(missing[:10])))
+    rc, out = _run_identity(setup_gates_env.venv_python(venv), target, "downstream")
+    if rc != 0:
+        raise SystemExit("%s target 的 .venv-gates 身分(downstream profile)不合法:\n%s" % (_CORE, out))
 
 
 def prepare_target_env(target):
@@ -748,13 +888,16 @@ def prepare_target_env(target):
 
     target 必須是已 `git init` 的 repo(setup 要登記 `.git/info/exclude`);
     沒有 `.git` 時在這裡 init,提交身分沿用安裝器的設定值(`install.py` 只在它自己 init 時才設)。
-    **核心模式**:安裝步驟是離線假步驟,真正的 `setup_gates_env._install_lock` 一次都不呼叫。
+    **核心模式**:安裝步驟是離線複製,真正的 `setup_gates_env._install_lock` 一次都不呼叫。
+    順序:來源檢查(任何寫入之前)→ setup + 複製 → 完整性 → downstream 身分。
     """
+    _core_check_source()
     os.makedirs(target, exist_ok=True)
     if not os.path.isdir(os.path.join(target, ".git")):
         for args in (["init", "-q"], ["config", "user.email", "gate@local"], ["config", "user.name", "gate"]):
             subprocess.run(["git"] + args, cwd=target, capture_output=True, check=True)
     setup_gates_env.main([target], install_step=_core_install_offline)
+    _core_verify_target(target)
 
 
 def main(workdir):

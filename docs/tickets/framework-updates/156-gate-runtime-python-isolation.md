@@ -140,11 +140,18 @@
 - **S4f 裁決（S4f-甲／乙／丙）與 R-3 判讀**：依 S4f-0 唯讀偵察（裁決助手已以原始碼核對）裁定如下。（Jeff 2026-10-20 約 13:53（美東），裁決助手記錄，非逐字原話）
   - **S4f-甲**：核心模式採 (d)。`verify_gates` 核心模式的假安裝步驟改為「離線複製」：從上游 repo 根目錄下**已安裝**的 `.venv-gates`，把 downstream profile 有效集合（`gates-lock.txt`、目前平台的 marker）的套件 payload 與 `*.dist-info` 複製進暫存 target 的 `.venv-gates`。複製前來源要先通過 `runtime_identity --profile upstream`；來源缺失或不合法 ⇒ `SystemExit`（含 `[verify_gates/核心]`），target 不寫入套件。完成後以 target 的直譯器執行上游的 `runtime_identity.py --whoami --repo <target> --profile downstream`，必須是 `identity: ok`（D-10）。宣告成功之前，除身分檢查外還要驗 payload 完整性或可用性。不採 (a)（CI 端查不到離線 wheel 的實際來源）、(b)（涵蓋面大幅縮小）、(c)（端到端改依賴網路）。
     - **證明的性質**：核心證明是**自洽**的 —— 上游 venv 的子集能通過 downstream 身分檢查；鎖定檔「真的裝得起來」由 CI 整合步驟（`id: gates-bootstrap-integration`）證明。
-    - 紅燈：`tests/test_verify_gates.py::TestS4fCoreCopiesFromUpstreamVenv` 六條（`test_s4f_d_*`；錨點 A6-紅），實作在 S4f-2。
+    - 紅燈：`TestS4fCoreCopiesFromUpstreamVenv` 六條（`test_s4f_d_*`；錨點 A6-紅），實作在 S4f-2。原本寫在 `tests/test_verify_gates.py`，S4f-丁 搬到 `tests/test_verify_gates_core_copy.py`。
   - **S4f-乙**：CI 的 `python-version` 釘成 `'3.11.9'`，與桌機一致。理由：`runtime_identity` 的 runtime-bootstrap 例外是精確版本（pip／setuptools 取自 3.11.9 的 ensurepip），只寫 `'3.11'` 時 runner 可能拿到別的修補版。改 `tests.yml` 在 S4f-2。
   - **S4f-丙**：`machine-init.md` 依 S4f-0 第 5 點的表一併改：0-1、0-2、`:667`、`:721`／`:746`、`:923-924`、`:1019`、`:1057-1062`；`:985` 不動（`import gate` 不觸發 gate-B）。在 S4f-2 改。
   - **R-3（裁決助手判讀）**：RT7 要求 CI 上所有 pytest 與 verify_gates 都在 `.venv-gates` 裡跑，所以**在 CI 上**，核心步驟以整合步驟先成功為前提。D-11「網路不得為核心綠燈的必要條件」的意思是：在已有合法 `.venv-gates` 的機器上，核心 `verify_gates` 不連網也能綠。(d) 符合這個解讀。
   - **待辦**：(d) 的自洽性 —— 核心證明的是上游 venv 子集能通過 downstream 身分檢查；鎖定檔可安裝性由整合步驟證明。
+- **S4f-丁**：(d) 的紅燈六條（含專用 helper 與常數）原樣搬到新檔 `tests/test_verify_gates_core_copy.py`，manifest 標 `skip`（不出貨、上游專屬），比照 `tests/test_runtime_identity_upstream.py`。理由：這組讀上游 repo 自己已安裝的 `.venv-gates`，在下游與淨室 target 裡沒有意義。（Jeff 2026-10-20 約 15:31（美東），裁決助手記錄，非逐字原話）
+  - **S4f-1 程序偏離的裁定**（裁決助手）：負控對 `packaging` 完整複製 —— 接受（符合「光靠 `identity: ok` 不夠」的用意）；用空 venv 當壞來源 —— 接受；規格 1 把來源檢查寫成子行程約束 —— 接受（同 D-10）；三個 Edit 並行送出 —— 記為違規。
+- **S4f-丁之二（淨室 4 紅的處理）**：S4f-2 實作後，淨室第一次端到端走到「框架測試在新 repo 裡重跑」，`tests/test_verify_gates.py` 紅了 4 條（T146-52、T146-52b、D-11 (b)、D-11 (c)）。處理方式：T146-52／52b 比照 D-11 (a) 以 monkeypatch 把 `vg.prepare_target_env` 換成什麼都不做的函式（它們驗的是「隔離先於安裝」，不是準備環境；原斷言不變）；D-11 (b)、(c) 原樣搬到 `tests/test_verify_gates_core_copy.py`（本質上依賴上游已安裝的 `.venv-gates`／上游測試鎖定檔）；D-11 (a) 留在原檔。（Jeff 2026-10-20 約 16:06（美東），裁決助手記錄，非逐字原話）
+- **S4f-2 完成（錨點 A6）**：`verify_gates.py` 的核心模式改為離線複製（`_core_source_venv`、共用的檔案選取 `_core_payload`、路徑元件語義的 `_within`、目的地 fail-closed 的 `_core_dest`、複製前的來源 upstream 身分檢查、seam 之外先完整性後 downstream 身分的 `_core_verify_target`）。結果：
+  - `tests/test_verify_gates_core_copy.py` 8 passed；`tests/test_verify_gates.py` 47 passed；
+  - **淨室首次端到端 exit 0**（`.venv-gates` 直譯器、離線）：R1～R10 各擋一次、權威層偵測正常、框架測試在新 repo 全綠（2652 passed, 14 skipped, 3 xfailed）、evidence policy 兩正三負成立；
+  - 全套（`.venv-gates`）：4 failed（`tests/test_ci_workflow.py` 的 RT7／D-11 四條，留給 S4f-3）、2839 passed。
 - **觀察（留給後續，不在本票處理）**：
   - 鎖定檔與 `.agents/extension-allowlist.json` 會受 autocrlf 影響，`git add` 時提示 checkout 後會轉成 CRLF。〔讀碼推論〕pip、`runtime_identity`、R10 的 json 解析都不受影響。之後在合適的站點，比照 gatepy 一起釘成 `eol=lf`。
   - 已安裝的下游，允許清單在 manifest 標 skip，不會跟著更新。下游仍須逐 repo 照 D10「先擴後縮」處理。
@@ -342,7 +349,7 @@
     - `tests/test_non_source_list_parity.py::TestTheDifferenceIsExactlyWhatWasDecided::test_the_overlap_is_exactly_the_listed_thirteen`、`::test_the_whole_partition_agrees_at_once`（`IN_BOTH` 加入 `.venv-gates` 後轉紅）
     - 對照（現況即綠，不作紅燈證據）：`tests/test_redlight.py::TestT156FindImplementationSkipsVenvGates::test_the_project_file_wins_over_a_venv_copy`
   - D-9：`tests/test_bootstrap.py::TestT156D9BootstrapVerifiesTheGatesEnvironment::test_d9_a_missing_venv_gates_interpreter_is_refused`、`::test_d9_a_failing_whoami_is_refused`
-  - D-11（離線核心）：`tests/test_verify_gates.py::TestT156D11OfflineCore::test_d11_a_setup_runs_before_install`、`::test_d11_b_the_core_mode_never_runs_the_real_install_or_touches_the_network`、`::test_d11_c_the_pos2_policy_uses_the_upstream_profile_set`
+  - D-11（離線核心）：`tests/test_verify_gates.py::TestT156D11OfflineCore::test_d11_a_setup_runs_before_install`、`tests/test_verify_gates_core_copy.py::TestT156D11OfflineCoreUpstream::test_d11_b_the_core_mode_never_runs_the_real_install_or_touches_the_network`、`::test_d11_c_the_pos2_policy_uses_the_upstream_profile_set`（(b)、(c) 原在 `tests/test_verify_gates.py::TestT156D11OfflineCore`，S4f-丁之二搬到不出貨的新檔）
   - D-11（整合層）：`tests/test_ci_workflow.py::test_d11_a_labelled_integration_step_really_bootstraps_from_the_locks`、`::test_d11_the_integration_step_is_separate_from_core_verify_gates`（步驟 `id: gates-bootstrap-integration`）
 
 ---
@@ -416,3 +423,4 @@
 - S4c′ U-a 取證結果、S4d（錨點 A3，policy-only）與 D2 改法、S4e-1 正式 hook 改走 gatepy（保留上游 hook 歷史註解）與後續觀察補入（錨點 A4）（2026-10-20，裁決助手記錄，非逐字原話）。
 - S4e-1 探針結果、S4e-2 gate-B 便宜身分檢查接上 `__main__`、T146-59／60／60b 改用 target `.venv-gates`、全域 Python 不再能救援補入（錨點 A5）（Jeff 2026-10-20，裁決助手記錄，非逐字原話）。
 - S4f 裁決（S4f-甲 方案 (d)、S4f-乙 CI 釘 3.11.9、S4f-丙 machine-init 範圍）與 R-3 判讀補入；`:106` 改指 S4f-甲；(d) 紅燈六條（錨點 A6-紅）（Jeff 2026-10-20 約 13:53（美東），裁決助手記錄，非逐字原話）。
+- S4f-丁（紅燈移到不出貨的 `tests/test_verify_gates_core_copy.py`）、S4f-1 偏離裁定、S4f-丁之二（淨室 4 紅：T146-52／52b 換掉 `prepare_target_env`，D-11 (b)(c) 移檔）、S4f-2 (d) 實作與淨室首次端到端 exit 0 補入（錨點 A6）（Jeff 2026-10-20 約 15:31／16:06（美東），裁決助手記錄，非逐字原話）。
