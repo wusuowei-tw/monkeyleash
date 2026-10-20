@@ -103,7 +103,7 @@
   - 帳本 append-only 驗收：`gate.py` 合法自我修改時 `.dev/gate-exemptions.jsonl` 會自動追加紀錄，屬既有機制的正常證據。驗收改為嚴格 append-only：原始基線 319 行（sha256 `2a72d6976e1812e536a08d68ea25dedec8897e98092b86a4dc9f3505964e870e`）位元組完全不變；只允許在 EOF 之後追加、且只能是票 156 本次 `gate.py` 自我修改產生的紀錄，逐欄核對；提交時既有機制最多再追加一筆，同樣逐欄核對；不得有刪除、改寫、插入或任何不相關的額外紀錄；筆數或內容異常立即停下，不得解釋成正常自動紀錄；帳本永遠不 stage、不 commit、不 restore。
   - `setup_gates_env.main(argv, install_step=None)`：多出的注入參數預設就是真正的安裝步驟（`_install_lock`）；用途是讓 verify_gates 的核心模式傳入離線假步驟，而不必在正式程式裡改模組屬性。
   - `gatepy` 判斷候選直譯器只用 `-f`、不用 `-x`：Windows 沒有執行位元；就算命中一個不可執行的檔，`exec` 也會失敗，結果仍是擋下，不會放行。
-  - **留給 S4f 的待裁**：核心模式下暫存 target 的 `.venv-gates` 是空的，install 的事前檢查（downstream profile 需要 pyyaml、pytest）預期會失敗；核心模式要怎麼通過這一關，S4f 再裁。
+  - **留給 S4f 的待裁**：核心模式下暫存 target 的 `.venv-gates` 是空的，install 的事前檢查（downstream profile 需要 pyyaml、pytest）預期會失敗；核心模式要怎麼通過這一關，已由 S4f-甲 裁定（見下方「S4f 裁決」）。
 - **S4b′ 裁決（bootstrap profile 慣例、gatepy LF 持久化）**：（Jeff 2026-10-20 約 09:02（美東）裁決，裁決助手記錄，非逐字原話）
   - `bootstrap.sh` 以「`.claude/portable/gates-lock-upstream-tests.txt` 是否存在」選 profile（存在 ⇒ upstream，否則 downstream）：這只是 **profile selection convention**，**不是安全邊界**。真正的安全邊界是 runtime identity／profile 的精確比對 fail-closed；兩種誤判方向（上游被當下游、下游被當上游）都會因預期集合不符而擋下。
   - S4b′：gatepy 的 LF 寫成**持久化政策**（`.gitattributes` 新增 `.claude/bin/gatepy text eol=lf`）。理由：S4e-1 之後所有 active hook 都只經 `sh → gatepy → .venv-gates` 啟動，gatepy 是唯一的正式入口，被 checkout 成 CRLF 就會把閘門鎖死；而 gatepy 沒有副檔名，`*.sh text eol=lf` 涵蓋不到它。證據：A1 的 `git add .claude/bin/gatepy` 印出 `LF will be replaced by CRLF the next time Git touches it`（本機開著 autocrlf）；新增規則前 `git check-attr` 為 `text: auto`／`eol: unspecified`。紅燈測試問的是 Git 實際套用的屬性（`git check-attr`），不綁規則字面。
@@ -137,6 +137,14 @@
   - `gate.py` 新增 `gate_runtime_problem(root, prefix, base_prefix, version_info)`，只做第三節第 4 條的前兩項（在 `<root>/.venv-gates` 這個 venv 裡、Python 3.11.x；路徑判法與 `runtime_identity.evaluate` 相同，realpath＋normcase）；不合法時 stderr 印出含 `.venv-gates` 的訊息並以前哨的擋下碼 2 結束。只接在 `if __name__ == "__main__":`，`import gate` 不觸發（D-S4-1）。
   - `tests/test_install.py` 的 `_t146_pre_commit` 改用 target 的 `.venv-gates` 直譯器（`Scripts/python.exe`，其次 `bin/python`，順序照 gatepy）。venv 沿用 `g3_installed_repo` 的 `_g3_bootstrap_like_setup` 既有建法（真的 venv），沒有另外準備；未 monkeypatch、未繞過身分檢查。紅燈證據：改之前 T146-59／60／60b 被 `gate_runtime_problem` 擋下（`sys.prefix == sys.base_prefix`，`assert 2 == 0`）。
   - **本站之後，前哨與 pre-commit 都不能再靠全域 Python 救援**：改回 `settings.json` 也沒用，因為全域 Python 會被 gate-B 擋下。萬一閘門把自己鎖死，救援方式是由 Jeff 在編輯器裡親手刪掉 `__main__` 裡呼叫 `gate_runtime_problem` 的那 4 行，agent 不得自行繞過。
+- **S4f 裁決（S4f-甲／乙／丙）與 R-3 判讀**：依 S4f-0 唯讀偵察（裁決助手已以原始碼核對）裁定如下。（Jeff 2026-10-20 約 13:53（美東），裁決助手記錄，非逐字原話）
+  - **S4f-甲**：核心模式採 (d)。`verify_gates` 核心模式的假安裝步驟改為「離線複製」：從上游 repo 根目錄下**已安裝**的 `.venv-gates`，把 downstream profile 有效集合（`gates-lock.txt`、目前平台的 marker）的套件 payload 與 `*.dist-info` 複製進暫存 target 的 `.venv-gates`。複製前來源要先通過 `runtime_identity --profile upstream`；來源缺失或不合法 ⇒ `SystemExit`（含 `[verify_gates/核心]`），target 不寫入套件。完成後以 target 的直譯器執行上游的 `runtime_identity.py --whoami --repo <target> --profile downstream`，必須是 `identity: ok`（D-10）。宣告成功之前，除身分檢查外還要驗 payload 完整性或可用性。不採 (a)（CI 端查不到離線 wheel 的實際來源）、(b)（涵蓋面大幅縮小）、(c)（端到端改依賴網路）。
+    - **證明的性質**：核心證明是**自洽**的 —— 上游 venv 的子集能通過 downstream 身分檢查；鎖定檔「真的裝得起來」由 CI 整合步驟（`id: gates-bootstrap-integration`）證明。
+    - 紅燈：`tests/test_verify_gates.py::TestS4fCoreCopiesFromUpstreamVenv` 六條（`test_s4f_d_*`；錨點 A6-紅），實作在 S4f-2。
+  - **S4f-乙**：CI 的 `python-version` 釘成 `'3.11.9'`，與桌機一致。理由：`runtime_identity` 的 runtime-bootstrap 例外是精確版本（pip／setuptools 取自 3.11.9 的 ensurepip），只寫 `'3.11'` 時 runner 可能拿到別的修補版。改 `tests.yml` 在 S4f-2。
+  - **S4f-丙**：`machine-init.md` 依 S4f-0 第 5 點的表一併改：0-1、0-2、`:667`、`:721`／`:746`、`:923-924`、`:1019`、`:1057-1062`；`:985` 不動（`import gate` 不觸發 gate-B）。在 S4f-2 改。
+  - **R-3（裁決助手判讀）**：RT7 要求 CI 上所有 pytest 與 verify_gates 都在 `.venv-gates` 裡跑，所以**在 CI 上**，核心步驟以整合步驟先成功為前提。D-11「網路不得為核心綠燈的必要條件」的意思是：在已有合法 `.venv-gates` 的機器上，核心 `verify_gates` 不連網也能綠。(d) 符合這個解讀。
+  - **待辦**：(d) 的自洽性 —— 核心證明的是上游 venv 子集能通過 downstream 身分檢查；鎖定檔可安裝性由整合步驟證明。
 - **觀察（留給後續，不在本票處理）**：
   - 鎖定檔與 `.agents/extension-allowlist.json` 會受 autocrlf 影響，`git add` 時提示 checkout 後會轉成 CRLF。〔讀碼推論〕pip、`runtime_identity`、R10 的 json 解析都不受影響。之後在合適的站點，比照 gatepy 一起釘成 `eol=lf`。
   - 已安裝的下游，允許清單在 manifest 標 skip，不會跟著更新。下游仍須逐 repo 照 D10「先擴後縮」處理。
@@ -407,3 +415,4 @@
 - S4c：S2a 個案裁決（cryptography `python_full_version` 邊）、鎖定檔純 ASCII 約束（甲′）與其測試、兩份帶 hash 的鎖定檔、上游 `.venv-gates` 建立與 D-4 實測補入（錨點 A2）（2026-10-20，裁決助手記錄，非逐字原話）。
 - S4c′ U-a 取證結果、S4d（錨點 A3，policy-only）與 D2 改法、S4e-1 正式 hook 改走 gatepy（保留上游 hook 歷史註解）與後續觀察補入（錨點 A4）（2026-10-20，裁決助手記錄，非逐字原話）。
 - S4e-1 探針結果、S4e-2 gate-B 便宜身分檢查接上 `__main__`、T146-59／60／60b 改用 target `.venv-gates`、全域 Python 不再能救援補入（錨點 A5）（Jeff 2026-10-20，裁決助手記錄，非逐字原話）。
+- S4f 裁決（S4f-甲 方案 (d)、S4f-乙 CI 釘 3.11.9、S4f-丙 machine-init 範圍）與 R-3 判讀補入；`:106` 改指 S4f-甲；(d) 紅燈六條（錨點 A6-紅）（Jeff 2026-10-20 約 13:53（美東），裁決助手記錄，非逐字原話）。
