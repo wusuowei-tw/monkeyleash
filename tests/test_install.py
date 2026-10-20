@@ -774,9 +774,13 @@ def _t146_write_trigger(root):
 
 
 def _t146_pre_commit(root):
+    """票 156 S4e-2(D-S4-1):用 target 自己的 `.venv-gates` 直譯器跑 gate —— gate-B 只認它。
+    venv 由 `_g3_bootstrap_like_setup` 建好(真的 venv);候選順序照 gatepy。不繞過、不替換身分檢查。"""
     import subprocess
-    import sys
-    p = subprocess.run([sys.executable, os.path.join(".claude", "hooks", "gate.py"), "--pre-commit"],
+    cands = [root / ".venv-gates" / "Scripts" / "python.exe", root / ".venv-gates" / "bin" / "python"]
+    py = next((c for c in cands if c.is_file()), None)
+    assert py is not None, "target 沒有 .venv-gates 直譯器:%s" % cands
+    p = subprocess.run([str(py), os.path.join(".claude", "hooks", "gate.py"), "--pre-commit"],
                        cwd=str(root), capture_output=True)
     return p.returncode, (p.stdout + p.stderr).decode("utf-8", "replace")
 

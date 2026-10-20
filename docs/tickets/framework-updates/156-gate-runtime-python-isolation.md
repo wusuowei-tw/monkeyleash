@@ -132,6 +132,11 @@
 - **S4e-1 正式 hook 改走 `sh → gatepy`（錨點 A4）**：（Jeff 2026-10-20，裁決助手記錄，非逐字原話）
   - `.claude/settings.json` 的 command 改為 `sh "$CLAUDE_PROJECT_DIR/.claude/bin/gatepy" "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py"`；`.githooks/pre-commit` 的兩行指令改為經 gatepy。
   - S4e-1 原指令要求整份換成範本，與 S3a 3-4 衝突（裁決助手錯誤），改依 S3a 3-4：保留上游 `:1-16` 歷史註解，只換指令行；上游 hook 因此不等於 hook-v2 範本。範本仍是新安裝／`--rehook` 的標準 v2 hook；上游不走 `--rehook`（票面 `:363`）。
+  - S4e-1 探針（重開 session 後）：本 session 的 PreToolUse 前綴是 `sh "$CLAUDE_PROJECT_DIR/.claude/bin/gatepy" "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py"`；`touch .venv-gates/s4e1-probe` 被 R7 正常擋下、檔案未建立；沒有 `[gatepy]` 錯誤；`core.hooksPath` 為 `.githooks`；帳本只在檔尾追加。程序偏離：兩條唯讀 grep 同時送出，已接受，視為輕微。
+- **S4e-2 gate-B 便宜身分檢查接上 `__main__`、T146 三條改用 target `.venv-gates`（錨點 A5）**：（Jeff 2026-10-20，裁決助手記錄，非逐字原話）
+  - `gate.py` 新增 `gate_runtime_problem(root, prefix, base_prefix, version_info)`，只做第三節第 4 條的前兩項（在 `<root>/.venv-gates` 這個 venv 裡、Python 3.11.x；路徑判法與 `runtime_identity.evaluate` 相同，realpath＋normcase）；不合法時 stderr 印出含 `.venv-gates` 的訊息並以前哨的擋下碼 2 結束。只接在 `if __name__ == "__main__":`，`import gate` 不觸發（D-S4-1）。
+  - `tests/test_install.py` 的 `_t146_pre_commit` 改用 target 的 `.venv-gates` 直譯器（`Scripts/python.exe`，其次 `bin/python`，順序照 gatepy）。venv 沿用 `g3_installed_repo` 的 `_g3_bootstrap_like_setup` 既有建法（真的 venv），沒有另外準備；未 monkeypatch、未繞過身分檢查。紅燈證據：改之前 T146-59／60／60b 被 `gate_runtime_problem` 擋下（`sys.prefix == sys.base_prefix`，`assert 2 == 0`）。
+  - **本站之後，前哨與 pre-commit 都不能再靠全域 Python 救援**：改回 `settings.json` 也沒用，因為全域 Python 會被 gate-B 擋下。萬一閘門把自己鎖死，救援方式是由 Jeff 在編輯器裡親手刪掉 `__main__` 裡呼叫 `gate_runtime_problem` 的那 4 行，agent 不得自行繞過。
 - **觀察（留給後續，不在本票處理）**：
   - 鎖定檔與 `.agents/extension-allowlist.json` 會受 autocrlf 影響，`git add` 時提示 checkout 後會轉成 CRLF。〔讀碼推論〕pip、`runtime_identity`、R10 的 json 解析都不受影響。之後在合適的站點，比照 gatepy 一起釘成 `eol=lf`。
   - 已安裝的下游，允許清單在 manifest 標 skip，不會跟著更新。下游仍須逐 repo 照 D10「先擴後縮」處理。
@@ -401,3 +406,4 @@
 - S4b′ 裁決（bootstrap profile 慣例非安全邊界、gatepy LF 持久化、下游判定 B 待裁）補入；`.gitattributes` 加 `.claude/bin/gatepy text eol=lf`（錨點 A1′）（2026-10-20，裁決助手記錄，非逐字原話）。
 - S4c：S2a 個案裁決（cryptography `python_full_version` 邊）、鎖定檔純 ASCII 約束（甲′）與其測試、兩份帶 hash 的鎖定檔、上游 `.venv-gates` 建立與 D-4 實測補入（錨點 A2）（2026-10-20，裁決助手記錄，非逐字原話）。
 - S4c′ U-a 取證結果、S4d（錨點 A3，policy-only）與 D2 改法、S4e-1 正式 hook 改走 gatepy（保留上游 hook 歷史註解）與後續觀察補入（錨點 A4）（2026-10-20，裁決助手記錄，非逐字原話）。
+- S4e-1 探針結果、S4e-2 gate-B 便宜身分檢查接上 `__main__`、T146-59／60／60b 改用 target `.venv-gates`、全域 Python 不再能救援補入（錨點 A5）（Jeff 2026-10-20，裁決助手記錄，非逐字原話）。

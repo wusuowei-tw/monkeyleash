@@ -4413,5 +4413,38 @@ def mode_pre_commit():
     return 0
 
 
+def gate_runtime_problem(root, prefix, base_prefix, version_info):
+    """票 156:gate 自己的便宜身分檢查 —— 只做第三節第 4 條的前兩項。
+
+    在 `<root>/.venv-gates` 這個 venv 裡、Python 3.11.x。回 None = 合法;回字串 = 擋下訊息。
+    完整套件比對只在 verify_gates / runtime_identity —— 這裡每一次 hook 都跑,所以只做便宜的。
+    路徑判法與 `runtime_identity.evaluate` 前兩項相同(realpath + normcase)。
+    **只由 `__main__` 呼叫**(D-S4-1):`import gate` 本身不得觸發。
+    """
+    venv = os.path.join(str(root), ".venv-gates")
+
+    def same(a, b):
+        return os.path.normcase(os.path.realpath(str(a))) == os.path.normcase(os.path.realpath(str(b)))
+
+    reasons = []
+    if prefix is None or base_prefix is None or same(prefix, base_prefix):
+        reasons.append("不在 venv 裡(sys.prefix == sys.base_prefix:%s)" % prefix)
+    elif not same(prefix, venv):
+        reasons.append("sys.prefix 不是本 repo 的 .venv-gates:實得 %s" % prefix)
+    vi = tuple(version_info or ())
+    if vi[:2] != (3, 11):
+        reasons.append("Python 必須是 3.11.x,實得 %s" % (".".join(str(x) for x in vi) or "?"))
+    if not reasons:
+        return None
+    return ("[六站閘門/gate_runtime_problem] 閘門只在 %s 的直譯器裡執行 —— %s。\n"
+            "     請經 sh .claude/bin/gatepy 啟動;.venv-gates 不存在就從上游 checkout 執行 "
+            "setup_gates_env.py <repo> 建立(票 156)。本檢查不退回其他直譯器。\n"
+            % (venv, ";".join(reasons)))
+
+
 if __name__ == "__main__":
+    _runtime = gate_runtime_problem(ROOT, sys.prefix, sys.base_prefix, sys.version_info)
+    if _runtime:
+        _err(_runtime)
+        sys.exit(2)
     sys.exit(mode_pre_commit() if "--pre-commit" in sys.argv else mode_hook())
