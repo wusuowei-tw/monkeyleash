@@ -428,3 +428,77 @@ def test_the_test_step_does_not_override_reportchars():
         "pyproject.toml 的 addopts 裡沒有 `-ra`(讀到 %r)——\n"
         "     上面那條「命令列不得覆蓋」守的東西不存在了,而它仍然是綠的。"
         % addopts.strip())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 156 S3b 紅燈 —— RT7(CI 照鎖定檔、在 .venv-gates 裡跑)與 D-11 整合層
+#
+# D-11(Jeff 2026-10-19 約 20:01):verify_gates 的核心驗證**離線、可重現**;
+# 真的照帶 hash 的鎖定檔建 `.venv-gates`,放在一個**明確標示**的整合步驟。
+# 本段只斷言新增的部分,**不動既有步驟的結構**。
+#
+# 最小設計(S3b 選定):同一個 job 裡多一個具名步驟,`id: gates-bootstrap-integration`。
+# 理由:不重構 CI;GitHub runner 預設有網路;id 是機器可讀的明確標示,步驟名是給人看的。
+# ─────────────────────────────────────────────────────────────────────────────
+
+INTEGRATION_STEP_ID = "gates-bootstrap-integration"
+
+
+def _walk_steps(node):
+    """遞迴取出所有帶 `run:` 的 step dict(與 `_walk_runs` 同一個理由:不寫死巢狀深度)。"""
+    if isinstance(node, dict):
+        if isinstance(node.get("run"), str):
+            yield node
+        for v in node.values():
+            for s in _walk_steps(v):
+                yield s
+    elif isinstance(node, list):
+        for item in node:
+            for s in _walk_steps(item):
+                yield s
+
+
+def _all_steps():
+    steps = []
+    for path in workflow_files():
+        steps.extend(_walk_steps(yaml.safe_load(_text(path))))
+    return steps
+
+
+def test_rt7_ci_no_longer_uses_an_editable_install():
+    """RT7:CI 照鎖定檔安裝,不再用 `pip install -e`(本專案本身不安裝,R1 K4 (a))。"""
+    bad = [s["run"] for s in _all_steps() if "pip install -e" in s["run"]]
+    assert not bad, bad
+
+
+def test_rt7_pytest_and_verify_gates_run_inside_venv_gates():
+    """RT7:pytest 與 verify_gates 都在 `.venv-gates` 的直譯器裡跑。"""
+    steps = _all_steps()
+    targets = [s["run"] for s in steps
+               if "verify_gates.py" in s["run"] or re.search(r"-m\s+pytest\b", s["run"])]
+    assert targets, "找不到 pytest / verify_gates 的步驟"
+    bad = [r for r in targets if ".venv-gates/" not in r]
+    assert not bad, "這些步驟不是用 .venv-gates 的直譯器跑:%s" % bad
+
+
+def test_d11_a_labelled_integration_step_really_bootstraps_from_the_locks():
+    """D-11 整合層:有一個明確標示的步驟,照兩份鎖定檔(upstream profile,
+    `setup_gates_env.py` 內部 `--require-hashes`)真的執行 setup。"""
+    hits = [s for s in _all_steps() if s.get("id") == INTEGRATION_STEP_ID]
+    assert len(hits) == 1, "找不到(或不只一個)id=%s 的步驟:%r" % (INTEGRATION_STEP_ID, hits)
+    run = hits[0]["run"]
+    assert "setup_gates_env.py" in run, run
+    assert "--profile upstream" in run, run
+
+
+def test_d11_the_integration_step_is_separate_from_core_verify_gates():
+    """D-11:整合步驟與核心 verify_gates 步驟**分開** —— 網路是否可用,
+    不得成為一般 verify_gates 能不能綠的條件。"""
+    steps = _all_steps()
+    integ = [s for s in steps if s.get("id") == INTEGRATION_STEP_ID]
+    core = [s for s in steps if "verify_gates.py" in s["run"]]
+    assert integ and core, (integ, core)
+    for s in integ:
+        assert "verify_gates.py" not in s["run"], s["run"]
+    for s in core:
+        assert s.get("id") != INTEGRATION_STEP_ID and "setup_gates_env.py" not in s["run"], s["run"]

@@ -92,6 +92,7 @@ def test_claude_python_parses_clean_with_warnings_as_errors():
 # 歷史紀錄照 F-036 不改寫,所以它們合法地留著舊字面。
 _H2_SKIP_DIRS = (
     ".git", "__pycache__", ".pytest_cache", ".cache", ".venv", "node_modules",
+    ".venv-gates",       # 票 156 D-1:閘門專用 venv,第三方碼,不是本 repo 的文字
     "docs/tickets",      # 票是工作紀錄,寫下當時的字
     "docs/audits",       # 盤點報告同上
     ".scratch",          # 工作階段暫存

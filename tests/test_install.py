@@ -502,10 +502,37 @@ def g3_installed_repo(tmp_path_factory):
         if "gate" in sys.modules:
             mp.setitem(sys.modules, "gate", sys.modules["gate"])
         mod = _load("install_for_g3_template", "install.py")
+        _g3_bootstrap_like_setup(target)
+        # 票 156 D-6:事前檢查換成一律通過的替身。system-site venv 一定帶到額外套件,
+        # 完整身分檢查不可能過 —— 「寫入前就失敗」只由 RT9 / RT10 驗。
+        # `raising=False`:本站(實作前)install 還沒有 `_run_target_identity`。
+        mp.setattr(mod, "_run_target_identity", lambda *a, **k: (True, "g3 stub"), raising=False)
         mod.main(str(target))
         yield target
     finally:
         mp.undo()
+
+
+def _g3_bootstrap_like_setup(target):
+    """票 156 D-6 (A):照 G4 新下游流程,在 install 之前先備好 target ——
+    `git init`、`.git/info/exclude` 登記 `.venv-gates/`、建一個**真的** venv
+    (`system_site_packages=True, with_pip=False`,離線)。
+
+    exclude 要先登記:target 的 `.gitignore` 由 install 產生,而 install 的
+    `git add -A` 在那之前就會跑;不先排除的話,整個 venv 會被收進安裝提交。
+    提交身分沿用 install 自己的設定值(`install.py:629-630`)——
+    target 已有 `.git` 時 install 不再設它。
+    """
+    import subprocess
+    import venv
+    target.mkdir(parents=True, exist_ok=True)
+    for args in (["init", "-q"], ["config", "user.email", "gate@local"], ["config", "user.name", "gate"]):
+        subprocess.run(["git"] + args, cwd=str(target), capture_output=True, check=True)
+    exclude = target / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    with open(str(exclude), "a", encoding="utf-8", newline="\n") as f:
+        f.write(".venv-gates/\n")
+    venv.EnvBuilder(system_site_packages=True, with_pip=False).create(str(target / ".venv-gates"))
 
 
 def _g_load_from(path, name):
@@ -686,7 +713,9 @@ class TestEvidencePolicyTemplate:
 
 _T146_ALLOW = ".agents/extension-allowlist.json"
 _T146_INV = ".agents/extension-inventory.json"
-_T146_HOOK = 'python "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py"'
+# 票 156 S3b:改成新指令(啟動器)。T146-56 / T146-58(a-none) 因此轉紅 ——
+# 它們拿的是**上游** `.claude/settings.json` 的 hook 指令,實作站改了 settings.json 才轉綠。
+_T146_HOOK = 'sh "$CLAUDE_PROJECT_DIR/.claude/bin/gatepy" "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py"'
 _T146_ALLOW_KEYS = {"schema", "version", "dev_mod_files", "user_skill_plugins", "user_commands",
                     "project_settings_hook_commands", "mcp_json_servers"}
 _T146_TRIGGER = "docs/adr/verify-trigger.md"
@@ -943,3 +972,420 @@ class TestTicket146InstallPolicy:
             _t146_git(root, "reset", "-q", "--hard", sha)
             if trigger.exists():
                 trigger.unlink()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 156 S3b 紅燈 —— 閘門執行環境的 Python 隔離(RT2 / RT6 / RT8 / RT9 / RT10)
+#
+# 本段釘住的 install 介面(S3b 定;實作站照此實作):
+#   install.HOOK                 = hook-v2-gatepy(LF)
+#   install.KNOWN_HOOKS          = {版本 ID: sha256(LF 標準形)}
+#   install.GITIGNORE_FRAMEWORK  含 `.venv-gates/`
+#   install.verify(target)       以 `<target>/.venv-gates` 的直譯器執行 gate(D-10;不經 sh / gatepy)
+#   install._run_target_identity(target)  事前檢查唯一的子行程入口(D-10 / F0c (b))
+#   install.rehook(target) -> "updated" | "no-op";拒絕 ⇒ SystemExit
+#   install._replace_hook(path, data)     `--rehook` 替換單一檔案的唯一入口(RT8(i) 注入點)
+#   CLI:install.py --rehook <target>
+#
+# 測試不碰真實 repo、不連網。會跑 `install.main` 的一律先把 USERPROFILE / HOME
+# 指到 tmp 家目錄(同 `g3_installed_repo`),不讀寫真實使用者層。
+# ─────────────────────────────────────────────────────────────────────────────
+
+import hashlib as _t156_hashlib
+import stat as _t156_stat
+import subprocess as _t156_subprocess
+import sys as _t156_sys
+
+_T156_FIXTURES = os.path.join(HERE, "fixtures", "hooks")
+_T156_V1 = open(os.path.join(_T156_FIXTURES, "hook-v1-bare-python.sh"), "rb").read()
+_T156_V2 = open(os.path.join(_T156_FIXTURES, "hook-v2-gatepy.sh"), "rb").read()
+# S3b 以 `sha256sum` 量得(LF 標準形,UTF-8,無 BOM)。
+_T156_KNOWN = {
+    "hook-v1-bare-python": "eb6ee62cfb31803c26c3547822ba76b8104d111f759a960774d425a6b1f1c807",
+    "hook-v2-gatepy": "091c0290f0e9c43441678f3c33391a31d8260c84764c9c86270e688fa1ccd83d",
+}
+_T156_T = 1000000000 * 10 ** 9      # 固定的過去 mtime(ns)—— 用來看「有沒有被碰過」
+
+
+class _T156Stop(Exception):
+    pass
+
+
+def _t156_heads(text):
+    heads = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        toks = s.split()
+        if toks[0] == "exec" and len(toks) > 1:
+            toks = toks[1:]
+        heads.append(toks[0])
+    return heads
+
+
+def _t156_venv_pythons(target):
+    return {os.path.normcase(os.path.abspath(os.path.join(str(target), ".venv-gates", "Scripts", "python.exe"))),
+            os.path.normcase(os.path.abspath(os.path.join(str(target), ".venv-gates", "bin", "python")))}
+
+
+def _t156_fake_venv(target):
+    for rel in (("Scripts", "python.exe"), ("bin", "python")):
+        p = os.path.join(str(target), ".venv-gates", *rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p, "wb").close()
+
+
+def _t156_snapshot(root):
+    """target 底下**全部**檔案(含 `.git/`)的 (相對路徑 -> (mode, sha256))。"""
+    snap = {}
+    for dp, _dn, fns in os.walk(str(root)):
+        for fn in fns:
+            p = os.path.join(dp, fn)
+            rel = os.path.relpath(p, str(root)).replace("\\", "/")
+            with open(p, "rb") as f:
+                data = f.read()
+            snap[rel] = (_t156_stat.S_IMODE(os.stat(p).st_mode), _t156_hashlib.sha256(data).hexdigest())
+    return snap
+
+
+def _t156_git(root, *args):
+    return _t156_subprocess.run(["git"] + list(args), cwd=str(root), capture_output=True, check=True)
+
+
+def _t156_isolated_home(tmp_path, monkeypatch):
+    home = tmp_path / "t156-home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(_t156_sys, "path", list(_t156_sys.path))
+    if "gate" in _t156_sys.modules:
+        monkeypatch.setitem(_t156_sys.modules, "gate", _t156_sys.modules["gate"])
+
+
+def _t156_clean_git_target(tmp_path, name="target"):
+    t = tmp_path / name
+    t.mkdir()
+    _t156_git(t, "init", "-q")
+    _t156_git(t, "config", "user.email", "t@t")
+    _t156_git(t, "config", "user.name", "t")
+    (t / "app.txt").write_text("app\n", encoding="utf-8")
+    _t156_git(t, "add", "app.txt")
+    _t156_git(t, "commit", "-q", "-m", "init")
+    return t
+
+
+class TestT156RT2ExecutableEntriesDoNotStartWithBarePython:
+    """RT2(G3 / D-10):四個會實際執行的入口。允許清單不在這裡(G3:改由各站核對)。
+    `.githooks/pre-commit` 那一格在 `tests/test_gatepy.py`(下游的那支是下游自己的)。"""
+
+    def test_rt2_install_hook_has_no_bare_python_command(self, install_mod):
+        heads = _t156_heads(install_mod.HOOK)
+        assert not [h for h in heads if h in ("python", "python3", "py")], heads
+
+    def test_rt2_settings_json_hook_has_no_bare_python_command(self):
+        import json
+        doc = json.load(open(os.path.join(HERE, "..", ".claude", "settings.json"), encoding="utf-8"))
+        cmds = []
+
+        def walk(n):
+            if isinstance(n, dict):
+                for k, v in n.items():
+                    if k == "command" and isinstance(v, str):
+                        cmds.append(v)
+                    else:
+                        walk(v)
+            elif isinstance(n, list):
+                for v in n:
+                    walk(v)
+        walk(doc.get("hooks"))
+        assert cmds, "settings.json 沒有任何 hook 指令"
+        assert not [c for c in cmds if c.split()[0] in ("python", "python3", "py")], cmds
+
+    def test_rt2_verify_runs_gate_with_the_target_venv_interpreter(self, tmp_path, monkeypatch):
+        """D-10:`verify()` 執行 gate 的直譯器是 `<target>/.venv-gates` 那一支 ——
+        不是 `"python"`、不是 `sys.executable`、**不經 sh 或 gatepy**。"""
+        mod = _load("install_t156_verify", "install.py")
+        t = tmp_path / "t"
+        t.mkdir()
+        _t156_fake_venv(t)
+        seen = []
+
+        def fake_run(args, cwd, check=True):
+            seen.append(list(args))
+            raise _T156Stop()
+        monkeypatch.setattr(mod, "run", fake_run)
+        with pytest.raises(_T156Stop):
+            mod.verify(str(t))
+        argv = seen[0]
+        exe = os.path.normcase(os.path.abspath(argv[0])) if os.path.dirname(argv[0]) else argv[0]
+        assert exe in _t156_venv_pythons(t), argv
+        assert argv[0] != _t156_sys.executable and argv[0] != "python", argv
+        assert os.path.basename(argv[0]) not in ("sh", "sh.exe", "bash", "bash.exe"), argv
+        assert not [a for a in argv if "gatepy" in str(a)], argv
+
+
+class TestT156HookTemplates:
+
+    def test_the_fixture_shas_match_the_recorded_table(self):
+        """**綠燈對照**:fixture 與本檔記下的 sha256 一致(表與範本不漂移)。"""
+        assert _t156_hashlib.sha256(_T156_V1).hexdigest() == _T156_KNOWN["hook-v1-bare-python"]
+        assert _t156_hashlib.sha256(_T156_V2).hexdigest() == _T156_KNOWN["hook-v2-gatepy"]
+
+    def test_install_registers_the_known_hook_table(self, install_mod):
+        """第三節第 7 條第 6 點:「版本 ID → sha256」對照表登記在程式裡。"""
+        assert getattr(install_mod, "KNOWN_HOOKS", None) == _T156_KNOWN, \
+            getattr(install_mod, "KNOWN_HOOKS", None)
+
+    def test_install_hook_is_v2(self, install_mod):
+        assert install_mod.HOOK.encode("utf-8") == _T156_V2
+
+    def test_the_generated_gitignore_ignores_venv_gates(self, install_mod):
+        """G4 第 5 步:install 產生的 `.gitignore` 永久含 `.venv-gates/`。"""
+        assert ".venv-gates/" in install_mod.GITIGNORE_FRAMEWORK, install_mod.GITIGNORE_FRAMEWORK
+
+
+class TestT156RT6InstalledRepoUsesTheLauncher:
+    """RT6:乾淨 target 裝完之後,兩支 pre-commit 都是 HOOK v2(經啟動器)。"""
+
+    def test_rt6_git_hooks_pre_commit_is_v2(self, g3_installed_repo):
+        assert (g3_installed_repo / ".git" / "hooks" / "pre-commit").read_bytes() == _T156_V2
+
+    def test_rt6_githooks_pre_commit_is_v2(self, g3_installed_repo):
+        assert (g3_installed_repo / ".githooks" / "pre-commit").read_bytes() == _T156_V2
+
+
+# ── RT8:`--rehook` ──────────────────────────────────────────────────────────
+
+def _t156_rehook_target(tmp_path, git_hook=_T156_V1, githooks=_T156_V1, venv=True, installed=True):
+    """已安裝的下游(最小形):gate.py + 允許清單 + 帳本 + CLAUDE.md,`.githooks/pre-commit` 已提交。"""
+    t = tmp_path / "rt"
+    t.mkdir()
+    _t156_git(t, "init", "-q")
+    _t156_git(t, "config", "user.email", "t@t")
+    _t156_git(t, "config", "user.name", "t")
+    files = {"CLAUDE.md": b"# project\n", "app.txt": b"app\n",
+             ".dev/pipeline.json": b'{"current_stage": "idle"}\n',
+             ".dev/test-runs.jsonl": b'{"r": 1}\n', ".dev/gate-exemptions.jsonl": b'{"e": 1}\n'}
+    if installed:
+        files[".claude/hooks/gate.py"] = b"# gate\n"
+        files[".agents/extension-allowlist.json"] = b"{}\n"
+    for rel, data in files.items():
+        p = t / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+    if githooks is not None:
+        (t / ".githooks").mkdir()
+        (t / ".githooks" / "pre-commit").write_bytes(githooks)
+    _t156_git(t, "add", "-A")
+    _t156_git(t, "commit", "-q", "-m", "installed")
+    if venv:
+        _t156_fake_venv(t)
+        with open(str(t / ".git" / "info" / "exclude"), "a", encoding="utf-8", newline="\n") as f:
+            f.write(".venv-gates/\n")
+    hooks = [t / ".git" / "hooks" / "pre-commit", t / ".githooks" / "pre-commit"]
+    if git_hook is not None:
+        hooks[0].parent.mkdir(parents=True, exist_ok=True)
+        hooks[0].write_bytes(git_hook)
+    for h in hooks:
+        if h.exists():
+            os.utime(str(h), ns=(_T156_T, _T156_T))
+    return t
+
+
+def _t156_hook_state(t):
+    out = {}
+    for rel in (".git/hooks/pre-commit", ".githooks/pre-commit"):
+        p = t / rel
+        if p.exists():
+            st = os.stat(str(p))
+            out[rel] = (p.read_bytes(), _t156_stat.S_IMODE(st.st_mode), st.st_mtime_ns)
+        else:
+            out[rel] = None
+    return out
+
+
+def _t156_rehook_mod():
+    return _load("install_t156_rehook", "install.py")
+
+
+class TestT156RT8Rehook:
+
+    def _refused_and_unchanged(self, t):
+        mod = _t156_rehook_mod()
+        before = _t156_snapshot(t)
+        with pytest.raises(SystemExit) as e:
+            mod.rehook(str(t))
+        assert e.value.code not in (0, None)
+        assert _t156_snapshot(t) == before
+
+    def test_rt8_a_no_venv_gates_is_refused(self, tmp_path):
+        self._refused_and_unchanged(_t156_rehook_target(tmp_path, venv=False))
+
+    def test_rt8_a_cli_rehook_mode_refuses_without_venv_gates(self, tmp_path):
+        """`install.py --rehook <target>` 這個 CLI 模式存在,拒絕時說出缺的是 `.venv-gates`。"""
+        t = _t156_rehook_target(tmp_path, venv=False)
+        before = _t156_snapshot(t)
+        p = _t156_subprocess.run([_t156_sys.executable, os.path.join(PORTABLE, "install.py"),
+                                  "--rehook", str(t)], capture_output=True)
+        out = (p.stdout + p.stderr).decode("utf-8", "replace")
+        assert p.returncode != 0, out
+        assert ".venv-gates" in out, out
+        assert _t156_snapshot(t) == before
+
+    def test_rt8_b_never_installed_is_refused(self, tmp_path):
+        self._refused_and_unchanged(_t156_rehook_target(tmp_path, installed=False))
+
+    def test_rt8_c_unknown_hook_content_is_refused(self, tmp_path):
+        custom = b"#!/bin/sh\nnpm run lint\n"
+        self._refused_and_unchanged(_t156_rehook_target(tmp_path, git_hook=custom, githooks=custom))
+
+    def test_rt8_d_only_the_two_hooks_change(self, tmp_path):
+        """(d):除了兩支 pre-commit,所有受追蹤檔、`.dev/`、允許清單、CLAUDE.md、`.git/` 其餘部分逐位元組不變;
+        兩支都變成 v2(LF)。"""
+        t = _t156_rehook_target(tmp_path)
+        mod = _t156_rehook_mod()
+        before = _t156_snapshot(t)
+        assert mod.rehook(str(t)) == "updated"
+        after = _t156_snapshot(t)
+        changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+        assert changed == [".git/hooks/pre-commit", ".githooks/pre-commit"], changed
+        assert (t / ".git" / "hooks" / "pre-commit").read_bytes() == _T156_V2
+        assert (t / ".githooks" / "pre-commit").read_bytes() == _T156_V2
+
+    def test_rt8_e_already_v2_is_a_no_op(self, tmp_path):
+        t = _t156_rehook_target(tmp_path, git_hook=_T156_V2, githooks=_T156_V2)
+        mod = _t156_rehook_mod()
+        before, hooks = _t156_snapshot(t), _t156_hook_state(t)
+        assert mod.rehook(str(t)) == "no-op"
+        assert _t156_snapshot(t) == before
+        assert _t156_hook_state(t) == hooks
+
+    def test_rt8_f_no_commit_is_created(self, tmp_path):
+        t = _t156_rehook_target(tmp_path)
+        head = _t156_git(t, "rev-parse", "HEAD").stdout
+        count = _t156_git(t, "rev-list", "--all", "--count").stdout
+        _t156_rehook_mod().rehook(str(t))
+        assert _t156_git(t, "rev-parse", "HEAD").stdout == head
+        assert _t156_git(t, "rev-list", "--all", "--count").stdout == count
+
+    def test_rt8_g_one_hook_missing_is_refused(self, tmp_path):
+        """沒有 `.githooks/`(舊下游的形狀)⇒ fail-closed,另一支也不寫。"""
+        self._refused_and_unchanged(_t156_rehook_target(tmp_path, githooks=None))
+
+    def test_rt8_h_one_known_one_custom_is_refused(self, tmp_path):
+        self._refused_and_unchanged(
+            _t156_rehook_target(tmp_path, git_hook=_T156_V1, githooks=b"#!/bin/sh\necho custom\n"))
+
+    def test_rt8_i_a_failed_second_replacement_rolls_back(self, tmp_path, monkeypatch):
+        """(i):第二支替換失敗 ⇒ 第一支回滾;兩支的內容、mode、mtime 都回原狀。"""
+        t = _t156_rehook_target(tmp_path)
+        mod = _t156_rehook_mod()
+        real = mod._replace_hook
+        calls = []
+
+        def flaky(path, data):
+            calls.append(path)
+            if len(calls) == 2:
+                raise OSError("injected failure on the second replacement")
+            return real(path, data)
+        monkeypatch.setattr(mod, "_replace_hook", flaky)
+        before, hooks = _t156_snapshot(t), _t156_hook_state(t)
+        with pytest.raises((OSError, SystemExit)):
+            mod.rehook(str(t))
+        assert len(calls) == 2, calls
+        assert _t156_hook_state(t) == hooks
+        assert _t156_snapshot(t) == before
+
+    @pytest.mark.parametrize("variant", ["crlf-v1-is-known", "trailing-space-is-unknown", "bom-is-unknown"])
+    def test_rt8_j_only_crlf_is_normalised(self, tmp_path, variant):
+        """(j)(G2):唯一允許的正規化是 CRLF→LF。行尾空白、BOM 一律「不認得」。"""
+        if variant == "crlf-v1-is-known":
+            crlf = _T156_V1.replace(b"\n", b"\r\n")
+            t = _t156_rehook_target(tmp_path, git_hook=crlf, githooks=crlf)
+            assert _t156_rehook_mod().rehook(str(t)) == "updated"
+            assert (t / ".git" / "hooks" / "pre-commit").read_bytes() == _T156_V2
+            assert (t / ".githooks" / "pre-commit").read_bytes() == _T156_V2
+            return
+        bad = (_T156_V1.replace(b"--pre-commit\n", b"--pre-commit \n")
+               if variant == "trailing-space-is-unknown" else b"\xef\xbb\xbf" + _T156_V1)
+        assert bad != _T156_V1
+        self._refused_and_unchanged(_t156_rehook_target(tmp_path, git_hook=_T156_V1, githooks=bad))
+
+    def test_rt8_k_crlf_v2_is_a_no_op(self, tmp_path):
+        """(k)(F0c (a)):CRLF 版的 v2 經 CRLF→LF 等於 v2 ⇒ 已是最新 ⇒ no-op,內容與 mtime 都不變。"""
+        crlf = _T156_V2.replace(b"\n", b"\r\n")
+        t = _t156_rehook_target(tmp_path, git_hook=crlf, githooks=crlf)
+        mod = _t156_rehook_mod()
+        before, hooks = _t156_snapshot(t), _t156_hook_state(t)
+        assert mod.rehook(str(t)) == "no-op"
+        assert _t156_snapshot(t) == before
+        assert _t156_hook_state(t) == hooks
+
+
+# ── RT9 / RT10:install 的事前檢查(G4、D-10、F0c (b))─────────────────────────
+
+class TestT156RT9RT10InstallPrecheck:
+
+    def test_rt9_no_venv_gates_fails_before_the_first_write(self, tmp_path, monkeypatch):
+        """RT9:乾淨、已 git init 的 target,沒有 `.venv-gates` ⇒ install 在第一次寫入之前失敗;
+        工作區、index、`.git/hooks/` 全部不變(快照涵蓋 `.git/` 全部)。"""
+        _t156_isolated_home(tmp_path, monkeypatch)
+        t = _t156_clean_git_target(tmp_path)
+        mod = _load("install_t156_rt9", "install.py")
+        before = _t156_snapshot(t)
+        with pytest.raises(SystemExit) as e:
+            mod.main(str(t))
+        assert e.value.code not in (0, None)
+        assert _t156_snapshot(t) == before
+
+    def test_rt9_a_missing_target_directory_is_not_created(self, tmp_path, monkeypatch):
+        """`install.py:625` 的 `os.makedirs(target)` 本身就是一次寫入 —— 事前檢查要排在它之前。"""
+        _t156_isolated_home(tmp_path, monkeypatch)
+        t = tmp_path / "does-not-exist"
+        mod = _load("install_t156_rt9b", "install.py")
+        with pytest.raises(SystemExit) as e:
+            mod.main(str(t))
+        assert e.value.code not in (0, None)
+        assert not t.exists()
+
+    @pytest.mark.parametrize("installer_python", ["as-is", "pretend-upstream-venv"])
+    def test_rt10_an_invalid_identity_fails_before_the_first_write(self, tmp_path, monkeypatch,
+                                                                    installer_python):
+        """RT10:`.venv-gates` 存在但身分不合法 ⇒ 在第一次寫入之前失敗。
+        驗證用的直譯器必須是 `<target>/.venv-gates` 那一支,執行**上游**的 `runtime_identity.py`,
+        帶 `--repo <target> --profile downstream`;不是 install 自己的 `sys.executable` ——
+        install 本身在合法的上游 `.venv-gates` 裡執行時,結果也必須相同(F0c (b))。"""
+        _t156_isolated_home(tmp_path, monkeypatch)
+        t = _t156_clean_git_target(tmp_path)
+        _t156_fake_venv(t)
+        with open(str(t / ".git" / "info" / "exclude"), "a", encoding="utf-8", newline="\n") as f:
+            f.write(".venv-gates/\n")
+        if installer_python == "pretend-upstream-venv":
+            fake_up = os.path.join(str(tmp_path), "upstream", ".venv-gates", "Scripts", "python.exe")
+            monkeypatch.setattr(_t156_sys, "executable", fake_up)
+        mod = _load("install_t156_rt10_" + installer_python.replace("-", "_"), "install.py")
+        real_run = _t156_subprocess.run
+        identity_calls = []
+
+        def spy(args, *a, **kw):
+            if any("runtime_identity.py" in str(x) for x in args):
+                identity_calls.append([str(x) for x in args])
+                return _t156_subprocess.CompletedProcess(args, 1, b"", b"identity: profile mismatch")
+            return real_run(args, *a, **kw)
+        monkeypatch.setattr(mod.subprocess, "run", spy)
+        before = _t156_snapshot(t)
+        with pytest.raises(SystemExit) as e:
+            mod.main(str(t))
+        assert e.value.code not in (0, None)
+        assert identity_calls, "install 沒有執行身分檢查就往下走了"
+        argv = identity_calls[0]
+        assert os.path.normcase(os.path.abspath(argv[0])) in _t156_venv_pythons(t), argv
+        assert argv[0] != _t156_sys.executable and argv[0] != "python", argv
+        want_ri = os.path.normcase(os.path.realpath(os.path.join(mod.SRC_ROOT, ".claude", "portable",
+                                                                 "runtime_identity.py")))
+        assert os.path.normcase(os.path.realpath(argv[1])) == want_ri, argv
+        i, j = argv.index("--repo"), argv.index("--profile")
+        assert os.path.normcase(os.path.realpath(argv[i + 1])) == os.path.normcase(os.path.realpath(str(t)))
+        assert argv[j + 1] == "downstream", argv
+        assert _t156_snapshot(t) == before

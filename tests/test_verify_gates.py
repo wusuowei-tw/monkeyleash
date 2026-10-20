@@ -867,3 +867,83 @@ class TestTicket146IsolationReparse:
         calls, _ran = self._wire_run(monkeypatch, [(1, u"[R4] 鏡像缺少 x")], "", code="R4")
         blocked, out = vg.run_scenario(str(tmp_path), "R4")
         assert blocked is False and u"情境 staged 為空" in out, (blocked, out)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 156 S3b 紅燈 —— D-11 離線核心(Jeff 2026-10-19 約 20:01)
+#
+# **一般 verify_gates 必須能離線綠燈**:網路 / PyPI 是否可用,不得是它能不能綠的必要條件。
+# 真的照鎖定檔建 `.venv-gates` 的是整合層(CI 明確標示的步驟,見 tests/test_ci_workflow.py)。
+#
+# 介面(S3b 定;實作站照此實作):
+#   vg.prepare_target_env(target)  在 install 之前對暫存 target 執行 setup(核心模式:安裝步驟是假步驟)
+#   vg.setup_gates_env             verify_gates 使用的 setup 模組(`_install_lock` 是真的安裝步驟)
+#   vg._ev_matching_policy(target) 正二政策 = upstream profile 的有效集合 ∩ 能力邊界(不再讀全域環境)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _T156Stop(Exception):
+    pass
+
+
+class TestT156D11OfflineCore:
+
+    def test_d11_a_setup_runs_before_install(self, tmp_path, monkeypatch):
+        """(a):verify_gates 呼叫 install 之前,先對暫存 target 執行 setup。"""
+        wd = tmp_path / "wd"
+        wd.mkdir()
+        order = []
+        monkeypatch.setattr(vg, "prepare_target_env", lambda target: order.append(("setup", target)))
+
+        def fake_install_main(target):
+            order.append(("install", target))
+            raise _T156Stop()
+        monkeypatch.setattr(vg.install, "main", fake_install_main)
+        with pytest.raises(_T156Stop):
+            vg.main(str(wd))
+        assert [o[0] for o in order] == ["setup", "install"], order
+        assert order[0][1] == order[1][1], "setup 與 install 對的不是同一個 target:%r" % order
+
+    def test_d11_b_the_core_mode_never_runs_the_real_install_or_touches_the_network(self, tmp_path,
+                                                                                  monkeypatch):
+        """(b):核心模式下 setup 的安裝步驟是假步驟 —— 真正的 `_install_lock` 一次都沒被呼叫;
+        行程內任何 socket 連線都會撞上哨兵。"""
+        import socket
+        prepare = getattr(vg, "prepare_target_env", None)
+        setup_mod = getattr(vg, "setup_gates_env", None)
+        assert prepare is not None and setup_mod is not None, \
+            "verify_gates 沒有 prepare_target_env / setup_gates_env(票 156 實作站產生)"
+        real_install = []
+
+        def sentinel_install(*a, **k):
+            real_install.append(a)
+            raise AssertionError("核心模式呼叫了真正的 _install_lock(會連網)")
+        monkeypatch.setattr(setup_mod, "_install_lock", sentinel_install)
+
+        def no_network(*a, **k):
+            raise AssertionError("核心模式發出了網路連線:%r" % (a,))
+        monkeypatch.setattr(socket.socket, "connect", no_network)
+        t = tmp_path / "target"
+        t.mkdir()
+        for args in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]):
+            subprocess.run(["git"] + args, cwd=str(t), capture_output=True, check=True)
+        prepare(str(t))
+        assert real_install == []
+        assert (t / ".venv-gates").is_dir()
+
+    def test_d11_c_the_pos2_policy_uses_the_upstream_profile_set(self, tmp_path, monkeypatch):
+        """(c):正二政策的 dists = upstream profile 的有效集合 ∩ `KNOWN_DISTS`,**不讀全域環境**。
+        環境裡裝的是 anyio 4.15.1(也在能力邊界內),鎖定檔是 4.15.0 ⇒ 政策必須是 4.15.0。"""
+        import importlib.metadata as md
+        import shutil
+        t = tmp_path / "target"
+        (t / ".claude" / "hooks").mkdir(parents=True)
+        shutil.copy2(os.path.join(HERE, "..", ".claude", "hooks", "redlight.py"),
+                     str(t / ".claude" / "hooks" / "redlight.py"))
+        real_version = md.version
+
+        def fake_version(name):
+            return {"anyio": "4.15.1", "pytest": "9.1.1"}.get(name) or real_version(name)
+        monkeypatch.setattr(md, "version", fake_version)
+        pol = vg._ev_matching_policy(str(t))
+        assert pol["dists"] == [["anyio", "4.15.0"]], pol["dists"]
+        assert pol["pytest_versions"] == ["9.1.1"], pol["pytest_versions"]

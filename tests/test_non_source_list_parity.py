@@ -93,6 +93,9 @@ ONLY_IN_REDLIGHT = {
 IN_BOTH = {
     ".agents", ".dev", ".git", ".venv", "__pycache__", "assets", "build",
     "docs", "logs", "node_modules", "skills", "tests", "tradingagents.egg-info",
+    # 票 156 D-1:兩邊各自的判準都答「是」—— gate:不是本 repo 的來源;
+    # redlight:反查實作不該走進第三方套件(裡面有同名的 install.py / status.py)。
+    ".venv-gates",
 }
 
 

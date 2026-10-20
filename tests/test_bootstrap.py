@@ -344,12 +344,29 @@ SH = find_sh()
 needs_sh = pytest.mark.skipif(SH is None, reason=SKIP_REASON)
 
 
-def _repo(tmp_path, name):
+def _repo(tmp_path, name, venv=True, whoami_rc=0):
+    """票 156 D-9 起,bootstrap 另外驗兩件事:`.venv-gates` 的直譯器存在、`--whoami` 退出碼為 0。
+
+    **預設 `venv=True`**:既有的三道 / 反控測試各自只在問**一道**檢查 ——
+    不先把 D-9 那兩件備好的話,實作站接上 D-9 之後它們會因為「沒有 venv」而紅,
+    紅得不是地方(它們問的那道其實還沒跑到)。D-9 自己的兩條用 `venv=False` / `whoami_rc!=0`。
+
+    假 gatepy 只回一個退出碼:本檔問的是「bootstrap 有沒有看 `--whoami` 的退出碼」,
+    不是 gatepy / runtime_identity 本身(那兩個各有自己的測試)。
+    """
     repo = tmp_path / name
     repo.mkdir()
     for c in ("init -q", "config user.email t@t", "config user.name t"):
         subprocess.run(["git"] + c.split(), cwd=str(repo), capture_output=True)
     shutil.copy2(str(BOOTSTRAP), str(repo / "bootstrap.sh"))
+    if venv:
+        for rel in (("Scripts", "python.exe"), ("bin", "python")):
+            p = repo.joinpath(".venv-gates", *rel)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"")
+    gp = repo / ".claude" / "bin" / "gatepy"
+    gp.parent.mkdir(parents=True, exist_ok=True)
+    io.open(str(gp), "w", encoding="utf-8", newline="\n").write("#!/bin/sh\nexit %d\n" % whoami_rc)
     return repo
 
 
@@ -439,6 +456,35 @@ class TestItStillWiresUpWhenEverythingIsRight:
         assert rc == 0, "條件都滿足卻被擋:%s" % out
         assert _hookspath(repo) == ".githooks", (
             "沒被擋,但 config 也沒設 —— 腳本什麼都沒做:%s" % out)
+
+
+def _staged_hook_repo(tmp_path, name, **kw):
+    repo = _repo(tmp_path, name, **kw)
+    _write_hook(repo)
+    subprocess.run(["git", "add", ".githooks/pre-commit"], cwd=str(repo), capture_output=True)
+    subprocess.run(["git", "update-index", "--chmod=+x", ".githooks/pre-commit"],
+                   cwd=str(repo), capture_output=True)
+    return repo
+
+
+@needs_sh
+class TestT156D9BootstrapVerifiesTheGatesEnvironment:
+    """票 156 D-9:bootstrap **只驗證、不安裝** —— 驗兩件事,任一不成立就拒絕,
+    而且 `core.hooksPath` 不得被設下去(TSI-030:檢查必須在設定之前)。"""
+
+    def test_d9_a_missing_venv_gates_interpreter_is_refused(self, tmp_path):
+        repo = _staged_hook_repo(tmp_path, "novenv", venv=False)
+        rc, out = _run(repo)
+        assert rc != 0, "沒有 .venv-gates 的直譯器卻放行了:%s" % out
+        assert ".venv-gates" in out, out
+        assert _hookspath(repo) == "", "拒絕了,但 config 已被設"
+
+    def test_d9_a_failing_whoami_is_refused(self, tmp_path):
+        repo = _staged_hook_repo(tmp_path, "badwhoami", whoami_rc=3)
+        rc, out = _run(repo)
+        assert rc != 0, "--whoami 退出碼非 0 卻放行了:%s" % out
+        assert "whoami" in out, out
+        assert _hookspath(repo) == "", "拒絕了,但 config 已被設"
 
 
 @needs_sh

@@ -79,6 +79,20 @@
 - **設計契約封版**：G1～G4 補完後不再擴充內容。（Jeff 2026-10-19 約 16:55（美東），裁決助手記錄，非逐字原話）
 - **RT11 前置定稿**：RT11 的 target 必須是乾淨、已 `git init`、還沒裝 agent-gates 的 repo；這不是擴大範圍。（Jeff 2026-10-19 約 16:56（美東），裁決助手記錄，非逐字原話）
 - **F0c 補精確（a）（b）（c）**：(a) CRLF 版新版 hook 經 CRLF→LF 正規化後等於新版範本 ⇒ 視為已是最新、--rehook no-op，不重寫、不改 mtime；CRLF 能否在 Windows／Git Bash 執行留待桌機偵察與金絲雀觀測，不與所有權判定混在一起。(b) install.py 驗 target 時必須明確使用 target 自己 .venv-gates 的直譯器執行上游同一支 runtime_identity.py，並明確指定 target repo 與 downstream profile；不得以自身 sys.executable 代替，不得另寫第二套驗證邏輯。(c) 封版條目依時間移到 16:56 之前。三點皆為把既有契約寫精確，不重開設計。（Jeff 2026-10-19 約 18:54（美東），裁決助手記錄，非逐字原話）
+- **S3b 裁決（D-1～D-11）**：依 S3a 紅燈設計審查，裁定如下。（Jeff 2026-10-19 約 20:01（美東），裁決助手記錄，非逐字原話）
+  - D-1：納入本票（不改會讓 R3／redlight 誤判，屬必要相容修正）。`.venv-gates` 加進所有實際參與掃描的跳過／忽略集合：`gate.NON_SOURCE_DIRS`、`redlight._SEARCH_SKIP`、`test_source_hygiene._H2_SKIP_DIRS`，`test_non_source_list_parity.IN_BOTH` 同步；先要有紅燈證明「沒有排除時真的會掃進 venv」。
+  - D-2：HOOK v2 加一行註解（全文見 `tests/fixtures/hooks/hook-v2-gatepy.sh`）。
+  - D-3：不新增 `gatepy --whoami` 子命令；正式寫法是 `gatepy .claude/portable/runtime_identity.py --whoami …`，gatepy 只選定 `.venv-gates` 直譯器並轉交參數。
+  - D-4（暫定）：runtime-bootstrap 例外候選 `pip==24.0`、`setuptools==65.5.0`，以名稱＋精確版本登記；實作站建出真的 `.venv-gates` 後觀測確認，**觀測不同就停，不得為了轉綠擴大例外清單**。
+  - D-5：新測試檔分類照 S3a 6-7；`tests/test_gatepy.py` 標 skip、載入 `test_bootstrap.find_sh`；找不到 sh 就 fail，不 skip。
+  - D-6：既有 installer 測試以 fixture／monkeypatch 讓事前檢查通過；「寫入前就失敗」只由 RT9、RT10 驗。
+  - D-7：平台 marker 以 `packaging.markers` 評估。
+  - D-8：允許清單遷移狀態不寫成常駐測試，改在各站核對。
+  - D-9：bootstrap 只驗兩件事：`.venv-gates` 的直譯器存在、`--whoami` 退出碼為 0。
+  - D-10：`install.py` 的驗證（`verify()` 與事前檢查）不經 gatepy、不依賴 sh：明確取 `<target>/.venv-gates/…/python`，用它執行**上游**的 `runtime_identity.py`（`--repo <target> --profile downstream`）；不得用裸 `python`、不得用 installer 自己的 `sys.executable`、不得退回 PATH。
+  - D-11（兩層）：
+    1. **核心**（verify_gates 與 RT 測試）：用 fixture、tmp repo、monkeypatch 或假的安裝步驟，**沒有網路也必須能完整驗證控制流程與 fail-closed 行為**；一般 `verify_gates` 必須能離線、可重現地綠燈，PyPI／網路是否可用不得是它綠燈的必要條件。
+    2. **真實 bootstrap 整合**：照帶 hash 的鎖定檔真的建出 `.venv-gates`。CI 可在**明確允許網路**的整合步驟／job 執行；本機執行須 Jeff 明確授權；至少成功一次才算滿足驗收 9。CI 已有合適 job 就用它，沒有就設計最小的一條，不趁機重構 CI。
 
 ---
 
@@ -127,6 +141,7 @@
   - 若最後決定讓全部相依都在每個平台無條件安裝，必須在票面明寫，不能留給實作者自行決定。
 - 已安裝的每個套件，版本都要等於有效集合裡的版本。
 - 除了 Python 與 pip 本身，以及票面明確列為 runtime-bootstrap 例外的項目之外，`.venv-gates` 裡只要出現**不在對應預期集合**的額外套件，就 fail-closed。（例外清單由紅燈站實測後列出，不在這裡猜；見第七節。）
+- **runtime-bootstrap 例外（D-4，暫定）**：`pip==24.0`、`setuptools==65.5.0`，以名稱＋精確版本登記（`setuptools 66.0` 不是例外）。來源是底座 3.11.9 的 `Lib/ensurepip/_bundled/` 檔名（〔讀碼推論〕，S3a 第 5 節）；實作站建出真的 `.venv-gates` 後觀測確認，觀測不同就停，不得擴大清單。
 - 一律用 `importlib.metadata` 讀版本，不用 `pip show`（原因：R0 §B6 的 cp950 問題）。
 - `--whoami` 要印出：profile、直譯器路徑、`sys.prefix`、Python 版本、實際安裝的全部套件與版本。
 - `gate.py` 只做便宜的前兩項；`verify_gates` 做完整檢查。
@@ -147,7 +162,7 @@
 
 - `settings.json` 的 hook
 - `.githooks/pre-commit`
-- `install.py` 的 `HOOK` 與 `verify()`
+- `install.HOOK` 改用啟動器；`verify()` 與事前檢查依 D-10 直接用 target 的 `.venv-gates` 直譯器，不經 sh 或 gatepy
 - 允許清單
 - CI：改成照鎖定檔安裝，不再用 `pip install -e`
 - `machine-init.md` 0-1、0-2 節
@@ -178,7 +193,12 @@
      - 第二支或之後任何一步替換失敗時，必須把已經改掉的第一支復原；
      - 最終狀態只允許兩種：「兩支都是舊的」或「兩支都是新的」，不得留下一新一舊；
      - 本票**不**宣稱檔案系統能提供跨檔的真正原子交易 —— 上面是以保存與復原達成的全有或全無，不是檔案系統層的原子性。
-   - 已知範本要用**固定的 sha256** 來識別（每一版有自己的版本 ID）。程式和票面都要登記這張「版本 ID → sha256」對照表，不能只寫「舊裸 python 版」「本票新版」這種名稱。實際的 sha256 值在紅燈站產生範本後填入（見第七節）。
+   - 已知範本要用**固定的 sha256** 來識別（每一版有自己的版本 ID）。程式和票面都要登記這張「版本 ID → sha256」對照表，不能只寫「舊裸 python 版」「本票新版」這種名稱。實際的 sha256 值在紅燈站產生範本後填入（見第七節）。S3b 已填入（LF 標準形、UTF-8、無 BOM，`sha256sum` 量得；fixture 在 `tests/fixtures/hooks/`）：
+
+     | 版本 ID | sha256 | 內容 |
+     |---|---|---|
+     | `hook-v1-bare-python` | `eb6ee62cfb31803c26c3547822ba76b8104d111f759a960774d425a6b1f1c807` | 立案提交 `f5815d3` 的 `install.HOOK`（裸 python） |
+     | `hook-v2-gatepy` | `091c0290f0e9c43441678f3c33391a31d8260c84764c9c86270e688fa1ccd83d` | 本票新版（經 gatepy，D-2 註解一行） |
 
 ### 8. 換 hook 的順序（D10，每個 repo 都照做）
 
@@ -208,12 +228,22 @@
 - Jeff 在該 repo 開 Claude Code，做一次 Write。
 - 判讀：結果檔出現、而且指向 `.venv-gates`，才算 U-a 已證明。沒有出現 → 不切換，回頭設計 `.cmd` 或寫絕對路徑。
 
+### 10. 非原始碼目錄清單（D-1）
+
+`.venv-gates` 裝的是第三方套件與直譯器（裡面就有與本 repo 同名的 `install.py`、`status.py`）。它要進三份實際參與掃描的跳過／忽略集合：
+
+- `gate.NON_SOURCE_DIRS`（`is_source_path` 判 R2／R3 要不要管）
+- `redlight._SEARCH_SKIP`（`find_implementation` 反查實作時 `os.walk` 要不要進去；不排除的話，紅燈紀錄的 `impl_hash` 會靜默記到 venv 裡的同名檔）
+- `tests/test_source_hygiene.py` 的 `_H2_SKIP_DIRS`
+
+`tests/test_non_source_list_parity.py` 的 `IN_BOTH` 同步加入（兩邊各自的判準都答「是」）。CLAUDE.md 常駐檢查項的兩問：會不會裝著判定邏輯 —— 不會；會不會裝著唯一的觀測 —— 不會。
+
 ---
 
 ## 四｜紅燈測試（先寫，並且要看到它們失敗）
 
 - **RT1**：沒有 `.venv-gates` 時呼叫啟動器 → exit 2。PATH 上放一支假 `python`，存在的 `.venv` 也放假直譯器，兩者被呼叫都會留下記號檔；斷言兩個記號檔都**不存在**。
-- **RT2**（G3）：只檢查四個會實際執行的入口 —— `settings.json`、`.githooks/pre-commit`、`install.HOOK`、`install.verify()` —— 沒有任何指令開頭是裸 `python`。允許清單不在 RT2 範圍內，改由第五節的遷移狀態驗收。
+- **RT2**（G3、D-10）：只檢查四個會實際執行的入口。`settings.json`、`.githooks/pre-commit`、`install.HOOK` 沒有任何指令開頭是裸 `python`；`install.verify()` 執行 gate 的直譯器是 `<target>/.venv-gates` 那一支（不是 `"python"`、不是 `sys.executable`），而且**不經 sh 或 gatepy**。允許清單不在 RT2 範圍內，改由第五節的遷移狀態驗收。
 - **RT3**：身分自檢遇到不在 venv 裡，或 `sys.prefix` 不是 `<repo>/.venv-gates` → fail-closed。
 - **RT4**：身分自檢遇到版本跟鎖定檔不符 → fail-closed，訊息要指名是哪一個套件。
 - **RT5**（依 profile 判定）：
@@ -248,6 +278,16 @@
     2. `.git/info/exclude` 新增 `.venv-gates/` 的登記，而且只新增這一筆。
   - 除了上面兩項，其他都不能變：已追蹤、未追蹤的專案檔案都不變；index 不變；hooks 不變；不產生任何其他 agent-gates 檔案。
 - **RT12**（G1）：每一個新檔在 manifest 裡都有明確的 copy 或 skip，而且分類必須跟第二節 G1 的表格一致。
+- **S3b 補入的對應紅燈**（實際測試名稱）：
+  - D-1：
+    - `tests/test_redlight.py::TestT156FindImplementationSkipsVenvGates::test_a_venv_only_match_is_not_an_implementation`（E2 負案例：tmp root 只有 `.venv-gates/Lib/site-packages/x/install.py` ⇒ 必須回 None；現況回 venv 那一份）
+    - `tests/test_redlight.py::TestT156FindImplementationSkipsVenvGates::test_venv_gates_is_in_the_search_skip_set`
+    - `tests/test_gate.py::TestT156VenvGatesIsNotSource::test_venv_gates_is_listed`、`::test_a_file_under_venv_gates_is_not_source`
+    - `tests/test_non_source_list_parity.py::TestTheDifferenceIsExactlyWhatWasDecided::test_the_overlap_is_exactly_the_listed_thirteen`、`::test_the_whole_partition_agrees_at_once`（`IN_BOTH` 加入 `.venv-gates` 後轉紅）
+    - 對照（現況即綠，不作紅燈證據）：`tests/test_redlight.py::TestT156FindImplementationSkipsVenvGates::test_the_project_file_wins_over_a_venv_copy`
+  - D-9：`tests/test_bootstrap.py::TestT156D9BootstrapVerifiesTheGatesEnvironment::test_d9_a_missing_venv_gates_interpreter_is_refused`、`::test_d9_a_failing_whoami_is_refused`
+  - D-11（離線核心）：`tests/test_verify_gates.py::TestT156D11OfflineCore::test_d11_a_setup_runs_before_install`、`::test_d11_b_the_core_mode_never_runs_the_real_install_or_touches_the_network`、`::test_d11_c_the_pos2_policy_uses_the_upstream_profile_set`
+  - D-11（整合層）：`tests/test_ci_workflow.py::test_d11_a_labelled_integration_step_really_bootstraps_from_the_locks`、`::test_d11_the_integration_step_is_separate_from_core_verify_gates`（步驟 `id: gates-bootstrap-integration`）
 
 ---
 
@@ -255,7 +295,7 @@
 
 1. 上游全套測試在 `.venv-gates` 裡全綠。
 2. `verify_gates` 綠燈，正二情境綠燈，而且政策裡的版本＝上游 profile 的預期集合。
-3. `gatepy --whoami`：
+3. 經 gatepy 執行 `runtime_identity.py --whoami`（D-3）：
    - 指向 `<repo>/.venv-gates`；
    - 印出的 profile 正確（上游是 upstream，下游是 downstream）；
    - 實際安裝的套件＝該 profile 的預期集合（加上已登記的例外）；
@@ -273,7 +313,9 @@
    - 擴張時**恰好**是新＋舊；
    - 收票時**只剩**新；
    - 裸 python 的舊指令一筆都不剩。
-9. 新下游的 bootstrap 流程（G4，第三節第 8 條的六步）至少走通一次。可以用金絲雀，或用測試裡的乾淨 target 證明。
+9. 新下游的 bootstrap 流程（G4，第三節第 8 條的六步）至少走通一次。可以用金絲雀，或用測試裡的乾淨 target 證明。並且由整合層（CI 網路 job 或經 Jeff 授權的本機執行）至少成功一次（D-11）。
+
+一般 `verify_gates` 必須能離線綠燈（D-11）。
 
 ---
 
@@ -297,8 +339,7 @@
 
 ## 七｜未決
 
-- runtime-bootstrap 例外清單（第三節第 4 條）：要等紅燈站實際建出 venv 之後才能列出。
-- 已知 HOOK 範本的「版本 ID → sha256」對照表：在紅燈站填入。
+- 例外清單暫定（D-4），實作站觀測確認；sha256 已填（第三節第 7 條第 6 點）。
 - U-a（hook 的 shell）：目前「高度支持 bash，但未證明」，等金絲雀取證。
 - 桌機的 Python 版本、桌機上 agent-gates 的副本位置、兩個下游目前的 hook 長什麼樣子：等桌機偵察。
 - manifest 分類與換行正規化已由 G1、G2 裁定，見第二節。
@@ -312,3 +353,4 @@
 - 立案草稿（2026-10-19，裁決助手記錄，非逐字原話）：依 R0／R1 偵察（當時暫用票號 155）與 Jeff 2026-10-19 14:40～16:45 的裁決起草。上一版 F0 因票號衝突在步驟 0 停下，見〔F0 停止〕。
 - G1～G4 補入（2026-10-19，裁決助手記錄，非逐字原話）；設計契約封版。
 - F0c (a)(b)(c) 補入；票面封版（2026-10-19，裁決助手記錄，非逐字原話）。
+- S3b 紅燈與 D-1～D-11 補入（2026-10-19，裁決助手記錄，非逐字原話）。

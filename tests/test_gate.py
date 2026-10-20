@@ -8065,3 +8065,49 @@ class TestTicket152Round2:
         _t152_log(root, _t152_red(_T152_DART_TEST, impl_file))
         msg, _trace, _used = _t152_check(root, _T152_DART_IMPL, u"int foo() => 1;\n")
         assert msg is not None and "[R3/紅燈]" in msg, msg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 156 S3b 紅燈 —— D-1(`.venv-gates` 進非原始碼目錄)與 gate 的便宜身分檢查
+#
+# 便宜檢查的介面(S3b 定;實作站照此實作):
+#   gate.gate_runtime_problem(root, prefix, base_prefix, version_info) -> None | str
+#     只做「便宜的前兩項」(第三節第 4 條):在 `<root>/.venv-gates` 這個 venv 裡、Python 3.11.x。
+#     回 None = 合法;回字串 = 擋下訊息。完整套件比對只在 verify_gates / runtime_identity。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestT156VenvGatesIsNotSource:
+    """D-1:`.venv-gates` 是第三方套件與直譯器,不是本 repo 的來源。
+
+    CLAUDE.md 常駐檢查項的兩問:會不會裝著判定邏輯 —— 不會(只有第三方套件);
+    會不會裝著唯一的觀測 —— 不會。"""
+
+    def test_venv_gates_is_listed(self):
+        assert ".venv-gates" in gate.NON_SOURCE_DIRS, sorted(gate.NON_SOURCE_DIRS)
+
+    def test_a_file_under_venv_gates_is_not_source(self):
+        assert gate.is_source_path(".venv-gates/Lib/site-packages/x/install.py") is False
+
+
+class TestT156GateCheapRuntimeCheck:
+
+    def _fn(self):
+        fn = getattr(gate, "gate_runtime_problem", None)
+        assert fn is not None, "gate.gate_runtime_problem 不存在(票 156 實作站產生)"
+        return fn
+
+    def test_not_in_a_venv_is_blocked(self, tmp_path):
+        msg = self._fn()(str(tmp_path), "/base", "/base", (3, 11, 9))
+        assert msg and ".venv-gates" in msg, msg
+
+    def test_a_foreign_venv_is_blocked(self, tmp_path):
+        msg = self._fn()(str(tmp_path), str(tmp_path / ".venv"), "/base", (3, 11, 9))
+        assert msg and ".venv-gates" in msg, msg
+
+    def test_python_other_than_3_11_is_blocked(self, tmp_path):
+        msg = self._fn()(str(tmp_path), str(tmp_path / ".venv-gates"), "/base", (3, 12, 0))
+        assert msg and "3.11" in msg, msg
+
+    def test_the_repos_own_venv_gates_passes(self, tmp_path):
+        """正控:少了它,「一律擋」的實作會讓上面三條全綠。"""
+        assert self._fn()(str(tmp_path), str(tmp_path / ".venv-gates"), "/base", (3, 11, 9)) is None

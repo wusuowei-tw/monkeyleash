@@ -98,6 +98,39 @@ def test_implementation_path_is_derived_from_the_test_file_name(tmp_path, monkey
     assert found and found.endswith("foo.py")
 
 
+class TestT156FindImplementationSkipsVenvGates:
+    """票 156 D-1 —— 反查實作不得走進 `.venv-gates`。
+
+    `.venv-gates` 裝的是 pip / setuptools 等第三方碼,裡面就有 `install.py`、
+    `status.py` 這類與本 repo 同名的模組。`find_implementation` 回傳**第一個**同名檔,
+    而 Linux 上 `os.walk` 的順序取決於檔案系統 ⇒ 紅燈紀錄的 `impl_hash` 會靜默記錯檔。
+    """
+
+    def test_a_venv_only_match_is_not_an_implementation(self, tmp_path, monkeypatch):
+        """**負案例(E2,必須紅)**:tmp root 底下**只有** venv 裡的 `install.py`,
+        沒有真正的專案實作 ⇒ 必須回 None。現況(`_SEARCH_SKIP` 沒有 `.venv-gates`)會回 venv 那一份。"""
+        monkeypatch.setattr(redlight, "ROOT", str(tmp_path))
+        p = tmp_path / ".venv-gates" / "Lib" / "site-packages" / "x" / "install.py"
+        p.parent.mkdir(parents=True)
+        p.write_text("x = 1\n", encoding="utf-8")
+        assert redlight.find_implementation("tests/test_install.py") is None
+
+    def test_the_project_file_wins_over_a_venv_copy(self, tmp_path, monkeypatch):
+        """兩份都在 ⇒ 回專案那一份。⚠ 這條在現況下**可能本來就綠**(走訪順序碰巧先到 `.claude`),
+        不能拿它當 D-1 的紅燈證據 —— 紅燈證據是上一條。"""
+        monkeypatch.setattr(redlight, "ROOT", str(tmp_path))
+        v = tmp_path / ".venv-gates" / "Lib" / "site-packages" / "x" / "install.py"
+        v.parent.mkdir(parents=True)
+        v.write_text("x = 1\n", encoding="utf-8")
+        real = tmp_path / ".claude" / "portable" / "install.py"
+        real.parent.mkdir(parents=True)
+        real.write_text("y = 2\n", encoding="utf-8")
+        assert redlight.find_implementation("tests/test_install.py") == ".claude/portable/install.py"
+
+    def test_venv_gates_is_in_the_search_skip_set(self):
+        assert ".venv-gates" in redlight._SEARCH_SKIP, sorted(redlight._SEARCH_SKIP)
+
+
 class TestTheRecordCarriesTheTicketItBelongsTo:
     """紅燈屬於**某一張票**,不是屬於某個檔案。
 
