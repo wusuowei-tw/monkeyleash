@@ -164,6 +164,24 @@
   - **淨室重跑**（改完 `machine-init.md` 之後，`.venv-gates` 直譯器、離線）：exit 0；框架測試在新 repo 2652 passed, 14 skipped, 3 xfailed；evidence policy 兩正三負成立。
   - 全套（`.venv-gates`）：**0 failed**、2843 passed。
   - **尚待 push 之後才能驗**：驗收 6「CI 綠燈（Jeff 目視）」，以及驗收 9 的「整合層（CI 網路 job）至少成功一次」。本站沒有連網、沒有 push。
+- **S4f-4 push 與 CI**：
+  - 10 筆提交 `f5815d3..e7604f4` 已推上 `origin/master`（一般 push；Jeff 2026-10-20 約 18:40（美東）授權，裁決助手記錄，非逐字原話）。
+  - 推之前的守衛：fetch 後遠端仍是 `f5815d3`、ancestry 成立；10 筆 × Author／Committer 共 20 組，全是同一個公開身分（與 `origin/master` 那筆相同）；整段歷史只有 A／M（沒有 D／R），沒有 `.dev/`、`.venv-gates`、scratchpad、`*.whl`、快取或 log 等本機產物；`leak_scan.py`、`leak-patterns.txt`、`scanner.py` 在這段範圍內都沒有變動；最終 34 檔以既有的 `leak_scan.py <檔案…>` 補掃，exit 0、沒有命中（補掃依 Jeff 2026-10-20 約 18:51（美東）裁決，裁決助手記錄，非逐字原話）。
+  - **CI 綠燈**：commit `e7604f4` 的那次執行，由 Jeff 2026-10-20 約 19:18（美東）目視確認（裁決助手記錄，非逐字原話）。本機沒有 `gh`，所以 CI 結果沒有在 session 內取得。
+- **S4g-0 唯讀偵察（R10 資料來源）**：〔讀碼結論，見 `.dev/reports/2026-10-20-ticket156-s4g0.md` 1-4／1-5〕前哨不跑 R10（只在 `mode_pre_commit` 呼叫）；一般提交的 policy 讀 HEAD blob，工作樹與 HEAD 不同就 `worktree_differs` 硬擋；policy-only 提交（staged 全屬兩個 policy 檔）讀 index；`settings.json` 一律讀工作樹。所以縮回必須單獨一筆 policy-only 提交，而且它之前不得有其他提交與允許清單的未提交修改交錯。
+- **S4g（錨點 A8）上游允許清單縮回完成**：`.agents/extension-allowlist.json` 的 `project_settings_hook_commands` 刪除裸 python 舊指令，只剩 gatepy 新指令（policy-only 提交）。
+  - pre-commit 的 R10 訊息：`[R10/policy-only] policy-only commit（policy_source=index）：staged 候選 policy 對現場成立（DECLARED_OK；runtime 仍 UNPROVEN）。這是候選驗證，不是 HEAD 已生效的 policy。`
+  - 核對方式（依 D-8「改在各站核對」，**不寫紅燈測試**，裁決助手判定）：對工作樹 `git grep -n -F 'python \"$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py\"' -- .agents/extension-allowlist.json` 沒有輸出；同一 pattern 對縮回前的 `HEAD` 命中第 14 行（證明 pattern 有鑑別力）；Grep `^\s*"python ` 為 0；diff 只有 1 行刪除、0 行新增；`json.tool` 驗證通過。
+  - 縮回後全套（`.venv-gates`）：0 failed、2843 passed。
+- **S4g 裁決**（Jeff 2026-10-20 約 19:33（美東），裁決助手記錄，非逐字原話）：
+  - **S4g-甲**：驗收 7（下游推廣）**移出本票，另開後續票**。後續票的範圍：兩個下游各自的 D10 七步、桌機唯讀偵察、驗收 3 的下游部分。以下三項也一併移入後續票：下游 gatepy 的 LF 保護（S4b′ 判定 B；S4g-0 報告第 3 節的 A／B／C 三案）、鎖定檔與允許清單的 `eol=lf`、金絲雀刪除。
+  - **S4g-乙**：金絲雀 `<canary>` 先留著，不刪。
+  - **S4g-丙**：`eol=lf` 照 `:168` 留給後續，本票不做。
+- **裁決助手判定**（2026-10-20，非 Jeff 逐字原話）：
+  - 縮回不寫紅燈測試，依 D-8（`:90`）改在各站核對（核對方式見上方 S4g）。
+  - 驗收 3 的上游部分判為成立：CI 的「接上權威層」通過，而 `bootstrap.sh:100` 是經 gatepy 執行 `runtime_identity --whoami`（profile 依上游測試鎖定檔存在而為 upstream）；加上 S4e-1 探針 `identity: ok`（套件清單沒有 `taishi-shared`）。下游部分移入後續票。
+  - 驗收 5 判為成立（等價形式）：S4e-1 探針證明前哨換成新前綴 `sh … gatepy …`、R7 照常擋、沒有 `[gatepy]` 錯誤；S4e-2 的 gate-B 證明全域 python 會被擋。`machine-init` 0-2「建 venv 前後翻面」的原形式不另做，因為那要刪掉上游的 `.venv-gates`。
+  - 錨點：縮回為 A8；收票前紀錄為 C1。
 - **觀察（留給後續，不在本票處理）**：
   - 鎖定檔與 `.agents/extension-allowlist.json` 會受 autocrlf 影響，`git add` 時提示 checkout 後會轉成 CRLF。〔讀碼推論〕pip、`runtime_identity`、R10 的 json 解析都不受影響。之後在合適的站點，比照 gatepy 一起釘成 `eol=lf`。
   - 已安裝的下游，允許清單在 manifest 標 skip，不會跟著更新。下游仍須逐 repo 照 D10「先擴後縮」處理。
@@ -392,6 +410,27 @@
 
 一般 `verify_gates` 必須能離線綠燈（D-11）。
 
+### 驗收最終狀態（C1，2026-10-20；上方原條文不改）
+
+| 驗收 | 狀態 | 依據 |
+|---|---|---|
+| 1 上游全套在 `.venv-gates` 全綠 | 成立 | S4f-3 全套 0 failed、2843 passed（A7）；S4g 縮回後同樣 0 failed、2843 passed；CI 綠燈 |
+| 2 verify_gates 綠、正二綠、政策版本＝上游 profile | 成立 | S4f-2／S4f-3 淨室 exit 0，「正二 已初始化且相符 成立」；`test_d11_c_*` 上游綠 |
+| 3 經 gatepy 的 `--whoami` | **部分成立／本票範圍完成** | 上游部分已成立（依據見上方「裁決助手判定」）；原下游部分依 S4g-甲 移入後續票，不再作為票 156 的收票阻塞條件 |
+| 4 金絲雀取證成功 | 成立 | S4c′（`:126`）U-a 已證明 |
+| 5 探針訊息翻面 | 成立（等價形式，裁決助手判定） | S4e-1 探針（前哨新前綴、R7 照常擋、沒有 `[gatepy]` 錯誤）與 S4e-2 gate-B；原形式要刪上游 `.venv-gates`，不另做 |
+| 6 CI 綠燈（Jeff 目視） | 成立 | Jeff 2026-10-20 約 19:18（美東）目視確認 `e7604f4` 的那次執行 |
+| 7 下游 | **移出本票，待後續票立案**（不是成立） | S4g-甲 |
+| 8 允許清單遷移狀態 | 成立 | 擴張＝新加舊（A3）；縮回後只剩新、裸 python 舊指令不存在（A8） |
+| 9 G4 bootstrap 走通一次＋整合層至少成功一次 | 成立 | 淨室的乾淨 target 走通 setup → install（S4f-2／S4f-3）；CI 綠燈 ⇒ 整合步驟 `gates-bootstrap-integration` 成功（裁決助手判定：job 的各 step 依序執行，任一步失敗整次就紅） |
+| （附）一般 verify_gates 離線綠燈 | 成立 | S4f-2／S4f-3 淨室離線 exit 0 |
+
+**移入後續票的事項**（S4g-甲；後續票待立案）：兩個下游（`meetingbridge`、`serenity-research`）各自的 D10 七步；桌機唯讀偵察；驗收 3 的下游部分；下游 gatepy 的 LF 保護（S4b′ 判定 B，A／B／C 三案）；鎖定檔與允許清單的 `eol=lf`；金絲雀刪除（S4g-乙：在此之前先留著）。
+
+### 範圍調整紀錄
+
+- 驗收 3 的下游部分、驗收 7 全項，依 **S4g-甲** 移出本票，另開後續票（Jeff 2026-10-20 約 19:33（美東），裁決助手記錄，非逐字原話）。上方驗收原條文保留原文，不刪不改；本票的收票判定以「驗收最終狀態」表為準。
+
 ---
 
 ## 六｜已知後續（KNOWN FOLLOW-UP，本票不實作）
@@ -415,7 +454,7 @@
 ## 七｜未決
 
 - 例外清單暫定（D-4），實作站觀測確認；sha256 已填（第三節第 7 條第 6 點）。
-- U-a（hook 的 shell）：目前「高度支持 bash，但未證明」，等金絲雀取證。
+- U-a（hook 的 shell）：~~目前「高度支持 bash，但未證明」，等金絲雀取證。~~ **已由 S4c′ 金絲雀證明**（`:126`；C1 更新）。
 - 桌機的 Python 版本、桌機上 agent-gates 的副本位置、兩個下游目前的 hook 長什麼樣子：等桌機偵察。
 - manifest 分類與換行正規化已由 G1、G2 裁定，見第二節。
 - 下游在 Windows 上的工作區實際是不是 CRLF，仍然要在桌機偵察時觀測（G2 只解決了比對規則）。依據：上游的 `.githooks/pre-commit` 由上游的 `.gitattributes` 釘成 LF（觀測：`git ls-files --eol` → `i/lf w/lf attr/text eol=lf`），但 `.gitattributes` 在 manifest 標 skip（`:71`；`:60-61`），不隨安裝走；票 154 曾觀測到 `git restore` 之後工作區變 CRLF 的現象（票 154 第四節之三）。另外要觀測 CRLF 的 hook 能不能被 Git Bash 正常執行（F0c (a)：與所有權判定分開）。
@@ -437,3 +476,4 @@
 - S4f 裁決（S4f-甲 方案 (d)、S4f-乙 CI 釘 3.11.9、S4f-丙 machine-init 範圍）與 R-3 判讀補入；`:106` 改指 S4f-甲；(d) 紅燈六條（錨點 A6-紅）（Jeff 2026-10-20 約 13:53（美東），裁決助手記錄，非逐字原話）。
 - S4f-丁（紅燈移到不出貨的 `tests/test_verify_gates_core_copy.py`）、S4f-1 偏離裁定、S4f-丁之二（淨室 4 紅：T146-52／52b 換掉 `prepare_target_env`，D-11 (b)(c) 移檔）、S4f-2 (d) 實作與淨室首次端到端 exit 0 補入（錨點 A6）（Jeff 2026-10-20 約 15:31／16:06（美東），裁決助手記錄，非逐字原話）。
 - S4f-3：CI 改走 `.venv-gates`（整合步驟 `gates-bootstrap-integration`、釘 3.11.9、移除 `pip install -e`）、`machine-init.md` 更新、出貨檔裁定（16:52）與淨室重跑結果補入；驗收 6、9 待 push 後驗（錨點 A7）（2026-10-20，裁決助手記錄，非逐字原話）。
+- S4f-4 push 與 CI 綠燈、S4g-0 R10 資料來源結論、S4g 允許清單縮回（錨點 A8）、S4g-甲／乙／丙 裁決與裁決助手判定、驗收最終狀態表與範圍調整紀錄、未決 U-a 更新（錨點 C1）（Jeff 2026-10-20 約 18:40／18:51／19:18／19:33（美東），裁決助手記錄，非逐字原話）。
