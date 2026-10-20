@@ -109,6 +109,19 @@
   - S4b′：gatepy 的 LF 寫成**持久化政策**（`.gitattributes` 新增 `.claude/bin/gatepy text eol=lf`）。理由：S4e-1 之後所有 active hook 都只經 `sh → gatepy → .venv-gates` 啟動，gatepy 是唯一的正式入口，被 checkout 成 CRLF 就會把閘門鎖死；而 gatepy 沒有副檔名，`*.sh text eol=lf` 涵蓋不到它。證據：A1 的 `git add .claude/bin/gatepy` 印出 `LF will be replaced by CRLF the next time Git touches it`（本機開著 autocrlf）；新增規則前 `git check-attr` 為 `text: auto`／`eol: unspecified`。紅燈測試問的是 Git 實際套用的屬性（`git check-attr`），不綁規則字面。
   - 下游判定：**B（待裁）**。installer 以 `shutil.copy2` 逐位元組照抄 gatepy，但 `.gitattributes` 在 manifest 標 **skip**（不隨安裝出貨），installer 對 `.gitattributes` 也沒有任何合併處理 ⇒ 下游拿不到這條規則；下游若開著 autocrlf，日後 checkout 可能把 gatepy 轉成 CRLF。本站不改 installer、manifest 或下游 `.gitattributes`。
   - **待裁：下游 gatepy 的 LF 保護**（要在下游切換 hook 之前決定）。
+- **S4c 裁決與實測（帶 hash 的鎖定檔、上游 `.venv-gates`）**：（S4c 實測，裁決助手記錄，非逐字原話）
+  - **S2a 個案裁決**（Jeff 2026-10-20 約 09:44（美東））：cryptography 50.0.2 的 `Requires-Dist: typing-extensions>=4.13.2 ; python_full_version < '3.11'` 用到禁用變數 `python_full_version`。**正式理由只有一個**：比較邊界在 `3.11`，依 PEP 440，所有 3.11.x 都 ≥ 3.11，這條 marker 在每一個 3.11 patch 版本上都恆為 False（稽核另以 `python_full_version=3.11.0` 評估，結果為 False）。「另有 8 條路徑帶入 typing-extensions」只列為旁證。本案**不建立泛化判例**，S2a 通則字面不改；下一次遇到 `python_full_version`／`implementation_version` 的 marker，照樣停下送裁決。「多條路徑」一項只適用於需要合成 marker 的 Windows-only 子套件；union 裡有 11 個多父套件，但兩平台都需要、父集合相同，不觸發。
+  - **鎖定檔編碼約束**（Jeff 甲′，2026-10-20 約 09:57（美東））：pip 24.0 依 locale 解碼需求檔（`auto_decode` 遇到無 BOM 的檔案會改用 locale 編碼）。S4c 實測：檔頭含 UTF-8 中文時，cp950 在**解析需求檔**階段就失敗（`UnicodeDecodeError: 'cp950' codec can't decode byte 0xa8 in position 4`），還沒走到下載或 hash 驗證。因此兩份鎖定檔一律純 ASCII，由 `tests/test_runtime_identity_upstream.py::test_s4c_the_locks_are_pure_ascii` 鎖住（先紅後綠）。乙（pip 子行程設 `PYTHONUTF8=1`）、丙（BOM）不採用。
+  - 第一次失敗留下的半成品 `.venv-gates`（裡面只有 ensurepip 預裝的 pip／setuptools），經 Jeff 核准後由 Jeff 手動移除（agent 的 `rm -rf` 被 R7 前哨擋下），之後重建。
+  - **產生方式**（依證據模型）：
+    - Windows：本機 CPython 3.11 上由 pip 24.0 **原生 resolver** 解析（`pip download --only-binary=:all:`，不加 `--platform`），core 7 個、union 37 個。
+    - Linux cp311 manylinux x86_64：依據是 **wheel 可用性 probe**（`--no-deps --platform manylinux_2_17_x86_64 / manylinux2014_x86_64 / manylinux_2_28_x86_64`，36 筆全中、版本一致）**加上 METADATA marker 稽核**，**不是 Linux resolver**（pip issue #12466、#13442：`--platform` 不會切換 marker 的評估環境）。
+    - hash：對每個釘住的版本讀 PyPI JSON API，收下支援範圍內的**全部** wheel（Windows 是 cp311／abi3／py3-none-any 的 `win_amd64` 相容 tag；Linux 是三個核准平台相容 tag 的聯集），sdist 一律不收。交叉核對：實際下載的 80 個檔，sha256 都等於 API 值，而且都在鎖定檔內；另以 `pip hash` 抽查 4 個，全部吻合。
+  - **套件數**：`gates-lock.txt` 7 個；`gates-lock-upstream-tests.txt` 30 個（union 37 減 core 7；共用套件只列在核心那一份）。
+  - **平台限定的套件**（相依邊表摘要）：只有兩個 Windows-only 套件，各自只有一條進入邊，marker 直接用原文：colorama（`sys_platform == "win32"`，來源：pytest 9.1.1）、pywin32（`sys_platform == 'win32' and python_version < '3.14'`，來源：mcp 1.29.1）。沒有 Linux-only 的邊或套件；稽核 FLAGS 為 0；extras 只有 `mcp -> pyjwt[crypto]`。
+  - **下載量實測**（scratchpad 下載目錄，單位 bytes）：Windows core 7 檔 1,985,371；Windows union 37 檔 17,382,517；Linux probe 36 檔 12,160,099。`setup_gates_env` 的安裝另外以 `--no-cache-dir` 從 PyPI 下載了 37 個 Windows wheel，這一筆的總量沒有另外量。
+  - **D-4 實測**：上游 `.venv-gates`（profile upstream）實際有 39 個 distribution，等於 upstream 有效集合 37 個加上 `pip==24.0`、`setuptools==65.5.0`，**與暫定相同**，例外清單不擴大。`--whoami --profile upstream` 退出碼 0（`identity: ok`）；`--profile downstream` 對照照預期 fail-closed（30 筆「額外套件」，正好是上游測試鎖定檔那 30 個）。
+  - **全套結果**（兩種直譯器相同）：全域 python 與 `.venv-gates` 直譯器都是 `12 failed, 2825 passed, 10 skipped, 3 xfailed`。紅的 12 條就是 A1 那 15 條扣掉 S4c 轉綠的 3 條（RT5(a)、RT5(b)、D-11(c)），沒有收集期錯誤。以 `.venv-gates` 直譯器跑 pytest 沒有被 R7 擋下。
 
 ---
 
@@ -372,3 +385,4 @@
 - S3b 紅燈與 D-1～D-11 補入（2026-10-19，裁決助手記錄，非逐字原話）。
 - S4a 裁決（D-S4-1～8）與 S4b 裁決（甲案兩處、帳本 append-only、`install_step` 參數、gatepy 只用 `-f`、S4f 待裁）補入；S4b 離線實作（錨點 A1）（2026-10-20，裁決助手記錄，非逐字原話）。
 - S4b′ 裁決（bootstrap profile 慣例非安全邊界、gatepy LF 持久化、下游判定 B 待裁）補入；`.gitattributes` 加 `.claude/bin/gatepy text eol=lf`（錨點 A1′）（2026-10-20，裁決助手記錄，非逐字原話）。
+- S4c：S2a 個案裁決（cryptography `python_full_version` 邊）、鎖定檔純 ASCII 約束（甲′）與其測試、兩份帶 hash 的鎖定檔、上游 `.venv-gates` 建立與 D-4 實測補入（錨點 A2）（2026-10-20，裁決助手記錄，非逐字原話）。

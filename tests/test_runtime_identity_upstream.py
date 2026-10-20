@@ -33,6 +33,26 @@ def test_rt5_the_upstream_tests_lock_pins_mcp_and_anyio():
     assert got.get("anyio") == "4.15.0", got
 
 
+CORE_LOCK = ROOT / ".claude" / "portable" / "gates-lock.txt"
+
+
+def test_s4c_the_locks_are_pure_ascii():
+    """兩份鎖定檔必須是純 ASCII(Jeff 甲′)。
+
+    理由:pip 24.0 依 locale 解碼需求檔(S4c 實測 cp950 失敗),純 ASCII 在任何 locale 都可解。
+    """
+    bad = []
+    for lock in (CORE_LOCK, UPSTREAM_LOCK):
+        assert lock.is_file(), "鎖定檔不存在:%s" % lock
+        data = lock.read_bytes()
+        try:
+            data.decode("ascii")
+        except UnicodeDecodeError as e:
+            bad.append("%s 不是純 ASCII:第一個非 ASCII 位元組在位置 %d(0x%02x)"
+                       % (lock.name, e.start, data[e.start]))
+    assert not bad, bad
+
+
 # ── RT12:G1 逐檔分類 ──────────────────────────────────────────────────────────
 #
 # **比對的是 manifest 裡逐字的那一行,不是 `explicit_mark()` 的結果。**
