@@ -26,10 +26,30 @@
 | `pyyaml` | **`gate.py` 的硬相依。** `load_stage_defs()` 的 `import yaml` 失敗 → `stages` 空 + `err` → R2 fail-closed **擋掉所有原始碼寫入**。`pyproject.toml` 自己的註解寫得最準:「少了它閘門不是壞掉,是**把人鎖在外面**」。方向是對的、會出聲,但那個 repo 在裝好之前寫不了任何碼。 |
 | `pytest` | 第二之一節的金絲雀與第三節的 `verify_gates` 全部跑不起來(`No module named pytest`)。 |
 
+> ### **票 156 更正(2026-10-20)—— 不再裝進全域 python。**
+> 原本這裡是一行 `python -m pip install "pyyaml>=6.0" "pytest>=8.0,<10"`(原句照 F-036 留在這裡)。
+> 閘門(前哨與 pre-commit)現在只經 `.claude/bin/gatepy` 啟動、**只認 repo 自己的 `.venv-gates`**;
+> 用全域 python 執行 `gate.py` 會被它的身分檢查(gate-B)擋下 —— 裝進全域不但沒用,還會讓人以為裝好了。
+
+做法:用 **Python 3.11 底座**(以 3.11.9 為準 —— 理由見 `.github/workflows/tests.yml` 的 setup-python 註解),
+從**上游** checkout 對目標 repo 執行:
+
 ```
-python -m pip install "pyyaml>=6.0" "pytest>=8.0,<10"
+python .claude/portable/setup_gates_env.py <repo> --profile <upstream|downstream>
 ```
 
+- 上游(agent-gates 自己)用 `upstream`;下游用 `downstream`。
+- **套件與版本以鎖定檔為準**(`.claude/portable/gates-lock.txt`;上游再加 `gates-lock-upstream-tests.txt`),
+  `--require-hashes` 安裝,不再寫版本範圍。
+- **這一步要連網**(從套件索引下載)。本機執行須 Jeff 明確授權(票 156 D-11)。
+- 只在目標 repo 建兩樣東西:`.venv-gates/`,以及 `.git/info/exclude` 裡 `.venv-gates/` 那一行。
+- 建好後驗身分(最後一行要是 `identity: ok`):
+  ```
+  sh .claude/bin/gatepy .claude/portable/runtime_identity.py --whoami --repo <repo> --profile <同上>
+  ```
+
+> 下面這段是全域安裝時代的註記。版本現在由鎖定檔釘死;`pyproject.toml` 的上限與到期複審仍然有效。
+>
 > **上限 `<10` 是刻意的(票 34)。** 沒有上限時新機器會拿到當下最新版
 > (演練那台拿到 9.1.1、桌機是 9.0.3),兩台機器跑的不是同一個測試執行器。
 > 上限的位置 = **實測證據的邊界**:9.x 兩台全綠,10.x 沒有證據。
@@ -45,23 +65,38 @@ python -m pip install "pyyaml>=6.0" "pytest>=8.0,<10"
 `where.exe python` 常常回兩支以上(第二支多半是 Microsoft Store 的轉接殼)。
 裝錯直譯器的話,檔案都在、`pip list` 也對,而 hook 依然吃不到套件。
 
+**repo 的 hook(前哨與 pre-commit)不再由 PATH 解析**(票 156):兩者都經
+`sh .claude/bin/gatepy`,它**只認** `<repo>/.venv-gates` 的直譯器
+(`Scripts/python.exe` 或 `bin/python`),找不到就 exit 2,絕不退回 `.venv` 或 PATH 上的 python。
+`gate.py` 自己還會再驗一次(gate-B):不是本 repo 的 `.venv-gates`、或不是 3.11 ⇒ 擋下。
+**上面那一段 PATH 的坑,現在只剩使用者層 G1 那一支會踩到。**
+
 **別用推論,用一條零副作用的探針**(`gate.check()` 是純判定,不寫任何檔案,
 所以擋下時磁碟上不會留下東西):
 
-1. 裝之前,對一個源碼路徑用 **Write / Edit** 試寫一次,看 hook 回報的**原因**:
+1. 建 `.venv-gates` 之前,對一個源碼路徑用 **Write / Edit** 試寫一次,看 hook 回報的**原因** ——
+   應該是啟動器找不到直譯器(gatepy exit 2):
    ```
-   [R2/fail-closed] …:站別定義不可用,原始碼寫入一律擋下。
-        原因:無法載入 yaml 套件(No module named 'yaml')
+   [gatepy] 找不到 <repo>/.venv-gates 的直譯器(查過 .venv-gates/Scripts/python.exe、.venv-gates/bin/python)。
+            本啟動器不退回 .venv 或 PATH 上的直譯器。建立方式:從上游 checkout 執行 setup_gates_env.py <repo>(票 156)。
    ```
-2. `python -m pip install …`(用 `python -m pip`,保證裝進 `python` 解析到的那支)。
-3. **同一條探針再試一次。** 訊息應翻成:
+2. 照 0-1 執行 `setup_gates_env.py`,並用 `--whoami` 確認 `identity: ok`。
+3. **同一條探針再試一次。** 訊息應翻成 `gate.py` 自己的判定,例如:
    ```
         原因:讀不到流程狀態(.dev/pipeline.json)
    ```
 
-**訊息翻面 = 證明 hook 吃的就是你剛裝的那支。** 中間只變動了一件事,
+**訊息翻面 = 證明 hook 吃的就是你剛建的那個 `.venv-gates`。** 中間只變動了一件事,
 所以這是觀測不是推論 —— 與第二節開頭「複製檔案不算裝好」同一句話,
 套在直譯器上。
+
+> **反過來的負控**:用全域 python 直接跑 `gate.py`,應該被 gate-B 擋下(exit 2),訊息開頭是
+> `[六站閘門/gate_runtime_problem] 閘門只在 <repo>/.venv-gates 的直譯器裡執行`。
+> 看到這句代表擋人的是身分檢查,不是規則 —— 那是「用錯直譯器」,不是「規則壞了」。
+
+> **原文(票 156 之前,照 F-036 保留)**:第 1 步的期望訊息原本是
+> `[R2/fail-closed] …:站別定義不可用 … 原因:無法載入 yaml 套件(No module named 'yaml')`,
+> 第 2 步原本是 `python -m pip install …`。
 
 ### 0-3. git identity
 
@@ -664,7 +699,7 @@ Add-Content -Encoding UTF8(檔已存在)     90, 90, 70              BOM: False 
 > 而 repo 在 `c:/projects/agent-gates` 底下)。
 >
 > **依據**:兩支 hook 的掛載軸不同 —— `gate.py` 掛在 repo 側 `.claude/settings.json`,
-> 命令是 `python "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py"`,**跟 session 走**;
+> 命令是 `sh "$CLAUDE_PROJECT_DIR/.claude/bin/gatepy" "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py"`(票 156 起;之前是 `python "…/gate.py"`),**跟 session 走**;
 > G1 掛在使用者層 `~/.claude/settings.json`,**跟人走**。
 > session 根一離開 repo,前哨(含 R7)整層不在場,而 G1 照跑。
 > 那正是這條探針要的窗口,**與「gate.py 未裝」等價,但不必真的把 gate.py 卸掉**。
@@ -718,7 +753,7 @@ Add-Content -Encoding UTF8(檔已存在)     90, 90, 70              BOM: False 
 **上面那四條探針問的是「規則會不會擋」。這一格問的是【規則會不會被叫到】。**
 
 > **`~/.claude/settings.json` 之外,repo 側 `.claude/settings.json` 的 `PreToolUse`
-> 掛的是 `python "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py"`,
+> 掛的是 `sh "$CLAUDE_PROJECT_DIR/.claude/bin/gatepy" "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py"`(票 156 起),
 > 而 `CLAUDE_PROJECT_DIR` 指的是【session 根】,不是 repo 根。**
 > 兩者不相等時(session 開在上一層、repo 在它底下),
 > **前哨整層不在場,而沒有任何東西會說**(票 86,2026-08-28 實測:
@@ -743,7 +778,7 @@ Add-Content -Encoding UTF8(檔已存在)     90, 90, 70              BOM: False 
 |---|---|
 | **①** | **`echo "$CLAUDE_PROJECT_DIR"` 在 Bash 工具內回【空字串】,此查法量不到。**<br>依據:該變數只注入 **hook 進程**的環境,不注入工具的 shell。<br>**⇒ 改由 ② 的擋下訊息反推** —— 前哨擋下時訊息裡帶著它自己的掛載路徑,那條路徑的前綴就是當下的 session 根。**訊息是唯一從 session 內看得到 `CLAUDE_PROJECT_DIR` 的地方。** |
 | **②** | **通過條件寫著「`[六站閘門/前哨] [R7][enforce]`,exit 2」,而【exit 2 那半在 session 內量不到】** —— harness 不把 hook 的退出碼印出來,agent 側只看得到擋下訊息本身。<br>**⇒ exit 2 只能由 ③ 在終端機當負控觀測。** 兩半的觀測位置不同,不要當成一次就驗完。 |
-| **③** | 🔴 **在【掛著前哨的 session 內】結構上不可執行。**<br>理由:負控的載體(要餵給 `gate.py` 的那條指令)**本身含引號**,而 R7 fail-closed **先吃掉載體** —— 還沒餵進去就被前哨擋了。<br>**⇒ 這一格必須【人在終端機】跑**:`echo <payload> \| python .claude/hooks/gate.py`。<br>**2026-09-04 實測 `exit=2`。** |
+| **③** | 🔴 **在【掛著前哨的 session 內】結構上不可執行。**<br>理由:負控的載體(要餵給 `gate.py` 的那條指令)**本身含引號**,而 R7 fail-closed **先吃掉載體** —— 還沒餵進去就被前哨擋了。<br>**⇒ 這一格必須【人在終端機】跑**:`echo <payload> \| sh .claude/bin/gatepy .claude/hooks/gate.py`(票 156 起;原本是 `\| python .claude/hooks/gate.py`,現在全域 python 會先被 gate-B 擋下,擋的理由就不是 R7 了)。<br>**2026-09-04 實測 `exit=2`**(當時用的是全域 python)。 |
 
 > **⇒ 三段裡有兩段(② 的退出碼、③ 整格)的權威觀測點在【終端機】,不在 session 內。**
 > 上表寫「三段,缺一不可」是對的,而它沒寫**誰跑得動哪一段** ——
@@ -920,8 +955,8 @@ certutil -hashfile "%USERPROFILE%\.claude\shadow-clamp.txt" SHA256
 
 | | |
 |---|---|
-| **啟用** | 在 repo 根目錄跑 `sh bootstrap.sh` —— 一行 `core.hooksPath` config,**每個 clone 一次**。零接觸不可能:git 刻意不讓 clone 自動執行任何東西。 **⚠ Windows 請在 Git Bash 裡跑**(裝 git 時會一起裝)—— PowerShell 沒有 `sh` 這個指令。 |
-| **驗收** | `python -m pytest tests/test_gate.py::TestAuthorityLayerIsWired` —— 其中 `test_this_repo_itself_is_wired` 問的是「**現在、這台機器上**接上了沒」,不是「框架的邏輯對不對」。 |
+| **啟用** | 在 repo 根目錄跑 `sh bootstrap.sh` —— 一行 `core.hooksPath` config,**每個 clone 一次**。零接觸不可能:git 刻意不讓 clone 自動執行任何東西。 **⚠ Windows 請在 Git Bash 裡跑**(裝 git 時會一起裝)—— PowerShell 沒有 `sh` 這個指令。<br>**票 156 起,`bootstrap.sh` 要求先有合法的 `.venv-gates`**(照 0-1 建好):找不到它的直譯器、或 `runtime_identity --whoami` 不合法,就拒絕設定 `core.hooksPath`(fail-closed)。 |
+| **驗收** | `.venv-gates/Scripts/python.exe -m pytest tests/test_gate.py::TestAuthorityLayerIsWired`(POSIX:`.venv-gates/bin/python`;票 156 起不用全域 `python`)—— 其中 `test_this_repo_itself_is_wired` 問的是「**現在、這台機器上**接上了沒」,不是「框架的邏輯對不對」。 |
 | **缺席時** | 紅燈,訊息直接給修法(`sh bootstrap.sh`)。**這是刻意讓它吵的** —— 靜默缺席正是票 27 的整件事。 |
 
 **兩條掛載路徑,以 `core.hooksPath` 為準:**
@@ -1016,7 +1051,7 @@ python -c "import sys; sys.path.insert(0,'.claude/hooks'); import gate; print(le
 而那條路徑含**使用者名**與**工作區資料夾名**。
 
 ```
-PYTHONIOENCODING=utf-8 python -m pytest -q -rs      # 看 SKIPPED 行
+PYTHONIOENCODING=utf-8 .venv-gates/Scripts/python.exe -m pytest -q -rs      # 看 SKIPPED 行(POSIX:.venv-gates/bin/python;票 156 起)
 ```
 
 **必須是 `tests\test_gate.py:<行號>` 這種相對形式,不得出現任何舊機器的絕對路徑。**
@@ -1054,13 +1089,24 @@ PYTHONIOENCODING=utf-8 python -m pytest -q -rs      # 看 SKIPPED 行
 
 ## 三、新專案安裝
 
+票 156 起的順序(G4)。全部**在上游 checkout 執行**,而上游自己要先照 0-1 建好合法的 `.venv-gates`
+(`--profile upstream`)。下面寫 Windows 的直譯器路徑;POSIX 換成 `.venv-gates/bin/python`。
+
 ```
-sh bootstrap.sh                                   # 啟用進版控的洩漏 pre-commit(每個 clone 一次)
-python .claude/portable/install.py <目標 repo>     # 一律建 commit(go-live sha)、最後強制驗證
+sh bootstrap.sh                                   # 上游這個 clone 接上權威層(每個 clone 一次;要求上游 .venv-gates 已合法)
+# 目標 repo 必須已 git init(setup 要登記 .git/info/exclude),而且還沒裝過 agent-gates
+python .claude/portable/setup_gates_env.py <目標 repo>   # 3.11 底座;downstream profile(預設);要連網
+.venv-gates/Scripts/python.exe .claude/portable/install.py <目標 repo>
+                                                  # 事前檢查以「目標自己的 .venv-gates」執行 runtime_identity(downstream);
+                                                  # 不合法就在任何寫入之前拒絕。一律建 commit(go-live sha)、最後強制驗證
 # → 讀 <目標 repo>/docs/decisions-pending.md,把裡面每一項問清楚、處理完刪掉
-python .claude/portable/verify_gates.py <暫存目錄>  # 全規則 + 淨室
-python .claude/portable/g1_verify.py               # G1 保護清單
+.venv-gates/Scripts/python.exe .claude/portable/verify_gates.py <暫存目錄>
+                                                  # 全規則 + 淨室;核心模式不連網(從上游 .venv-gates 離線複製)
+python .claude/portable/g1_verify.py               # G1 保護清單(使用者層,不經 .venv-gates)
 ```
+
+> **原文(票 156 之前,照 F-036 保留)**:原本是 `sh bootstrap.sh` → `python install.py <目標>` → `python verify_gates.py <暫存目錄>`,
+> 沒有建 `.venv-gates` 這一步,也不分直譯器。
 
 **裝好的定義是驗證通過,不是檔案複製完。** `decisions-pending.md` 清空才算安裝的人工部分做完。
 

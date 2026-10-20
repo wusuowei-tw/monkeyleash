@@ -152,6 +152,18 @@
   - `tests/test_verify_gates_core_copy.py` 8 passed；`tests/test_verify_gates.py` 47 passed；
   - **淨室首次端到端 exit 0**（`.venv-gates` 直譯器、離線）：R1～R10 各擋一次、權威層偵測正常、框架測試在新 repo 全綠（2652 passed, 14 skipped, 3 xfailed）、evidence policy 兩正三負成立；
   - 全套（`.venv-gates`）：4 failed（`tests/test_ci_workflow.py` 的 RT7／D-11 四條，留給 S4f-3）、2839 passed。
+- **S4f-3 完成（錨點 A7）：S4f-乙、S4f-丙 已實作**：
+  - `.github/workflows/tests.yml`：
+    - `python-version` 釘 `'3.11.9'`（S4f-乙；註解寫明理由：bootstrap 例外是精確版本）；
+    - 刪除 `pip install -e ".[dev]"`；
+    - 在 `sh bootstrap.sh` 之前新增整合步驟 `id: gates-bootstrap-integration`（`setup_gates_env.py . --profile upstream`，再以 `.venv-gates/bin/python` 跑 `runtime_identity --whoami --profile upstream`；會連網）；
+    - 跑測試、收集清單、淨室驗證三步改用 `.venv-gates/bin/python`。
+    - `tests/test_ci_workflow.py` 14 passed（4 紅轉綠，既有 10 條仍綠）。
+  - `docs/machine-init.md`（S4f-丙）：改了 0-1、0-2、前哨掛載指令兩處、③ 負控、二之一的 `bootstrap.sh` 前提與驗收直譯器、二之二 `-rs` 那行的直譯器、第三節新下游流程；`:985` 與 0-2 的使用者層 G1 那一行不動；舊文照 F-036 保留。
+  - **出貨檔的裁定**：`docs/machine-init.md` 在 manifest 標 `copy`（會出貨），與原指示「改到出貨檔就停」衝突，S4f-3 因此在修改前停下。裁定：它是 S4f-丙 授權修改的檔，照改，改完必須重跑淨室；除此之外改到其他出貨檔仍要停。原指示互相衝突屬裁決助手的指示錯誤。（裁決助手 2026-10-20 約 16:52（美東），非 Jeff 逐字原話）
+  - **淨室重跑**（改完 `machine-init.md` 之後，`.venv-gates` 直譯器、離線）：exit 0；框架測試在新 repo 2652 passed, 14 skipped, 3 xfailed；evidence policy 兩正三負成立。
+  - 全套（`.venv-gates`）：**0 failed**、2843 passed。
+  - **尚待 push 之後才能驗**：驗收 6「CI 綠燈（Jeff 目視）」，以及驗收 9 的「整合層（CI 網路 job）至少成功一次」。本站沒有連網、沒有 push。
 - **觀察（留給後續，不在本票處理）**：
   - 鎖定檔與 `.agents/extension-allowlist.json` 會受 autocrlf 影響，`git add` 時提示 checkout 後會轉成 CRLF。〔讀碼推論〕pip、`runtime_identity`、R10 的 json 解析都不受影響。之後在合適的站點，比照 gatepy 一起釘成 `eol=lf`。
   - 已安裝的下游，允許清單在 manifest 標 skip，不會跟著更新。下游仍須逐 repo 照 D10「先擴後縮」處理。
@@ -424,3 +436,4 @@
 - S4e-1 探針結果、S4e-2 gate-B 便宜身分檢查接上 `__main__`、T146-59／60／60b 改用 target `.venv-gates`、全域 Python 不再能救援補入（錨點 A5）（Jeff 2026-10-20，裁決助手記錄，非逐字原話）。
 - S4f 裁決（S4f-甲 方案 (d)、S4f-乙 CI 釘 3.11.9、S4f-丙 machine-init 範圍）與 R-3 判讀補入；`:106` 改指 S4f-甲；(d) 紅燈六條（錨點 A6-紅）（Jeff 2026-10-20 約 13:53（美東），裁決助手記錄，非逐字原話）。
 - S4f-丁（紅燈移到不出貨的 `tests/test_verify_gates_core_copy.py`）、S4f-1 偏離裁定、S4f-丁之二（淨室 4 紅：T146-52／52b 換掉 `prepare_target_env`，D-11 (b)(c) 移檔）、S4f-2 (d) 實作與淨室首次端到端 exit 0 補入（錨點 A6）（Jeff 2026-10-20 約 15:31／16:06（美東），裁決助手記錄，非逐字原話）。
+- S4f-3：CI 改走 `.venv-gates`（整合步驟 `gates-bootstrap-integration`、釘 3.11.9、移除 `pip install -e`）、`machine-init.md` 更新、出貨檔裁定（16:52）與淨室重跑結果補入；驗收 6、9 待 push 後驗（錨點 A7）（2026-10-20，裁決助手記錄，非逐字原話）。

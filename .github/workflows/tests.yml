@@ -40,14 +40,24 @@ jobs:
       # v6.3.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          # 釘 3.11,與桌機相同。一次只變一個變數:CI 的價值是換一台
-          # 乾淨機器,不是順便換直譯器版本。
+          # 釘 3.11.9(修補版也釘),與桌機相同(票 156 裁決 S4f-乙)。
+          # 理由:runtime_identity 的 runtime-bootstrap 例外是精確版本 ——
+          # pip 24.0 / setuptools 65.5.0 取自 3.11.9 的 ensurepip;修補版不同,
+          # venv 預裝的版本就不同,.venv-gates 的身分檢查會失敗。
           # pyproject.toml 只寫 requires-python >= 3.10(有下限無上限),
           # 那個不對稱已登記在票 54,不在這裡處理。
-          python-version: '3.11'
+          python-version: '3.11.9'
 
-      - name: 安裝相依
-        run: python -m pip install -e ".[dev]"
+      # 票 156 D-11 的**整合層**:照帶 hash 的鎖定檔(upstream profile)真的建出 `.venv-gates`。
+      # **會連網**(從套件索引下載)—— 所以它是獨立、明確標示的一步,id 是機器可讀的標記。
+      # 不再 `pip install -e`:本專案本身不安裝,相依只照鎖定檔裝進 .venv-gates(RT7)。
+      # 後面的步驟(bootstrap、pytest、verify_gates)都以這一步先成功為前提(R-3 判讀);
+      # 核心 verify_gates 本身不連網(S4f-甲:從這裡建好的 .venv-gates 離線複製)。
+      - name: 照鎖定檔建立閘門環境(整合層,連網)
+        id: gates-bootstrap-integration
+        run: |
+          python .claude/portable/setup_gates_env.py . --profile upstream
+          .venv-gates/bin/python .claude/portable/runtime_identity.py --whoami --repo . --profile upstream
 
       # 權威層靠 core.hooksPath 接上(.githooks/pre-commit 進版控),
       # 而那是 per-clone 的 config,clone 不會帶走 —— 每個乾淨 checkout 都要設一次。
@@ -71,7 +81,7 @@ jobs:
       # ⇒ deselect 的整條理由(票 49 / 票 93)消失,不是「先放著」。
       - name: 跑測試
         run: |
-          python -m pytest -q \
+          .venv-gates/bin/python -m pytest -q \
             --ignore=tests/test_known_items_regression.py
 
       # 票 85:CI 那一側的**收集清單**。只收集不執行 ——
@@ -94,7 +104,7 @@ jobs:
       # 而在還不知道差集長什麼樣之前,那是先付款後看貨。
       - name: 收集清單(票 85)
         run: |
-          python -m pytest --collect-only -q \
+          .venv-gates/bin/python -m pytest --collect-only -q \
             --ignore=tests/test_known_items_regression.py
 
       # 淨室:真的裝一次、讓每條規則各擋一次、再在新 repo 裡跑一次框架測試。
@@ -110,4 +120,4 @@ jobs:
       # 守著 —— 被拿掉會有東西叫。少了那條斷言,這裡就是
       # 「機制做好了但沒有東西保證它被走到」的第四個實例(票 56)。
       - name: 淨室驗證(每條規則各擋一次 + 安裝後形態)
-        run: python .claude/portable/verify_gates.py "${{ runner.temp }}/verify-gates"
+        run: .venv-gates/bin/python .claude/portable/verify_gates.py "${{ runner.temp }}/verify-gates"
