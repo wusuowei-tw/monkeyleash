@@ -14,6 +14,7 @@
 #  上面那句引文與 manifest.py:101 的原文在同一次改完,免得引號裡的字對不上。)
 # agent-gates 自己就處在那個降級狀態,40 個 commit 沒有人發現 ——
 # 因為 core.hooksPath 根本沒設定,這一支從頭到尾沒被執行過。
+# 直譯器只經 .claude/bin/gatepy 取 .venv-gates(票 156);不退回 .venv 或 PATH 上的 python。
 root="$(git rev-parse --show-toplevel)"
-python "$root/.claude/portable/leak_scan.py" --staged || exit 1
-exec python "$root/.claude/hooks/gate.py" --pre-commit
+sh "$root/.claude/bin/gatepy" "$root/.claude/portable/leak_scan.py" --staged || exit 1
+exec sh "$root/.claude/bin/gatepy" "$root/.claude/hooks/gate.py" --pre-commit

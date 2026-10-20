@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py\""
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/bin/gatepy\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py\""
           }
         ]
       }

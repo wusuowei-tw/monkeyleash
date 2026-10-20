@@ -122,6 +122,20 @@
   - **下載量實測**（scratchpad 下載目錄，單位 bytes）：Windows core 7 檔 1,985,371；Windows union 37 檔 17,382,517；Linux probe 36 檔 12,160,099。`setup_gates_env` 的安裝另外以 `--no-cache-dir` 從 PyPI 下載了 37 個 Windows wheel，這一筆的總量沒有另外量。
   - **D-4 實測**：上游 `.venv-gates`（profile upstream）實際有 39 個 distribution，等於 upstream 有效集合 37 個加上 `pip==24.0`、`setuptools==65.5.0`，**與暫定相同**，例外清單不擴大。`--whoami --profile upstream` 退出碼 0（`identity: ok`）；`--profile downstream` 對照照預期 fail-closed（30 筆「額外套件」，正好是上游測試鎖定檔那 30 個）。
   - **全套結果**（兩種直譯器相同）：全域 python 與 `.venv-gates` 直譯器都是 `12 failed, 2825 passed, 10 skipped, 3 xfailed`。紅的 12 條就是 A1 那 15 條扣掉 S4c 轉綠的 3 條（RT5(a)、RT5(b)、D-11(c)），沒有收集期錯誤。以 `.venv-gates` 直譯器跑 pytest 沒有被 R7 擋下。
+- **S4c′ 金絲雀取證（U-a）**：（Jeff 2026-10-20，裁決助手記錄，非逐字原話）
+  - 在 `<canary>` 以 Claude Code 真正的 PreToolUse hook 做了兩次 Write，P1～P5 全部通過。hook 在 Git for Windows 的 MINGW64 bash 下，經 `sh → gatepy` 執行，用的是金絲雀自己的 `.venv-gates`（Python 3.11.9）。結果檔每一行都指向該 venv，沒有其他直譯器混入。**U-a 已證明。**
+  - 瑕疵：第 1 次檔名 `canary-2026` 可預測，改用 B 方案重做一次補強；第 2 次 `canary-55663344` 長度合格，但只有數字而且有規律，Jeff 裁定不重做。
+  - 金絲雀 `<canary>` 尚未刪除（K5）。
+- **S4d 允許清單擴張（錨點 A3）**：（Jeff 2026-10-20，裁決助手記錄，非逐字原話）
+  - A3 是 policy-only commit；允許清單新舊兩條指令並存；pre-commit 印出 `DECLARED_OK`。
+  - 原 D2 的三方比對前提有誤：`install.py` 不寫死 settings 指令（它照抄上游 settings，再由 `_settings_hook_commands` 推出允許清單），票面也沒有新指令全文。這是裁決助手的錯誤。改為 fixed-string 比對（`grep -F`）加語義比對（json 解碼後做子字串比對）；`tests/test_install.py`、S3a 報告、允許清單三者一致。
+- **S4e-1 正式 hook 改走 `sh → gatepy`（錨點 A4）**：（Jeff 2026-10-20，裁決助手記錄，非逐字原話）
+  - `.claude/settings.json` 的 command 改為 `sh "$CLAUDE_PROJECT_DIR/.claude/bin/gatepy" "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py"`；`.githooks/pre-commit` 的兩行指令改為經 gatepy。
+  - S4e-1 原指令要求整份換成範本，與 S3a 3-4 衝突（裁決助手錯誤），改依 S3a 3-4：保留上游 `:1-16` 歷史註解，只換指令行；上游 hook 因此不等於 hook-v2 範本。範本仍是新安裝／`--rehook` 的標準 v2 hook；上游不走 `--rehook`（票面 `:363`）。
+- **觀察（留給後續，不在本票處理）**：
+  - 鎖定檔與 `.agents/extension-allowlist.json` 會受 autocrlf 影響，`git add` 時提示 checkout 後會轉成 CRLF。〔讀碼推論〕pip、`runtime_identity`、R10 的 json 解析都不受影響。之後在合適的站點，比照 gatepy 一起釘成 `eol=lf`。
+  - 已安裝的下游，允許清單在 manifest 標 skip，不會跟著更新。下游仍須逐 repo 照 D10「先擴後縮」處理。
+  - 下游 gatepy 的 LF 保護（S4b′ 判定 B）仍待裁。
 
 ---
 
@@ -386,3 +400,4 @@
 - S4a 裁決（D-S4-1～8）與 S4b 裁決（甲案兩處、帳本 append-only、`install_step` 參數、gatepy 只用 `-f`、S4f 待裁）補入；S4b 離線實作（錨點 A1）（2026-10-20，裁決助手記錄，非逐字原話）。
 - S4b′ 裁決（bootstrap profile 慣例非安全邊界、gatepy LF 持久化、下游判定 B 待裁）補入；`.gitattributes` 加 `.claude/bin/gatepy text eol=lf`（錨點 A1′）（2026-10-20，裁決助手記錄，非逐字原話）。
 - S4c：S2a 個案裁決（cryptography `python_full_version` 邊）、鎖定檔純 ASCII 約束（甲′）與其測試、兩份帶 hash 的鎖定檔、上游 `.venv-gates` 建立與 D-4 實測補入（錨點 A2）（2026-10-20，裁決助手記錄，非逐字原話）。
+- S4c′ U-a 取證結果、S4d（錨點 A3，policy-only）與 D2 改法、S4e-1 正式 hook 改走 gatepy（保留上游 hook 歷史註解）與後續觀察補入（錨點 A4）（2026-10-20，裁決助手記錄，非逐字原話）。
