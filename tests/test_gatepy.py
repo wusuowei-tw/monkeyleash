@@ -218,3 +218,28 @@ def test_the_v2_fixture_keeps_the_three_substrings_and_no_bare_python():
     for needle in ("gate.py", "--pre-commit", "leak_scan"):
         assert needle in text, needle
     assert not [h for h in _command_heads(text) if h in ("python", "python3", "py")]
+
+
+# ── S4b′:gatepy 的 LF 是**持久化政策**,不是「這一刻剛好是 LF」───────────────────
+#
+# S4e-1 之後,所有 active hook 都只經 `sh → gatepy → .venv-gates` 啟動 —— gatepy 一旦被
+# checkout 成 CRLF,唯一的正式入口就壞了,閘門把自己鎖死。gatepy 沒有副檔名,
+# `*.sh text eol=lf` 涵蓋不到它;本機 `git add` 時 Git 已警告「LF will be replaced by CRLF」。
+# **問 Git 實際套用了什麼**(`git check-attr`),不綁某一行字面 —— 等價的寫法都會通過。
+
+def test_s4b_prime_gitattributes_pins_gatepy_to_lf():
+    p = subprocess.run(["git", "check-attr", "text", "eol", "--", ".claude/bin/gatepy"],
+                       cwd=str(ROOT), capture_output=True)
+    assert p.returncode == 0, p.stderr.decode("utf-8", "replace")
+    attrs = {}
+    for line in p.stdout.decode("utf-8", "replace").splitlines():
+        parts = [s.strip() for s in line.split(":")]
+        if len(parts) == 3:
+            attrs[parts[1]] = parts[2]
+    assert attrs.get("eol") == "lf", "gatepy 沒有被 .gitattributes 釘成 eol=lf:%r" % attrs
+    assert attrs.get("text") == "set", "gatepy 的 text 屬性不是 set:%r" % attrs
+
+
+def test_s4b_prime_gatepy_has_no_carriage_return():
+    """結果檢查(不負責先紅):gatepy 本體的原始位元組沒有 `\\r`。"""
+    assert b"\r" not in GATEPY.read_bytes()

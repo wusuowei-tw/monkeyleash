@@ -104,6 +104,11 @@
   - `setup_gates_env.main(argv, install_step=None)`：多出的注入參數預設就是真正的安裝步驟（`_install_lock`）；用途是讓 verify_gates 的核心模式傳入離線假步驟，而不必在正式程式裡改模組屬性。
   - `gatepy` 判斷候選直譯器只用 `-f`、不用 `-x`：Windows 沒有執行位元；就算命中一個不可執行的檔，`exec` 也會失敗，結果仍是擋下，不會放行。
   - **留給 S4f 的待裁**：核心模式下暫存 target 的 `.venv-gates` 是空的，install 的事前檢查（downstream profile 需要 pyyaml、pytest）預期會失敗；核心模式要怎麼通過這一關，S4f 再裁。
+- **S4b′ 裁決（bootstrap profile 慣例、gatepy LF 持久化）**：（Jeff 2026-10-20 約 09:02（美東）裁決，裁決助手記錄，非逐字原話）
+  - `bootstrap.sh` 以「`.claude/portable/gates-lock-upstream-tests.txt` 是否存在」選 profile（存在 ⇒ upstream，否則 downstream）：這只是 **profile selection convention**，**不是安全邊界**。真正的安全邊界是 runtime identity／profile 的精確比對 fail-closed；兩種誤判方向（上游被當下游、下游被當上游）都會因預期集合不符而擋下。
+  - S4b′：gatepy 的 LF 寫成**持久化政策**（`.gitattributes` 新增 `.claude/bin/gatepy text eol=lf`）。理由：S4e-1 之後所有 active hook 都只經 `sh → gatepy → .venv-gates` 啟動，gatepy 是唯一的正式入口，被 checkout 成 CRLF 就會把閘門鎖死；而 gatepy 沒有副檔名，`*.sh text eol=lf` 涵蓋不到它。證據：A1 的 `git add .claude/bin/gatepy` 印出 `LF will be replaced by CRLF the next time Git touches it`（本機開著 autocrlf）；新增規則前 `git check-attr` 為 `text: auto`／`eol: unspecified`。紅燈測試問的是 Git 實際套用的屬性（`git check-attr`），不綁規則字面。
+  - 下游判定：**B（待裁）**。installer 以 `shutil.copy2` 逐位元組照抄 gatepy，但 `.gitattributes` 在 manifest 標 **skip**（不隨安裝出貨），installer 對 `.gitattributes` 也沒有任何合併處理 ⇒ 下游拿不到這條規則；下游若開著 autocrlf，日後 checkout 可能把 gatepy 轉成 CRLF。本站不改 installer、manifest 或下游 `.gitattributes`。
+  - **待裁：下游 gatepy 的 LF 保護**（要在下游切換 hook 之前決定）。
 
 ---
 
@@ -366,3 +371,4 @@
 - F0c (a)(b)(c) 補入；票面封版（2026-10-19，裁決助手記錄，非逐字原話）。
 - S3b 紅燈與 D-1～D-11 補入（2026-10-19，裁決助手記錄，非逐字原話）。
 - S4a 裁決（D-S4-1～8）與 S4b 裁決（甲案兩處、帳本 append-only、`install_step` 參數、gatepy 只用 `-f`、S4f 待裁）補入；S4b 離線實作（錨點 A1）（2026-10-20，裁決助手記錄，非逐字原話）。
+- S4b′ 裁決（bootstrap profile 慣例非安全邊界、gatepy LF 持久化、下游判定 B 待裁）補入；`.gitattributes` 加 `.claude/bin/gatepy text eol=lf`（錨點 A1′）（2026-10-20，裁決助手記錄，非逐字原話）。

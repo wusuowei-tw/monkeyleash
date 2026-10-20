@@ -10,6 +10,8 @@
 
 # 版控的 git hooks(無副檔名,但由 sh 執行)—— 必須 LF。
 .githooks/* text eol=lf
+# 票 156:gatepy 是無副檔名的 sh 腳本,也是 active hook 的唯一入口;CRLF 會讓它壞掉而把閘門鎖死。
+.claude/bin/gatepy text eol=lf
 
 # Python:LF,跨平台一致。涵蓋 install 入口、gate.py、redlight.py、
 # g1_guard.py、leak_scan.py、verify_gates.py 等全部判定與安裝邏輯。
