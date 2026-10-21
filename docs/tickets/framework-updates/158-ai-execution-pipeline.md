@@ -74,6 +74,7 @@
 - **Q-D (a)**：R11 照擋，不受影子模式豁免（先例：R10）。
 - **C0-2 修正（Jeff 2026-10-21 約 13:40、13:50（美東））**：R11 只在前哨擋，完全比照 R7：不在 check()，提交時不判。理由：下游的站牌受 git 追蹤，提交時分不出是誰改的，而合法修改者是使用者本人；全新安裝不帶 docs/adr/，留在 check() 會讓分歧不變式在下游失敗。這推翻了 C0-R0 讀碼提出的「寫入與提交時都擋」。ADR 另開 F-0017。繞過前哨沒有第二道防線，留待 C2 設計，不保證能擋。Q-D 在此之下等同「前哨不受影子豁免」。
 - **C0-3 裁定（Jeff 2026-10-21 約 15:58（美東））**：Shell 類（W2–W4）R11 由前哨述詞判定，在 R7 與影子分支之前硬擋。目標看不出來時採「指令字面含 pipeline.json，且 R7 會擋、或內嵌直譯器命中、或任一抽出目標的檔名是 pipeline.json」⇒ 擋；讀取不擋。從站牌複製出去接受誤擋。PowerShell 短別名、.NET 直接呼叫、ln／rsync／curl -o 等 R7 動詞表空缺不在本站，另開票。已知殘留（不保證能擋）：W5（含 python -m json.tool A 站牌）、W6、未收的別名與 .NET、以字面拼接繞過。
+- **C0-1c 裁定（Jeff 2026-10-21 約 19:40（美東））**：redlight 三支讀取端碰到不合格站牌（A 組：讀不到、非 JSON、非物件、缺 current_stage 或非字串、ticket_id 型別錯）時照常記錄、票號記 null，並在當下以 stderr 警告；測試照跑，不中止。B 組（缺 ticket_id、null、空字串）不變、不警告。只判格式，不做 stages[].id 值域檢查（站名錯時由 R2 擋原始碼寫入）。判定函式放在 redlight（純函式），gate.py 本站不改，另以測試鎖住兩邊格式判定一致。
 - **Q-E (a)**：格式檢查只要求 `current_stage` 存在且在 `stages[].id` 值域內、`ticket_id` 是字串或 null（空字串也是字串，合法）；不要求四個欄位。
 - 寫入守衛 (i)+(ii+) 完成後，腳本內部寫入（W5）與 `git stash -a`／`clean -x`（W6）仍未擋；不得宣稱站牌已上鎖。
 - C2 完整性驗證 (iv) 目前只是待設計的目標：它是事後偵測被改動，不等於阻止寫入，也還不能保證分辨得出人工修改與腳本修改。
@@ -95,7 +96,7 @@
 ## 四、範圍（子項與順序）
 
 1. **B1 重大事件清單**：寫在 `docs/agents/commander.md`「只有 Jeff 能做的」一節。內容是擴大範圍、接受新風險、例外放行、push、改受保護項目等。**這份清單就是 C 的停止條件。**（已寫入 commander.md〈六、只有裁決者能做的〉，錨點 B1-W1。）
-2. **C0 站牌寫入守衛＋格式與值域檢查**：吸收票 135（寫入守衛）與票 117（格式與 `stages[].id` 值域，包括提交時點的未知站名）。修法在設計時選定（Q3）。（C0-1 讀取端格式與值域已完成，錨點 C0-1b；C0-2 R11 檔案工具類已實作，僅前哨（比照 R7，ADR F-0017），錨點 C0-2b′；C0-3 Shell 類已實作，錨點 C0-3b；redlight 讀取端待 C0-1c。）
+2. **C0 站牌寫入守衛＋格式與值域檢查**：吸收票 135（寫入守衛）與票 117（格式與 `stages[].id` 值域，包括提交時點的未知站名）。修法在設計時選定（Q3）。（C0-1 讀取端格式與值域已完成，錨點 C0-1b；C0-2 R11 檔案工具類已實作，僅前哨（比照 R7，ADR F-0017），錨點 C0-2b′；C0-3 Shell 類已實作，錨點 C0-3b；C0-1c redlight 讀取端紅燈已寫，錨點 C0-1c-a；實作待 C0-1c-b。）
 3. **A 正式執行通道**：
    - 修 U3：`VAR=value` 前綴不再因為「看不出寫入」就放行；
    - 把 ADR 0008 的「明示管道」做成有登記、由雙鑰（Q4）控制的通道；
@@ -139,7 +140,8 @@
 - Q1（含人員緊急復原方式）、Q7（43 的範圍）、Q8（清空 `ticket_id`），在各子項動工前裁；
 - 票 142 是否併入 C1；
 - 子項之間是否拆成多次 push。
-- C0-1c：redlight 三支讀取端（current_ticket／_ticket_of／redlight_run._ticket）讀到壞站牌時要怎麼出聲（票 117 原待裁）。
+- C0-1c：redlight 三支讀取端（current_ticket／_ticket_of／redlight_run._ticket）讀到壞站牌時要怎麼出聲（票 117 原待裁）。（已裁，見〈二〉C0-1c 裁定）
+- redlight.validate_session 只檢查 ticket_id 鍵是否存在，不檢查型別（docstring 寫「字串或 null」）；C0-1c-R0 附帶發現，是否處理待裁。
 - install.py 的 precheck 不拒絕「目標 repo = 本 repo」，可能覆寫本 repo 站牌（C0-R0 步驟 3 發現）；是否納入 158 待裁。
 - ADR 編號（F- 前綴）與 friction 編號在 CLAUDE.md 正典段相撞：test_claude_md 把正典段任何 F-數字都當 friction 引用。C0-2b′ 暫以 R11 那一列不寫 ADR 編號、改指向 RULE_DIVERGENCE 宣告避開（裁決助手依既有授權，2026-10-21）。要不要改發號規則或測試，待裁。
 - 待開票：補 R7 寫入動詞表（PowerShell 短別名 sc／ac／ni／ri 等、.NET [IO.File]::Write*、ln、rsync、curl -o、wget -O、tar -x、unzip、patch）。別名清單須以 Get-Alias 實際列舉，不憑記憶（C0-3 裁定 C）。
@@ -171,3 +173,5 @@
 - 2026-10-21（美東）：C0-3 Shell 類 R11 實作（錨點 C0-3b）：shell_stage_card_violation 由 mode_hook 對 Bash／PowerShell 指令在 R7 與影子分支前硬擋，涵蓋 W2–W4 已列舉寫法與規則 (c)；抽取與許可過濾拆開，R7 行為不變；verify_gates 的 R11 情境改為兩個述詞都要擋到；ADR F-0017 補 C0-3 一節；CLAUDE.md R11 列更新涵蓋範圍與殘留。紅轉綠，全套通過。已知殘留（不保證能擋）：W5、W6、PowerShell 短別名與 .NET、以字面拼接繞過。
 - 2026-10-21（美東）：C0-3b 第一次執行時，前一個 session 一次並行送出 5 個 Edit 後停下，gate.py 改到一半；Jeff 約 18:15 由本人在 VS Code 捨棄 gate.py 的變更。重做指令要求開新 session，實際被貼回同一 session 執行（第二次執行並行 0 次），Jeff 約 18:40 接受此偏離。第一次執行未跑測試、未 commit。
 - 2026-10-21（美東）：C0-3b 的 commit 被 R10 擋下（synced 內容不符 6：skill-creator 五檔與 skills manifest.json 被改寫，原因未確認，和本站改動無關）。唯讀診斷 D1 之後，Jeff 約 18:57 本人提交名冊重新登記（99e301e，內容未審閱），再提交 C0-3b。
+- 2026-10-21（美東）：記錄 C0-1c 裁定；C0-1c-a redlight 讀取端紅燈測試（錨點 C0-1c-a）。
+- 2026-10-21（美東）：C0-1c-a 同一 session 並行一次（步驟 5 改票面〈四〉與〈七〉的兩個 Edit 同時送出，兩者都成功），Jeff 約 19:45 接受，由原 session 完成本機提交；紅燈結果在並行前已記錄，未重跑。

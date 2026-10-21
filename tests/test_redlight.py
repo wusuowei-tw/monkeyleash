@@ -4831,3 +4831,192 @@ class TestTicket153UpdatedAtFraction:
         """AC6(守住):非字串(整數)⇒ contract_type。"""
         res = _t153_check(tmp_path, 20261014122014)
         assert res == {"category": "contract_type", "field": "rows[0].updated_at"}, res
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 158 C0-1c —— redlight 讀取端碰到不合格站牌(裁定 2026-10-21,選 (b))
+#
+# A 組(讀不到、非 JSON、非物件、缺 `current_stage` 或非字串、`ticket_id` 型別錯)
+# ⇒ 照常記錄、票號記 None、當下往 stderr 寫一行 `[redlight/站牌不合格]`;不得丟例外。
+# B 組(缺 `ticket_id`、null、空字串)與站名在值域外但格式正確 ⇒ 行為不變、不警告。
+# 只判格式,不做 `stages[].id` 值域檢查(站名錯時由 R2 擋原始碼寫入)。
+#
+# 介面:純函式 `redlight.stage_card_ticket(path)` → `(ticket, problem)`;
+# 三支讀取端回傳 `stage_card_ticket(...)[0]`。
+# 一致性(T3):格式合不合格,與 `gate.load_stage()` 是否回 `UNREADABLE_STAGE` 相同。
+# 真 repo 的 `.dev/pipeline.json` 一個位元組都不碰 —— 站牌一律寫在 tmp_path。
+# `redlight_run._ticket` 的 T1 在 tests/test_redlight_run.py(同名段)。
+# ─────────────────────────────────────────────────────────────────────────────
+
+import os as _t158_c0_1c_os
+
+
+def _t158_c0_1c_load_gate():
+    spec = importlib.util.spec_from_file_location(
+        "gate_for_redlight_t158_c0_1c", ROOT / ".claude" / "hooks" / "gate.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# 模組層載入:conftest 的隔離 fixture 由測試模組屬性找 gate 實例(`_loaded_gate_modules`)。
+gate_for_t158_c0_1c = _t158_c0_1c_load_gate()
+
+_T158_C0_1C_WARN = "[redlight/站牌不合格]"
+_T158_C0_1C_MISSING = object()          # #1:不建檔
+_T158_C0_1C_OK = b'{"current_stage": "implement", "ticket_id": "158"}'
+
+# (編號, 站牌原始位元組, 是否 A 組, 預期票號, 開檔時丟 PermissionError)
+_T158_C0_1C_CASES = [
+    ("01", _T158_C0_1C_MISSING, True, None, False),
+    ("02", b"{not json", True, None, False),
+    ("03", b"[1, 2]", True, None, False),
+    ("04", b"null", True, None, False),
+    ("05", b'{"current_stage": "implement", "ticket_id": 158}', True, None, False),
+    ("06", b'{"current_stage": "implement", "ticket_id": ["158"]}', True, None, False),
+    ("07", b'{"ticket_id": "158"}', True, None, False),
+    ("08", b'{"current_stage": 1, "ticket_id": "158"}', True, None, False),
+    ("09", b"\xff\xfe{", True, None, False),
+    ("10", b'{"current_stage": "implement"}', False, None, False),
+    ("11", b'{"current_stage": "implement", "ticket_id": null}', False, None, False),
+    ("12", b'{"current_stage": "implement", "ticket_id": ""}', False, "", False),
+    ("13", b'{"current_stage": "implment", "ticket_id": "158"}', False, "158", False),
+    ("14", _T158_C0_1C_OK, False, "158", False),
+    ("15", _T158_C0_1C_OK, True, None, True),
+]
+_T158_C0_1C_IDS = [
+    "01-A-missing", "02-A-not-json", "03-A-list", "04-A-null", "05-A-ticket-int",
+    "06-A-ticket-list", "07-A-no-stage", "08-A-stage-int", "09-A-not-utf8",
+    "10-B-no-ticket", "11-B-ticket-null", "12-B-ticket-empty", "13-ok-unknown-stage",
+    "14-ok", "15-A-permission",
+]
+
+
+def _t158_c0_1c_card(tmp_path, raw):
+    """`<tmp>/repo/.dev/pipeline.json` 寫入 `raw`(#1 不建檔)。回 `(repo 根, 站牌路徑)`。"""
+    root = tmp_path / "repo"
+    (root / ".dev").mkdir(parents=True)
+    p = root / ".dev" / "pipeline.json"
+    if raw is not _T158_C0_1C_MISSING:
+        p.write_bytes(raw)
+    return root, p
+
+
+def _t158_c0_1c_deny(monkeypatch, target):
+    """`io.open` 的替身:只在開 `target` 時丟 PermissionError,其他路徑轉給原函式。
+    redlight / redlight_run / gate 都以 `io.open` 開站牌(讀碼確認),一個替身涵蓋三者。"""
+    real = io.open
+    want = _t158_c0_1c_os.path.normcase(_t158_c0_1c_os.path.abspath(str(target)))
+
+    def fake(file, *args, **kwargs):
+        if isinstance(file, (str, _t158_c0_1c_os.PathLike)):
+            got = _t158_c0_1c_os.path.normcase(
+                _t158_c0_1c_os.path.abspath(_t158_c0_1c_os.fspath(file)))
+            if got == want:
+                raise PermissionError(13, "denied by t158_c0_1c", str(target))
+        return real(file, *args, **kwargs)
+
+    monkeypatch.setattr(io, "open", fake)
+
+
+def _t158_c0_1c_prepare(tmp_path, monkeypatch, raw, deny):
+    root, p = _t158_c0_1c_card(tmp_path, raw)
+    if deny:
+        _t158_c0_1c_deny(monkeypatch, p)
+    return root, p
+
+
+def _t158_c0_1c_call(fn, *args):
+    """讀取端不得丟例外 —— 丟了就是斷言失敗,不是錯誤。"""
+    try:
+        return fn(*args)
+    except Exception as e:      # noqa: BLE001
+        pytest.fail("讀取端丟出例外(不得丟):%s: %s" % (type(e).__name__, e))
+
+
+def _t158_c0_1c_assert_ticket(got, expected):
+    """嚴格比對:None 用 `is`,字串要型別與值都對;不用真假值。"""
+    if expected is None:
+        assert got is None, repr(got)
+    else:
+        assert type(got) is str and got == expected, repr(got)
+
+
+def _t158_c0_1c_stage_card_ticket():
+    fn = getattr(redlight, "stage_card_ticket", None)
+    assert callable(fn), "redlight.stage_card_ticket 不存在(票 158 C0-1c 紅燈)"
+    return fn
+
+
+class TestT158C01cReadersOnBadStageCard:
+    """T1:`current_ticket` 與 `_ticket_of` 對 15 種站牌的回傳值與 stderr。"""
+
+    @pytest.mark.parametrize("num,raw,group_a,expected,deny", _T158_C0_1C_CASES,
+                             ids=_T158_C0_1C_IDS)
+    def test_t158_c0_1c_current_ticket(self, tmp_path, monkeypatch, capsys,
+                                       num, raw, group_a, expected, deny):
+        _root, p = _t158_c0_1c_prepare(tmp_path, monkeypatch, raw, deny)
+        monkeypatch.setattr(redlight, "PIPELINE", str(p))
+        capsys.readouterr()
+        got = _t158_c0_1c_call(redlight.current_ticket)
+        err = capsys.readouterr().err
+        _t158_c0_1c_assert_ticket(got, expected)
+        if group_a:
+            assert _T158_C0_1C_WARN in err, (num, err)
+        else:
+            assert _T158_C0_1C_WARN not in err, (num, err)
+
+    @pytest.mark.parametrize("num,raw,group_a,expected,deny", _T158_C0_1C_CASES,
+                             ids=_T158_C0_1C_IDS)
+    def test_t158_c0_1c_ticket_of(self, tmp_path, monkeypatch, capsys,
+                                  num, raw, group_a, expected, deny):
+        root, _p = _t158_c0_1c_prepare(tmp_path, monkeypatch, raw, deny)
+        capsys.readouterr()
+        got = _t158_c0_1c_call(redlight._ticket_of, root)
+        err = capsys.readouterr().err
+        _t158_c0_1c_assert_ticket(got, expected)
+        if group_a:
+            assert _T158_C0_1C_WARN in err, (num, err)
+        else:
+            assert _T158_C0_1C_WARN not in err, (num, err)
+
+
+class TestT158C01cStageCardTicket:
+    """T2:純函式 `stage_card_ticket(path)` → `(ticket, problem)`;不寫 stderr。"""
+
+    @pytest.mark.parametrize("num,raw,group_a,expected,deny", _T158_C0_1C_CASES,
+                             ids=_T158_C0_1C_IDS)
+    def test_t158_c0_1c_stage_card_ticket(self, tmp_path, monkeypatch, capsys,
+                                          num, raw, group_a, expected, deny):
+        fn = _t158_c0_1c_stage_card_ticket()
+        _root, p = _t158_c0_1c_prepare(tmp_path, monkeypatch, raw, deny)
+        capsys.readouterr()
+        got = _t158_c0_1c_call(fn, p)
+        captured = capsys.readouterr()
+        assert isinstance(got, tuple) and len(got) == 2, repr(got)
+        ticket, problem = got
+        _t158_c0_1c_assert_ticket(ticket, expected)
+        if group_a:
+            assert isinstance(problem, str) and problem, (num, problem)
+        else:
+            assert problem is None, (num, problem)
+        assert captured.err == "", (num, captured.err)
+
+
+class TestT158C01cFormatParityWithGate:
+    """T3:同一份站牌,redlight 判「格式不合格」⇔ `gate.load_stage()` 回 `UNREADABLE_STAGE`。
+    只比格式;站名值域由 R2 負責 —— #13 兩邊都必須判為格式合格。"""
+
+    @pytest.mark.parametrize("num,raw,group_a,expected,deny", _T158_C0_1C_CASES,
+                             ids=_T158_C0_1C_IDS)
+    def test_t158_c0_1c_format_verdict_matches_gate(self, tmp_path, monkeypatch,
+                                                    num, raw, group_a, expected, deny):
+        fn = _t158_c0_1c_stage_card_ticket()
+        gate = gate_for_t158_c0_1c
+        _root, p = _t158_c0_1c_prepare(tmp_path, monkeypatch, raw, deny)
+        monkeypatch.setattr(gate, "PIPELINE", str(p))
+        rl_bad = _t158_c0_1c_call(fn, p)[1] is not None
+        gate_bad = _t158_c0_1c_call(gate.load_stage)[0] == gate.UNREADABLE_STAGE
+        assert rl_bad == gate_bad, (num, "redlight", rl_bad, "gate", gate_bad)
+        if num == "13":
+            assert rl_bad is False and gate_bad is False, (rl_bad, gate_bad)

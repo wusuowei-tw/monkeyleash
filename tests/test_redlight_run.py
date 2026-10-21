@@ -1706,3 +1706,88 @@ def test_j1_colon_segment_removed_by_normalisation_is_still_rejected(tmp_path, m
     assert _ledger(root) == []
     assert blocked == [], blocked
     assert calls == [], calls
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 158 C0-1c —— `redlight_run._ticket(root)` 碰到不合格站牌(裁定 2026-10-21,選 (b))
+#
+# A 組 ⇒ 回 None、往 stderr 寫一行 `[redlight/站牌不合格]`、不得丟例外;
+# B 組與站名在值域外但格式正確 ⇒ 行為不變、不警告。只判格式。
+# 表與編號和 tests/test_redlight.py 的同名段相同(該段另有 T2 / T3)。
+# 真 repo 的 `.dev/pipeline.json` 一個位元組都不碰 —— 站牌一律寫在 tmp_path。
+# ─────────────────────────────────────────────────────────────────────────────
+
+import os as _t158_c0_1c_os
+
+_T158_C0_1C_WARN = "[redlight/站牌不合格]"
+_T158_C0_1C_MISSING = object()          # #1:不建檔
+_T158_C0_1C_OK = b'{"current_stage": "implement", "ticket_id": "158"}'
+
+# (編號, 站牌原始位元組, 是否 A 組, 預期票號, 開檔時丟 PermissionError)
+_T158_C0_1C_CASES = [
+    ("01", _T158_C0_1C_MISSING, True, None, False),
+    ("02", b"{not json", True, None, False),
+    ("03", b"[1, 2]", True, None, False),
+    ("04", b"null", True, None, False),
+    ("05", b'{"current_stage": "implement", "ticket_id": 158}', True, None, False),
+    ("06", b'{"current_stage": "implement", "ticket_id": ["158"]}', True, None, False),
+    ("07", b'{"ticket_id": "158"}', True, None, False),
+    ("08", b'{"current_stage": 1, "ticket_id": "158"}', True, None, False),
+    ("09", b"\xff\xfe{", True, None, False),
+    ("10", b'{"current_stage": "implement"}', False, None, False),
+    ("11", b'{"current_stage": "implement", "ticket_id": null}', False, None, False),
+    ("12", b'{"current_stage": "implement", "ticket_id": ""}', False, "", False),
+    ("13", b'{"current_stage": "implment", "ticket_id": "158"}', False, "158", False),
+    ("14", _T158_C0_1C_OK, False, "158", False),
+    ("15", _T158_C0_1C_OK, True, None, True),
+]
+_T158_C0_1C_IDS = [
+    "01-A-missing", "02-A-not-json", "03-A-list", "04-A-null", "05-A-ticket-int",
+    "06-A-ticket-list", "07-A-no-stage", "08-A-stage-int", "09-A-not-utf8",
+    "10-B-no-ticket", "11-B-ticket-null", "12-B-ticket-empty", "13-ok-unknown-stage",
+    "14-ok", "15-A-permission",
+]
+
+
+def _t158_c0_1c_deny(monkeypatch, target):
+    """`io.open` 的替身:只在開 `target` 時丟 PermissionError,其他路徑轉給原函式。"""
+    real = io.open
+    want = _t158_c0_1c_os.path.normcase(_t158_c0_1c_os.path.abspath(str(target)))
+
+    def fake(file, *args, **kwargs):
+        if isinstance(file, (str, _t158_c0_1c_os.PathLike)):
+            got = _t158_c0_1c_os.path.normcase(
+                _t158_c0_1c_os.path.abspath(_t158_c0_1c_os.fspath(file)))
+            if got == want:
+                raise PermissionError(13, "denied by t158_c0_1c", str(target))
+        return real(file, *args, **kwargs)
+
+    monkeypatch.setattr(io, "open", fake)
+
+
+@pytest.mark.parametrize("num,raw,group_a,expected,deny", _T158_C0_1C_CASES,
+                         ids=_T158_C0_1C_IDS)
+def test_t158_c0_1c_ticket(tmp_path, monkeypatch, capsys, num, raw, group_a, expected, deny):
+    """T1:`redlight_run._ticket(root)` 的回傳值(嚴格比對)與 stderr;不得丟例外。"""
+    mod = _load()
+    root = tmp_path / "repo"
+    (root / ".dev").mkdir(parents=True)
+    p = root / ".dev" / "pipeline.json"
+    if raw is not _T158_C0_1C_MISSING:
+        p.write_bytes(raw)
+    if deny:
+        _t158_c0_1c_deny(monkeypatch, p)
+    capsys.readouterr()
+    try:
+        got = mod._ticket(str(root))
+    except Exception as e:      # noqa: BLE001
+        pytest.fail("讀取端丟出例外(不得丟):%s: %s" % (type(e).__name__, e))
+    err = capsys.readouterr().err
+    if expected is None:
+        assert got is None, repr(got)
+    else:
+        assert type(got) is str and got == expected, repr(got)
+    if group_a:
+        assert _T158_C0_1C_WARN in err, (num, err)
+    else:
+        assert _T158_C0_1C_WARN not in err, (num, err)
