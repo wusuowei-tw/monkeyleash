@@ -252,6 +252,12 @@ RULE_DIVERGENCE = {
                "『這個檔案是用 Bash 還是 Write 寫的』在提交時已經不存在了。"
                "因此 R7 只活在前哨,繞過前哨就沒有第二道。這是規則對象的性質,不是放水。",
     },
+    "R11": {
+        "adr": "docs/adr/F-0017-r11-stage-card-is-sentinel-only.md",
+        "why": "R11 管的是 **AI 檔案工具的寫入** —— 提交時只看得到 staged 內容,"
+               "分不出站牌是誰改的,而站牌的合法修改者是使用者本人。"
+               "因此 R11 只活在前哨,繞過前哨就沒有第二道。這是規則對象的性質,不是放水。",
+    },
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1398,6 +1404,41 @@ def rel(path):
         return os.path.relpath(os.path.abspath(path), ROOT).replace("\\", "/")
     except ValueError:
         return path.replace("\\", "/")
+
+
+STAGE_CARD_REL = ".dev/pipeline.json"
+
+
+def is_stage_card_path(path):
+    """R11(票 158 C0-2):這條路徑是不是本 repo 的站牌。
+
+    **不用 `rel()`**:它把 `\\` 換成 `/`,而 POSIX 上反斜線是檔名字元 ——
+    `.dev\\pipeline.json` 在那裡是另一個檔。先轉成 repo 內相對路徑,
+    再 `normpath` + `normcase`,與同樣處理過的 `STAGE_CARD_REL` 比對;
+    大小寫只在不分大小寫的平台視為同一路徑。
+    轉不成 repo 內相對路徑(repo 外、不同磁碟)⇒ 不是站牌,R11 不判定。
+    """
+    try:
+        rp = os.path.relpath(os.path.abspath(path), ROOT)
+    except ValueError:
+        return False
+    rp = os.path.normcase(os.path.normpath(rp))
+    if rp == os.pardir or rp.startswith(os.pardir + os.sep):
+        return False
+    return rp == os.path.normcase(os.path.normpath(STAGE_CARD_REL))
+
+
+def stage_card_violation(path):
+    """R11 的前哨述詞:`path` 是站牌 ⇒ `[R11]` 訊息,否則 None。
+
+    只由 `mode_hook` 對檔案工具呼叫;`check()` 與 pre-commit 不判 R11(見 F-0017)。
+    """
+    if not is_stage_card_path(path):
+        return None
+    return ("[R11] %s:.dev/pipeline.json 是站牌,只能由使用者本人修改;"
+            "AI 的檔案工具(Write / Edit / MultiEdit / NotebookEdit)不得寫入。\n"
+            "     換站請由使用者自行修改 .dev/pipeline.json 的 current_stage。\n"
+            "     (本規則只涵蓋檔案工具;Shell 類寫入待 C0-3。)" % rel(path))
 
 
 STAGE_DEF_SOURCES = ("worktree", "index")
@@ -3859,6 +3900,16 @@ def mode_hook():
                          "你可能正照著被覆蓋過的指令工作:\n")
         for m in mounts:
             _err("  %s\n" % m)
+        return 2
+
+    # R11 只在前哨評估,pre-commit 不判它:提交時分不出站牌是誰改的,
+    # 而合法修改者是使用者本人(見 F-0017,比照 ADR 0008)。
+    # 在 `check()` 與影子分支之前硬擋 —— 不受影子豁免(票 158 Q-D)。
+    # **不套 sentinel_footer()**:那句「繞過前哨仍會在 commit 被擋」對 R11 是假的,
+    # 繞過前哨就沒有第二道。
+    r11 = stage_card_violation(path)
+    if r11:
+        _err("[六站閘門/前哨] %s\n" % tag_enforce(r11))
         return 2
 
     # 豁免在**判決之後**才記帳,而且只在強制點記 —— 這裡才有「真的有人要寫」

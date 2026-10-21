@@ -229,6 +229,15 @@ def scenario_r7(target):
     return "predicate"
 
 
+def scenario_r11(target):
+    """R11 同 R7 是**前哨規則**(F-0017):它擋的是 AI 檔案工具寫站牌,pre-commit 不判它 ——
+    走 git commit 驗不到。所以回傳一個述詞,由 `run_scenario` 交給已載入的目標 gate 回答。
+    不寫入任何檔案。
+    """
+    card = os.path.join(target, ".dev", "pipeline.json")
+    return lambda gate: gate.stage_card_violation(card)
+
+
 # ── 票 146 3g:淨室家目錄隔離(G-1)與 R10 情境(G-3)────────────────────────
 #
 # 安裝、情境子程序、直接載入的目標 gate 一律用同一個隔離家目錄;真實使用者層不讀不寫。
@@ -437,6 +446,7 @@ SCENARIOS = {
     "R8": scenario_r8,
     "R9": scenario_r9,
     "R10": scenario_r10,
+    "R11": scenario_r11,
 }
 
 # 有指定擋下路徑的規則:代號標記與原因**同時**出現才算擋到(G-3;補件裁決)。
@@ -717,6 +727,11 @@ def run_scenario(target, code, iso=None):
         # 前哨規則:直接問述詞。走 commit 驗不到它 —— 它管的是工具呼叫。
         gate = load_target_gate(target)
         msg = gate.bash_write_violation("echo x > 偷偷寫進去.txt")
+        return bool(msg and "[%s]" % code in msg), (msg or "(述詞放行了)")
+    if callable(marker):
+        # 前哨規則各帶自己的述詞(R11,F-0017):收已載入的目標 gate,回擋下訊息或 None。
+        gate = load_target_gate(target)
+        msg = marker(gate)
         return bool(msg and "[%s]" % code in msg), (msg or "(述詞放行了)")
     sh(["git", "add", "-A"], target)
     # N-4:staged 為空時 `git commit` 會以 nothing-to-commit 非零結束 —— 那個 rc 不是閘門給的,不得算擋下。
