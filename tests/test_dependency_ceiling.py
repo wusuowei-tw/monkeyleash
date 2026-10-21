@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -61,12 +63,14 @@ def _review_re(name: str) -> re.Pattern:
 
 def _howto(name: str) -> str:
     return (
-        "複審程序:\n"
-        "  1. `python -m pip install -U %s` 裝下一個大版本\n"
-        "  2. `python -m pytest` 跑全套\n"
-        "  3. 全綠 -> 把 pyproject.toml 的上限與複審日**一起**往上推\n"
+        "複審程序(票 156 的鎖定檔流程;票 157 起不再直接升級套件):\n"
+        "  1. 改 .claude/portable/gates-lock*.txt 裡 %s 的版本與 hash(要連網,先取得 Jeff 授權)\n"
+        "  2. 經 Jeff 同意後重建環境:setup_gates_env.py <repo> --profile upstream\n"
+        "  3. runtime_identity.py --whoami --repo <repo> --profile upstream,確認 identity: ok\n"
+        "  4. 用 .venv-gates 的 python 跑全套 `-m pytest`\n"
+        "  5. 全綠 -> 最後才把 pyproject.toml 的上限與複審日**一起**往上推\n"
         "     有紅 -> 上限留著,把紅的成因寫進那張票,複審日往後推並註明理由\n"
-        "不要只改日期不做 1-2 步 —— 那會把這條測試變成一個沒有內容的儀式。" % name
+        "不要只改日期不做 1-4 步 —— 那會把這條測試變成一個沒有內容的儀式。" % name
     )
 
 
@@ -159,3 +163,85 @@ def test_ceiling_review_date_has_not_passed(name: str) -> None:
         "這條紅燈不是壞掉,是它在做它被寫出來要做的事。\n%s"
         % (name, review, today, _howto(name))
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 157 —— mcp 複審(2026-10-20)
+#
+# (A) 複審程序必須走票 156 的鎖定檔流程。舊版第一步是 `pip install -U`,
+#     在 `.venv-gates` 裡照做,已安裝版本就偏離鎖定檔,`runtime_identity` 判 FAIL ——
+#     **照著紅燈訊息做,反而把閘門環境弄壞**。
+# (B) 驗收 2:不改系統時間,只換掉本模組的日期來源 `_dt`,
+#     證明新複審日之下 11/1 綠、複審日當天綠、隔天紅。
+
+_PIP_UPGRADE_RE = re.compile(r"pip\s+install\b[^\n]*?(?:\s-U\b|--upgrade\b)", re.I)
+_NEGATION = ("不要", "不得", "不再", "勿", "禁止", "別")
+
+
+def test_t157_howto_walks_the_lock_file_flow_in_order() -> None:
+    """改鎖定檔 → 重建 `.venv-gates` → 核對身分,三步要依序出現。
+
+    判定用**第一次出現的位置**比先後:第一次提到鎖定檔必須早於第一次提到重建,
+    第一次提到重建必須早於第一次提到身分核對。只檢查關鍵字有沒有出現,
+    擋不住「三步都提了但順序顛倒」—— 先重建再改鎖定檔,重建出來的還是舊版。
+    """
+    text = _howto("mcp")
+    lock = text.find("gates-lock")
+    hits = [i for i in (text.find("setup_gates_env"), text.find(".venv-gates")) if i >= 0]
+    rebuild = min(hits) if hits else -1
+    whoami = text.find("runtime_identity")
+    ok = text.find("identity: ok")
+
+    assert lock >= 0, "複審程序沒有提到鎖定檔(gates-lock):\n%s" % text
+    assert rebuild >= 0, "複審程序沒有提到重建環境(setup_gates_env / .venv-gates):\n%s" % text
+    assert whoami >= 0 and ok >= 0, \
+        "複審程序沒有提到身分核對(runtime_identity 與 identity: ok):\n%s" % text
+    assert lock < rebuild < min(whoami, ok), (
+        "三步的順序不對(位置:鎖定檔 %d、重建 %d、身分 %d/%d):\n%s"
+        % (lock, rebuild, whoami, ok, text)
+    )
+
+
+def test_t157_howto_never_instructs_pip_install_upgrade() -> None:
+    """沒有任何一步叫人直接 `pip install -U`。
+
+    判定方式(**逐行的字面啟發式,不是語意判定**):含 `pip install … -U/--upgrade`
+    的那一行,必須同時帶否定詞(`_NEGATION`)才算「引用或警告」;
+    沒有否定詞就當成指示,判錯。所以「不要用 `pip install -U`」這種句子不會誤判;
+    而把指示和否定詞硬塞在同一行,這條測試擋不住 —— 那要靠人讀。
+    """
+    text = _howto("mcp")
+    offending = [line for line in text.splitlines()
+                 if _PIP_UPGRADE_RE.search(line) and not any(n in line for n in _NEGATION)]
+    assert not offending, (
+        "複審程序仍有一行在指示 `pip install -U`(在 .venv-gates 裡照做會讓身分判 FAIL):\n%s"
+        % "\n".join(offending)
+    )
+
+
+def _fixed_dt(day: _dt.date):
+    """一個 `_dt` 替身:`date.today()` 固定回 `day`,其餘行為與 `datetime.date` 相同。"""
+    class _FixedDate(_dt.date):
+        @classmethod
+        def today(cls):
+            return day
+    return types.SimpleNamespace(date=_FixedDate)
+
+
+@pytest.mark.parametrize("today, should_pass", [
+    ("2026-11-01", True),    # 舊複審日的隔天:票 157 要讓它仍綠
+    ("2027-01-31", True),    # 新複審日當天(`today <= review`,含等號)
+    ("2027-02-01", False),   # 新複審日隔天:機制必須仍會紅
+])
+def test_t157_mcp_review_date_acceptance(monkeypatch, today: str, should_pass: bool) -> None:
+    """驗收 2:只替換本模組的 `_dt`,呼叫原本那條測試。
+
+    第三格(會紅)同時證明替身真的生效 —— 真實的今天會讓它綠,
+    所以它紅的唯一原因是 `today()` 被換掉了。
+    """
+    monkeypatch.setattr(sys.modules[__name__], "_dt", _fixed_dt(_dt.date.fromisoformat(today)))
+    if should_pass:
+        test_ceiling_review_date_has_not_passed("mcp")
+    else:
+        with pytest.raises(AssertionError):
+            test_ceiling_review_date_has_not_passed("mcp")

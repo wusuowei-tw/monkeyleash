@@ -65,7 +65,9 @@ pytest-ceiling-review = "2027-02-15"
 # mcp 的上限在等**一張已經開好的候選票**(升 2.x),而那張票有具體內容 ——
 # 換 import 面(`FastMCP` -> `MCPServer`)、換 HTTP 客戶端(`httpx` -> `httpx2`)。
 # **一個等外界、一個等自己,後者不該給同樣長的繩子。**
-mcp-ceiling-review = "2026-10-31"
+# 2026-10-20 複審(票 157):PyPI 已有 2.0.x;維持 `<2`。升大版本需另案評估,
+# 並走鎖定檔流程。下次複審 2027-01-31。
+mcp-ceiling-review = "2027-01-31"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
