@@ -8111,3 +8111,119 @@ class TestT156GateCheapRuntimeCheck:
     def test_the_repos_own_venv_gates_passes(self, tmp_path):
         """正控:少了它,「一律擋」的實作會讓上面三條全綠。"""
         assert self._fn()(str(tmp_path), str(tmp_path / ".venv-gates"), "/base", (3, 11, 9)) is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 158 C0-1 —— 讀取端的格式與值域(吸收票 117)
+#
+# 裁定 Q-E (a):只要求 `current_stage` 存在且在 `stages[].id` 內、
+# `ticket_id` 是字串或 null(**空字串也是字串,合法**)。不要求四個欄位。
+# 不合法 ⇒ 比照讀不到(`UNREADABLE_STAGE`),兩個時點都擋。
+#
+# **用真的 `load_stage`、真的檔案**:patch 掉 `load_stage` 的話,
+# 測的是 lambda 不是讀取端(`_REAL_LOAD_STAGE` 的理由同上)。
+# 真 repo 的 `.dev/pipeline.json` 一個位元組都不碰 —— `PIPELINE` 指向 tmp。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _t158_c0_1_pipeline(tmp_path, monkeypatch, raw):
+    """只給 `load_stage()` 用:tmp 裡放一份 pipeline.json(`raw` 原樣寫入的位元組)。"""
+    p = tmp_path / "pipeline.json"
+    p.write_bytes(raw)
+    monkeypatch.setattr(gate, "PIPELINE", str(p))
+    monkeypatch.setattr(gate, "load_stage", _REAL_LOAD_STAGE)
+    return p
+
+
+def _t158_c0_1_world(tmp_path, monkeypatch, raw):
+    """給 `check()` 用的真 git repo:站別定義原封複製進工作樹與 index,
+    `pkg/thing.py` 有對應測試檔,站牌是 `raw`。回 `(repo, 實作檔絕對路徑)`。
+
+    提交時點讀 **index** 的站別定義(票 133 B3),所以要 `_install_stage_defs`。
+    紅燈帳本、例外清單、上游指標都指向不存在的 tmp 路徑 —— 不讀真 repo、
+    不讀使用者層。
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for c in ("init -q", "config user.email t@t", "config user.name t",
+              "config core.autocrlf false"):
+        _git133(c.split(), repo)
+    defs_path, _src = _install_stage_defs(repo)
+    (repo / "pkg").mkdir()
+    probe = repo / "pkg" / "thing.py"
+    io.open(str(probe), "w", encoding="utf-8", newline="\n").write("x = 1\n")
+    (repo / "tests").mkdir()
+    io.open(str(repo / "tests" / "test_thing.py"), "w", encoding="utf-8",
+            newline="\n").write("def test_x(): pass\n")
+    (repo / ".dev").mkdir()
+    pipeline = repo / ".dev" / "pipeline.json"
+    pipeline.write_bytes(raw)
+    monkeypatch.setattr(gate, "ROOT", str(repo))
+    monkeypatch.setattr(gate, "STAGES_DEF", str(defs_path))
+    monkeypatch.setattr(gate, "PIPELINE", str(pipeline))
+    monkeypatch.setattr(gate, "RUN_LOG", str(repo / ".dev" / "no-such-test-runs.jsonl"))
+    monkeypatch.setattr(gate, "EXEMPTION_LOG", str(repo / ".dev" / "gate-exemptions.jsonl"))
+    monkeypatch.setattr(gate, "LEGACY_LIST", str(repo / "no-such-legacy.txt"))
+    monkeypatch.setattr(gate, "UPSTREAM_ROOTS", str(tmp_path / "no-such-upstream-roots.txt"))
+    monkeypatch.setattr(gate, "load_stage", _REAL_LOAD_STAGE)
+    monkeypatch.chdir(repo)
+    return repo, str(probe)
+
+
+def _t158_c0_1_json(stage="implement", ticket="158"):
+    return json.dumps({"current_stage": stage, "ticket_id": ticket}).encode("utf-8")
+
+
+def test_t158_c0_1_commit_with_unknown_stage_is_blocked(tmp_path, monkeypatch):
+    """提交時點的前置站判定只問 `stage in pre_implement`,打錯的站名不在集合內
+    ⇒ 現行 R2 不擋(C0-R0 步驟 4)。要的是:站名不在 `stages[].id` 就擋,而且說出來。"""
+    _repo, probe = _t158_c0_1_world(tmp_path, monkeypatch, _t158_c0_1_json(stage="implment"))
+    msg = gate.check(probe, "x = 1\n", at_commit=True)
+    assert msg is not None and msg.startswith("[R2"), msg
+    assert "implment" in msg and "不合法" in msg, msg
+
+
+def test_t158_c0_1_write_with_unknown_stage_is_blocked(tmp_path, monkeypatch):
+    """現況回歸:寫入時點 `stage not in writable` 本來就擋。"""
+    _repo, probe = _t158_c0_1_world(tmp_path, monkeypatch, _t158_c0_1_json(stage="implment"))
+    msg = gate.check(probe, "x = 1\n", at_commit=False)
+    assert msg is not None and msg.startswith("[R2"), msg
+    assert "implment" in msg, msg
+
+
+def test_t158_c0_1_missing_current_stage_is_unreadable_not_idle(tmp_path, monkeypatch):
+    """缺 `current_stage` 時現行預設成 `"idle"`,而提交時 idle 是放行的(ADR 0005)——
+    與 `load_stage` docstring「不知道停在哪一站,不等於停在 idle」相反。"""
+    _repo, probe = _t158_c0_1_world(tmp_path, monkeypatch, b'{"ticket_id": "158"}')
+    stage, _ticket = gate.load_stage()
+    assert stage == gate.UNREADABLE_STAGE, (stage, _ticket)
+    msg = gate.check(probe, "x = 1\n", at_commit=True)
+    assert msg is not None and msg.startswith("[R2"), msg
+
+
+@pytest.mark.parametrize("value,legal", [
+    (158, False),
+    (["158"], False),
+    ({"n": 158}, False),
+    ("158", True),
+    ("", True),       # 空字串也是字串 —— Q-E (a) 裁定合法,不得在測試裡收緊
+    (None, True),
+], ids=["bad-int", "bad-list", "bad-dict", "ok-str", "ok-empty", "ok-null"])
+def test_t158_c0_1_ticket_id_must_be_string_or_null(tmp_path, monkeypatch, value, legal):
+    """`ticket_id` 只接受字串或 null。型別錯比照讀不到;合法的原樣回傳。"""
+    _t158_c0_1_pipeline(tmp_path, monkeypatch, _t158_c0_1_json(ticket=value))
+    stage, ticket = gate.load_stage()
+    if legal:
+        assert (stage, ticket) == ("implement", value)
+    else:
+        assert stage == gate.UNREADABLE_STAGE, (stage, ticket)
+
+
+@pytest.mark.parametrize("raw", [
+    b'["implement"]',
+    u'﻿{"current_stage": "implement", "ticket_id": "158"}'.encode("utf-8"),
+], ids=["top-level-list", "utf8-bom"])
+def test_t158_c0_1_non_dict_or_bom_pipeline_is_unreadable(tmp_path, monkeypatch, raw):
+    """現況回歸:頂層不是物件、或帶 BOM,現在就回讀不到。"""
+    _t158_c0_1_pipeline(tmp_path, monkeypatch, raw)
+    stage, _ticket = gate.load_stage()
+    assert stage == gate.UNREADABLE_STAGE, (stage, _ticket)
