@@ -445,7 +445,7 @@
     },
     {
       "path": "skills/<bucket>/manifest.json",
-      "sha256": "4d60451e560b938fbbce1ab4a55051f390950a6fd25905dd65c448b237a8f688",
+      "sha256": "dda4c4cae3ed27a965ea58f37a46b1e7f26d0014754e1d5425e95959100679bd",
       "note": "Jeff 核准 2026-10-08 第六次"
     },
     {
@@ -815,7 +815,7 @@
     },
     {
       "path": "skills/<bucket>/skill-creator/SKILL.md",
-      "sha256": "42765c880e446a83c85f7852fc77b43ecd46c76ca219d68051799ac7425e6943",
+      "sha256": "db7ec49392b8fc124a86b5274019c416db76125ef86de6a53b23fb50f206eb18",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -840,17 +840,17 @@
     },
     {
       "path": "skills/<bucket>/skill-creator/eval-viewer/generate_review.py",
-      "sha256": "fc9d1b9243fe5ab6012ebd579bd76d0035de1b79fd3b969de114defab26478fb",
+      "sha256": "f3764c705765da2e93799f8e2b38133eb1d009d954465bf9194204ed67bd2330",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/skill-creator/eval-viewer/viewer.html",
-      "sha256": "a53213426ee1100441d701a3a0d49cda7a842f992d2c36463f4d3cc0258575fa",
+      "sha256": "43834bfddbffa018e8645f75a760e80a126e07cdd27fffcbf9a4ca3f70a81664",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/skill-creator/references/schemas.md",
-      "sha256": "8e8876180a8989b406a4d3edddf875b04cdfd5805cc8616686d552b11ce4455f",
+      "sha256": "527f1c2627e6c072f13737bb5753d09ab9e596071b061de157734cb26011e1fc",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -860,7 +860,7 @@
     },
     {
       "path": "skills/<bucket>/skill-creator/scripts/aggregate_benchmark.py",
-      "sha256": "123ef128ea5ccc01a4b1ac212ef5567f21e9c13d3d240609780beeb3200c49aa",
+      "sha256": "f654c4a1c4caccd910c704a9ff5f604337f91b071f94cdbb848b8e1577b4b6ba",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
