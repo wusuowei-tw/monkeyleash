@@ -1562,13 +1562,23 @@ def load_stage():
     回 idle 的話:寫入時 idle 不可寫 → 擋下(看起來沒問題),
     但**提交時 idle 是刻意放行的**(ADR 0005),於是 pipeline.json 壞掉或被刪,
     R2 在提交時就無條件通過。「不知道停在哪一站」不等於「停在 idle」。
+
+    格式(票 158 C0-1,裁定 Q-E (a)):頂層不是物件、缺 `current_stage` 或它不是字串、
+    `ticket_id` 存在卻不是字串也不是 null ⇒ 一律比照讀不到。空字串的 `ticket_id` 合法、
+    原樣回傳;缺 `ticket_id` 視同 null。站名在不在 `stages[].id` 由 R2 判,不在這裡。
     """
     try:
         with io.open(PIPELINE, encoding="utf-8") as f:
             d = json.load(f)
-        return d.get("current_stage", "idle"), d.get("ticket_id")
     except Exception:
         return UNREADABLE_STAGE, None
+    if not isinstance(d, dict):
+        return UNREADABLE_STAGE, None
+    stage = d.get("current_stage")
+    ticket = d.get("ticket_id")
+    if not isinstance(stage, str) or not (ticket is None or isinstance(ticket, str)):
+        return UNREADABLE_STAGE, None
+    return stage, ticket
 
 
 def load_feature():
@@ -2982,6 +2992,15 @@ def check(path, content, at_commit=False, trace=None, exemptions=None):
                 "     （目錄名打錯時這條路徑就是證據 —— `.dev` 與 `.dve` 差一個字母,\n"
                 "      而狀態目錄被 gitignore,`git status` 不會告訴你。)\n"
                 "     修好 pipeline.json 再繼續。" % (r, rel(PIPELINE), PIPELINE))
+
+    # 值域(票 158 C0-1):站名不在 `stages[].id` ⇒ 兩個時點都擋。
+    # 提交時的前置站判定只問 `stage in pre_implement`,打錯的站名不在集合內就放行。
+    if stage not in {s["id"] for s in stages} and not gate_self:
+        return with_stage_def_source(
+            "[R2] %s:current_stage='%s' 不合法(不在 %s 的 stages[].id)。\n"
+            "     跳過流程請由使用者自行修改 .dev/pipeline.json 的 current_stage"
+            % (r, stage, STAGES_DEF_REL),
+            at_commit)
 
     writable = writable_stage_ids(stages)
 
