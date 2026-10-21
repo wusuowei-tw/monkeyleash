@@ -8227,3 +8227,128 @@ def test_t158_c0_1_non_dict_or_bom_pipeline_is_unreadable(tmp_path, monkeypatch,
     _t158_c0_1_pipeline(tmp_path, monkeypatch, raw)
     stage, _ticket = gate.load_stage()
     assert stage == gate.UNREADABLE_STAGE, (stage, _ticket)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 158 C0-2a —— R11:檔案工具(Write / Edit / MultiEdit / NotebookEdit)寫站牌 ⇒ 擋。
+# **本批只有測試,`gate.py` 一個字沒動。**
+#
+# 裁定(C0,Jeff 約 09:40):Q3 (a) 寫入守衛採 (i),本批只管檔案工具(Shell 類是 C0-3);
+# Q-C (a) 新代號 R11;Q-D (a) R11 **不受影子豁免**(先例 R10)。
+# R11 放在 `check()` 裡、寫入與提交兩個時點都擋 —— 兩條不變式
+# (前哨評估的規則 ⊆ 權威層;兩層分歧必須宣告)因此自然成立。
+#
+# 路徑先正規化再比對:`./`、絕對路徑、`..`、反斜線(只在 Windows 是分隔符)、
+# 大小寫(依 `os.path.normcase`,只在不分大小寫的平台視為同一路徑)。
+# 一律在 tmp repo 裡跑(`_t158_c0_1_world`),真 repo 的 `.dev/pipeline.json` 一個位元組都不碰。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_T158_C0_2_PIPELINE_REL = ".dev/pipeline.json"
+
+
+def _t158_c0_2_world(tmp_path, monkeypatch):
+    """合法站牌(implement / "158")的 tmp repo,cwd 在 repo 根。回 repo。"""
+    repo, _probe = _t158_c0_1_world(tmp_path, monkeypatch, _t158_c0_1_json())
+    return repo
+
+
+def _t158_c0_2_hook(monkeypatch, capsys, tool, tool_input, shadow=False):
+    """經 `mode_hook` 端對端(stdin 餵 payload,寫法同 `test_the_rule_is_actually_invoked_at_the_sentinel`)。
+    上游影子、掛載點、權威層提醒停掉 —— 本組驗的是逐檔 `check()` 那一段。
+    影子紀錄收集器同 `_t152r2_pre_commit`。回 (rc, stderr, 影子紀錄串列)。"""
+    monkeypatch.setattr(gate, "upstream_shadow_violation", lambda: (None, None))
+    monkeypatch.setattr(gate, "mount_violations_cached", lambda: [])
+    monkeypatch.setattr(gate, "authoritative_layer", lambda *a, **k: (True, ""))
+    shadow_logged = []
+    monkeypatch.setattr(gate, "log_shadow",
+                        lambda msg, at_commit=False, command=None: shadow_logged.append(msg))
+    monkeypatch.setattr(gate, "shadow_active", lambda *a, **k: shadow)
+
+    class _Stdin:
+        buffer = io.BytesIO(json.dumps(
+            {"tool_name": tool, "tool_input": tool_input}).encode("utf-8"))
+
+    monkeypatch.setattr(gate.sys, "stdin", _Stdin())
+    capsys.readouterr()
+    rc = gate.mode_hook()
+    return rc, capsys.readouterr().err, shadow_logged
+
+
+def test_t158_c0_2_check_blocks_pipeline_json_at_write(tmp_path, monkeypatch):
+    """寫入時點:`check(<ROOT>/.dev/pipeline.json)` ⇒ `[R11` 開頭。現行 `.dev` 不是原始碼 ⇒ None。"""
+    repo = _t158_c0_2_world(tmp_path, monkeypatch)
+    msg = gate.check(str(repo / ".dev" / "pipeline.json"), "{}", at_commit=False)
+    assert msg is not None and msg.startswith("[R11"), msg
+
+
+def test_t158_c0_2_check_blocks_pipeline_json_at_commit(tmp_path, monkeypatch):
+    """提交時點同樣擋 —— R11 在 `check()` 裡,兩層判定一致。"""
+    repo = _t158_c0_2_world(tmp_path, monkeypatch)
+    msg = gate.check(str(repo / ".dev" / "pipeline.json"), "{}", at_commit=True)
+    assert msg is not None and msg.startswith("[R11"), msg
+
+
+_T158_C0_2_CASE_INSENSITIVE = os.path.normcase("A") == os.path.normcase("a")
+
+
+@pytest.mark.parametrize("variant,blocked", [
+    ("./.dev/pipeline.json", True),
+    ("<abs>", True),
+    (".dev/../.dev/pipeline.json", True),
+    (".dev\\pipeline.json", os.sep == "\\"),          # POSIX 上反斜線是檔名字元,是另一條路徑
+    (".DEV/PIPELINE.JSON", _T158_C0_2_CASE_INSENSITIVE),
+], ids=["dot-slash", "absolute", "dotdot", "backslash", "upper-case"])
+def test_t158_c0_2_path_variants_are_blocked(tmp_path, monkeypatch, variant, blocked):
+    """各種寫法指向同一個站牌 ⇒ 都擋;平台上不是同一個檔的寫法 ⇒ 不是 R11。"""
+    repo = _t158_c0_2_world(tmp_path, monkeypatch)
+    path = str(repo / ".dev" / "pipeline.json") if variant == "<abs>" else variant
+    msg = gate.check(path, "{}", at_commit=False)
+    if blocked:
+        assert msg is not None and msg.startswith("[R11"), (variant, msg)
+    else:
+        assert "[R11" not in (msg or ""), (variant, msg)
+
+
+@pytest.mark.parametrize("other", [
+    ".dev/test-runs.jsonl",
+    ".dev/notes.jsonl",
+    ".dev/reports/x.md",
+], ids=["test-runs", "notes", "reports"])
+def test_t158_c0_2_other_dev_files_are_not_r11(tmp_path, monkeypatch, other):
+    """現況回歸:R11 只管站牌,`.dev` 其他檔不受影響(現行回 None)。"""
+    repo = _t158_c0_2_world(tmp_path, monkeypatch)
+    msg = gate.check(str(repo / other), "{}", at_commit=False)
+    assert "[R11" not in (msg or ""), (other, msg)
+
+
+@pytest.mark.parametrize("tool,key,extra", [
+    ("Write", "file_path", {"content": "{}"}),
+    ("Edit", "file_path", {"old_string": "158", "new_string": "159"}),
+    ("MultiEdit", "file_path", {"edits": [{"old_string": "158", "new_string": "159"}]}),
+    ("NotebookEdit", "notebook_path", {"new_source": "x"}),
+], ids=["Write", "Edit", "MultiEdit", "NotebookEdit"])
+def test_t158_c0_2_mode_hook_blocks_write_tools(tmp_path, monkeypatch, capsys, tool, key, extra):
+    """前哨端對端:四種檔案工具寫站牌 ⇒ exit 2,stderr 含 `[R11`。"""
+    repo = _t158_c0_2_world(tmp_path, monkeypatch)
+    tool_input = dict(extra)
+    tool_input[key] = str(repo / ".dev" / "pipeline.json")
+    rc, err, _sh = _t158_c0_2_hook(monkeypatch, capsys, tool, tool_input)
+    assert rc == 2 and "[R11" in err, (tool, rc, err)
+
+
+def test_t158_c0_2_shadow_mode_does_not_exempt_r11(tmp_path, monkeypatch, capsys):
+    """Q-D (a):影子模式下 R11 照擋。
+
+    對照(先做):影子模式下,被 R1 擋的規格書寫入照舊只記帳、回 0 —— 證明影子確實開著、
+    而且一般規則確實被它放行;否則下半段的 exit 2 可能只是影子根本沒生效。"""
+    repo = _t158_c0_2_world(tmp_path, monkeypatch)
+    spec = repo / "docs" / "specs" / "x.md"
+    rc, err, shadow_logged = _t158_c0_2_hook(
+        monkeypatch, capsys, "Write",
+        {"file_path": str(spec), "content": "```\nx = 1\n```\n"}, shadow=True)
+    assert rc == 0 and any(m.startswith("[R1]") for m in shadow_logged), (rc, err, shadow_logged)
+
+    rc, err, shadow_logged = _t158_c0_2_hook(
+        monkeypatch, capsys, "Write",
+        {"file_path": str(repo / ".dev" / "pipeline.json"), "content": "{}"}, shadow=True)
+    assert rc == 2 and "[R11" in err, (rc, err, shadow_logged)
