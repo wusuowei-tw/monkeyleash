@@ -799,22 +799,18 @@ def _target_allowed(token):
     return False
 
 
-def unallowed_write_targets(command):
-    """這條指令會寫到哪些**沒有被許可**的位置。回空串列 = 每個目標都許可。
+def _write_targets(command):
+    """這條指令的**全部**寫入目標,不論許不許可。回 `(targets, unclear)`。
 
-    要問的是「**每一個**寫入目標都被許可嗎」,不是
-    「指令字串裡有沒有出現過一個許可目標」。後者是原本的寫法,
-    而它讓 `2>/dev/null` 變成萬用通行證:`rm -rf x >/dev/null`、
-    `tee gate.py < evil 2>/dev/null` 全部放行(票 19)。
+      targets   依出現順序的**原始 token**(引號未剝)。`None` 標記一個
+                「引號或跳脫切不乾淨」的段 —— 位置保留,R7 的點名順序才不變。
+      unclear   有沒有抽不出或模糊的段(含 `None`,或一個目標都沒抽到)。
 
-    兩類目標:
-      重導向     `>` / `>>` 後面那一段
-      寫入指令   `rm` / `cp` / `mv` / `tee` / … 的路徑運算元(旗標不算)
-
-    **解析不出來時回一個佔位項(= 擋)**:半套的解析器比零涵蓋更危險,
-    所以不確定往嚴的倒(ADR 0008 的同一句話)。
+    與許可過濾拆開(票 158 C0-3b):R11 要的是**全部**目標,而 `.dev/` 許可目標
+    正是它不能經過的那一層(W2)。本函式也不經過 `bash_write_violation` 的
+    許可前綴 —— `git show … > 站牌` 這類要抽得到(W3)。
     """
-    bad = []
+    targets = []
     # **先按分隔符切段再解析。** 不切的話,運算元會一路吃過 `;` 吃到下一段:
     # `rm -rf x; cd y && ls` 會把 `cd`、`y`、`ls` 全當成 rm 的目標。
     # 分隔符還可能**黏在 token 上**(`fresh9;`),所以用切的,不是比對 token。
@@ -842,13 +838,8 @@ def unallowed_write_targets(command):
             saw_construct = True
             saw_target = True            # 已經有結論,不要再落到「解析不出」那句
             for m in REDIRECT_RE.finditer(_mask_quoted(seg)):
-                raw_target = seg[m.start(1):m.end(1)]
-                if not _target_allowed(raw_target):
-                    tgt = raw_target.strip('"').strip("'")
-                    if tgt not in bad:
-                        bad.append(tgt)
-            if AMBIGUOUS_QUOTING not in bad:
-                bad.append(AMBIGUOUS_QUOTING)
+                targets.append(seg[m.start(1):m.end(1)])
+            targets.append(None)         # 呼叫端換成 AMBIGUOUS_QUOTING
             continue
         # **重導向只在引號外算數**(票 21 標本 3)。
         # `sed 's/…/<x>/g'` 的 `>` 在引號裡,它不是 shell 重導向 ——
@@ -859,9 +850,7 @@ def unallowed_write_targets(command):
         for m in REDIRECT_RE.finditer(masked):
             saw_construct = True
             saw_target = True
-            raw_target = seg[m.start(1):m.end(1)]
-            if not _target_allowed(raw_target):
-                bad.append(raw_target.strip('"').strip("'"))
+            targets.append(seg[m.start(1):m.end(1)])
 
         tokens = seg.replace("\t", " ").split()
         # **只認指令位置的 token。** `rm` / `cp` / `install` 是不是寫入指令,
@@ -906,8 +895,7 @@ def unallowed_write_targets(command):
                         nxt = tokens[i + 1]
                         if not nxt.startswith("-"):
                             saw_target = True
-                            if not _target_allowed(nxt):
-                                bad.append(nxt.strip('"').strip("'"))
+                            targets.append(nxt)
                         i += 2
                         continue
                     if tok.startswith("-"):
@@ -915,8 +903,7 @@ def unallowed_write_targets(command):
                                    and not tokens[i + 1].startswith("-")) else 1
                         continue          # 具名參數連它的值一起跳過
                     saw_target = True
-                    if not _target_allowed(tok):
-                        bad.append(tok.strip('"').strip("'"))
+                    targets.append(tok)
                     i += 1
                 continue
             while i < len(tokens):
@@ -928,9 +915,37 @@ def unallowed_write_targets(command):
                     i += 1
                     continue
                 saw_target = True
-                if not _target_allowed(tok):
-                    bad.append(tok.strip('"').strip("'"))
+                targets.append(tok)
                 i += 1
+
+    return targets, (None in targets) or not saw_target
+
+
+def unallowed_write_targets(command):
+    """這條指令會寫到哪些**沒有被許可**的位置。回空串列 = 每個目標都許可。
+
+    要問的是「**每一個**寫入目標都被許可嗎」,不是
+    「指令字串裡有沒有出現過一個許可目標」。後者是原本的寫法,
+    而它讓 `2>/dev/null` 變成萬用通行證:`rm -rf x >/dev/null`、
+    `tee gate.py < evil 2>/dev/null` 全部放行(票 19)。
+
+    兩類目標:
+      重導向     `>` / `>>` 後面那一段
+      寫入指令   `rm` / `cp` / `mv` / `tee` / … 的路徑運算元(旗標不算)
+
+    **解析不出來時回一個佔位項(= 擋)**:半套的解析器比零涵蓋更危險,
+    所以不確定往嚴的倒(ADR 0008 的同一句話)。
+
+    抽取在 `_write_targets`(票 158 C0-3b 拆開),這裡只做許可過濾。
+    """
+    targets, _unclear = _write_targets(command)
+    bad = []
+    for t in targets:
+        if t is None:
+            bad.append(AMBIGUOUS_QUOTING)
+        elif not _target_allowed(t):
+            bad.append(t.strip('"').strip("'"))
+    saw_target = bool(targets)   # 模糊段也算「已有結論」(它留下 None)
 
     # **三態,不是兩態**(票 36):
     #   抽到目標、有不許可的  -> bad 非空,擋並點名
@@ -1438,7 +1453,51 @@ def stage_card_violation(path):
     return ("[R11] %s:.dev/pipeline.json 是站牌,只能由使用者本人修改;"
             "AI 的檔案工具(Write / Edit / MultiEdit / NotebookEdit)不得寫入。\n"
             "     換站請由使用者自行修改 .dev/pipeline.json 的 current_stage。\n"
-            "     (本規則只涵蓋檔案工具;Shell 類寫入待 C0-3。)" % rel(path))
+            % rel(path)) + STAGE_CARD_RESIDUAL
+
+
+# 兩個 R11 述詞共用的末行:已知殘留寫在訊息上,不讓「擋到了」讀成「擋得住全部」。
+STAGE_CARD_RESIDUAL = "     (腳本內寫入、git 清除指令、PowerShell 短別名等仍是已知缺口,不保證能擋。)"
+
+
+def shell_stage_card_violation(command):
+    """R11 的 Shell 類前哨述詞(票 158 C0-3):Bash / PowerShell 指令寫站牌 ⇒ `[R11]` 訊息,否則 None。
+
+    目標取自 `_write_targets`,**不經過** R7 的許可前綴與 `.dev/` 許可目標 ——
+    經過的話 W2(`.dev/` 許可)與 W3(許可前綴)會在這裡被放行。依序:
+
+      (1) 直接命中   任一抽出目標(去引號,相對路徑以 `ROOT` 為基準,
+                     與 `_resolves_inside_repo` 同一基準)是站牌。
+      (2) 規則 (c)   目標看不出來,但指令字面含 `pipeline.json`(不分大小寫),
+                     且 R7 會擋(含內嵌直譯器),或任一抽出目標的 basename 是
+                     `pipeline.json`。basename **不先把 `\\` 換成 `/`** ——
+                     POSIX 上 `.dev\\pipeline.json` 是另一個檔(同 `is_stage_card_path`)。
+
+    讀取不擋:讀取指令抽不出寫入目標,R7 也不擋。從站牌複製出去會被誤擋,裁定接受。
+    只由 `mode_hook` 呼叫;pre-commit 不判 R11(見 F-0017)。
+    """
+    if not command or not command.strip():
+        return None
+    targets, _unclear = _write_targets(command)
+    paths = [t.strip().strip('"').strip("'") for t in targets if t is not None]
+    for p in paths:
+        if p and is_stage_card_path(os.path.join(ROOT, p)):
+            return _shell_stage_card_message(
+                "%s:.dev/pipeline.json 是站牌" % rel(os.path.join(ROOT, p)))
+    if "pipeline.json" in command.lower():
+        card_name = os.path.normcase("pipeline.json")
+        if (bash_write_violation(command) is not None
+                or any(os.path.normcase(os.path.basename(p)) == card_name for p in paths)):
+            return _shell_stage_card_message(
+                "無法確定目標,但指令涉及站牌(.dev/pipeline.json)")
+    return None
+
+
+def _shell_stage_card_message(head):
+    return ("[R11] %s,只能由使用者本人修改;"
+            "AI 不得用 Bash / PowerShell 指令寫入。\n"
+            "     換站請由使用者自行修改 .dev/pipeline.json 的 current_stage。\n"
+            % head) + STAGE_CARD_RESIDUAL
 
 
 STAGE_DEF_SOURCES = ("worktree", "index")
@@ -3866,6 +3925,14 @@ def mode_hook():
     # 沒有規則被評估,就沒有規則會出錯(F-039)。
     command = ti.get("command")
     if isinstance(command, str) and command.strip():
+        # R11 的 Shell 類(票 158 C0-3):在 R7 與影子分支之前硬擋 —— 不受影子豁免,
+        # 也不經過 R7 的許可前綴與 `.dev/` 許可目標(見 F-0017 補充節)。
+        # **不套 sentinel_footer()**:那句「繞過前哨仍會在 commit 被擋」對 R11 是假的,
+        # 繞過前哨就沒有第二道。
+        r11 = shell_stage_card_violation(command)
+        if r11:
+            _err("[六站閘門/前哨] %s\n" % tag_enforce(r11))
+            return 2
         msg = bash_write_violation(command)
         if msg:
             if shadow_active():

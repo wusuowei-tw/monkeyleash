@@ -230,12 +230,23 @@ def scenario_r7(target):
 
 
 def scenario_r11(target):
-    """R11 同 R7 是**前哨規則**(F-0017):它擋的是 AI 檔案工具寫站牌,pre-commit 不判它 ——
+    """R11 同 R7 是**前哨規則**(F-0017):它擋的是 AI 寫站牌,pre-commit 不判它 ——
     走 git commit 驗不到。所以回傳一個述詞,由 `run_scenario` 交給已載入的目標 gate 回答。
+
+    **兩個述詞都要擋到,才算 R11 擋到**(票 158 C0-3):依序問檔案工具述詞
+    `stage_card_violation` 與 Shell 述詞 `shell_stage_card_violation`;
+    哪一個的結果不含 `[R11`,就回那個結果。兩個都含才回 Shell 述詞的訊息。
     不寫入任何檔案。
     """
     card = os.path.join(target, ".dev", "pipeline.json")
-    return lambda gate: gate.stage_card_violation(card)
+
+    def predicate(gate):
+        file_msg = gate.stage_card_violation(card)
+        if u"[R11" not in (file_msg or u""):
+            return file_msg
+        # 不含 `[R11` 回它本身,兩個都含也回它 —— 同一個 return。
+        return gate.shell_stage_card_violation("echo x > .dev/pipeline.json")
+    return predicate
 
 
 # ── 票 146 3g:淨室家目錄隔離(G-1)與 R10 情境(G-3)────────────────────────
