@@ -8230,13 +8230,15 @@ def test_t158_c0_1_non_dict_or_bom_pipeline_is_unreadable(tmp_path, monkeypatch,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 票 158 C0-2a —— R11:檔案工具(Write / Edit / MultiEdit / NotebookEdit)寫站牌 ⇒ 擋。
-# **本批只有測試,`gate.py` 一個字沒動。**
+# 票 158 C0-2a / C0-2R2 —— R11:檔案工具(Write / Edit / MultiEdit / NotebookEdit)寫站牌 ⇒ 前哨擋。
 #
 # 裁定(C0,Jeff 約 09:40):Q3 (a) 寫入守衛採 (i),本批只管檔案工具(Shell 類是 C0-3);
 # Q-C (a) 新代號 R11;Q-D (a) R11 **不受影子豁免**(先例 R10)。
-# R11 放在 `check()` 裡、寫入與提交兩個時點都擋 —— 兩條不變式
-# (前哨評估的規則 ⊆ 權威層;兩層分歧必須宣告)因此自然成立。
+# **C0-2 修正(Jeff 約 13:40、13:50)**:R11 **比照 R7,只在前哨** —— 見 F-0017(下一站新增)。
+# 不在 `check()`,提交時不判:下游的站牌受 git 追蹤,提交時分不出是誰改的,而合法修改者
+# 是使用者本人;全新安裝不帶 `docs/adr/`,留在 `check()` 會讓分歧不變式在下游失敗。
+# 判定由前哨述詞 `gate.stage_card_violation(path)` 回答,`mode_hook` 對四種檔案工具呼叫它。
+# 繞過前哨沒有第二道。
 #
 # 路徑先正規化再比對:`./`、絕對路徑、`..`、反斜線(只在 Windows 是分隔符)、
 # 大小寫(依 `os.path.normcase`,只在不分大小寫的平台視為同一路徑)。
@@ -8254,7 +8256,7 @@ def _t158_c0_2_world(tmp_path, monkeypatch):
 
 def _t158_c0_2_hook(monkeypatch, capsys, tool, tool_input, shadow=False):
     """經 `mode_hook` 端對端(stdin 餵 payload,寫法同 `test_the_rule_is_actually_invoked_at_the_sentinel`)。
-    上游影子、掛載點、權威層提醒停掉 —— 本組驗的是逐檔 `check()` 那一段。
+    上游影子、掛載點、權威層提醒停掉 —— 本組驗的是檔案工具寫入的判定那一段。
     影子紀錄收集器同 `_t152r2_pre_commit`。回 (rc, stderr, 影子紀錄串列)。"""
     monkeypatch.setattr(gate, "upstream_shadow_violation", lambda: (None, None))
     monkeypatch.setattr(gate, "mount_violations_cached", lambda: [])
@@ -8274,17 +8276,26 @@ def _t158_c0_2_hook(monkeypatch, capsys, tool, tool_input, shadow=False):
     return rc, capsys.readouterr().err, shadow_logged
 
 
-def test_t158_c0_2_check_blocks_pipeline_json_at_write(tmp_path, monkeypatch):
-    """寫入時點:`check(<ROOT>/.dev/pipeline.json)` ⇒ `[R11` 開頭。現行 `.dev` 不是原始碼 ⇒ None。"""
-    repo = _t158_c0_2_world(tmp_path, monkeypatch)
-    msg = gate.check(str(repo / ".dev" / "pipeline.json"), "{}", at_commit=False)
-    assert msg is not None and msg.startswith("[R11"), msg
+def _t158_c0_2_predicate():
+    """前哨述詞。缺函式寫成斷言失敗,不讓它以 AttributeError 紅。"""
+    fn = getattr(gate, "stage_card_violation", None)
+    assert callable(fn), "gate.stage_card_violation 不存在 —— R11 的前哨述詞還沒接上"
+    return fn
 
 
-def test_t158_c0_2_check_blocks_pipeline_json_at_commit(tmp_path, monkeypatch):
-    """提交時點同樣擋 —— R11 在 `check()` 裡,兩層判定一致。"""
+@pytest.mark.parametrize("at_commit", [False, True], ids=["write", "commit"])
+def test_t158_c0_2_check_never_reports_r11(tmp_path, monkeypatch, at_commit):
+    """R11 比照 R7 不住在 `check()`:兩個時點都不得回報 R11。
+    不寫死成 None —— 站牌會不會被別的規則接走,不是 R11 該斷言的事。"""
     repo = _t158_c0_2_world(tmp_path, monkeypatch)
-    msg = gate.check(str(repo / ".dev" / "pipeline.json"), "{}", at_commit=True)
+    msg = gate.check(str(repo / ".dev" / "pipeline.json"), "{}", at_commit=at_commit)
+    assert "[R11" not in (msg or ""), (at_commit, msg)
+
+
+def test_t158_c0_2_predicate_blocks_pipeline_json(tmp_path, monkeypatch):
+    """前哨述詞:`stage_card_violation(<ROOT>/.dev/pipeline.json)` ⇒ `[R11` 開頭。"""
+    repo = _t158_c0_2_world(tmp_path, monkeypatch)
+    msg = _t158_c0_2_predicate()(str(repo / ".dev" / "pipeline.json"))
     assert msg is not None and msg.startswith("[R11"), msg
 
 
@@ -8299,10 +8310,10 @@ _T158_C0_2_CASE_INSENSITIVE = os.path.normcase("A") == os.path.normcase("a")
     (".DEV/PIPELINE.JSON", _T158_C0_2_CASE_INSENSITIVE),
 ], ids=["dot-slash", "absolute", "dotdot", "backslash", "upper-case"])
 def test_t158_c0_2_path_variants_are_blocked(tmp_path, monkeypatch, variant, blocked):
-    """各種寫法指向同一個站牌 ⇒ 都擋;平台上不是同一個檔的寫法 ⇒ 不是 R11。"""
+    """各種寫法指向同一個站牌 ⇒ 前哨述詞都擋;平台上不是同一個檔的寫法 ⇒ 不是 R11。"""
     repo = _t158_c0_2_world(tmp_path, monkeypatch)
     path = str(repo / ".dev" / "pipeline.json") if variant == "<abs>" else variant
-    msg = gate.check(path, "{}", at_commit=False)
+    msg = _t158_c0_2_predicate()(path)
     if blocked:
         assert msg is not None and msg.startswith("[R11"), (variant, msg)
     else:
@@ -8319,6 +8330,22 @@ def test_t158_c0_2_other_dev_files_are_not_r11(tmp_path, monkeypatch, other):
     repo = _t158_c0_2_world(tmp_path, monkeypatch)
     msg = gate.check(str(repo / other), "{}", at_commit=False)
     assert "[R11" not in (msg or ""), (other, msg)
+
+
+@pytest.mark.parametrize("other", [
+    ".dev/test-runs.jsonl",
+    ".dev/notes.jsonl",
+    ".dev/reports/x.md",
+    "<outside>",
+], ids=["test-runs", "notes", "reports", "outside-repo"])
+def test_t158_c0_2_predicate_ignores_other_dev_files(tmp_path, monkeypatch, other):
+    """前哨述詞只認本 repo 的站牌:`.dev` 其他檔、repo 外另一個 `.dev/pipeline.json` ⇒ None。"""
+    repo = _t158_c0_2_world(tmp_path, monkeypatch)
+    if other == "<outside>":
+        path = str(tmp_path / "elsewhere" / ".dev" / "pipeline.json")
+    else:
+        path = str(repo / other)
+    assert _t158_c0_2_predicate()(path) is None, other
 
 
 @pytest.mark.parametrize("tool,key,extra", [

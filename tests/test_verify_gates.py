@@ -904,3 +904,32 @@ class TestT156D11OfflineCore:
             vg.main(str(wd))
         assert [o[0] for o in order] == ["setup", "install"], order
         assert order[0][1] == order[1][1], "setup 與 install 對的不是同一個 target:%r" % order
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 158 C0-2R2 —— R11 比照 R7 只在前哨,所以它的演練情境不走 commit:
+# 情境回傳一個**可呼叫的述詞**,`run_scenario` 載入目標 gate 交給它,以 `"[%s]" % code in msg` 判定。
+# 寫法比照 `_wire_run`:`sh` 換成記錄器(被碰到 = 走了 commit 路徑 = 失敗),目標 gate 換成假物件。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_t158_c0_2_run_scenario_accepts_callable_predicate(tmp_path, monkeypatch):
+    import types
+    fake_gate = types.SimpleNamespace(tag="t158-c0-2-fake-gate")
+    sh_calls, handed = [], []
+
+    def fake_sh(args, cwd, check=True):
+        sh_calls.append(list(args))
+        return 0, ""
+
+    def predicate(g):
+        handed.append(g)
+        return u"[R11] 假訊息"
+
+    monkeypatch.setattr(vg, "sh", fake_sh)
+    monkeypatch.setattr(vg, "restore", lambda t: None)
+    monkeypatch.setattr(vg, "load_target_gate", lambda target: fake_gate)
+    monkeypatch.setitem(vg.SCENARIOS, "R11", lambda t: predicate)
+    blocked, out = vg.run_scenario(str(tmp_path), "R11")
+    assert sh_calls == [], "可呼叫述詞的情境走了 git 指令路徑:%r" % sh_calls
+    assert handed == [fake_gate], "述詞沒有收到目標 gate:%r" % handed
+    assert blocked is True and u"[R11]" in out, (blocked, out)
