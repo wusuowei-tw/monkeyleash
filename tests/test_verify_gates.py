@@ -933,3 +933,24 @@ def test_t158_c0_2_run_scenario_accepts_callable_predicate(tmp_path, monkeypatch
     assert sh_calls == [], "可呼叫述詞的情境走了 git 指令路徑:%r" % sh_calls
     assert handed == [fake_gate], "述詞沒有收到目標 gate:%r" % handed
     assert blocked is True and u"[R11]" in out, (blocked, out)
+
+
+# 票 158 C0-3a —— `scenario_r11` 的述詞依序問「檔案工具述詞」與「Shell 述詞」(C0-3 介面約定):
+# 兩個都回 `[R11` 開頭才回 `[R11` 訊息;否則回第一個沒有 `[R11` 的結果(可能是 None)。
+# 假 gate 只帶這兩個述詞 —— 不載入真 gate、不走 commit、不寫任何檔。
+
+@pytest.mark.parametrize("file_msg,shell_msg,blocked", [
+    (u"[R11] 檔案工具假訊息", u"[R11] Shell 假訊息", True),
+    (u"[R11] 檔案工具假訊息", None, False),
+    (None, u"[R11] Shell 假訊息", False),
+], ids=["n34-both-r11", "n34-shell-none", "n34-file-none"])
+def test_t158_c0_3_scenario_r11_asks_both_predicates(tmp_path, file_msg, shell_msg, blocked):
+    import types
+    fake_gate = types.SimpleNamespace(
+        stage_card_violation=lambda path: file_msg,
+        shell_stage_card_violation=lambda command: shell_msg)
+    msg = vg.scenario_r11(str(tmp_path))(fake_gate)
+    if blocked:
+        assert msg is not None and u"[R11" in msg, msg
+    else:
+        assert u"[R11" not in (msg or u""), msg

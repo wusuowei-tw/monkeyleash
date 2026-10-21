@@ -8379,3 +8379,129 @@ def test_t158_c0_2_shadow_mode_does_not_exempt_r11(tmp_path, monkeypatch, capsys
         monkeypatch, capsys, "Write",
         {"file_path": str(repo / ".dev" / "pipeline.json"), "content": "{}"}, shadow=True)
     assert rc == 2 and "[R11" in err, (rc, err, shadow_logged)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 158 C0-3a —— R11 Shell 類(W2–W4):Bash / PowerShell 寫站牌 ⇒ 前哨擋。
+#
+# 裁定(C0-3,Jeff 2026-10-21 約 15:58 美東):Shell 類 R11 由前哨述詞
+# `gate.shell_stage_card_violation(command)` 判定(命中回 `[R11` 開頭字串,否則 None);
+# `mode_hook` 對帶 `command` 的工具呼叫,在 `bash_write_violation` 與影子分支之前先問它 ——
+# 不受影子豁免,也不經過 R7 的許可前綴(W3)與 `.dev/` 許可目標(W2)。
+# 目標看不出來時採 6-2 (c):指令字面含 `pipeline.json`(不分大小寫),且 R7 會擋、
+# 或內嵌直譯器命中、或任一抽出目標的 basename 是 `pipeline.json` ⇒ 擋。讀取不擋。
+# 從站牌複製出去接受誤擋(6-3 (i))。相對路徑以 `ROOT` 為基準解析。
+#
+# 指令**只當字串**餵給 `mode_hook`,一條都不執行。一律在 tmp repo(`_t158_c0_2_world`),
+# 真 repo 的站牌一個位元組都不碰。ids 的 `nNN` 對回 C0-3-R0 報告 6-4 的編號。
+# 「擋」= rc 2 且 stderr 含 `[R11`;「不擋」= stderr 不含 `[R11`(讀取另要求 rc 0)。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _t158_c0_3_hook(monkeypatch, capsys, tool, command, shadow=False):
+    """`_t158_c0_2_hook` 的指令版:payload 帶 `command`。回 (rc, stderr, 影子紀錄串列)。"""
+    return _t158_c0_2_hook(monkeypatch, capsys, tool, {"command": command}, shadow=shadow)
+
+
+def _t158_c0_3_resolve(repo, tmp_path, command):
+    """把佔位換成 tmp repo 的實際路徑:`<abs>` = 站牌絕對路徑,`<outside>` = repo 外的備份檔。"""
+    return (command
+            .replace("<abs>", (repo / ".dev" / "pipeline.json").as_posix())
+            .replace("<outside>", (tmp_path / "outside" / "backup.json").as_posix()))
+
+
+def test_t158_c0_3_predicate_exists_and_blocks_redirect(tmp_path, monkeypatch):
+    """Shell 述詞:`shell_stage_card_violation("echo x > .dev/pipeline.json")` ⇒ `[R11` 開頭。"""
+    _t158_c0_2_world(tmp_path, monkeypatch)
+    fn = getattr(gate, "shell_stage_card_violation", None)
+    assert callable(fn), "gate.shell_stage_card_violation 不存在 —— Shell 類 R11 的前哨述詞還沒接上"
+    msg = fn("echo x > .dev/pipeline.json")
+    assert msg is not None and msg.startswith("[R11"), msg
+
+
+@pytest.mark.parametrize("tool,command", [
+    ("Bash", "echo x > .dev/pipeline.json"),
+    ("Bash", "echo x >> .dev/pipeline.json"),
+    ("Bash", "echo x | tee .dev/pipeline.json"),
+    ("Bash", "cp .dev/a.json .dev/pipeline.json"),
+    ("Bash", "mv .dev/a.json .dev/pipeline.json"),
+    ("Bash", "touch .dev/pipeline.json"),
+    ("Bash", "rm .dev/pipeline.json"),
+    ("Bash", "sed -i s/a/b/ .dev/pipeline.json"),
+    ("Bash", 'cat > .dev/pipeline.json <<EOF\n{"current_stage": "x"}\nEOF'),
+    ("Bash", "echo x > <abs>"),
+    ("Bash", "cd .dev && echo x > pipeline.json"),
+    ("Bash", "git show HEAD:x > .dev/pipeline.json"),
+    ("Bash", "python -m pytest -q > .dev/pipeline.json"),
+    ("Bash", "python .claude/hooks/gate.py > .dev/pipeline.json"),
+    ("Bash", "FOO=1 git status > .dev/pipeline.json"),
+    ("PowerShell", "Set-Content -Path .dev/pipeline.json -Value x"),
+    ("PowerShell", "Add-Content -Path .dev/pipeline.json -Value x"),
+    ("PowerShell", "'x' | Out-File -FilePath .dev/pipeline.json"),
+    ("PowerShell", "'x' > .dev/pipeline.json"),
+    ("PowerShell", "Copy-Item .dev/a.json .dev/pipeline.json"),
+    ("PowerShell", "Remove-Item .dev/pipeline.json"),
+    ("Bash", 'powershell -Command "Set-Content .dev/pipeline.json x"'),
+    ("Bash", "cp .dev/pipeline.json <outside>"),
+], ids=["n01-redirect", "n02-append", "n03-tee", "n04-cp", "n05-mv", "n06-touch", "n07-rm",
+        "n08-sed-i", "n09-heredoc-json", "n11-absolute", "n12-cd-relative",
+        "n13-w3-git", "n14-w3-pytest", "n15-w3-claude-tool", "n16-w3-var-prefix",
+        "n17-ps-set-content", "n18-ps-add-content", "n19-ps-out-file", "n20-ps-redirect",
+        "n21-ps-copy-item", "n22-ps-remove-item", "n23-bash-powershell-command",
+        "n33-copy-out-of-card"])
+def test_t158_c0_3_mode_hook_blocks_shell_writes(tmp_path, monkeypatch, capsys, tool, command):
+    """W2–W4:Bash / PowerShell 寫站牌 ⇒ 前哨 exit 2,stderr 含 `[R11`。
+    n33 是從站牌複製出去 —— 裁定 6-3 (i) 接受誤擋,所以也在「擋」這一組。"""
+    repo = _t158_c0_2_world(tmp_path, monkeypatch)
+    cmd = _t158_c0_3_resolve(repo, tmp_path, command)
+    rc, err, _sh = _t158_c0_3_hook(monkeypatch, capsys, tool, cmd)
+    assert rc == 2 and "[R11" in err, (tool, cmd, rc, err)
+
+
+def test_t158_c0_3_backslash_is_r11_only_on_windows(tmp_path, monkeypatch, capsys):
+    """n10:`.dev\\pipeline.json` 只在 Windows 是站牌(反斜線是分隔符);
+    POSIX 上反斜線是檔名字元,是另一個檔 ⇒ 不是 R11(比照 C0-2 的 `os.sep` 寫法)。"""
+    _t158_c0_2_world(tmp_path, monkeypatch)
+    rc, err, _sh = _t158_c0_3_hook(monkeypatch, capsys, "Bash", "echo x > .dev\\pipeline.json")
+    if os.sep == "\\":
+        assert rc == 2 and "[R11" in err, (rc, err)
+    else:
+        assert "[R11" not in err, (rc, err)
+
+
+@pytest.mark.parametrize("command", [
+    "echo x > .dev/pipeline.json",
+    "sed -i s/a/b/ .dev/pipeline.json",
+], ids=["n24-shadow-redirect", "n25-shadow-sed-i"])
+def test_t158_c0_3_shadow_mode_does_not_exempt_shell_r11(tmp_path, monkeypatch, capsys, command):
+    """Q-D (a) 延伸到 Shell 類:影子模式下照擋(n26 是同一個影子設定下的 R7 對照)。"""
+    _t158_c0_2_world(tmp_path, monkeypatch)
+    rc, err, shadow_logged = _t158_c0_3_hook(monkeypatch, capsys, "Bash", command, shadow=True)
+    assert rc == 2 and "[R11" in err, (command, rc, err, shadow_logged)
+
+
+def test_t158_c0_3_shadow_control_r7_still_only_logs(tmp_path, monkeypatch, capsys):
+    """n26 對照:同一個影子設定下,R7 擋的非站牌寫入照舊只記帳、rc 0 ——
+    證明影子確實開著,n24 / n25 的 exit 2 不是影子沒生效。"""
+    _t158_c0_2_world(tmp_path, monkeypatch)
+    rc, err, shadow_logged = _t158_c0_3_hook(
+        monkeypatch, capsys, "Bash", "echo x > pkg/x.py", shadow=True)
+    assert rc == 0 and "[R11" not in err, (rc, err)
+    assert any(m.startswith("[R7") for m in shadow_logged), shadow_logged
+
+
+@pytest.mark.parametrize("tool,command", [
+    ("Bash", "cat .dev/pipeline.json"),
+    ("Bash", "type .dev\\pipeline.json"),
+    ("Bash", "git diff .dev/pipeline.json"),
+    ("Bash", "python -m json.tool .dev/pipeline.json"),
+    ("PowerShell", "Get-Content .dev/pipeline.json"),
+    ("Bash", "echo x >> .dev/test-runs.jsonl"),
+], ids=["n27-read-cat", "n28-read-type", "n29-read-git-diff", "n30-read-json-tool",
+        "n31-read-get-content", "n32-other-dev-file"])
+def test_t158_c0_3_reads_and_other_dev_files_are_not_blocked(tmp_path, monkeypatch, capsys,
+                                                               tool, command):
+    """讀取站牌、寫 `.dev` 其他檔 ⇒ 不是 R11,而且 rc 0(現況回歸)。"""
+    _t158_c0_2_world(tmp_path, monkeypatch)
+    rc, err, _sh = _t158_c0_3_hook(monkeypatch, capsys, tool, command)
+    assert rc == 0 and "[R11" not in err, (tool, command, rc, err)
