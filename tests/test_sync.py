@@ -1488,3 +1488,92 @@ class TestT125OnlyTheWritePlanDecides:
         assert rel in msg and "gitlink" in msg, "擋下的理由不是「路徑落在 gitlink 底下」:%s" % msg
         assert sorted(os.listdir(str(inner))) == before, "內嵌 repo 底下被寫入了"
         assert not (inner / "helper.py").exists(), "內嵌 repo 底下被寫入了"
+
+    # ── 125-c 審查後補:保護既有行為的考卷 ─────────────────────────────
+
+    def test_t125_17_an_untracked_existing_provenance_blocks(self, pair):
+        """provenance 只免「追蹤中但有未提交內容」—— 存在但未追蹤照擋(裁決第三點)。
+
+        與 #11 對照:#11 是追蹤中而髒 ⇒ 追加;本條是根本沒追蹤 ⇒ 擋。
+        """
+        src, dst = pair
+        prov = ".dev/provenance.jsonl"
+        _w(dst, prov, '{"path": "下游自己的,未追蹤"}\n')
+
+        # 前提:只剩一個形狀
+        assert _git(dst, "ls-files", "--", prov).stdout == b"", "前提沒成立:provenance 已被追蹤"
+        assert _git(dst, "check-ignore", "-q", prov).returncode == 1, "前提沒成立:provenance 被 ignore"
+        status = _git(dst, "status", "--porcelain", "--untracked-files=all").stdout
+        assert status == ("?? %s\n" % prov).encode(), "前提沒成立:外層還有別的未提交內容:%r" % status
+        assert _b(src, self.GATE) != _b(dst, self.GATE), "前提沒成立:計畫裡沒有 copy 桶的改動"
+        prov_before = _b(dst, prov)
+        gate_before = _b(dst, self.GATE)
+
+        try:
+            sync.update(str(src), str(dst), apply=True)
+        except sync.Refused as e:
+            msg = str(e)
+        else:
+            msg = None
+        assert msg is not None, "provenance 存在但未追蹤卻沒有擋"
+        assert prov in msg and "未追蹤" in msg, "擋下的理由不是「provenance 存在但未追蹤」:%s" % msg
+        assert _b(dst, prov) == prov_before, "未追蹤的 provenance 被改了"
+        assert _b(dst, self.GATE) == gate_before, "copy 桶的檔被寫了"
+        assert not (dst / ".claude/hooks/newfile.py").exists(), "copy 桶的新檔被寫了"
+
+    def test_t125_18_a_parent_that_exists_but_is_not_a_directory_blocks(self, pair):
+        """父目錄那一層在下游是一個已提交、乾淨的一般檔案 —— git 說乾淨,寫入仍然走不通。"""
+        src, dst = pair
+        parent = ".claude/hooks/newdir"
+        _w(src, parent + "/x.py", "# 上游新增,父層在下游是同名檔\n")
+        _commit(src, "newdir")
+        _w(dst, parent, "下游的同名一般檔案\n")
+        _commit(dst, "newdir as file")
+
+        # 前提:只剩一個形狀
+        assert (dst / parent).is_file(), "前提沒成立:下游同名項不是一般檔案"
+        assert _git(dst, "ls-files", "--", parent).stdout.strip() == parent.encode(), (
+            "前提沒成立:下游同名檔沒有被追蹤")
+        assert _git(dst, "status", "--porcelain").stdout == b"", "前提沒成立:外層有未提交內容"
+        before = _b(dst, parent)
+        listing = sorted(os.listdir(str(dst / ".claude/hooks")))
+
+        try:
+            sync.update(str(src), str(dst), apply=True)
+        except sync.Refused as e:
+            msg = str(e)
+        else:
+            msg = None
+        assert msg is not None, "父目錄是一般檔案卻沒有擋"
+        assert "newdir" in msg and "不是目錄" in msg, "擋下的理由不是「父目錄不是目錄」:%s" % msg
+        assert _b(dst, parent) == before, "同名檔被改了"
+        assert sorted(os.listdir(str(dst / ".claude/hooks"))) == listing, "有新增檔"
+
+    def test_t125_19_a_clean_case_collision_blocks(self, pair):
+        """#10 的乾淨版:下游小寫檔已提交、沒有任何本地改動。
+
+        擋在位置檢查(列目錄逐字比對名稱),先於任何 git 查詢 ——
+        所以大小寫有別與無別的檔案系統都該擋,本條**不做**大小寫探測的 skip。
+        """
+        src, dst = pair
+        _w(src, ".claude/hooks/Foo.md", "上游\n")
+        _commit(src, "Foo")
+        _w(dst, ".claude/hooks/foo.md", "下游原本\n")
+        _commit(dst, "foo")
+
+        # 前提:只剩一個形狀
+        assert _git(dst, "status", "--porcelain").stdout == b"", "前提沒成立:外層有未提交內容"
+        listing = sorted(os.listdir(str(dst / ".claude/hooks")))
+        assert "foo.md" in listing and "Foo.md" not in listing, "前提沒成立:%r" % listing
+        before = _b(dst, ".claude/hooks/foo.md")
+
+        try:
+            sync.update(str(src), str(dst), apply=True)
+        except sync.Refused as e:
+            msg = str(e)
+        else:
+            msg = None
+        assert msg is not None, "大小寫碰撞卻沒有擋"
+        assert "Foo.md" in msg and "大小寫碰撞" in msg, "擋下的理由不是「大小寫碰撞」:%s" % msg
+        assert _b(dst, ".claude/hooks/foo.md") == before, "下游小寫檔被改了"
+        assert sorted(os.listdir(str(dst / ".claude/hooks"))) == listing, "有新增檔"

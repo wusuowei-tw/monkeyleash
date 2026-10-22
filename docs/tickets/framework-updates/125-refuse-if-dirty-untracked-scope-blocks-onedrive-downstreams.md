@@ -1,6 +1,6 @@
 # 票 125 —— `refuse_if_dirty` 的 untracked 口徑對 OneDrive 型下游是實質障礙
 
-**狀態**：**125-b 實作完成（本機），待獨立審查。** 符號連結 3 題本機無權建立，交 GitHub CI（Linux）驗證。
+**狀態**：**125-c 獨立審查 PASS（附註）；125-d 補測試完成（本機），待 push。** 符號連結 3 題本機無權建立，交 GitHub CI（Linux）驗證。
 **發現於**:2026-09-09,筆電(hostname `14X`),上游 HEAD `63cd0fa`。
 **受影響 repo**:工作區位於 OneDrive 底下的下游。今日實測的是影音下游
 (`analyst-tracker`,HEAD `562e4ef`)。
@@ -170,6 +170,8 @@ $ python .claude/portable/sync.py "<影音>"
   本身或任一層父目錄是符號連結、落在 gitlink 底下、大小寫碰撞、
   無法安全讀取或判定，一律擋，不得追加。
 
+Jeff 2026-10-22 約 10:55（美東）：provenance 存在但未追蹤 ⇒ 擋（只免「追蹤中但有未提交內容」）；由 #17 釘住。（裁決助手記錄，非逐字原話）
+
 ### 四、gitlink：維持整樹擋
 
 已 stage 未提交的 gitlink 版本更新、讀不到的內嵌 repo，照現行全域擋（票 42）；
@@ -194,9 +196,22 @@ $ python .claude/portable/sync.py "<影音>"
 | 存在但讀不到 | `file_hash` 吞例外回 `None` ⇒ 當新檔寫下去（125-a 實測） |
 | 大小寫碰撞 | 大小寫不分的檔案系統上寫到另一個名字的既有檔〔讀碼推論〕 |
 | 符號連結 | 已提交的連結讓樹乾淨，寫入穿出 repo〔讀碼推論〕 |
-| 寫入路徑未檢查 gitlink | 只問 gitlink 是否落定，不問寫入路徑是否落在它底下〔讀碼推論〕 |
+| 寫入路徑未檢查 gitlink | 只問 gitlink 是否落定，不問寫入路徑是否落在它底下（125-b #16 實測） |
+
+## 125-c 審查後待辦（不在本票）
+
+1. assume-unchanged／skip-worktree 標記的檔，`git diff` 可能看不到本地改動而被覆寫〔未驗證〕；舊版同有、非本票退化；Jeff 2026-10-22 約 12:18（美東）裁「先 push，另開票驗」。**下一張票的第一優先。**
+2. dry-run 不跑 `freeze_plan`：試跑顯示可寫、`--apply` 卻被擋。
+3. TOCTOU：凍結到寫入之間無防護；寫入中途例外會留下部分寫入、且不是 `Refused`；凍結只驗可讀不驗可寫。
+4. `certify` 寫 provenance 不經凍結計畫與位置檢查。
+5. 未登記成 gitlink 的內嵌 repo 底下可新增檔〔未驗證〕。
+6. Windows 路徑、計畫內非 ASCII 路徑、junction〔未驗證〕。
+7. `tracked(target)`／`gitlink_paths` 是不帶 pathspec 的 `ls-files`（只列 index），在 OneDrive 型工作區上的速度〔未驗證〕。
+8. 剩餘測試缺口：符號連結 assertion 不看原因、gitlink 父目錄層、父目錄大小寫碰撞、#04～#08 不看原因、`regenerate_canon` 讀不到、父目錄列不出內容。
+9. 搬移後的「目標沒有 %s」拒絕訊息不含「乾淨／髒」（輕）。
 
 ## 修正紀錄
 
 - 2026-10-22（美東）：記錄裁決 C；125-a 紅燈測試（錨點 125-a）。
 - 2026-10-22（美東）：125-b 實作（錨點 125-b）：寫入計畫先算後凍結、逐條路徑判定、refuse_if_dirty 只留 gitlink 全域檢查、不跑整樹 untracked 掃描；新增 #16。符號連結 3 題本機 skip，交 CI。
+- 2026-10-22（美東）：125-c 獨立審查 PASS（附註）；125-d 補 #17～#19（provenance 未追蹤、父目錄非目錄、乾淨的大小寫碰撞），審查後待辦入票。
