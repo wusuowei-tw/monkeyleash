@@ -330,6 +330,12 @@ def refuse_if_dirty(target):
 #   四、存在 ⇒ 追蹤中、worktree = index = HEAD、讀得到;
 #       `.dev/provenance.jsonl` 只免「已有未提交內容」這一項,其餘照判(裁決第三點);
 #   五、不存在 ⇒ 未追蹤(追蹤中而不存在 = 本地刪除 ⇒ 擋)。
+#   六、帶 assume-unchanged / skip-worktree 旗標 ⇒ 擋(票 161)。第四項的 `git diff`
+#       對這兩種旗標是盲的 —— 它們就是叫 git 不去比 worktree,本地改動因此看不見。
+#       **內容其實沒改也擋**:git 已答不出它乾不乾淨,問不出來不等於乾淨(fail-closed)。
+#       這是刻意收緊,**會誤擋乾淨的檔**;出口是下游自己解除旗標再跑。
+#       `.dev/provenance.jsonl` 不查旗標:它只追加,不蓋掉舊內容,
+#       與它在第四項只免「已有未提交內容」是同一個理由(票 161 裁決第 2 點)。
 # regenerate 的 CLAUDE.md 走同一套、沒有豁免 —— 界線外的本地改動也擋(裁決第二點)。
 #
 # **讀檔一律經由本模組的 `io`(`io.open`)。** 那是測試注入「讀不到」的位置;
@@ -361,6 +367,33 @@ def _git_z(target, args, rels):
                           % (target, out.stderr.decode("utf-8", "replace").strip()))
         got.update(p for p in out.stdout.decode("utf-8", "replace").split("\0") if p)
     return got
+
+
+def _flags_z(target, rels):
+    """`git ls-files -v -z` 的首字:回 {路徑: 首字}。規矩與 `_git_z` 相同。"""
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
+    got = {}
+    for i in range(0, len(rels), _CHUNK):
+        specs = [":(literal)" + r for r in rels[i:i + _CHUNK]]
+        out = subprocess.run(["git", "-C", target, "ls-files", "-v", "-z", "--"] + specs,
+                             capture_output=True, env=env)
+        if out.returncode != 0:
+            raise Refused("問不到 %s 的 index 旗標,無法判定寫入計畫乾不乾淨:%s"
+                          % (target, out.stderr.decode("utf-8", "replace").strip()))
+        for rec in out.stdout.decode("utf-8", "replace").split("\0"):
+            tag, _, path = rec.partition(" ")
+            if path:
+                got[path] = tag
+    return got
+
+
+def _flag_name(tag):
+    """小寫字母 = assume-unchanged(含兩者同設);`S` = skip-worktree。其他不算帶旗標。"""
+    if tag.isalpha() and tag.islower():
+        return "assume-unchanged"
+    if tag == "S":
+        return "skip-worktree"
+    return None
 
 
 def _parent_dirs(rel):
@@ -440,6 +473,8 @@ def freeze_plan(target, entries):
     tracked_set = _git_z(target, ["ls-files", "-z"], located)
     dirty = (_git_z(target, ["diff", "--name-only", "-z"], present)
              | _git_z(target, ["diff", "--cached", "--name-only", "-z"], present))
+    # 第六項(票 161):`diff` 看不見帶旗標的檔,所以另問 index 旗標。provenance 不查。
+    flags = _flags_z(target, [rel for rel in located if rel not in DIRTY_EXEMPT])
 
     for rel in located:
         why = None
@@ -456,6 +491,12 @@ def freeze_plan(target, entries):
                     why = "讀不到(%s)—— 讀不到不等於不存在" % e
         elif rel in tracked_set:
             why = "追蹤中但磁碟上不在 —— 那是未提交的本地刪除,不是新檔"
+        flag = _flag_name(flags.get(rel, ""))
+        if flag:
+            # 額外的一條理由,不取代上面那一條 —— 兩者同時成立就兩條都說
+            note = ("帶 %s 旗標 —— git 不比對 worktree,無法判定乾不乾淨(內容沒改也擋);"
+                    "解除:git update-index --no-%s -- %s" % (flag, flag, rel))
+            why = "%s;另外%s" % (why, note) if why else note
         if why:
             bad.append("%s:%s" % (rel, why))
 
