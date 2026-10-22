@@ -200,7 +200,7 @@ Jeff 2026-10-22 約 10:55（美東）：provenance 存在但未追蹤 ⇒ 擋（
 
 ## 125-c 審查後待辦（不在本票）
 
-1. assume-unchanged／skip-worktree 標記的檔，`git diff` 可能看不到本地改動而被覆寫〔未驗證〕；舊版同有、非本票退化；Jeff 2026-10-22 約 12:18（美東）裁「先 push，另開票驗」。**下一張票的第一優先。**
+1. assume-unchanged／skip-worktree 標記的檔，`git diff` 可能看不到本地改動而被覆寫〔未驗證〕；舊版同有、非本票退化；Jeff 2026-10-22 約 12:18（美東）裁「先 push，另開票驗」。**下一張票的第一優先。** → 票 161（R0 已實測確認，修法 A）。
 2. dry-run 不跑 `freeze_plan`：試跑顯示可寫、`--apply` 卻被擋。
 3. TOCTOU：凍結到寫入之間無防護；寫入中途例外會留下部分寫入、且不是 `Refused`；凍結只驗可讀不驗可寫。
 4. `certify` 寫 provenance 不經凍結計畫與位置檢查。

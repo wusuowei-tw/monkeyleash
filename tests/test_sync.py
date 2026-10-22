@@ -1577,3 +1577,173 @@ class TestT125OnlyTheWritePlanDecides:
         assert "Foo.md" in msg and "大小寫碰撞" in msg, "擋下的理由不是「大小寫碰撞」:%s" % msg
         assert _b(dst, ".claude/hooks/foo.md") == before, "下游小寫檔被改了"
         assert sorted(os.listdir(str(dst / ".claude/hooks"))) == listing, "有新增檔"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 161:assume-unchanged / skip-worktree 讓 git 不去看 worktree
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# `freeze_plan` 判髒只問 `git diff` / `git diff --cached`,而這兩種旗標正是叫 git
+# 不去比 worktree —— 本地改動因此看不見,sync 照寫(R0 實測,新舊版同有)。
+# 裁決修法 A:計畫內路徑帶旗標就擋,**內容其實沒改也擋**(git 已答不出它乾不乾淨)。
+# 計畫外帶旗標不擋;`.dev/provenance.jsonl` 帶旗標不擋(只追加)。
+
+class TestT161FlaggedPlanPathsBlock:
+
+    GATE = ".claude/hooks/gate.py"
+    A = "# 舊版\nx = 1\n"                 # 下游提交時(`pair` 寫的)
+    B = "# 下游本地改動\nx = 99\n"        # 下游本地
+    C = "# 新版\nx = 2\n"                 # 上游(`pair` 寫的)
+
+    @staticmethod
+    def _tag(root, rel):
+        out = _git(root, "ls-files", "-v", "--", rel).stdout.decode("utf-8", "replace")
+        return out[:1]
+
+    @staticmethod
+    def _refusal(fn, *a, **kw):
+        try:
+            fn(*a, **kw)
+        except sync.Refused as e:
+            return str(e)
+        return None
+
+    def _edited_and_flagged(self, pair, *flags):
+        """copy 桶的檔:已提交 A、本地改成 B、再設旗標。回 (src, dst)。"""
+        src, dst = pair
+        assert len({self.A, self.B, self.C}) == 3
+        _w(dst, self.GATE, self.B)
+        for flag in flags:
+            _git(dst, "update-index", flag, "--", self.GATE)
+        # 前提:三份內容就位;旗標讓 git status 看不到本地改動(這正是要釘的形狀)
+        assert _b(src, self.GATE) == self.C.encode("utf-8"), "前提沒成立:上游不是 C"
+        assert _b(dst, self.GATE) == self.B.encode("utf-8"), "前提沒成立:下游不是 B"
+        assert _git(dst, "cat-file", "blob", "HEAD:" + self.GATE).stdout == \
+            self.A.encode("utf-8"), "前提沒成立:下游 HEAD 不是 A"
+        assert _git(dst, "status", "--porcelain").stdout == b"", "前提沒成立:外層有別的未提交內容"
+        return src, dst
+
+    def _assert_flag_refusal(self, msg, rel, words):
+        assert msg is not None, "計畫內的檔帶旗標卻沒有擋"
+        assert rel in msg, "拒絕訊息沒點名路徑:%s" % msg
+        assert any(w in msg for w in words), "拒絕訊息沒點名旗標 %r:%s" % (words, msg)
+        assert "乾淨" in msg or "髒" in msg, "拒絕訊息沒說乾淨/髒:%s" % msg
+
+    def test_t161_01_assume_unchanged_with_local_edit_blocks(self, pair):
+        src, dst = self._edited_and_flagged(pair, "--assume-unchanged")
+        assert self._tag(dst, self.GATE) == "h", "前提沒成立:旗標首字 %r" % self._tag(dst, self.GATE)
+
+        msg = self._refusal(sync.update, str(src), str(dst), apply=True)
+        self._assert_flag_refusal(msg, self.GATE, ("assume-unchanged",))
+        assert _b(dst, self.GATE) == self.B.encode("utf-8"), "本地改動被覆寫了"
+
+    def test_t161_02_skip_worktree_with_local_edit_blocks(self, pair):
+        src, dst = self._edited_and_flagged(pair, "--skip-worktree")
+        assert self._tag(dst, self.GATE) == "S", "前提沒成立:旗標首字 %r" % self._tag(dst, self.GATE)
+
+        msg = self._refusal(sync.update, str(src), str(dst), apply=True)
+        self._assert_flag_refusal(msg, self.GATE, ("skip-worktree",))
+        assert _b(dst, self.GATE) == self.B.encode("utf-8"), "本地改動被覆寫了"
+
+    def test_t161_03_both_flags_block(self, pair):
+        """兩種旗標同設:首字照實記錄,應為小寫(assume-unchanged 的小寫蓋過 `S`)。"""
+        src, dst = self._edited_and_flagged(pair, "--assume-unchanged", "--skip-worktree")
+        tag = self._tag(dst, self.GATE)
+        assert tag.isalpha() and tag.islower(), "前提沒成立:兩者同設的首字 %r 不是小寫" % tag
+
+        msg = self._refusal(sync.update, str(src), str(dst), apply=True)
+        self._assert_flag_refusal(msg, self.GATE, ("assume-unchanged", "skip-worktree"))
+        assert _b(dst, self.GATE) == self.B.encode("utf-8"), "本地改動被覆寫了"
+
+    def test_t161_04_flag_without_local_edit_still_blocks(self, pair):
+        """內容沒改也擋 —— 刻意收緊:git 已答不出它乾不乾淨(fail-closed)。"""
+        src, dst = pair
+        _git(dst, "update-index", "--assume-unchanged", "--", self.GATE)
+        assert self._tag(dst, self.GATE) == "h", "前提沒成立:旗標首字 %r" % self._tag(dst, self.GATE)
+        assert _b(dst, self.GATE) == self.A.encode("utf-8"), "前提沒成立:下游不是 A"
+        assert _b(src, self.GATE) == self.C.encode("utf-8"), "前提沒成立:上游不是 C"
+        assert _git(dst, "status", "--porcelain").stdout == b"", "前提沒成立:外層有未提交內容"
+
+        msg = self._refusal(sync.update, str(src), str(dst), apply=True)
+        self._assert_flag_refusal(msg, self.GATE, ("assume-unchanged",))
+        assert _b(dst, self.GATE) == self.A.encode("utf-8"), "帶旗標的檔被寫了"
+
+    def test_t161_05_canon_with_flag_blocks(self, pair):
+        src, dst = pair
+        _w(src, "CLAUDE.md", _claude_md(CANON.replace("完全相同", "上游改過"), "(還沒有。)"))
+        _commit(src, "canon")
+        _w(dst, "CLAUDE.md", _claude_md(CANON, "台股收盤 13:30。\n界線外的本地改動。"))
+        _git(dst, "update-index", "--assume-unchanged", "--", "CLAUDE.md")
+
+        # 前提:界線內上游與下游不同(照 `framework_section` 的實際回傳值比,不自己拼);
+        # 下游有界線外的本地改動,而旗標讓 git status 看不到
+        section = sync.claude_md.framework_section
+        head = _git(dst, "cat-file", "blob", "HEAD:CLAUDE.md").stdout
+        before = _b(dst, "CLAUDE.md")
+        assert self._tag(dst, "CLAUDE.md") == "h", "前提沒成立:旗標首字 %r" % self._tag(dst, "CLAUDE.md")
+        assert section(_b(src, "CLAUDE.md").decode("utf-8")) != section(before.decode("utf-8")), (
+            "前提沒成立:上游正典段與下游相同,沒有東西可寫")
+        assert section(head.decode("utf-8")) == section(before.decode("utf-8")), (
+            "前提沒成立:本地改動不只在界線外")
+        assert before != head, "前提沒成立:下游沒有本地改動"
+        assert _git(dst, "status", "--porcelain").stdout == b"", "前提沒成立:外層有未提交內容"
+
+        msg = self._refusal(sync.regenerate_canon, str(src), str(dst))
+        self._assert_flag_refusal(msg, "CLAUDE.md", ("assume-unchanged",))
+        assert _b(dst, "CLAUDE.md") == before, "帶旗標的 CLAUDE.md 被寫了"
+
+    # ── 保護既有行為的考卷:現行就該綠 ─────────────────────────────────
+
+    def test_t161_06_flag_outside_the_plan_does_not_block(self, pair):
+        """計畫外帶旗標不擋 —— 與票 125 裁決 C「計畫外的髒不擋」一致。"""
+        src, dst = pair
+        outside = "project_only.py"
+        _w(dst, outside, "專案自己的,本地改過\n")
+        _git(dst, "update-index", "--skip-worktree", "--", outside)
+        assert self._tag(dst, outside) == "S", "前提沒成立:旗標首字 %r" % self._tag(dst, outside)
+        assert _b(src, self.GATE) != _b(dst, self.GATE), "前提沒成立:計畫裡沒有 copy 桶的改動"
+        assert _git(dst, "status", "--porcelain").stdout == b"", "前提沒成立:外層有未提交內容"
+        before = _b(dst, outside)
+
+        _must_pass(sync.update, str(src), str(dst), apply=True)
+        assert _b(dst, self.GATE) == _b(src, self.GATE), "計畫內的 copy 改動沒寫成"
+        assert _b(dst, outside) == before, "計畫外的檔被動到了"
+
+    def test_t161_07_flagged_provenance_still_appends(self, pair):
+        """provenance 帶旗標不擋(裁決第 2 點):它只追加,舊內容逐位元組保留。"""
+        src, dst = pair
+        prov = ".dev/provenance.jsonl"
+        _w(dst, prov, '{"path": "HEAD 那一份"}\n')
+        _commit(dst, "track provenance")
+        _git(dst, "update-index", "--skip-worktree", "--", prov)
+        _w(dst, prov, '{"path": "本地內容 P"}\n')
+        original = _b(dst, prov)
+        assert self._tag(dst, prov) == "S", "前提沒成立:旗標首字 %r" % self._tag(dst, prov)
+        assert original != _git(dst, "cat-file", "blob", "HEAD:" + prov).stdout, (
+            "前提沒成立:本地內容與 HEAD 相同")
+        assert _b(src, self.GATE) != _b(dst, self.GATE), "前提沒成立:計畫裡沒有 copy 桶的改動"
+        assert _git(dst, "status", "--porcelain").stdout == b"", "前提沒成立:外層有未提交內容"
+
+        _must_pass(sync.update, str(src), str(dst), apply=True)
+        after = _b(dst, prov)
+        assert after.startswith(original), "原有內容沒有逐位元組保留"
+        new = [json.loads(l) for l in after[len(original):].decode("utf-8").splitlines()
+               if l.strip()]
+        assert any(r["path"] == self.GATE for r in new), new
+
+    def test_t161_08_staged_then_flagged_still_blocks(self, pair):
+        """先 stage 再設旗標:index ≠ HEAD,既有的 `diff --cached` 判準就擋 —— 不要求提到旗標。"""
+        src, dst = pair
+        _w(dst, self.GATE, self.B)
+        _git(dst, "add", "--", self.GATE)
+        _git(dst, "update-index", "--assume-unchanged", "--", self.GATE)
+        assert self._tag(dst, self.GATE) == "h", "前提沒成立:旗標首字 %r" % self._tag(dst, self.GATE)
+        assert _git(dst, "cat-file", "blob", ":" + self.GATE).stdout == self.B.encode("utf-8"), (
+            "前提沒成立:index 不是 B")
+        status = _git(dst, "status", "--porcelain").stdout
+        assert status == ("M  %s\n" % self.GATE).encode(), "前提沒成立:外層有別的未提交內容:%r" % status
+
+        msg = self._refusal(sync.update, str(src), str(dst), apply=True)
+        assert msg is not None, "已 stage 的本地改動卻沒有擋"
+        assert self.GATE in msg and "未提交" in msg, "擋下的理由不是既有的髒檔判準:%s" % msg
+        assert _b(dst, self.GATE) == self.B.encode("utf-8"), "本地改動被覆寫了"
