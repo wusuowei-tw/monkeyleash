@@ -1,6 +1,6 @@
 # 160 — 找不到實作被記成「實作不存在」，R3 Python 路徑因此略過 HEAD 雜湊比對
 
-**狀態**：候選，待裁；不在本站處理。
+**狀態**：**已裁 (b′)（Jeff 2026-10-22 約 09:05（美東））；160-a 紅燈完成（本機）。** 160-b 實作待開工。
 **來源**：票 159 獨立審查 N1（2026-10-22）；Jeff 2026-10-22 約 07:58（美東）決定另開票登記，之後再修，連同 K3 一起看（裁決助手記錄，非逐字原話）。
 **相關**：K3（`find_implementation` 取第一個同名檔）、`F-167`、票 159。
 
@@ -21,6 +21,28 @@
 
 兩者都要動 gate.py（權威層），需裁決。
 
-## 四、修正紀錄
+## 四、裁決
+
+（裁決助手記錄，非逐字原話。）
+
+**Jeff 2026-10-22 約 09:05（美東）裁定：票 160 採 (b′)。**
+
+- Python 路徑的 R3 紅燈出口「`impl_exists is False` ⇒ 放行」加一個條件：**而且 `impl_rel` 確定不在 HEAD**，才放行。
+- 「在不在 HEAD」用三態判定（gate 既有的 `_git_object_exists` 或等價做法）：
+  - 確定不在 ⇒ 可放行；
+  - 確定在 ⇒ 不走此出口，改走 HEAD 雜湊出口；
+  - 問不動（不是 git、git 失敗、`impl_rel` 為 None）⇒ 不放行。
+- 純收緊。只改 `gate.redlight_missing` 的 Python 分支（160-b）；紀錄器（redlight.py）與帳本格式不動；非 Python（Kotlin／Dart）路徑不動。K3 不在本票。
+
+**R0 報告**：完整帳本 7737 筆，impl_exists False 4506 筆，其中紅燈 94 筆；帳本無法區分其中新檔與找不到各幾筆。
+
+**Jeff 2026-10-22 約 13:06（美東）裁定 A：准許「修改三」，只限 P1、P2。**
+
+- P1：`TestR3ReadsRedlight::test_a_proper_red_then_green_sequence_passes`；P2：`TestRedlightAcceptsTheSameTestLocationsAsR3::test_a_sibling_test_file_can_satisfy_the_redlight_half`。
+- 修改三：呼叫補上 `impl_rel=<確定不在 HEAD 的路徑>`，setup 改成真 git repo（patch `ROOT`）；「放行」的預期（`is None`）不變。
+- 只限 P1、P2 的理由：這兩條測的不是本票形狀，只是呼叫時沒給 `impl_rel`；生產環境唯一呼叫點（`gate.check()`）恆傳 `impl_rel`。
+
+## 五、修正紀錄
 
 - 2026-10-22（美東）：立案（候選）。
+- 2026-10-22（美東）：記錄裁決 (b′) 與修改三；160-a 紅燈測試（錨點 160-a）。

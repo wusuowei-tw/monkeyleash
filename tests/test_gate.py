@@ -740,11 +740,21 @@ class TestR3ReadsRedlight:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
     def test_a_proper_red_then_green_sequence_passes(self, tmp_path, monkeypatch):
+        """票 160:補上 impl_rel,(b′) 下 None 不放行。
+
+        setup 改成真 git repo,pkg/widget.py 確定不在 HEAD。
+        """
+        _t148_env(tmp_path, monkeypatch)
+        root = _t148_repo(tmp_path / "repo")
+        _t152_write(root, "README.md", u"t160\n")
+        _t148_git(root, "add", "-A")
+        _t148_git(root, "commit", "-q", "-m", "base (t160)")
+        monkeypatch.setattr(gate, "ROOT", str(root))
         log = tmp_path / "runs.jsonl"
         self._write_log(log, [{"test_file": "tests/test_widget.py", "result": "red",
                                "impl_exists": False, "impl_hash": None}])
         monkeypatch.setattr(gate, "RUN_LOG", str(log))
-        assert gate.redlight_missing("widget") is None
+        assert gate.redlight_missing("widget", impl_rel="pkg/widget.py") is None
 
     def test_implementation_written_before_the_test_is_blocked(self, tmp_path, monkeypatch):
         """紅燈時實作就已經在了 —— 那不是紅綠燈,是補測試。"""
@@ -1251,12 +1261,23 @@ class TestRedlightAcceptsTheSameTestLocationsAsR3:
 
     def test_a_sibling_test_file_can_satisfy_the_redlight_half(
             self, tmp_path, monkeypatch):
+        """票 160:補上 impl_rel,(b′) 下 None 不放行。
+
+        setup 改成真 git repo,pkg/foo.py 確定不在 HEAD。
+        """
+        _t148_env(tmp_path, monkeypatch)
+        root = _t148_repo(tmp_path / "repo")
+        _t152_write(root, "README.md", u"t160\n")
+        _t148_git(root, "add", "-A")
+        _t148_git(root, "commit", "-q", "-m", "base (t160)")
+        monkeypatch.setattr(gate, "ROOT", str(root))
         log = tmp_path / "runs.jsonl"
         log.write_text(json.dumps({"test_file": "pkg/test_foo.py", "result": "red",
                                    "impl_exists": False, "impl_hash": None}) + "\n",
                        encoding="utf-8")
         monkeypatch.setattr(gate, "RUN_LOG", str(log))
-        assert gate.redlight_missing("foo", ("pkg/test_foo.py",)) is None
+        assert gate.redlight_missing("foo", ("pkg/test_foo.py",),
+                                     impl_rel="pkg/foo.py") is None
 
 
 class TestGoLiveShaTravelsWithTheList:
@@ -1549,10 +1570,14 @@ class TestRedlightJudgesTheImplementationNotTheFile:
                                      ticket="07") is None
 
     def test_a_new_file_redlight_still_passes(self, repo):
-        """舊行為不得回歸:實作不存在時紅過的紀錄照樣算數。"""
+        """舊行為不得回歸:實作不存在時紅過的紀錄照樣算數。
+
+        票 160 裁定:在 HEAD 的檔不得靠 not-found 紀錄解鎖。
+        這個 fixture 的 pkg/thing.py 在 HEAD,所以預期翻成擋下。
+        """
         self._log(repo, self._red(impl_file=None, impl_exists=False, impl_hash=None))
         assert gate.redlight_missing("thing", impl_rel="pkg/thing.py",
-                                     ticket="07") is None
+                                     ticket="07") is not None
 
     # ── 負控 ──────────────────────────────────────────────────────────────
 
@@ -8505,3 +8530,96 @@ def test_t158_c0_3_reads_and_other_dev_files_are_not_blocked(tmp_path, monkeypat
     _t158_c0_2_world(tmp_path, monkeypatch)
     rc, err, _sh = _t158_c0_3_hook(monkeypatch, capsys, tool, command)
     assert rc == 0 and "[R11" not in err, (tool, command, rc, err)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#
+# **票 160 紅燈站(160-a):本批只有測試,`gate.py` 一個字沒動。**
+# 裁決 (b′):Python 路徑的「`impl_exists is False` ⇒ 放行」出口加一個條件 ——
+# `impl_rel` **確定不在 HEAD**。在 HEAD ⇒ 只能走 HEAD 雜湊出口;
+# 問不動(不是 git、git 失敗、`impl_rel` 為 None)⇒ 不放行。
+# 非 Python 分支不動(對照 #7)。
+#
+# 寫法沿用 `_t152_*`:一律在 tmp git repo 裡跑,紅燈紀錄一律是合成紀錄。
+
+_T160_IMPL = "pkg/thing.py"
+_T160_TEST = "tests/test_thing.py"
+
+
+def _t160_not_found(**kw):
+    """一筆 Python 合成紅燈:本票、`impl_file: null`、`impl_exists: false`。"""
+    return _t152_red(_T160_TEST, None, **kw)
+
+
+class TestT160NotFoundRecordDoesNotUnlockAFileInHead:
+
+    def test_t160_1_impl_in_head_is_blocked(self, tmp_path, monkeypatch):
+        """#1|必須先紅|現行:False 出口不看 HEAD ⇒ 放行。要求:在 HEAD ⇒ 擋。"""
+        root = _t152_repo(tmp_path, monkeypatch, commit=[(_T160_IMPL, u"x = 1\n")])
+        _t152_log(root, _t160_not_found())
+        assert gate.redlight_missing("thing", impl_rel=_T160_IMPL,
+                                     ticket=_T152_TICKET) is not None, \
+            u"在 HEAD 的檔靠 not-found 紀錄解鎖了"
+
+    def test_t160_2_impl_not_in_head_passes(self, tmp_path, monkeypatch):
+        """#2|守住既有行為|確定不在 HEAD ⇒ 放行。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        _t152_log(root, _t160_not_found())
+        assert gate.redlight_missing("thing", impl_rel=_T160_IMPL,
+                                     ticket=_T152_TICKET) is None
+
+    def test_t160_3_not_a_git_repo_is_blocked(self, tmp_path, monkeypatch):
+        """#3|必須先紅|問不動(不是 git repo)⇒ 擋。"""
+        _t148_env(tmp_path, monkeypatch)
+        root = tmp_path / "plain"
+        root.mkdir()
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+        rc = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=str(root),
+                            capture_output=True).returncode
+        assert rc != 0, u"fixture 不成立:plain 目錄在某個 git repo 裡"
+        monkeypatch.setattr(gate, "ROOT", str(root))
+        monkeypatch.setattr(gate, "RUN_LOG", str(root / ".dev" / "test-runs.jsonl"))
+        monkeypatch.chdir(str(root))
+        _t152_log(root, _t160_not_found())
+        assert gate.redlight_missing("thing", impl_rel=_T160_IMPL,
+                                     ticket=_T152_TICKET) is not None
+
+    def test_t160_4_impl_rel_none_is_blocked(self, tmp_path, monkeypatch):
+        """#4|必須先紅|`impl_rel` 為 None ⇒ 問不動 ⇒ 擋。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        _t152_log(root, _t160_not_found())
+        assert gate.redlight_missing("thing", ticket=_T152_TICKET) is not None
+
+    def test_t160_5_no_ticket_other_tickets_record_impl_in_head_is_blocked(
+            self, tmp_path, monkeypatch):
+        """#5|必須先紅|站牌票號為 None ⇒ 不比對票號(提交時點),紀錄走到 False 出口。
+        要求:別張票的 not-found 紀錄,對在 HEAD 的檔 ⇒ 擋。"""
+        root = _t152_repo(tmp_path, monkeypatch, commit=[(_T160_IMPL, u"x = 1\n")])
+        _t152_log(root, _t160_not_found(ticket_id="151"))
+        assert gate.redlight_missing("thing", impl_rel=_T160_IMPL,
+                                     ticket=None) is not None
+
+    def test_t160_6_control_head_hash_exit_still_passes(self, tmp_path, monkeypatch):
+        """#6|對照|在 HEAD、紀錄 impl_exists true 且 impl_hash 等於 HEAD 內容雜湊 ⇒ 放行。"""
+        root = _t152_repo(tmp_path, monkeypatch, commit=[(_T160_IMPL, u"x = 1\n")])
+        _t152_log(root, _t152_red(_T160_TEST, _T160_IMPL, impl_exists=True,
+                                  impl_hash=_t152_head_hash(root, _T160_IMPL)))
+        assert gate.redlight_missing("thing", impl_rel=_T160_IMPL,
+                                     ticket=_T152_TICKET) is None
+
+    def test_t160_7_control_kotlin_not_found_unchanged(self, tmp_path, monkeypatch):
+        """#7|對照|Kotlin:impl_exists false、impl_file 等於 impl_rel、不在 HEAD ⇒ 放行。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        _t152_log(root, _t152_red(_T152_KT_TEST, _T152_KT_IMPL))
+        cands = gate.test_candidates(_T152_KT_IMPL, gate.R3_KOTLIN)
+        assert gate.redlight_missing("Foo", cands, impl_rel=_T152_KT_IMPL,
+                                     ticket=_T152_TICKET, lang=gate.R3_KOTLIN) is None
+
+    def test_t160_8_check_blocks_a_write_to_a_file_in_head(self, tmp_path, monkeypatch):
+        """#8|必須先紅|端到端:經由 `check()` 寫已在 HEAD 的 pkg/thing.py,
+        帳本只有 #1 那種紀錄 ⇒ `[R3/紅燈]`。"""
+        root = _t152_repo(tmp_path, monkeypatch, commit=[
+            (_T160_IMPL, u"x = 1\n"), (_T160_TEST, u"def test_x(): pass\n")])
+        _t152_log(root, _t160_not_found())
+        msg, _trace, _used = _t152_check(root, _T160_IMPL, u"x = 2\n")
+        assert msg is not None and "[R3/紅燈]" in msg, msg
