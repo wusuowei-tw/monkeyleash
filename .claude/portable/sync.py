@@ -328,7 +328,8 @@ def refuse_if_dirty(target):
 #   二、不落在任何 gitlink 底下;
 #   三、每一層名稱與該層目錄實際列出的名稱逐字相同(大小寫碰撞 ⇒ 擋);
 #   四、存在 ⇒ 追蹤中、worktree = index = HEAD、讀得到;
-#       `.dev/provenance.jsonl` 只免「已有未提交內容」這一項,其餘照判(裁決第三點);
+#       `.dev/provenance.jsonl` 免「必須追蹤」與「已有未提交內容」兩項(Jeff 2026-10-22
+#       約 16:58 改裁:下游家規帳本不進版控;它只追加、不蓋舊內容),其餘照判;
 #   五、不存在 ⇒ 未追蹤(追蹤中而不存在 = 本地刪除 ⇒ 擋)。
 #   六、帶 assume-unchanged / skip-worktree 旗標 ⇒ 擋(票 161)。第四項的 `git diff`
 #       對這兩種旗標是盲的 —— 它們就是叫 git 不去比 worktree,本地改動因此看不見。
@@ -479,7 +480,7 @@ def freeze_plan(target, entries):
     for rel in located:
         why = None
         if rel in present:
-            if rel not in tracked_set:
+            if rel not in tracked_set and rel not in DIRTY_EXEMPT:
                 why = "存在但未追蹤(被 ignore 或未納入版控)—— git status 看不見不等於不存在"
             elif rel in dirty and rel not in DIRTY_EXEMPT:
                 why = "有未提交的變更(worktree / index / HEAD 不一致)"

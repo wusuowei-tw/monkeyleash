@@ -1491,10 +1491,11 @@ class TestT125OnlyTheWritePlanDecides:
 
     # ── 125-c 審查後補:保護既有行為的考卷 ─────────────────────────────
 
-    def test_t125_17_an_untracked_existing_provenance_blocks(self, pair):
-        """provenance 只免「追蹤中但有未提交內容」—— 存在但未追蹤照擋(裁決第三點)。
+    def test_t125_17_an_untracked_existing_provenance_still_appends(self, pair):
+        """provenance 存在但未追蹤 ⇒ 照常追加。
 
-        與 #11 對照:#11 是追蹤中而髒 ⇒ 追加;本條是根本沒追蹤 ⇒ 擋。
+        Jeff 2026-10-22 約 16:58 改裁:下游家規帳本不進版控,第二次 sync 不得被自己擋。
+        與 #11 對照:#11 是追蹤中而髒 ⇒ 追加;本條是根本沒追蹤 ⇒ 也追加。
         """
         src, dst = pair
         prov = ".dev/provenance.jsonl"
@@ -1506,20 +1507,39 @@ class TestT125OnlyTheWritePlanDecides:
         status = _git(dst, "status", "--porcelain", "--untracked-files=all").stdout
         assert status == ("?? %s\n" % prov).encode(), "前提沒成立:外層還有別的未提交內容:%r" % status
         assert _b(src, self.GATE) != _b(dst, self.GATE), "前提沒成立:計畫裡沒有 copy 桶的改動"
-        prov_before = _b(dst, prov)
-        gate_before = _b(dst, self.GATE)
+        original = _b(dst, prov)
 
-        try:
-            sync.update(str(src), str(dst), apply=True)
-        except sync.Refused as e:
-            msg = str(e)
-        else:
-            msg = None
-        assert msg is not None, "provenance 存在但未追蹤卻沒有擋"
-        assert prov in msg and "未追蹤" in msg, "擋下的理由不是「provenance 存在但未追蹤」:%s" % msg
-        assert _b(dst, prov) == prov_before, "未追蹤的 provenance 被改了"
-        assert _b(dst, self.GATE) == gate_before, "copy 桶的檔被寫了"
-        assert not (dst / ".claude/hooks/newfile.py").exists(), "copy 桶的新檔被寫了"
+        _must_pass(sync.update, str(src), str(dst), apply=True)
+        after = _b(dst, prov)
+        assert after.startswith(original), "原有內容沒有逐位元組保留"
+        assert _b(dst, self.GATE) == _b(src, self.GATE), "copy 桶的檔沒寫成上游內容"
+        new = [json.loads(l) for l in after[len(original):].decode("utf-8").splitlines()
+               if l.strip()]
+        assert any(r["path"] == self.GATE for r in new), new
+
+    def test_t125_20_an_ignored_existing_provenance_still_appends(self, pair):
+        """同 #17,但下游把 provenance 加進 `.gitignore` —— 同一種家規,同樣照常追加。"""
+        src, dst = pair
+        prov = ".dev/provenance.jsonl"
+        _w(dst, ".gitignore", prov + "\n")
+        _commit(dst, "ignore provenance")
+        _w(dst, prov, '{"path": "下游自己的,被 ignore"}\n')
+
+        # 前提:只剩一個形狀
+        assert _git(dst, "check-ignore", "-q", prov).returncode == 0, "前提沒成立:provenance 沒被 ignore"
+        assert _git(dst, "ls-files", "--", prov).stdout == b"", "前提沒成立:provenance 已被追蹤"
+        status = _git(dst, "status", "--porcelain", "--untracked-files=all").stdout
+        assert status == b"", "前提沒成立:外層還有別的未提交內容:%r" % status
+        assert _b(src, self.GATE) != _b(dst, self.GATE), "前提沒成立:計畫裡沒有 copy 桶的改動"
+        original = _b(dst, prov)
+
+        _must_pass(sync.update, str(src), str(dst), apply=True)
+        after = _b(dst, prov)
+        assert after.startswith(original), "原有內容沒有逐位元組保留"
+        assert _b(dst, self.GATE) == _b(src, self.GATE), "copy 桶的檔沒寫成上游內容"
+        new = [json.loads(l) for l in after[len(original):].decode("utf-8").splitlines()
+               if l.strip()]
+        assert any(r["path"] == self.GATE for r in new), new
 
     def test_t125_18_a_parent_that_exists_but_is_not_a_directory_blocks(self, pair):
         """父目錄那一層在下游是一個已提交、乾淨的一般檔案 —— git 說乾淨,寫入仍然走不通。"""
