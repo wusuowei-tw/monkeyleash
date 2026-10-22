@@ -8623,3 +8623,20 @@ class TestT160NotFoundRecordDoesNotUnlockAFileInHead:
         _t152_log(root, _t160_not_found())
         msg, _trace, _used = _t152_check(root, _T160_IMPL, u"x = 2\n")
         assert msg is not None and "[R3/紅燈]" in msg, msg
+
+    def test_t160_9_unborn_head_is_blocked(self, tmp_path, monkeypatch):
+        """#9|必須先紅|Jeff 2026-10-22 約 15:14 裁定:全新 repo 算問不動 ⇒ 擋"""
+        _t148_env(tmp_path, monkeypatch)
+        root = _t148_repo(tmp_path / "repo")
+        assert subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD"], cwd=str(root),
+                              capture_output=True).returncode != 0, u"fixture 不成立:HEAD 已誕生"
+        assert subprocess.run(["git", "rev-parse", "--git-dir"], cwd=str(root),
+                              capture_output=True).returncode == 0, u"fixture 不成立:不是 git repo"
+        assert not (root / _T160_IMPL).exists()
+        monkeypatch.setattr(gate, "ROOT", str(root))
+        monkeypatch.setattr(gate, "RUN_LOG", str(root / ".dev" / "test-runs.jsonl"))
+        monkeypatch.chdir(str(root))
+        _t152_log(root, _t160_not_found())
+        assert gate.redlight_missing("thing", impl_rel=_T160_IMPL,
+                                     ticket=_T152_TICKET) is not None, \
+            u"全新 repo(HEAD 未誕生)的 not-found 紀錄被放行了"

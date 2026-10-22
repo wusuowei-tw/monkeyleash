@@ -2233,6 +2233,90 @@ def head_content_hash(rel_path):
         return None
 
 
+def _git_out(*args):
+    """在 `ROOT` 跑 git,回 stdout 字串;rc 非 0 或任何例外回 None(= 問不動)。"""
+    try:
+        out = subprocess.run(["git"] + list(args), cwd=ROOT, capture_output=True)
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.decode("utf-8", "replace")
+
+
+def _under_gitlink(rel_path):
+    """`rel_path` 在 HEAD 的樹裡是否落在某一格 gitlink 底下。三態:True / False / None。
+
+    與 `is_gitlink` 問同一件事,差別只在失敗的方向:`is_gitlink` 問不到回 False
+    (那邊的呼叫端拿 False 當「不委派」,不會因此放行);這裡的 False 會被拿去
+    **證明不在 HEAD**,所以問不到、解析不了一律回 None —— 不得把「查詢失敗」
+    當成「沒有子模組」。mode 是封閉集合,不認得的 mode 也算解析不了(F-087)。
+    """
+    parts = rel_path.split("/")
+    for i in range(1, len(parts)):
+        prefix = "/".join(parts[:i])
+        out = _git_out("ls-tree", "-z", "HEAD", "--", prefix)
+        if out is None:
+            return None
+        entries = [e for e in out.split("\0") if e]
+        if not entries:
+            return False                 # 這一層前綴不在樹裡,更深的也不會在
+        if len(entries) != 1 or "\t" not in entries[0]:
+            return None
+        meta, path = entries[0].split("\t", 1)
+        if path != prefix:
+            return None
+        mode = meta.split(" ", 1)[0]
+        if mode == GITLINK_MODE:
+            return True
+        if mode == "040000":
+            continue
+        if mode in ("100644", "100755", "120000"):
+            return False                 # 前綴是檔案,底下不可能有東西
+        return None
+    return False
+
+
+def _impl_absent_from_head(impl_rel, head):
+    """票 160 (b′):`impl_rel` 是否**確定不在** HEAD。只有 True 才能走 not-found 出口。
+
+    三態收斂成「確定不在 ⇒ True,其他(確定在 / 問不動)⇒ False」:
+      - `impl_rel` 為 None ⇒ 問不動。
+      - `ROOT` 不是工作樹、HEAD 尚未指向存在的 commit、git 失敗 ⇒ 問不動。
+        **「不是 git」要另外判**:`_git_object_exists` 在非 git 目錄回 `(False, None)`
+        (它自己的 docstring 寫明),只靠它的話「不是 git」會被當成「確定不在」而放行。
+        全新 repo(HEAD 未誕生)也算問不動 ⇒ 擋(Jeff 2026-10-22 裁定);代價是
+        全新 repo 要先 commit 一個初始版本,才能寫第一支 Python 實作。
+        這裡不分辨「全新」與「壞掉」 —— 兩者都擋。
+      - git 找到的工作樹根目錄不是 `ROOT` 本身(例如往父目錄找到別的 repo)⇒ 問不動。
+      - `head`(HEAD 內容雜湊)有值 ⇒ 確定在,交給 HEAD 雜湊出口。
+      - 落在 gitlink 底下而拿不到其 HEAD 內容 ⇒ 問不動,不另外去問子模組;
+        gitlink 清單取不到也算問不動。HEAD 雜湊出口照舊保留 —— 不是「gitlink 底下一律擋」。
+      - 只有 `_git_object_exists` 正面答 `(False, None)`、且不在 gitlink 底下 ⇒ 確定不在。
+    """
+    if impl_rel is None:
+        return False
+    if not (_git_out("rev-parse", "--verify", "-q", "HEAD^{commit}") or "").strip():
+        return False
+    top = (_git_out("rev-parse", "--show-toplevel") or "").strip()
+    if not top:
+        return False
+    try:
+        same_root = (os.path.normcase(os.path.realpath(top))
+                     == os.path.normcase(os.path.realpath(ROOT)))
+    except Exception:
+        return False
+    if not same_root:
+        return False
+    if head is not None:
+        return False                     # 確定在
+    rel_path = impl_rel.replace("\\", "/")
+    exists, why = _git_object_exists("HEAD:" + rel_path, cwd=ROOT)
+    if exists is not False or why is not None:
+        return False                     # 在卻拿不到雜湊,或問不動
+    return _under_gitlink(rel_path) is False
+
+
 def redlight_missing(base, also_accept=(), impl_rel=None, ticket=None, lang=None):
     """R3 的另一半:這個模組的測試曾經在**這次的實作寫之前**紅過嗎?
 
@@ -2286,6 +2370,9 @@ def redlight_missing(base, also_accept=(), impl_rel=None, ticket=None, lang=None
 
     # 只算一次:HEAD 內容與這一輪的每一筆紀錄比對,與紀錄無關。
     head = head_content_hash(impl_rel) if impl_rel else None
+    # 票 160 (b′):Python 的 not-found 出口只放行「確定不在 HEAD」的實作,
+    # 理由與三態見 `_impl_absent_from_head`。同樣只算一次。
+    absent = _impl_absent_from_head(impl_rel, head) if python else False
 
     saw_any = False
     saw_ticket_mismatch = False
@@ -2309,7 +2396,7 @@ def redlight_missing(base, also_accept=(), impl_rel=None, ticket=None, lang=None
             if not python and rec.get("impl_file") != impl_rel:
                 saw_impl_mismatch = True    # D5:別支同名實作的紅燈不算數
                 continue
-            if rec["impl_exists"] is False:
+            if rec["impl_exists"] is False and (absent or not python):
                 return None                 # 新檔案:紅燈時實作不存在
             if head is not None and rec.get("impl_hash") == head:
                 return None                 # 既有檔案:紅燈對著改動前的碼發生
