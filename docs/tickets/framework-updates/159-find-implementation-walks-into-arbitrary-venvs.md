@@ -1,6 +1,6 @@
 # 159 — find_implementation 誤入任意名稱的虛擬環境
 
-**狀態**：**立案；159-a 紅燈完成（本機）。** 159-b 實作待開工。
+**狀態**：**159-b 實作完成（本機），待獨立審查。**
 **立案**：2026-10-21（美東）。建檔前以 Glob `docs/tickets/framework-updates/159-*` 確認無命中。
 **性質**：小票 —— `redlight.find_implementation` 跳過判準的修正（只動一個函式的跳過邏輯）。
 **交叉引用**：`F-167`（`docs/agents/friction-log.md`）；票 156 D-1；`F-021`。
@@ -72,3 +72,4 @@ Jeff 2026-10-21 約 19:55（美東）決定（裁決助手記錄，非逐字原�
 
 - 2026-10-21（美東）：立案；159-a 紅燈測試（錨點 159-a）。
 - 2026-10-21（美東）：159-a 同一 session 並行一次（步驟 8 一則訊息送出 5 個唯讀呼叫：兩次 git diff 導向 scratchpad、兩次 Read、一次 git diff），Jeff 約 21:16 接受，由原 session 完成本機提交；紅燈結果在並行前已記錄，未重跑。
+- 2026-10-21（美東）：159-b 實作（錨點 159-b）：_SEARCH_SKIP 加 site-packages；find_implementation 另跳過含 pyvenv.cfg 的目錄。紅轉綠，全套通過。gate.py、NON_SOURCE_DIRS、_H2_SKIP_DIRS 未改。

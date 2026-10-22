@@ -128,9 +128,14 @@ def current_ticket():
 # 把本份併過去會讓 `.scratch/` 底下的碼脫離站別限制(R7 的官方出口就指向那裡),
 # 並讓 `gate.PROTOTYPE_RE` 靜默變死碼。
 # 差集由 `tests/test_non_source_list_parity.py` 釘住 —— **對的是差集,不是相等。**
+#
+# 票 159:venv 的名字是開放集合,靠枚舉守不住(F-167)。venv 一律以「目錄內有
+# `pyvenv.cfg`」判定 —— 那是**內容判定**,寫在 `find_implementation` 的目錄過濾裡,
+# **不進本集合**。本集合只收工具決定、名字固定的目錄(`site-packages`、`node_modules`)。
+# 不得改用 `.venv*` 名稱前綴 —— 那是又一次拿名字當判準(F-021)。
 _SEARCH_SKIP = {".git", ".venv", ".venv-gates", "node_modules", "__pycache__", ".cache",
                 ".scratch", ".dev", "tests", "docs", ".agents", "skills",
-                "build", "logs", "assets", "tradingagents.egg-info"}
+                "build", "logs", "assets", "tradingagents.egg-info", "site-packages"}
 
 
 def find_implementation(test_file):
@@ -138,13 +143,16 @@ def find_implementation(test_file):
 
     找不到不是錯誤:測試檔可以不對應單一實作(例如整合測試)。
     R3 只在「由實作反查」時才需要這個對應,方向相反時允許落空。
+
+    venv(含 `pyvenv.cfg` 的目錄)與 `site-packages` 不會被當成實作所在(票 159)。
     """
     base = os.path.basename(test_file)
     if not base.startswith("test_") or not base.endswith(".py"):
         return None
     target = base[len("test_"):]
     for dirpath, dirnames, filenames in os.walk(ROOT):
-        dirnames[:] = [d for d in dirnames if d not in _SEARCH_SKIP]
+        dirnames[:] = [d for d in dirnames if d not in _SEARCH_SKIP
+                       and not os.path.isfile(os.path.join(dirpath, d, "pyvenv.cfg"))]
         if target in filenames:
             return os.path.relpath(os.path.join(dirpath, target), ROOT).replace("\\", "/")
     return None
