@@ -196,12 +196,13 @@ def _snapshot(root, impl_rel):
 
 
 def _ticket(root):
-    """開跑前的票號。讀不到就是 None,不猜(同 `redlight.current_ticket`)。"""
+    """開跑前的票號。站牌格式不合格回 None 並往 stderr 警告、照常開跑;B 組照舊 —— 不猜
+    (同 `redlight.current_ticket`,走同一支 `redlight._ticket_from`)。"""
     try:
-        with io.open(os.path.join(root, ".dev", "pipeline.json"), encoding="utf-8") as f:
-            return json.load(f).get("ticket_id")
+        path = os.path.join(root, ".dev", "pipeline.json")
     except Exception:
-        return None
+        path = None         # 開檔必失敗 ⇒ 依 A 組處理;讀取端不得丟例外
+    return _redlight._ticket_from(path)
 
 
 # ── Dart:〔D-json〕事件流 ───────────────────────────────────────────────────

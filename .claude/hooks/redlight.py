@@ -38,6 +38,7 @@ import os
 import posixpath
 import re
 import stat
+import sys
 from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -66,17 +67,55 @@ def content_hash(raw):
     return hashlib.sha256(norm).hexdigest()
 
 
+def stage_card_ticket(path):
+    """站牌 `path` 的 `(ticket, problem)`。純函式:不印、不寫檔。
+
+    格式不合格(A 組)⇒ `(None, 原因)`:開檔或解析失敗、頂層不是物件、
+    `current_stage` 缺少或不是字串、`ticket_id` 存在卻不是字串也不是 null。
+    其他 ⇒ `(ticket_id 原值或 None, None)` —— 缺 `ticket_id`、null、空字串(B 組)照舊。
+
+    **格式規則與 `gate.load_stage` 相同**(同為 `io.open` + `"utf-8"`,BOM 判定才一致),
+    兩邊一致由 `tests/test_redlight.py` 的票 158 C0-1c 段釘住;本模組不載入 gate。
+    **只判格式,不判站名在不在 `stages[].id`**(票 158 C0-1c 裁定;值域由 R2 判)。
+    原因只寫例外類別與簡短說明,不帶完整路徑。
+    """
+    try:
+        with io.open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception as e:
+        return None, u"站牌讀不到或不是合法 JSON(%s)" % type(e).__name__
+    if not isinstance(d, dict):
+        return None, u"站牌頂層不是物件(%s)" % type(d).__name__
+    if not isinstance(d.get("current_stage"), str):
+        return None, u"current_stage 缺少或不是字串"
+    ticket = d.get("ticket_id")
+    if not (ticket is None or isinstance(ticket, str)):
+        return None, u"ticket_id 不是字串也不是 null(%s)" % type(ticket).__name__
+    return ticket, None
+
+
+def _ticket_from(path):
+    """三支讀取端共用:`stage_card_ticket` 的票號;A 組時往 stderr 警告一行。任何情形都不丟例外。"""
+    ticket, problem = stage_card_ticket(path)
+    if problem is not None:
+        try:
+            sys.stderr.write(u"[redlight/站牌不合格] %s；這次紀錄的 ticket_id 記為 null，"
+                             u"不會歸到任何票號。請由使用者自行修正 .dev/pipeline.json。\n" % problem)
+        except Exception:
+            pass
+    return ticket
+
+
 def current_ticket():
-    """紅燈發生當下的票號。讀不到回 None。
+    """紅燈發生當下的票號。
+
+    站牌格式不合格(A 組)⇒ None,並往 stderr 警告一行;缺 `ticket_id`、null、
+    空字串(B 組)照舊回原值或 None,不警告(票 158 C0-1c)。
 
     **讀不到就是 None,不猜。** 猜一個票號的話,猜中的那次會靜默解鎖
     一個根本沒有紅燈的修改 —— 而那正是這個欄位要防的事。
     """
-    try:
-        with io.open(PIPELINE, encoding="utf-8") as f:
-            return json.load(f).get("ticket_id")
-    except Exception:
-        return None
+    return _ticket_from(PIPELINE)
 
 # 測試檔名對應到實作檔名的搜尋範圍。與 R3 反向:R3 由實作找測試,這裡由測試找實作。
 #
@@ -173,13 +212,12 @@ def session_log(root):
 
 
 def _ticket_of(root):
-    """`<root>/.dev/pipeline.json` 的 `ticket_id`。讀不到回 None —— 不猜(同 `current_ticket`)。"""
+    """`<root>/.dev/pipeline.json` 的 `ticket_id`。格式不合格回 None 並警告,B 組照舊 —— 不猜(同 `current_ticket`)。"""
     try:
-        with io.open(os.path.join(os.fspath(root), ".dev", "pipeline.json"),
-                     encoding="utf-8") as f:
-            return json.load(f).get("ticket_id")
+        path = os.path.join(os.fspath(root), ".dev", "pipeline.json")
     except Exception:
-        return None
+        path = None         # 開檔必失敗 ⇒ 依 A 組處理;讀取端不得丟例外
+    return _ticket_from(path)
 
 
 def _normalize_arg(arg, root, invocation_dir):
