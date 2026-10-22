@@ -211,7 +211,7 @@ Jeff 2026-10-22 約 16:58（美東）改裁：存在但未追蹤 ⇒ 放行（�
 7. `tracked(target)`／`gitlink_paths` 是不帶 pathspec 的 `ls-files`（只列 index），在 OneDrive 型工作區上的速度〔未驗證〕。
 8. 剩餘測試缺口：符號連結 assertion 不看原因、gitlink 父目錄層、父目錄大小寫碰撞、#04～#08 不看原因、`regenerate_canon` 讀不到、父目錄列不出內容。
 9. 搬移後的「目標沒有 %s」拒絕訊息不含「乾淨／髒」（輕）。
-11. sync.py --help 被當成目標路徑（回「目標沒有 CLAUDE.md」），無寫入；某下游 2026-10-22 回報。
+10. sync.py --help 被當成目標路徑（回「目標沒有 CLAUDE.md」），無寫入；某下游 2026-10-22 回報。
 
 ## 修正紀錄
 
