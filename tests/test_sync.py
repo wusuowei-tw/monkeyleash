@@ -1445,3 +1445,46 @@ class TestT125OnlyTheWritePlanDecides:
         _must_pass(sync.update, str(src), str(dst), apply=True)
         monkeypatch.undo()
         assert not seen, "跑了整樹含 untracked 的 git status:%r" % seen
+
+    # ── gitlink:寫入路徑落在它底下 ───────────────────────────────────
+
+    def test_t125_16_a_planned_path_under_a_gitlink_blocks(self, pair):
+        """gitlink 本身完全落定、外層完全乾淨 —— 唯一的形狀是「計畫裡的路徑落在它底下」。
+
+        全域檢查(`gitlink_unsettled`)在這裡回空,所以擋下的理由只能是逐條路徑那一關。
+        """
+        src, dst = pair
+        rel = ".claude/hooks/vendored/helper.py"
+        _w(src, rel, "# 上游新增,路徑落在下游的 gitlink 底下\n")
+        _commit(src, "vendored helper")
+
+        inner = dst / ".claude/hooks/vendored"
+        inner.mkdir()
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            _git(inner, *c.split())
+        _w(inner, "own.py", "x = 1\n")
+        _commit(inner, "inner1")
+        _commit(dst, "embed")
+
+        # 前提:只剩一個形狀
+        mode = _git(dst, "ls-files", "-s", ".claude/hooks/vendored").stdout.decode()
+        assert mode.startswith("160000"), "前提沒成立:沒種出 gitlink:%r" % mode
+        assert _git(inner, "status", "--porcelain").stdout == b"", "前提沒成立:內嵌 repo 不乾淨"
+        inner_head = _git(inner, "rev-parse", "HEAD").stdout.strip()
+        index_sha = _git(dst, "rev-parse", ":.claude/hooks/vendored").stdout.strip()
+        assert inner_head and inner_head == index_sha, "前提沒成立:index 的 gitlink 版本不等於內嵌 HEAD"
+        assert _git(dst, "diff", "--cached", "--name-only").stdout == b"", "前提沒成立:外層有 staged 變更"
+        assert _git(dst, "status", "--porcelain").stdout == b"", "前提沒成立:外層有未提交內容"
+        assert sync.gitlink_unsettled(str(dst)) == [], "前提沒成立:gitlink 全域檢查本身就不乾淨"
+        before = sorted(os.listdir(str(inner)))
+
+        try:
+            sync.update(str(src), str(dst), apply=True)
+        except sync.Refused as e:
+            msg = str(e)
+        else:
+            msg = None
+        assert msg is not None, "寫入路徑落在 gitlink 底下卻沒有擋"
+        assert rel in msg and "gitlink" in msg, "擋下的理由不是「路徑落在 gitlink 底下」:%s" % msg
+        assert sorted(os.listdir(str(inner))) == before, "內嵌 repo 底下被寫入了"
+        assert not (inner / "helper.py").exists(), "內嵌 repo 底下被寫入了"

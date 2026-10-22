@@ -7,7 +7,9 @@
 
 **這支工具會覆寫別的 repo 的檔案**,所以每一個「不確定」都往**不寫**倒:
 
-  目標工作樹髒                 -> 拒絕(與 install.py 同規矩)
+  寫入計畫裡的路徑不是乾淨狀態   -> 拒絕(票 125 裁決 C:只問這次要寫的那些路徑,
+                                   計畫外的髒不擋;見 `freeze_plan`)
+  gitlink 已 stage 未提交 / 讀不到 -> 拒絕(全域,見 `refuse_if_dirty`)
   桶標未裁決(portable-manifest)-> 跳過那個檔
   friction-log 有未搬遷的本地條目 -> 拒絕,並列出是哪幾則
   寫完 hash 對不上來源           -> 拒絕(而不是回報成功)
@@ -73,11 +75,14 @@ class Refused(Exception):
 
 class Plan(object):
     __slots__ = ("changed", "added", "needs_decision", "verified", "untouched",
-                 "canon_drift")
+                 "canon_drift", "writes", "appended")
 
     def __init__(self):
         self.changed = []
         self.added = []
+        # 本次的寫入計畫 [(rel, 動作), ...],含 `.dev/provenance.jsonl` 的追加(票 125)
+        self.writes = []
+        self.appended = []
         # 混血條目的正典段兩邊不同。**空 list 是「查過了,沒漂」** ——
         # 沒有這個欄位的話,「守衛沒說話」與「守衛根本沒跑」在退出碼上長得一樣。
         self.canon_drift = []
@@ -111,10 +116,10 @@ def file_hash(path):
 
 def _write_bytes(path, raw):
     """抽成函式是為了讓「寫了但內容不對」可以被測試注入 ——
-    沒有那條測試的話,寫完重驗只是一個永遠為真的旗標。"""
-    d = os.path.dirname(path)
-    if d and not os.path.isdir(d):
-        os.makedirs(d)
+    沒有那條測試的話,寫完重驗只是一個永遠為真的旗標。
+
+    **不建父目錄**(票 125):父目錄只能照凍結時推導的安全集合建
+    (`_make_parents`),不得在寫入當下從路徑重算。"""
     with io.open(path, "wb") as f:
         f.write(raw)
 
@@ -287,22 +292,188 @@ def gitlink_unsettled(target):
 
 
 def refuse_if_dirty(target):
-    """外層樹必須乾淨。**內嵌 repo 的內部狀態不算**(見 `gitlink_unsettled`)。"""
-    out = subprocess.run(["git", "status", "--porcelain",
-                          "--ignore-submodules=all"],
-                         cwd=target, capture_output=True)
-    if out.returncode != 0:
-        raise Refused("問不到 %s 的工作樹狀態" % target)
-    dirty = [l for l in out.stdout.decode("utf-8", "replace").splitlines()
-             if l.strip()]
-    dirty += gitlink_unsettled(target)
-    if dirty:
+    """**票 125 裁決 C 之後只剩 gitlink 的全域檢查。** 名稱與單參數簽名照舊。
+
+    原本這裡跑一次整樹 `git status`,問「外層工作樹乾不乾淨」。那個問法兩頭都錯:
+
+      - 太寬:計畫外的髒(下游追蹤的站牌、未追蹤的筆記)也擋,下游永遠收不到修補;
+        而且整樹含 untracked 的掃描在 OneDrive 型工作區上跑不完(實測逾時、零輸出)
+        —— 判準對也沒用,它走不到判準。
+      - 太窄:被 ignore 的同名檔、讀不到的檔、符號連結底下的路徑,git status 看不見。
+
+    逐條路徑的判定改由 `freeze_plan` 對**本次寫入計畫**做。這裡只留裁決第四點的
+    全域那一半:已 stage 未提交的 gitlink 版本、讀不到的內嵌 repo(票 42 三態,
+    見 `gitlink_unsettled`)。**本函式不跑 `git status`,不掃 untracked。**
+    """
+    unsettled = gitlink_unsettled(target)
+    if unsettled:
         raise Refused(
-            "目標**外層**工作樹不乾淨(%d 項),先清乾淨再更新 —— "
+            "目標的 gitlink 狀態不乾淨(%d 項),先落定再更新 —— "
             "在未提交的變更上覆寫,出事時分不出是誰改的。\n"
             "     (內嵌 repo 的內部 modified / untracked **不算** ——\n"
             "      那在 sync 的寫入面之外,sync 從不寫它底下的東西。)\n  %s"
-            % (len(dirty), "\n  ".join(dirty[:10])))
+            % (len(unsettled), "\n  ".join(unsettled[:10])))
+
+
+# ── 票 125 裁決 C:寫入計畫先算、凍結,再逐條判定 ──────────────────────────
+#
+# 兩層:
+#   1. 凍結檔案計畫:只記真正的檔案動作(create / overwrite / append / rewrite)。
+#   2. 父目錄安全集合:計畫裡每條路徑在 target 底下的整條父目錄鏈,寫入前一次推導。
+# 檔案與父目錄**全部**通過才開始寫。寫入時只照計畫寫檔;mkdir 只建集合裡
+# 「檢查時確認不存在」的那幾層,不在寫入當下從路徑重算。
+#
+# 逐條細則(任一不成立 ⇒ Refused):
+#   一、路徑與每一層父目錄都不是符號連結,realpath 仍在 target 底下;
+#   二、不落在任何 gitlink 底下;
+#   三、每一層名稱與該層目錄實際列出的名稱逐字相同(大小寫碰撞 ⇒ 擋);
+#   四、存在 ⇒ 追蹤中、worktree = index = HEAD、讀得到;
+#       `.dev/provenance.jsonl` 只免「已有未提交內容」這一項,其餘照判(裁決第三點);
+#   五、不存在 ⇒ 未追蹤(追蹤中而不存在 = 本地刪除 ⇒ 擋)。
+# regenerate 的 CLAUDE.md 走同一套、沒有豁免 —— 界線外的本地改動也擋(裁決第二點)。
+#
+# **讀檔一律經由本模組的 `io`(`io.open`)。** 那是測試注入「讀不到」的位置;
+# 換成 `open` / `os.open` / pathlib / `git hash-object`,注入就打不到,
+# 「讀不到當成不存在」那一格會失去守衛而沒有任何東西說話。
+
+DIRTY_EXEMPT = (PROVENANCE,)
+_CHUNK = 100
+
+
+def _abs(target, rel):
+    return os.path.join(target, rel.replace("/", os.sep)) if rel else target
+
+
+def _git_z(target, args, rels):
+    """對 `rels` 逐批帶 literal pathspec 問 git,回 NUL 切開的路徑集合。
+
+    **一律帶 pathspec** —— 不帶的話又回到整樹掃描。`rels` 為空就不問。
+    `GIT_OPTIONAL_LOCKS=0`:查詢不順手改寫 `.git/index`。
+    """
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
+    got = set()
+    for i in range(0, len(rels), _CHUNK):
+        specs = [":(literal)" + r for r in rels[i:i + _CHUNK]]
+        out = subprocess.run(["git", "-C", target] + list(args) + ["--"] + specs,
+                             capture_output=True, env=env)
+        if out.returncode != 0:
+            raise Refused("問不到 %s 的 git 狀態,無法判定寫入計畫乾不乾淨:%s"
+                          % (target, out.stderr.decode("utf-8", "replace").strip()))
+        got.update(p for p in out.stdout.decode("utf-8", "replace").split("\0") if p)
+    return got
+
+
+def _parent_dirs(rel):
+    """`a/b/c.py` -> ("a", "a/b"),由淺到深。"""
+    parts = rel.split("/")[:-1]
+    return tuple("/".join(parts[:i]) for i in range(1, len(parts) + 1))
+
+
+def _location_refusal(target, real_root, rel, links):
+    """第一、二、三項。檔案與父目錄共用。回 None 表示通過。"""
+    for g in links:
+        if rel == g or rel.startswith(g + "/"):
+            return "落在 gitlink %s 底下" % g
+    p = _abs(target, rel)
+    if os.path.islink(p):
+        return "是符號連結"
+    real = os.path.normcase(os.path.realpath(p))
+    root = os.path.normcase(real_root)
+    if real != root and not real.startswith(root.rstrip(os.sep) + os.sep):
+        return "realpath 落在目標之外"
+    parent, _, name = rel.rpartition("/")
+    pd = _abs(target, parent)
+    if not os.path.isdir(pd):
+        return None              # 父層待建,底下不可能有同名項
+    try:
+        names = os.listdir(pd)
+    except Exception as e:
+        return "列不出 %s 的內容(%s)" % (parent or ".", e)
+    if name not in names:
+        clash = sorted(n for n in names if n.casefold() == name.casefold())
+        if clash:
+            return "大小寫碰撞:實際存在的是 %s" % "、".join(clash)
+    return None
+
+
+def freeze_plan(target, entries):
+    """`entries` = [(rel, 動作), ...]。全部通過才回凍結計畫,否則 Refused,一個檔都不寫。
+
+    回 [(rel, 動作, 要先建的父目錄), ...]。第三欄取自父目錄安全集合裡
+    「檢查時確認不存在」的那幾層,寫入時照它建(`_make_parents`)。
+    """
+    links = gitlink_paths(target)
+    real_root = os.path.realpath(target)
+    rels = [rel for rel, _ in entries]
+    parents = dict((rel, _parent_dirs(rel)) for rel in rels)
+    safe = sorted(set(d for ds in parents.values() for d in ds),
+                  key=lambda d: (d.count("/"), d))
+    bad, missing = [], set()
+
+    for d in safe:
+        why = _location_refusal(target, real_root, d, links)
+        p = _abs(target, d)
+        if why is None and os.path.lexists(p):
+            if not os.path.isdir(p):
+                why = "存在但不是目錄"
+            else:
+                try:
+                    os.listdir(p)
+                except Exception as e:
+                    why = "列不出內容(%s)" % e
+        elif why is None:
+            missing.add(d)
+        if why:
+            bad.append("%s/(父目錄):%s" % (d, why))
+
+    located = []
+    for rel in rels:
+        why = _location_refusal(target, real_root, rel, links)
+        if why:
+            bad.append("%s:%s" % (rel, why))
+        else:
+            located.append(rel)
+
+    # 只對位置合格的路徑問 git —— 落在 gitlink 底下的 pathspec 會讓 git 自己報錯,
+    # 那會把「為什麼擋」換成一句不相干的訊息。
+    present = [rel for rel in located if os.path.lexists(_abs(target, rel))]
+    tracked_set = _git_z(target, ["ls-files", "-z"], located)
+    dirty = (_git_z(target, ["diff", "--name-only", "-z"], present)
+             | _git_z(target, ["diff", "--cached", "--name-only", "-z"], present))
+
+    for rel in located:
+        why = None
+        if rel in present:
+            if rel not in tracked_set:
+                why = "存在但未追蹤(被 ignore 或未納入版控)—— git status 看不見不等於不存在"
+            elif rel in dirty and rel not in DIRTY_EXEMPT:
+                why = "有未提交的變更(worktree / index / HEAD 不一致)"
+            else:
+                try:
+                    with io.open(_abs(target, rel), "rb") as f:
+                        f.read()
+                except Exception as e:
+                    why = "讀不到(%s)—— 讀不到不等於不存在" % e
+        elif rel in tracked_set:
+            why = "追蹤中但磁碟上不在 —— 那是未提交的本地刪除,不是新檔"
+        if why:
+            bad.append("%s:%s" % (rel, why))
+
+    if bad:
+        raise Refused(
+            "寫入計畫裡有 %d 項不是可安全寫入的乾淨狀態,一個檔都沒寫:\n  %s\n"
+            "     只問這次真的要寫的那些路徑;計畫外的髒不擋(票 125 裁決 C)。"
+            % (len(bad), "\n  ".join(bad)))
+    return [(rel, act, tuple(d for d in parents[rel] if d in missing))
+            for rel, act in entries]
+
+
+def _make_parents(target, dirs):
+    """只建凍結時確認不存在的那幾層 —— 由淺到深,一層一個 `os.mkdir`。"""
+    for d in dirs:
+        p = _abs(target, d)
+        if not os.path.isdir(p):
+            os.mkdir(p)
 
 
 def _headings(path):
@@ -446,13 +617,17 @@ def regenerate_canon(src, target):
     """
     src, target = os.path.abspath(src), os.path.abspath(target)
     refuse_if_dirty(target)
+    for rel in sorted(HYBRID):
+        if not os.path.exists(os.path.join(target, rel.replace("/", os.sep))):
+            raise Refused("目標沒有 %s —— 沒有東西可以重新產生。" % rel)
+    # 票 125 裁決第二點:寫入計畫就是 HYBRID 檔,任何本地改動(含界線外)都擋。
+    frozen = freeze_plan(target, [(rel, "rewrite") for rel in sorted(HYBRID)])
 
     done = []
-    for rel, (extract, label) in sorted(HYBRID.items()):
+    for rel, _act, _dirs in frozen:
+        extract, label = HYBRID[rel]
         sp = os.path.join(src, rel.replace("/", os.sep))
         tp = os.path.join(target, rel.replace("/", os.sep))
-        if not os.path.exists(tp):
-            raise Refused("目標沒有 %s —— 沒有東西可以重新產生。" % rel)
         with io.open(sp, "rb") as f:
             s = f.read().decode("utf-8")
         with io.open(tp, "rb") as f:
@@ -553,7 +728,7 @@ def certify(src, target):
     return write_provenance(src, target, rels, head_commit(src))
 
 
-def write_provenance(src, target, rels, commit):
+def write_provenance(src, target, rels, commit, prepare=None):
     """替同步進來的檔案產 provenance:上游 commit + 路徑。
 
     下游的 R3 據此改判「與上游一致 ⇒ 紅燈責任在上游」——
@@ -583,9 +758,13 @@ def write_provenance(src, target, rels, commit):
     if not out:
         return []
     p = os.path.join(target, PROVENANCE.replace("/", os.sep))
-    d = os.path.dirname(p)
-    if d and not os.path.isdir(d):
-        os.makedirs(d)
+    if prepare is not None:
+        # `update --apply`:父目錄照凍結計畫建(票 125)。`certify` 不帶,行為照舊。
+        prepare()
+    else:
+        d = os.path.dirname(p)
+        if d and not os.path.isdir(d):
+            os.makedirs(d)
     with io.open(p, "a", encoding="utf-8", newline="\n") as f:
         for rec in out:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -634,31 +813,19 @@ def update(src, target, apply=False):
             plan.untouched[rel] = file_hash(
                 os.path.join(target, rel.replace("/", os.sep)))
 
-    for rel in sorted(tracked(src)):
-        mark = mark_for(rel, marks)
-        if mark != "copy":
-            # `ask` 桶:不自動搬,但兩邊不一樣就要說出來。
-            if mark == "ask":
-                sp = os.path.join(src, rel.replace("/", os.sep))
-                tp = os.path.join(target, rel.replace("/", os.sep))
-                if file_hash(sp) != file_hash(tp):
-                    plan.needs_decision.append(rel)
-            continue
-        sp = os.path.join(src, rel.replace("/", os.sep))
-        tp = os.path.join(target, rel.replace("/", os.sep))
-        sh, th = file_hash(sp), file_hash(tp)
-        if th is None:
-            plan.added.append(rel)
-        elif sh != th:
-            plan.changed.append(rel)
-        else:
-            continue
-        if apply:
-            with io.open(sp, "rb") as f:
-                _write_bytes(tp, f.read())
-
+    entries = write_plan(src, target, marks, plan)
     if not apply:
         return plan
+
+    # 先判定、後寫:計畫裡任何一條不乾淨就整批不寫。寫入迴圈**只照凍結的計畫**,
+    # 不再重算 changed / added(票 125 裁決 C)。
+    frozen = freeze_plan(target, entries)
+    for rel, act, dirs in frozen:
+        if act == "append":
+            continue                       # provenance 在重驗之後才寫,見下
+        _make_parents(target, dirs)
+        with io.open(os.path.join(src, rel.replace("/", os.sep)), "rb") as f:
+            _write_bytes(os.path.join(target, rel.replace("/", os.sep)), f.read())
 
     # 寫完重驗 —— 宣稱寫對了不算數
     bad = [rel for rel in plan.changed + plan.added
@@ -678,10 +845,44 @@ def update(src, target, apply=False):
     #
     # 發給**所有與上游一致的 copy 檔**,不只這輪寫過的:判準是
     # 「它與上游一致」,不是「我寫了它」(票 19)。
-    write_provenance(src, target, identical_copy_files(src, target, marks),
-                     head_commit(src))
+    prov_dirs = [dirs for rel, act, dirs in frozen if rel == PROVENANCE][0]
+    plan.appended = write_provenance(
+        src, target, identical_copy_files(src, target, marks), head_commit(src),
+        prepare=lambda: _make_parents(target, prov_dirs))
     plan.verified = True
     return plan
+
+
+def write_plan(src, target, marks, plan):
+    """**不寫任何東西。** 算出本次的寫入計畫,dry-run 與 `--apply` 共用這一份(票 125)。
+
+    回 [(rel, 動作), ...]:copy 桶的 changed(overwrite)/ added(create),判法照舊
+    (`file_hash` 兩邊不同),再加上 `--apply` 會追加的 `.dev/provenance.jsonl`(append)。
+    `ask` 桶照舊只進 `needs_decision`,不進計畫。
+    """
+    entries = []
+    for rel in sorted(tracked(src)):
+        mark = mark_for(rel, marks)
+        if mark != "copy":
+            # `ask` 桶:不自動搬,但兩邊不一樣就要說出來。
+            if mark == "ask":
+                sp = os.path.join(src, rel.replace("/", os.sep))
+                tp = os.path.join(target, rel.replace("/", os.sep))
+                if file_hash(sp) != file_hash(tp):
+                    plan.needs_decision.append(rel)
+            continue
+        sp = os.path.join(src, rel.replace("/", os.sep))
+        tp = os.path.join(target, rel.replace("/", os.sep))
+        sh, th = file_hash(sp), file_hash(tp)
+        if th is None:
+            plan.added.append(rel)
+            entries.append((rel, "create"))
+        elif sh != th:
+            plan.changed.append(rel)
+            entries.append((rel, "overwrite"))
+    entries.append((PROVENANCE, "append"))
+    plan.writes = list(entries)
+    return entries
 
 
 def main(argv):
@@ -735,6 +936,9 @@ def main(argv):
         out.append(u"  M %s" % rel)
     for rel in plan.added:
         out.append(u"  + %s" % rel)
+    # provenance 也在寫入計畫裡(票 125),要列出來 —— 不列的話它是一個看不見的寫入
+    out.append(u"  >> %s(%s)" % (PROVENANCE, u"已追加 %d 筆" % len(plan.appended)
+                                  if plan.verified else u"將追加"))
     for rel in plan.needs_decision:
         out.append(u"  ? %s(ask 桶:兩邊不同,不自動搬,要人決定帶哪些)" % rel)
     out.append(u"")
