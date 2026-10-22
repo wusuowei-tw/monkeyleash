@@ -1,6 +1,6 @@
 # 159 — find_implementation 誤入任意名稱的虛擬環境
 
-**狀態**：**159-b 實作完成（本機），待獨立審查。**
+**狀態**：**已收（Jeff 2026-10-22 約 08:16（美東））。** 已推送 bc1e516，CI 綠燈（Jeff 約 08:06 目視）；獨立審查 APPROVE WITH NOTES。
 **立案**：2026-10-21（美東）。建檔前以 Glob `docs/tickets/framework-updates/159-*` 確認無命中。
 **性質**：小票 —— `redlight.find_implementation` 跳過判準的修正（只動一個函式的跳過邏輯）。
 **交叉引用**：`F-167`（`docs/agents/friction-log.md`）；票 156 D-1；`F-021`。
@@ -68,8 +68,19 @@ Jeff 2026-10-21 約 19:55（美東）決定（裁決助手記錄，非逐字原�
 3. 獨立審查通過。
 4. push 後 CI 綠，由 Jeff 目視。
 
-## 八、修正紀錄
+## 八、待辦（獨立審查 159-R1 留下，皆 note）
+
+- N1（移到票 160）：find_implementation 回 None 時紅燈紀錄寫成 impl_exists=false，R3 的 Python 路徑看到它會略過 HEAD 雜湊比對；被排除的目錄若其實是自己的碼，R3 對它們放寬。
+- N2：缺一條「repo 根本身有 pyvenv.cfg 時，根目錄不被剪掉」的對照測試。
+- N3：測試 ① 的 docstring 與 _SEARCH_SKIP 新註解「本集合只收工具決定、名字固定的目錄」照字面已不精確。
+- N4：PYVENV.CFG 大寫在 Windows 會跳過、在 POSIX 不會；實務機率極低。
+- N5：沒有 pyvenv.cfg 的環境（conda、根 venv 的 Scripts/、bin/）仍會錯誤命中，屬 F-167 同族。
+
+## 九、修正紀錄
 
 - 2026-10-21（美東）：立案；159-a 紅燈測試（錨點 159-a）。
 - 2026-10-21（美東）：159-a 同一 session 並行一次（步驟 8 一則訊息送出 5 個唯讀呼叫：兩次 git diff 導向 scratchpad、兩次 Read、一次 git diff），Jeff 約 21:16 接受，由原 session 完成本機提交；紅燈結果在並行前已記錄，未重跑。
 - 2026-10-21（美東）：159-b 實作（錨點 159-b）：_SEARCH_SKIP 加 site-packages；find_implementation 另跳過含 pyvenv.cfg 的目錄。紅轉綠，全套通過。gate.py、NON_SOURCE_DIRS、_H2_SKIP_DIRS 未改。
+- 2026-10-22（美東）：獨立審查 159-R1，APPROVE WITH NOTES（N1–N5 皆 note）。
+- 2026-10-22（美東）：159-P1 推送 bc1e516。推送時 git diff --check 與 git push 在同一則送出，push 沒有等待 --check 的結果（事後為空）；這是一次真實的程序違規。遠端 SHA 由裁決助手（筆電這一側的 Claude，於其雲端工作環境）以 git ls-remote 另行確認，CI 由 Jeff 目視綠燈，不回滾、不重推。
+- 2026-10-22（美東）：收票（Jeff 約 08:16）。N1 移至票 160。

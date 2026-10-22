@@ -145,6 +145,7 @@
 - install.py 的 precheck 不拒絕「目標 repo = 本 repo」，可能覆寫本 repo 站牌（C0-R0 步驟 3 發現）；是否納入 158 待裁。
 - ADR 編號（F- 前綴）與 friction 編號在 CLAUDE.md 正典段相撞：test_claude_md 把正典段任何 F-數字都當 friction 引用。C0-2b′ 暫以 R11 那一列不寫 ADR 編號、改指向 RULE_DIVERGENCE 宣告避開（裁決助手依既有授權，2026-10-21）。要不要改發號規則或測試，待裁。
 - 待開票：補 R7 寫入動詞表（PowerShell 短別名 sc／ac／ni／ri 等、.NET [IO.File]::Write*、ln、rsync、curl -o、wget -O、tar -x、unzip、patch）。別名清單須以 Get-Alias 實際列舉，不憑記憶（C0-3 裁定 C）。
+- 站牌不合格時，redlight 的警告在一次全套測試中會重複約 56 行（每個測試檔一行，再加 session 一行）；Jeff 2026-10-21 約 20:30（美東）決定先不處理，記為待辦。
 
 ## 八、相關
 
@@ -176,3 +177,5 @@
 - 2026-10-21（美東）：記錄 C0-1c 裁定；C0-1c-a redlight 讀取端紅燈測試（錨點 C0-1c-a）。
 - 2026-10-21（美東）：C0-1c-a 同一 session 並行一次（步驟 5 改票面〈四〉與〈七〉的兩個 Edit 同時送出，兩者都成功），Jeff 約 19:45 接受，由原 session 完成本機提交；紅燈結果在並行前已記錄，未重跑。
 - 2026-10-21（美東）：C0-1c redlight 讀取端實作（錨點 C0-1c-b）：新增純函式 stage_card_ticket（格式規則同 gate.load_stage，不判值域），三支讀取端改走它；A 組記 null 並以 stderr 警告，B 組不變，測試照跑。紅轉綠，全套通過。gate.py 未改。
+- 2026-10-21（美東）：C0-1c-P1 推送時同一 session 並行一次（git rev-parse origin/master 與 Write 腳本同一則送出），依規定停下、未推；Jeff 約 20:50 決定同 session 從頭重做（P1b），推送 78c3a14，CI 綠燈（Jeff 約 20:55 目視）。
+- 2026-10-22（美東）：C0（站牌寫入守衛＋格式與值域檢查）四個子項 C0-1、C0-1c、C0-2、C0-3 都已推送。已知殘留照〈二〉C0-3 裁定，不得宣稱站牌已上鎖。
