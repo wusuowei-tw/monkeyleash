@@ -86,6 +86,10 @@ ONLY_IN_REDLIGHT = {
         "`gate.py:1310` TICKET_DIRS 含 `.scratch/%s/issues`、"
         "`gate.py:986-987` R7 的官方出口指向 `.scratch/<feature>/`。"
         "redlight 跳過它是因為反查實作不該走進暫存區。",
+    "site-packages":
+        "票 159:redlight 反查實作不該走進第三方套件目錄。gate 不需要它 —— "
+        "is_source_path 問的是會不會被執行,與反查範圍無關;本票裁決不動 NON_SOURCE_DIRS。"
+        "pyvenv.cfg 是內容判定,不進這份集合。",
 }
 
 # 兩份都有的那些。**明列,不用長度** —— 長度相等而內容不同時,

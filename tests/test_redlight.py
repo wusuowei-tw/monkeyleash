@@ -5020,3 +5020,58 @@ class TestT158C01cFormatParityWithGate:
         assert rl_bad == gate_bad, (num, "redlight", rl_bad, "gate", gate_bad)
         if num == "13":
             assert rl_bad is False and gate_bad is False, (rl_bad, gate_bad)
+
+
+def _t159_write(root, rel, text="x = 1\n"):
+    p = root.joinpath(*rel.split("/"))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def _t159_venv_research(root):
+    """① 那一份 venv:名字不在 `_SEARCH_SKIP`,只有 `pyvenv.cfg` 說得出它是 venv。"""
+    _t159_write(root, ".venv-research/pyvenv.cfg", "home = x\n")
+    _t159_write(root, ".venv-research/Lib/site-packages/yfinance/domain/market.py")
+
+
+class TestT159FindImplementationSkipsArbitraryVenvs:
+    """票 159 —— 反查實作不得走進**任意名稱**的 venv,也不得走進 `site-packages`。
+
+    票 156 D-1 只把 `.venv-gates` 一個名字加進 `_SEARCH_SKIP`;某下游研究 repo 的
+    `.venv-research` 不在清單裡,`find_implementation` 走進去取到第三方套件的同名檔(`F-167`)。
+    判準看**內容**(`pyvenv.cfg`)不看名字(`F-021`)。
+    """
+
+    def test_t159_1_a_venv_named_outside_the_list_is_skipped(self, tmp_path, monkeypatch):
+        """① venv 只有它的副本 ⇒ None。"""
+        monkeypatch.setattr(redlight, "ROOT", str(tmp_path))
+        _t159_venv_research(tmp_path)
+        assert redlight.find_implementation("tests/test_market.py") is None
+
+    def test_t159_2_pyvenv_cfg_alone_marks_the_venv(self, tmp_path, monkeypatch):
+        """② 路徑不經過 `site-packages` ⇒ 只有 `pyvenv.cfg` 那條判準能讓它回 None。"""
+        monkeypatch.setattr(redlight, "ROOT", str(tmp_path))
+        _t159_write(tmp_path, "env/pyvenv.cfg", "home = x\n")
+        _t159_write(tmp_path, "env/lib/other/market.py")
+        assert redlight.find_implementation("tests/test_market.py") is None
+
+    def test_t159_3_site_packages_alone_is_skipped(self, tmp_path, monkeypatch):
+        """③ 沒有任何 `pyvenv.cfg` ⇒ 只有 `site-packages` 那條判準能讓它回 None。"""
+        monkeypatch.setattr(redlight, "ROOT", str(tmp_path))
+        _t159_write(tmp_path, "vendor/site-packages/x/market.py")
+        assert redlight.find_implementation("tests/test_market.py") is None
+
+    def test_t159_4_the_project_file_wins_over_a_venv_copy(self, tmp_path, monkeypatch):
+        """④ 診斷:兩份都在 ⇒ 回專案那一份。⚠ 現況下結果取決於 `os.walk` 的走訪順序,
+        **不能拿它當紅燈證據**;實作後必須綠。"""
+        monkeypatch.setattr(redlight, "ROOT", str(tmp_path))
+        _t159_write(tmp_path, "src/market.py")
+        _t159_venv_research(tmp_path)
+        assert redlight.find_implementation("tests/test_market.py") == "src/market.py"
+
+    def test_t159_5_a_plain_directory_is_still_searched(self, tmp_path, monkeypatch):
+        """⑤ 反控:沒有 `pyvenv.cfg` 的普通目錄照找 —— 新判準不得把 None 擴大到真實作。"""
+        monkeypatch.setattr(redlight, "ROOT", str(tmp_path))
+        _t159_write(tmp_path, "tools/market.py")
+        assert redlight.find_implementation("tests/test_market.py") == "tools/market.py"
