@@ -459,9 +459,15 @@ class TestDirtinessIsAboutTheOuterTree:
             sync.update(str(src), str(dst), apply=True)
 
     def test_outer_dirt_still_blocks(self, embedded):
-        """**負控**:外層髒照樣拒絕。少了它,「一律放行」也會讓上面幾條過。"""
+        """**負控**:外層髒照樣拒絕。少了它,「一律放行」也會讓上面幾條過。
+
+        票 125 裁定:只有寫入計畫內的髒才擋 —— 所以外層髒的是要被更新的那支 copy 檔,
+        內嵌 repo 同時也髒著:內部髒放行由 `test_internal_dirt_does_not_block` 證明,
+        這條證明它旁邊的外層計畫內髒仍擋。
+        """
         src, dst, inner = embedded
-        _w(dst, "untracked_outer.txt", "x\n")
+        _w(inner, "collect.py", "x = 2\n")
+        _w(dst, ".claude/hooks/gate.py", "# 下游本地改過\nx = 1\n")
         with pytest.raises(sync.Refused):
             sync.update(str(src), str(dst), apply=True)
 
@@ -841,9 +847,12 @@ class TestDryRunIsTheDefault:
 class TestItRefusesRatherThanGuesses:
 
     def test_a_dirty_target_is_refused(self, pair):
-        """與 install.py 同規矩:髒工作樹上覆寫,出事時分不出是誰改的。"""
+        """與 install.py 同規矩:髒工作樹上覆寫,出事時分不出是誰改的。
+
+        票 125 裁定:只有寫入計畫內的髒才擋 —— 所以髒的是要被更新的那支 copy 檔。
+        """
         src, dst = pair
-        _w(dst, "untracked_change.txt", "x")
+        _w(dst, ".claude/hooks/gate.py", "# 下游本地改過\nx = 1\n")
         with pytest.raises(sync.Refused):
             sync.update(str(src), str(dst), apply=True)
 
@@ -1134,3 +1143,305 @@ class TestCanonSectionDrift:
             assert sync.mark_for(rel, marks) == "generate", (
                 "`HYBRID` 收了 %s,而標記表把它標成 %s —— "
                 "混血分支只對 `generate` 桶有意義" % (rel, sync.mark_for(rel, marks)))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 票 125 —— 逐檔判定寫入計畫(裁決 C)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 原本問的是「整棵樹髒不髒」,而那個問法在兩個方向都錯:
+#   - 太寬:計畫外的髒(下游追蹤站牌、未追蹤的筆記)也擋,下游永遠收不到修補;
+#     整樹含 untracked 的 `git status` 在 OneDrive 型工作區上跑不完。
+#   - 太窄:被 ignore 的同名檔、讀不到的檔、符號連結底下的路徑,git status 看不見,
+#     sync 照樣覆寫。
+# 規則改成:**只問寫入計畫裡的每一條路徑**,而每一條都要是
+# 「磁碟上不存在、也未追蹤」或「追蹤中,且 worktree = index = HEAD」。
+#
+# 斷言一律是行為:被拒(`Refused`)且位元組不變,或成功且寫入正確。
+
+def _b(root, rel):
+    return io.open(root / rel, "rb").read()
+
+
+def _commit(root, msg):
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", msg)
+
+
+def _must_pass(fn, *a, **kw):
+    """成功是本條的主張 —— 被拒時把拒絕訊息變成斷言失敗,而不是一個外漏的例外。"""
+    try:
+        return fn(*a, **kw)
+    except sync.Refused as e:
+        pytest.fail("不該被拒:%s" % e)
+
+
+class _DenyRead(object):
+    """代替 `sync` 模組看到的 `io`:讀某一條路徑時丟 `PermissionError`,其餘照常。
+
+    不真的改權限 —— Windows 上的唯讀屬性與 POSIX 的權限位元語意不同,
+    而這裡要釘的是「讀不到」這個結果,不是哪一種讀不到。
+    """
+
+    def __init__(self, deny):
+        self._deny = os.path.normcase(os.path.abspath(str(deny)))
+
+    def open(self, path, mode="r", *a, **kw):
+        reading = not any(c in mode for c in "wax+")
+        if reading and os.path.normcase(os.path.abspath(str(path))) == self._deny:
+            raise PermissionError(13, "測試注入:讀不到", str(path))
+        return io.open(path, mode, *a, **kw)
+
+    def __getattr__(self, name):
+        return getattr(io, name)
+
+
+def _case_insensitive(tmp_path):
+    """**實際探測**,不看平台名稱:建一個小寫檔,問大寫名字在不在。"""
+    probe = tmp_path / "case_probe_a.txt"
+    probe.write_bytes(b"x")
+    try:
+        return (tmp_path / "CASE_PROBE_A.TXT").exists()
+    finally:
+        probe.unlink()
+
+
+def _symlink_or_skip(link, target, is_dir):
+    try:
+        os.symlink(str(target), str(link), target_is_directory=is_dir)
+    except (OSError, NotImplementedError, AttributeError) as e:
+        pytest.skip("這個平台/權限建不了符號連結(%s)—— 本條驗不到,不是通過" % e)
+
+
+def _is_full_status(cmd):
+    """這一次呼叫是不是「整樹、含 untracked」的 `git status`。"""
+    if not isinstance(cmd, (list, tuple)) or not cmd:
+        return False
+    if os.path.basename(str(cmd[0])).lower() not in ("git", "git.exe"):
+        return False
+    args = [str(x) for x in cmd[1:]]
+    if "status" not in args:
+        return False
+    rest = args[args.index("status") + 1:]
+    has_pathspec = False
+    for i, a in enumerate(rest):
+        if a == "--":
+            has_pathspec = i < len(rest) - 1
+            break
+        if not a.startswith("-"):
+            has_pathspec = True
+            break
+    no_untracked = any(a in ("-uno", "--untracked-files=no") for a in rest)
+    return not has_pathspec and not no_untracked
+
+
+class TestT125OnlyTheWritePlanDecides:
+
+    GATE = ".claude/hooks/gate.py"
+
+    # ── 計畫外:不論髒不髒都不擋 ─────────────────────────────────────
+
+    def test_t125_01_untracked_outside_the_plan_does_not_block(self, pair):
+        src, dst = pair
+        _w(dst, "untracked_change.txt", "x")
+        _must_pass(sync.update, str(src), str(dst), apply=True)
+        assert _b(dst, self.GATE) == _b(src, self.GATE)
+        assert _b(dst, ".claude/hooks/newfile.py") == _b(src, ".claude/hooks/newfile.py")
+
+    def test_t125_02_a_modified_tracked_station_sign_does_not_block(self, pair):
+        """觸發來源的形狀:下游追蹤 `.dev/pipeline.json`,整樹永遠髒。"""
+        src, dst = pair
+        _w(dst, ".dev/pipeline.json", '{"current_stage": "implement"}\n')
+        _commit(dst, "track sign")
+        _w(dst, ".dev/pipeline.json", '{"current_stage": "review"}\n')
+        _must_pass(sync.update, str(src), str(dst), apply=True)
+        assert _b(dst, self.GATE) == _b(src, self.GATE)
+
+    def test_t125_03_non_ascii_names_outside_the_plan_do_not_block(self, pair):
+        """git 預設會把非 ASCII 路徑加引號跳脫 —— 計畫外的那些不得因此被誤判進來。"""
+        src, dst = pair
+        _w(dst, "資料/說明.md", "原本\n")
+        _commit(dst, "中文檔名")
+        _w(dst, "資料/說明.md", "本地改過\n")
+        _w(dst, "筆記/草稿.md", "未追蹤\n")
+        _must_pass(sync.update, str(src), str(dst), apply=True)
+        assert _b(dst, self.GATE) == _b(src, self.GATE)
+
+    # ── 計畫內:髒就擋,位元組不變 ───────────────────────────────────
+
+    def test_t125_04_a_locally_modified_planned_file_blocks(self, pair):
+        src, dst = pair
+        _w(dst, self.GATE, "# 下游本地改過\nx = 1\n")
+        before = _b(dst, self.GATE)
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=True)
+        assert _b(dst, self.GATE) == before
+
+    def test_t125_05_a_staged_planned_file_blocks(self, pair):
+        src, dst = pair
+        _w(dst, self.GATE, "# 下游已 stage\nx = 1\n")
+        _git(dst, "add", self.GATE)
+        before = _b(dst, self.GATE)
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=True)
+        assert _b(dst, self.GATE) == before
+
+    def test_t125_06_a_locally_deleted_tracked_file_is_not_written_back(self, pair):
+        """磁碟上不在,但**追蹤中** —— 那是一個未提交的刪除,不是「新檔」。"""
+        src, dst = pair
+        os.remove(str(dst / self.GATE))
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=True)
+        assert not (dst / self.GATE).exists(), "本地刪除被寫回了"
+
+    def test_t125_07_an_ignored_file_on_an_added_path_blocks(self, pair):
+        """git status 看不見被 ignore 的檔 —— 看不見不等於不存在。"""
+        src, dst = pair
+        _w(dst, ".gitignore", ".claude/hooks/newfile.py\n")
+        _commit(dst, "ignore")
+        _w(dst, ".claude/hooks/newfile.py", "# 下游自己的,被 ignore\n")
+        before = _b(dst, ".claude/hooks/newfile.py")
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=True)
+        assert _b(dst, ".claude/hooks/newfile.py") == before
+
+    def test_t125_08_an_unreadable_planned_file_blocks(self, pair, monkeypatch):
+        """讀不到不等於不存在 —— 當成新檔寫下去就是覆寫一個沒看過的東西。"""
+        src, dst = pair
+        before = _b(dst, self.GATE)
+        monkeypatch.setattr(sync, "io", _DenyRead(dst / self.GATE))
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=True)
+        monkeypatch.undo()
+        assert _b(dst, self.GATE) == before, "讀不到的檔被覆寫了"
+
+    @pytest.mark.parametrize("shape", [
+        "a_copy_parent_dir",
+        "b_provenance_file",
+        "b_dev_dir",
+    ])
+    def test_t125_09_a_symlink_on_the_write_path_blocks(self, pair, tmp_path, shape):
+        """符號連結(目標本身或任一層父目錄)會把寫入帶出 repo。
+
+        連結本身**提交進去**,讓 git status 乾淨 —— 這條要釘的是
+        「git 說乾淨,而寫入路徑仍然穿出去」那一格。
+        """
+        src, dst = pair
+        _git(dst, "config", "core.symlinks", "true")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        if shape == "a_copy_parent_dir":
+            _w(src, ".claude/hooks/lib/helper.py", "# 上游新增\n")
+            _commit(src, "lib")
+            _symlink_or_skip(dst / ".claude/hooks/lib", outside, True)
+            landed = outside / "helper.py"
+        elif shape == "b_provenance_file":
+            (dst / ".dev").mkdir()
+            ext = outside / "provenance.jsonl"
+            ext.write_bytes("外部\n".encode("utf-8"))
+            _symlink_or_skip(dst / ".dev/provenance.jsonl", ext, False)
+            landed = ext
+        else:
+            _symlink_or_skip(dst / ".dev", outside, True)
+            landed = outside / "provenance.jsonl"
+        before = landed.read_bytes() if landed.exists() else None
+        _commit(dst, "symlink")
+        status = _git(dst, "status", "--porcelain").stdout
+        assert status == b"", "前提沒成立:連結提交後 git status 仍不乾淨:%r" % status
+
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=True)
+        after = landed.read_bytes() if landed.exists() else None
+        assert after == before, "寫入穿過符號連結落到 repo 外"
+
+    def test_t125_10_a_case_collision_blocks(self, pair, tmp_path):
+        if not _case_insensitive(tmp_path):
+            pytest.skip("探測結果:這個檔案系統大小寫有別 —— 碰撞不存在,本條驗不到")
+        src, dst = pair
+        _w(src, ".claude/hooks/Foo.md", "上游\n")
+        _commit(src, "Foo")
+        _w(dst, ".claude/hooks/foo.md", "下游原本\n")
+        _commit(dst, "foo")
+        _w(dst, ".claude/hooks/foo.md", "下游本地改過\n")
+        before = _b(dst, ".claude/hooks/foo.md")
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=True)
+        assert _b(dst, ".claude/hooks/foo.md") == before
+
+    # ── provenance:已有未提交內容也照追加 ─────────────────────────────
+
+    def test_t125_11_a_dirty_tracked_provenance_is_appended_not_replaced(self, pair):
+        src, dst = pair
+        _w(dst, ".dev/provenance.jsonl", '{"path": "old"}\n')
+        _commit(dst, "track provenance")
+        with io.open(dst / ".dev/provenance.jsonl", "a", encoding="utf-8",
+                     newline="\n") as f:
+            f.write('{"path": "本地未提交"}\n')
+        original = _b(dst, ".dev/provenance.jsonl")
+        _must_pass(sync.update, str(src), str(dst), apply=True)
+        after = _b(dst, ".dev/provenance.jsonl")
+        assert after.startswith(original), "原有內容沒有逐位元組保留"
+        new = [json.loads(l) for l in after[len(original):].decode("utf-8").splitlines()
+               if l.strip()]
+        assert any(r["path"] == self.GATE for r in new), new
+
+    # ── regenerate:CLAUDE.md 任何本地改動都擋 ─────────────────────────
+
+    def test_t125_12_regenerate_blocks_on_a_change_outside_the_markers(self, pair):
+        src, dst = pair
+        drifted = CANON.replace("完全相同", "被下游改過了")
+        _w(dst, "CLAUDE.md", _claude_md(drifted, "台股收盤 13:30。"))
+        _commit(dst, "動正典段")
+        _w(dst, "CLAUDE.md", _claude_md(drifted, "台股收盤 13:30。\n界線外的本地改動。"))
+        before = _b(dst, "CLAUDE.md")
+        with pytest.raises(sync.Refused):
+            sync.regenerate_canon(str(src), str(dst))
+        assert _b(dst, "CLAUDE.md") == before
+
+    # ── 站牌不進寫入計畫 ──────────────────────────────────────────────
+
+    def test_t125_13_the_station_sign_is_never_in_the_plan(self, pair):
+        src, dst = pair
+        _w(dst, ".dev/pipeline.json", '{"current_stage": "implement"}\n')
+        _commit(dst, "track sign")
+        before = _b(dst, ".dev/pipeline.json")
+        _must_pass(sync.update, str(src), str(dst), apply=True)
+        assert _b(dst, ".dev/pipeline.json") == before
+
+    # ── gitlink:維持整樹擋 ───────────────────────────────────────────
+
+    def test_t125_14_a_staged_gitlink_bump_still_blocks_globally(self, pair):
+        src, dst = pair
+        inner = dst / "data_collector"
+        inner.mkdir()
+        for c in ("init -q", "config user.email t@t", "config user.name t"):
+            _git(inner, *c.split())
+        _w(inner, "collect.py", "x = 1\n")
+        _commit(inner, "inner1")
+        _commit(dst, "embed")
+        _w(inner, "collect.py", "x = 2\n")
+        _commit(inner, "inner2")
+        _git(dst, "add", "data_collector")
+        before = _b(dst, self.GATE)
+        with pytest.raises(sync.Refused):
+            sync.update(str(src), str(dst), apply=True)
+        assert _b(dst, self.GATE) == before
+
+    # ── 效能面:不跑整樹含 untracked 的掃描 ───────────────────────────
+
+    def test_t125_15_apply_never_runs_a_full_untracked_status(self, pair, monkeypatch):
+        """OneDrive 型下游上,那個掃描跑不完 —— 判準對也沒用,它走不到判準。"""
+        src, dst = pair
+        seen = []
+        real_run = subprocess.run
+
+        def _spy(*a, **kw):
+            cmd = a[0] if a else kw.get("args")
+            if _is_full_status(cmd):
+                seen.append(list(cmd))
+            return real_run(*a, **kw)
+
+        monkeypatch.setattr(subprocess, "run", _spy)
+        _must_pass(sync.update, str(src), str(dst), apply=True)
+        monkeypatch.undo()
+        assert not seen, "跑了整樹含 untracked 的 git status:%r" % seen
