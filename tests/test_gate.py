@@ -8640,3 +8640,160 @@ class TestT160NotFoundRecordDoesNotUnlockAFileInHead:
         assert gate.redlight_missing("thing", impl_rel=_T160_IMPL,
                                      ticket=_T152_TICKET) is not None, \
             u"全新 repo(HEAD 未誕生)的 not-found 紀錄被放行了"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#
+# **票 158 A-a 紅燈站:本批只有測試,`gate.py` 一個字沒動。**
+# 裁定 A3(Jeff 2026-10-22 約 16:48、16:54 美東;裁決助手記錄,非逐字原話),兩個機制:
+#
+# 一、U3-c 環境前綴(R7 的一部分):指令位置前有 `VAR=value`、`env` 包裝器、
+#    或 PowerShell `$env:X=` 指派 ⇒ 擋,訊息點名變數名。只放行封閉的例外表
+#    `ENV_PREFIX_ALLOWED`:`PYTHONIOENCODING` 只許 `utf-8`、`PYTHONUTF8` 只許 `1`,
+#    每項帶理由與允許值;值必須逐字相等(可帶一對引號)。`MSYS_NO_PATHCONV` 不在表內。
+#    例外只代表「這個前綴不觸發擋」,指令其餘部分照原本流程判。受影子豁免(和 R7 一致)。
+# 二、ADR 0008〈使用登記〉改成機制:R7 走「看不出寫入 ⇒ 放行」那條出口放行一支
+#    直譯器呼叫時,前哨 `mode_hook` 記一筆到攔截帳本,`outcome == "passed-undecidable"`。
+#    **不記完整指令**,只記指紋(既有 `cmd_sha256`)與分類。許可前綴放行的不記;
+#    `check()` 無副作用。帳本在 `.dev/`,agent 寫得動 —— 它是量測,不是證據。
+#
+# 一律在 tmp repo(`_t158_c0_2_world` / `_t152_repo`);攔截帳本指到 tmp。
+# 指令只當字串餵給閘門,一條都不執行。
+
+_T158A_TOOL = "python .claude/portable/x.py"
+_T158A_METERED = "passed-undecidable"
+
+
+def _t158a_ledger(tmp_path, monkeypatch):
+    """攔截帳本指到 tmp。conftest 已 autouse 隔離;這裡明寫,是為了讀回同一個目錄。回目錄。"""
+    d = tmp_path / "intercepts"
+    d.mkdir()
+    monkeypatch.setattr(gate, "INTERCEPT_LOG", str(d / "intercepts.jsonl"))
+    monkeypatch.setattr(gate, "INTERCEPT_SUMMARY", str(d / "intercepts-summary.jsonl"))
+    return d
+
+
+def _t158a_records(ledger_dir):
+    """帳本目錄裡各月檔的紀錄(摘要檔除外)。"""
+    out = []
+    for name in sorted(os.listdir(str(ledger_dir))):
+        if name == "intercepts-summary.jsonl" or not (
+                name.startswith("intercepts-") and name.endswith(".jsonl")):
+            continue
+        for line in io.open(str(ledger_dir / name), encoding="utf-8"):
+            if line.strip():
+                out.append(json.loads(line))
+    return out
+
+
+def _t158a_metered(ledger_dir):
+    return [r for r in _t158a_records(ledger_dir) if r.get("outcome") == _T158A_METERED]
+
+
+def _t158a_assert_blocked(cmd, name):
+    msg = gate.bash_write_violation(cmd)
+    assert msg and "R7" in msg and name in msg, (cmd, msg)
+
+
+class TestT158AEnvPrefixAndUndecidableMeter:
+
+    def test_t158a_01_var_prefix_blocks(self):
+        """#1|必須先紅|現行:前綴讓指令掉出許可清單、又看不出寫入 ⇒ 放行。要求:擋,點名 FOO。"""
+        _t158a_assert_blocked("FOO=1 " + _T158A_TOOL, "FOO")
+
+    def test_t158a_02_env_wrapper_blocks(self):
+        """#2|必須先紅|`env` 包裝器帶指派,同 #1。"""
+        _t158a_assert_blocked("env FOO=1 " + _T158A_TOOL, "FOO")
+
+    def test_t158a_03_powershell_env_assign_blocks(self):
+        """#3|必須先紅|PowerShell `$env:FOO=` 指派在前一段,同 #1。"""
+        _t158a_assert_blocked("$env:FOO=1; " + _T158A_TOOL, "FOO")
+
+    def test_t158a_04_pythonpath_prefix_blocks(self):
+        """#4|必須先紅|前綴改變程式行為的典型:同一支腳本載入別的模組,字串上看不出來。"""
+        _t158a_assert_blocked("PYTHONPATH=.scratch " + _T158A_TOOL, "PYTHONPATH")
+
+    @pytest.mark.parametrize("cmd", [
+        "PYTHONIOENCODING=utf-8 " + _T158A_TOOL,
+        "PYTHONUTF8=1 " + _T158A_TOOL,
+        "PYTHONIOENCODING='utf-8' " + _T158A_TOOL,
+    ], ids=["ioencoding", "utf8", "ioencoding-quoted"])
+    def test_t158a_05_allowed_var_passes(self, cmd):
+        """#5|對照|例外變數＋允許值 ⇒ 放行(現行也放行)。"""
+        assert gate.bash_write_violation(cmd) is None, "例外變數被擋:%r" % cmd
+
+    @pytest.mark.parametrize("cmd,name", [
+        ("PYTHONIOENCODING=latin-1 " + _T158A_TOOL, "PYTHONIOENCODING"),
+        ("PYTHONUTF8=0 " + _T158A_TOOL, "PYTHONUTF8"),
+        ("PYTHONIOENCODING=$(cat x) " + _T158A_TOOL, "PYTHONIOENCODING"),
+        ("PYTHONUTF8=1x " + _T158A_TOOL, "PYTHONUTF8"),
+        ("MSYS_NO_PATHCONV=1 git status", "MSYS_NO_PATHCONV"),
+    ], ids=["ioencoding-latin1", "utf8-zero", "ioencoding-subst", "utf8-suffix", "msys-no-pathconv"])
+    def test_t158a_05b_allowed_name_wrong_value_blocks(self, cmd, name):
+        """#5b|必須先紅|名字在表內但值不逐字相等、或名字不在表內 ⇒ 擋,點名變數。"""
+        _t158a_assert_blocked(cmd, name)
+
+    def test_t158a_06_allowed_var_does_not_launder_redirect(self):
+        """#6|對照|例外不改變其餘判定:重導向目標照樣抽取而被擋(現行也擋)。"""
+        msg = gate.bash_write_violation("PYTHONIOENCODING=utf-8 " + _T158A_TOOL + " > pkg/a")
+        assert msg and "R7" in msg, msg
+
+    def test_t158a_07_exception_table_is_closed_and_reasoned(self):
+        """#7|必須先紅|例外表是封閉集合:恰好兩項,每項是 `{"reason": 非空字串, "values": 允許值}`。"""
+        table = getattr(gate, "ENV_PREFIX_ALLOWED", None)
+        assert table is not None, "gate.ENV_PREFIX_ALLOWED 不存在 —— 例外變數表還沒建"
+        assert set(table) == {"PYTHONIOENCODING", "PYTHONUTF8"}, sorted(table)
+        expected = {"PYTHONIOENCODING": {"utf-8"}, "PYTHONUTF8": {"1"}}
+        for name, entry in table.items():
+            assert str(entry.get("reason") or "").strip(), "例外 %s 沒有理由" % name
+            assert set(entry.get("values") or ()) == expected[name], (name, entry)
+        forbidden = {"PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PATH", "HOME",
+                     "USERPROFILE", "MSYS_NO_PATHCONV"}
+        for name in table:
+            assert name not in forbidden and not name.startswith("GIT_"), name
+
+    def test_t158a_08_undecidable_interpreter_call_is_metered(self, tmp_path, monkeypatch, capsys):
+        """#8|必須先紅|`python .scratch/probe.py` 經前哨放行 ⇒ 帳本新增一筆 `passed-undecidable`;
+        有指紋與直譯器名稱,**任一欄位都不含完整指令裡的路徑**(只准 basename)。"""
+        repo = _t158_c0_2_world(tmp_path, monkeypatch)
+        ledger = _t158a_ledger(tmp_path, monkeypatch)
+        (repo / ".scratch").mkdir()
+        (repo / ".scratch" / "probe.py").write_text(u"print(1)\n", encoding="utf-8")
+        cmd = "python .scratch/probe.py"
+        rc, err, _sh = _t158_c0_3_hook(monkeypatch, capsys, "Bash", cmd)
+        assert rc == 0, (rc, err)
+        metered = _t158a_metered(ledger)
+        assert len(metered) == 1, "帳本沒有恰好一筆 %s:%r" % (_T158A_METERED, _t158a_records(ledger))
+        rec = metered[0]
+        digest = hashlib.sha256(cmd.encode("utf-8")).hexdigest()
+        fp = rec.get("cmd_sha256") or ""
+        assert len(fp) >= 16 and fp[:16] == digest[:16], rec
+        assert "python" in [v for v in rec.values() if isinstance(v, str)], rec
+        leaked = [k for k, v in rec.items()
+                  if ".scratch/probe.py" in json.dumps(v, ensure_ascii=False)]
+        assert not leaked, "帳本記了完整指令路徑:%r" % leaked
+
+    def test_t158a_09_normal_check_call_does_not_meter(self, tmp_path, monkeypatch):
+        """#9|對照|`check()` 是純判定:正常呼叫一次,帳本不新增 `passed-undecidable`。"""
+        root = _t152_repo(tmp_path, monkeypatch)
+        ledger = _t158a_ledger(tmp_path, monkeypatch)
+        _t152_check(root, "README.md", u"t158a\n")
+        assert _t158a_metered(ledger) == [], _t158a_records(ledger)
+
+    def test_t158a_10_allowed_prefix_calls_are_not_metered(self, tmp_path, monkeypatch, capsys):
+        """#10|對照|許可前綴放行的直譯器呼叫不記帳。"""
+        _t158_c0_2_world(tmp_path, monkeypatch)
+        ledger = _t158a_ledger(tmp_path, monkeypatch)
+        rc, err, _sh = _t158_c0_3_hook(monkeypatch, capsys, "Bash", "python -m pytest -q --co")
+        assert rc == 0, (rc, err)
+        assert _t158a_metered(ledger) == [], _t158a_records(ledger)
+
+    def test_t158a_11_shadow_mode_exempts_prefix_block(self, tmp_path, monkeypatch, capsys):
+        """#11|必須先紅|影子模式下環境前綴的擋只記影子帳、rc 0(和 R7 一致)。
+        現行:R7 根本不判它,影子帳本沒有那一筆。"""
+        _t158_c0_2_world(tmp_path, monkeypatch)
+        _t158a_ledger(tmp_path, monkeypatch)
+        rc, err, shadow_logged = _t158_c0_3_hook(
+            monkeypatch, capsys, "Bash", "FOO=1 " + _T158A_TOOL, shadow=True)
+        assert rc == 0, (rc, err)
+        assert any(m.startswith("[R7") and "FOO" in m for m in shadow_logged), shadow_logged
