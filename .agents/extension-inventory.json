@@ -445,7 +445,7 @@
     },
     {
       "path": "skills/<bucket>/manifest.json",
-      "sha256": "dda4c4cae3ed27a965ea58f37a46b1e7f26d0014754e1d5425e95959100679bd",
+      "sha256": "cf00c8ec91cf4f31c65537f57ee345798b3e310dbd8e4f581825c303c4189e06",
       "note": "Jeff 核准 2026-10-08 第六次"
     },
     {
@@ -530,7 +530,7 @@
     },
     {
       "path": "skills/<bucket>/pptx/SKILL.md",
-      "sha256": "d8bf85f2ef187ce78cf1afa0eab0566d8760df158ea99815b84ac8bc813f04ab",
+      "sha256": "710a823f644c0187a88e6d9e8c8385bb646b4844ac28570dbc4e8f9bae013860",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -802,6 +802,11 @@
       "path": "skills/<bucket>/pptx/scripts/office/validators/redlining.py",
       "sha256": "25ff68611a7cfcfe88644fe3cf011438c9e9a544ae39bad3ae740d96d99a9d43",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
+    },
+    {
+      "path": "skills/<bucket>/pptx/scripts/slide_text.py",
+      "sha256": "0deab09d4ae494411ee893f9c69fffc19fe264a6053990a2f066334c0d88d422",
+      "note": "synced 2026-10-26；Jeff 核准 2026-10-26（票 158 A-a-D2 形狀審查，待查 2 項已知）"
     },
     {
       "path": "skills/<bucket>/pptx/scripts/thumbnail.py",
