@@ -3322,3 +3322,72 @@ class TestTicket146StatusLines:
         out = render(root)
         assert u"未記錄（146 判定器不在）" in out, out
         assert u"static surfaces:" not in out, out
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#
+# **票 158 A-a2 紅燈:status 的 intercepts 兩行排除量測紀錄。**
+# 量測(`outcome == "passed-undecidable"`)與攔截寫同一本帳(Jeff 2026-10-26 裁 B)。
+# status 若照筆數全算,「被擋了幾次」與「最近一次攔截」都會被量測灌水 ——
+# 讀的人會以為前哨在擋,其實它在放行。量測另印一行;「最新存在月」指
+# **最近一個含攔截的月份**,全是量測的月份不算。沒有 `outcome` 的舊紀錄照舊當攔截。
+
+_T158A_METERED = u"passed-undecidable"
+
+
+class TestT158AReadersStatus:
+
+    def _write_month(self, root, month, recs):
+        path = pathlib.Path(root) / ".dev" / ("intercepts-%s.jsonl" % month)
+        with io.open(str(path), "w", encoding="utf-8") as f:
+            for r in recs:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    def _intercept(self, ts):
+        return {"ts": ts, "rule": "R7", "at_commit": False, "cmd_verb": "printf"}
+
+    def _metered(self, ts):
+        return {"ts": ts, "rule": "R7", "at_commit": False, "cmd_verb": "python",
+                "outcome": _T158A_METERED}
+
+    def test_t158a_r4_status_current_month_excludes_metered(self, tmp_path):
+        """R4|必須先紅|當月攔截 1 筆＋量測 2 筆 ⇒「intercepts (當月)」印 1 筆,另一行印量測 2 筆。"""
+        import datetime
+        month = datetime.date.today().strftime("%Y-%m")
+        root = _make_root(tmp_path)
+        self._write_month(root, month, [self._intercept(month + u"-01T00:00:00+00:00"),
+                                        self._metered(month + u"-01T01:00:00+00:00"),
+                                        self._metered(month + u"-01T02:00:00+00:00")])
+        out = render(root)
+        cur = _value_of(out, u"intercepts (當月)")
+        assert cur is not None and re.match(u"^1 筆", cur), out
+        meter_lines = [ln for ln in _lines(out)
+                       if _T158A_METERED in ln and not ln.strip().startswith(u"intercepts (當月):")]
+        assert meter_lines and any(u"2 筆" in ln for ln in meter_lines), out
+
+    def test_t158a_r5_status_latest_ignores_metered(self, tmp_path):
+        """R5|必須先紅|最新月檔攔截在前、量測在後 ⇒ 筆數 1、末筆是攔截那筆。"""
+        root = _make_root(tmp_path)
+        hit, meter = u"2026-08-01T00:00:00+00:00", u"2026-08-02T00:00:00+00:00"
+        self._write_month(root, u"2026-08", [self._intercept(hit), self._metered(meter)])
+        val = _value_of(render(root), u"intercepts (最新存在月)")
+        assert u"2026-08 1 筆" in val, val
+        assert hit in val and meter not in val, val
+
+    def test_t158a_r6_status_latest_month_all_metered_falls_back(self, tmp_path):
+        """R6|必須先紅|最新月只有量測 ⇒ 往前找到有攔截的那個月。"""
+        root = _make_root(tmp_path)
+        hit = u"2026-07-05T00:00:00+00:00"
+        self._write_month(root, u"2026-07", [self._intercept(hit)])
+        self._write_month(root, u"2026-08", [self._metered(u"2026-08-01T00:00:00+00:00"),
+                                             self._metered(u"2026-08-02T00:00:00+00:00")])
+        val = _value_of(render(root), u"intercepts (最新存在月)")
+        assert u"2026-07 1 筆" in val, val
+        assert hit in val and u"2026-08" not in val, val
+
+    def test_t158a_r7_status_only_metered_shows_no_record(self, tmp_path):
+        """R7|必須先紅|唯一的月檔只有量測 ⇒ 照「沒有月檔」時的顯示。"""
+        root = _make_root(tmp_path)
+        self._write_month(root, u"2026-08", [self._metered(u"2026-08-01T00:00:00+00:00"),
+                                             self._metered(u"2026-08-02T00:00:00+00:00")])
+        assert _value_of(render(root), u"intercepts (最新存在月)") == UNRECORDED

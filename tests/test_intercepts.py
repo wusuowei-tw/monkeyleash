@@ -414,3 +414,71 @@ class TestItDoesNotTouchTheExemptionLedger:
         assert os.path.basename(gate.INTERCEPT_LOG) != \
             os.path.basename(gate.EXEMPTION_LOG)
         assert "intercepts" in os.path.basename(gate.INTERCEPT_LOG)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#
+# **票 158 A-a2 紅燈:攔截帳本的讀取端排除量測紀錄。**
+# A-b 約束 4 讀碼發現:量測(`outcome == "passed-undecidable"`)與攔截寫同一本帳,
+# 而 `_summarise_month` 逐筆 tally `rule` 不看 `outcome` —— 量測會灌進 R7 的攔截數,
+# 滾動之後兩者再也分不開。Jeff 2026-10-26 裁 B:讀取端一律以 `outcome` 排除量測,
+# 摘要另開 `metered` 格記量測次數,不讓它在滾動後消失。
+# 沒有 `outcome` 的舊紀錄照原方式當攔截計數(向後相容)。
+
+_T158A_METERED = "passed-undecidable"
+
+
+class TestT158AReadersSummary:
+
+    NOW = datetime.datetime(2026, 8, 15, 12, 0, tzinfo=datetime.timezone.utc)
+
+    def _seed(self, ledger, month, recs):
+        path = ledger / ("intercepts-%s.jsonl" % month)
+        with io.open(str(path), "w", encoding="utf-8") as f:
+            for r in recs:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        return path
+
+    def _intercept(self, verb):
+        return {"ts": "2026-05-01T00:00:00+00:00", "rule": "R7",
+                "at_commit": False, "cmd_sha256": "0" * 64,
+                "cmd_verb": verb, "cmd_len": 10, "message": "[R7] x"}
+
+    def _metered(self, verb):
+        return {"ts": "2026-05-02T00:00:00+00:00", "rule": "R7",
+                "at_commit": False, "cmd_sha256": "1" * 64,
+                "cmd_verb": verb, "cmd_len": 20,
+                "outcome": _T158A_METERED, "message": "R7 不可判定直譯器呼叫放行(量測)"}
+
+    def _rolled(self, ledger, recs):
+        self._seed(ledger, "2026-05", recs)
+        gate.roll_intercepts(now=self.NOW)
+        return _read(gate.INTERCEPT_SUMMARY)
+
+    def test_t158a_r1_summary_excludes_metered_from_rules(self, ledger):
+        """R1|必須先紅|攔截 1 筆＋量測 2 筆 ⇒ R7 的攔截數是 1,不是 3。"""
+        summaries = self._rolled(ledger, [self._intercept("rm"),
+                                          self._metered("python"),
+                                          self._metered("python")])
+        r7 = sum(s["count"] for s in summaries if s.get("rule") == "R7")
+        assert r7 == 1, "量測被數成攔截:%r" % summaries
+
+    def test_t158a_r2_summary_keeps_metered_count(self, ledger):
+        """R2|必須先紅|量測次數在摘要裡另開 `metered` 格,恰好出現一次、不重複。"""
+        summaries = self._rolled(ledger, [self._intercept("rm"),
+                                          self._metered("python"),
+                                          self._metered("python")])
+        metered = [s["metered"] for s in summaries if s.get("metered")]
+        assert len(metered) == 1, "摘要裡的 metered 不是恰好一格:%r" % summaries
+        assert metered[0][_T158A_METERED]["count"] == 2, metered
+
+    def test_t158a_r3_summary_without_metered_is_unchanged(self, ledger):
+        """R3|對照|沒有量測時,攔截的 count 與 by_verb 與現行相同。"""
+        summaries = self._rolled(ledger, [self._intercept("grep"),
+                                          self._intercept("grep"),
+                                          self._intercept("rm")])
+        rows = [s for s in summaries if s.get("rule") == "R7"]
+        assert len(rows) == 1, summaries
+        assert rows[0]["count"] == 3
+        assert rows[0]["by_verb"] == {"grep": 2, "rm": 1}
+        assert not [s for s in summaries if s.get("metered")], summaries
