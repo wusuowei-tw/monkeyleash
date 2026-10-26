@@ -620,6 +620,31 @@ _PS_CODE_PARAMS = ("command", "encodedcommand")
 #   - 從 stdin 餵程式(`python < x.py`、`echo … | python`)不認 ——
 #     那是重導向與管線,由 R7 既有的路徑判
 
+# ── 環境前綴(票 158 A3 之一,U3-c)─────────────────────────────────────
+#
+# 指令位置前的 `VAR=value`、`env` 包裝器、PowerShell `$env:NAME=…` 會**改變程式的行為**
+# (`PYTHONPATH` 讓同一支腳本載入別的模組),而那從指令字串上看不出來 ——
+# 在這之前它們讓指令掉出許可清單,又因為「看不出寫入」被放行(U3)。
+# 現在:有這種指派就擋,只放行下表。**例外只免這一條**,指令其餘部分照原流程判
+# (`PYTHONIOENCODING=utf-8 python … > pkg/a` 仍會在目標抽取被擋)。
+#
+# **封閉集合,增刪由 Jeff 裁(票 158 A,2026-10-22)。** 值必須逐字等於允許值,
+# 可帶一對單／雙引號;值裡有 `$`、反引號、空白或任何其他字元都不算例外。
+ENV_PREFIX_ALLOWED = {
+    "PYTHONIOENCODING": {
+        "reason": "Windows 主控台預設 cp950,子行程輸出中文會壞;只改輸出編碼,不改載入或寫入行為",
+        "values": frozenset({"utf-8"}),
+    },
+    "PYTHONUTF8": {
+        "reason": "開 Python 的 UTF-8 模式,理由同上;只影響預設編碼",
+        "values": frozenset({"1"}),
+    },
+}
+
+_ENV_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
+_PS_ENV_ASSIGN_RE = re.compile(r"^\$env:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$",
+                               re.I | re.S)
+
 # `>` / `>>` / `2>` 後面那一段就是重導向目標。`2>&1` 不算(fd 重導向,不落地)。
 REDIRECT_RE = re.compile(r"(?<!\d)(?<!&)>>?\s*([^\s;&|>]+)")
 
@@ -1114,22 +1139,123 @@ def inline_interpreter_hit(command):
     """
     for seg in SEGMENT_SPLIT_RE.split(command or ""):
         toks = seg.split()
-        i = 0
-        while i < len(toks) and (
-                toks[i].lower() in WRAPPERS
-                or ("=" in toks[i] and not toks[i].startswith("-"))):
-            i += 1
+        i = _command_position(toks)
         if i >= len(toks):
             continue
-        name = os.path.basename(
-            toks[i].strip('"').strip("'").replace("\\", "/")).lower()
-        if name.endswith(".exe"):
-            name = name[:-len(".exe")]
+        name = _program_name(toks[i])
         if name not in INLINE_INTERPRETERS:
             continue
         for tok in toks[i + 1:]:
             if tok.startswith("-") and _inline_code_flag(name, tok):
                 return name, tok
+    return None, None
+
+
+def _command_position(toks):
+    """跳過前置的包裝器與環境變數指派,回指令位置的索引(可能等於 `len(toks)`)。
+
+    `inline_interpreter_hit` 與量測的 `undecidable_interpreter_call` 共用這一份 ——
+    兩處各自跳的話,「誰算直譯器呼叫」會在兩處各自漂移。
+    """
+    i = 0
+    while i < len(toks) and (
+            toks[i].lower() in WRAPPERS
+            or ("=" in toks[i] and not toks[i].startswith("-"))):
+        i += 1
+    return i
+
+
+def _program_name(tok):
+    """指令位置那個 token 的程式名:去引號、取 basename、小寫、去 `.exe`。"""
+    name = os.path.basename(tok.strip('"').strip("'").replace("\\", "/")).lower()
+    if name.endswith(".exe"):
+        name = name[:-len(".exe")]
+    return name
+
+
+def _unquote_once(value):
+    """剝掉**一對**成對的單／雙引號。只剝一層,不處理跳脫。"""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        return value[1:-1]
+    return value
+
+
+def _env_prefix_assignments(seg):
+    """一段指令在指令位置前的環境指派:`[(名, 值原文)]`。
+
+    三種寫法:`NAME=value …`、`env [旗標] NAME=value …`(包裝器照 `WRAPPERS` 跳)、
+    PowerShell `$env:NAME = value`(整段就是指派)。
+    """
+    s = seg.strip()
+    m = _PS_ENV_ASSIGN_RE.match(s)
+    if m:
+        return [(m.group(1), m.group(2).strip())]
+    out = []
+    toks = s.split()
+    i = 0
+    after_env = False
+    while i < len(toks):
+        tok = toks[i]
+        if tok.lower() in WRAPPERS:
+            after_env = tok.lower() == "env"
+            i += 1
+            continue
+        if after_env and tok.startswith("-"):
+            i += 1
+            continue
+        m = _ENV_ASSIGN_RE.match(tok)
+        if not m:
+            break
+        out.append((m.group(1), m.group(2)))
+        i += 1
+    return out
+
+
+def env_prefix_violation(command):
+    """R7/環境前綴(票 158 A3 之一)。回 None 或擋下訊息。
+
+    **只點名變數名,不印值** —— 值可能是任何東西(含 token),而這則訊息會進影子日誌。
+    """
+    bad = []
+    for seg in SEGMENT_SPLIT_RE.split(command or ""):
+        for name, value in _env_prefix_assignments(seg):
+            entry = ENV_PREFIX_ALLOWED.get(name)
+            if entry and _unquote_once(value) in entry["values"]:
+                continue
+            if name not in bad:
+                bad.append(name)
+    if not bad:
+        return None
+    return (
+        "[R7/環境前綴] 指令位置前有環境變數指派:%s —— 不在例外表 "
+        "`ENV_PREFIX_ALLOWED`,或值不是允許值。\n"
+        "     前綴會改變程式的行為(例如 PYTHONPATH 讓同一支腳本載入別的模組),\n"
+        "     而那從指令字串上看不出來 —— 看不出寫入不等於沒有寫入。\n"
+        "     出口:拿掉前綴。例外表是封閉集合,增刪由 Jeff 裁。"
+        % ", ".join(bad))
+
+
+def undecidable_interpreter_call(command):
+    """指令位置是直譯器的第一段:回 `(直譯器名, 第一個非旗標引數的 basename)`。
+
+    不是 ⇒ `(None, None)`。basename 只有檔名、不含目錄;沒有非旗標引數時是 None。
+    只給量測用(票 158 A3 之二),不參與判定。
+    """
+    for seg in SEGMENT_SPLIT_RE.split(command or ""):
+        toks = seg.split()
+        i = _command_position(toks)
+        if i >= len(toks):
+            continue
+        name = _program_name(toks[i])
+        if name not in INLINE_INTERPRETERS:
+            continue
+        target = None
+        for tok in toks[i + 1:]:
+            if not tok.startswith("-"):
+                target = os.path.basename(
+                    tok.strip('"').strip("'").replace("\\", "/")) or None
+                break
+        return name, target
     return None, None
 
 
@@ -1158,8 +1284,22 @@ def inline_interpreter_violation(command):
 
 def bash_write_violation(command):
     """R7:這個 Bash 指令會不會寫入 repo。回 None(放行)或訊息。"""
+    return _bash_write_verdict(command)[0]
+
+
+# `_bash_write_verdict` 的出口種類。量測只認這一種:R7 **看不出寫入**而放行。
+R7_EXIT_UNDECIDABLE = "no-write-construct"
+
+
+def _bash_write_verdict(command):
+    """R7 的判定本體:回 `(訊息或 None, 出口種類)`。
+
+    抽出來是為了讓 `mode_hook` 知道放行走的是哪一條出口(票 158 A3 之二的量測),
+    而**不必在那裡重寫一份判定** —— 兩份判定必分岔。`bash_write_violation`
+    只取第一格,介面不變。
+    """
     if not command or not command.strip():
-        return None
+        return None, "empty"
     cmd = command.strip()
 
     # **內嵌直譯器先判**(票 112):放在許可清單之前,因為許可是**指令前綴**的性質,
@@ -1167,7 +1307,7 @@ def bash_write_violation(command):
     # 一個許可前綴不得成為夾帶任意程式碼的洗白管道。
     inline = inline_interpreter_violation(cmd)
     if inline:
-        return inline
+        return inline, "inline"
 
     # 逐段比對:`a && b` 的每一段都要在許可清單裡才算數,
     # 否則 `git status && rm -rf x` 會整條被許可。
@@ -1175,26 +1315,33 @@ def bash_write_violation(command):
     segments = [s.strip() for s in SEGMENT_SPLIT_RE.split(cmd) if s.strip()]
     seg_ok = [_allowed_cmd_prefix(seg) for seg in segments]
     if segments and all(seg_ok):
-        return None
+        return None, "allowed-prefix"
     # **哪幾段落出許可清單** —— 只拿來寫訊息,判定邏輯一個字都不動(票 13)。
     offenders = [seg for seg, ok in zip(segments, seg_ok) if not ok]
     mixed = any(seg_ok) and offenders
 
+    # 環境前綴(票 158 A3 之一):放在「看不出寫入 ⇒ 放行」**之前** ——
+    # 那條出口正是 U3 的洞:`FOO=1 python x.py` 掉出許可清單,又看不出寫入。
+    # 例外表放行的指派只免這一條,下面照原流程判。
+    env = env_prefix_violation(cmd)
+    if env:
+        return env, "env-prefix"
+
     if not WRITE_CONSTRUCT.search(cmd):
-        return None
+        return None, R7_EXIT_UNDECIDABLE
 
     # 「確定在 repo 外」與「不知道寫到哪」是兩件事:前者可以放行(repo 外是 G1 的事),
     # 後者必須擋。只放行前者 —— 而判準是**每一個寫入目標**都被許可,
     # 不是「指令字串裡出現過一個許可目標」(票 19,判錯對象第七例)。
     bad = unallowed_write_targets(cmd)
     if not bad:
-        return None
+        return None, "targets-allowed"
     return (_r7_head(bad, mixed, offenders, cmd) +
             "     理由不是風格:從指令字串解析『寫到哪』解不完,而半套的解析器\n"
             "     比零涵蓋更危險 —— 零涵蓋你知道它是零。所以入口收成一個,\n"
             "     走檔案工具的話 R1–R6 全部適用。\n"
             "     例外(附理由)在 gate.py 的 BASH_ALLOWED_CMDS / BASH_ALLOWED_TARGETS。\n"
-            "     指令裡出現 /dev/null **不會**讓其他寫入一起免檢。")
+            "     指令裡出現 /dev/null **不會**讓其他寫入一起免檢。"), "targets"
 
 
 RESEARCH_ROOT = "research"
@@ -3786,6 +3933,10 @@ INTERCEPT_KEEP_MONTHS = 2
 # `sum(by_verb) < count` 而沒有人看得出差額去了哪。
 CMD_VERB_ABSENT = "<無指令>"
 
+# 量測紀錄的 `outcome`(票 158 A3 之二)。**讀取端一律以這一格判斷是不是量測**,
+# 不以 `rule` —— 量測的 `rule` 也填 `R7`(它量的是 R7 的放行出口)。
+OUTCOME_UNDECIDABLE_PASS = "passed-undecidable"
+
 
 def cmd_fingerprint(command):
     """指令的指紋三欄(票 68)。給不出來時回**空 dict**,不是三個 `N/A`。
@@ -3876,6 +4027,14 @@ def _summarise_month(month, path, now):
     **明寫的取捨:滾動會丟掉個別紀錄的 `message` 全文與 `cmd_sha256`。**
     所以要拿來分類的月份,**必須在它被滾掉之前處理** ——
     這是一個真的損失,不是無痛壓縮。
+
+    **量測不是攔截**(票 158,Jeff 2026-10-26 裁 B):`outcome` 是
+    `passed-undecidable` 的紀錄是放行時記的量測,與攔截寫同一本帳。
+    算進 `count` 的話,R7 的攔截數會被放行次數灌水,而滾動之後再也分不開。
+    所以 `count` / `by_verb` 只數攔截,量測另進同一規則那一行的 `metered` 格,
+    滾動後仍看得到。**一律以 `outcome` 判,不以 `rule` 判**;
+    沒有 `outcome` 的舊紀錄照原方式當攔截。某規則當月只有量測時,
+    那一行 `count` 是 0 —— 量測仍要有一行可以住。
     """
     tally = {}
     try:
@@ -3891,15 +4050,22 @@ def _summarise_month(month, path, now):
                 if rec.get("kind") == "summary":
                     continue
                 slot = tally.setdefault(rec.get("rule") or "?",
-                                        {"count": 0, "by_verb": {}})
-                slot["count"] += 1
+                                        {"count": 0, "by_verb": {}, "metered": {}})
                 verb = rec.get("cmd_verb") or CMD_VERB_ABSENT
+                if rec.get("outcome") == OUTCOME_UNDECIDABLE_PASS:
+                    m = slot["metered"].setdefault(OUTCOME_UNDECIDABLE_PASS,
+                                                   {"count": 0, "by_verb": {}})
+                    m["count"] += 1
+                    m["by_verb"][verb] = m["by_verb"].get(verb, 0) + 1
+                    continue
+                slot["count"] += 1
                 slot["by_verb"][verb] = slot["by_verb"].get(verb, 0) + 1
     except (IOError, OSError):
         return []
     stamp = now.isoformat()
     return [{"kind": "summary", "month": month, "rule": rule,
-             "count": s["count"], "by_verb": s["by_verb"], "rolled_at": stamp}
+             "count": s["count"], "by_verb": s["by_verb"],
+             "metered": s["metered"], "rolled_at": stamp}
             for rule, s in sorted(tally.items())]
 
 
@@ -3977,6 +4143,48 @@ def log_intercept(msg, command=None, at_commit=False, now=None):
     return rec
 
 
+# 量測紀錄的 `message`:**固定短語**,不帶指令原文、路徑、引數、環境變數值。
+UNDECIDABLE_PASS_MESSAGE = "R7 不可判定直譯器呼叫放行（量測）"
+
+
+def log_undecidable_pass(command, now=None):
+    """量測:R7 **看不出寫入**而放行了一支直譯器呼叫(票 158 A3 之二)。
+
+    ADR 0008〈使用登記〉原本是一句話,從這裡起有機制在數:放行時記一筆,
+    `outcome = passed-undecidable`,寫進攔截帳本的同一個月檔、跟著同一套滾動。
+
+    **量測只是量測,不是證據** —— 帳本在 `.dev/`,agent 寫得動。
+    它回答「這條出口實際被走了幾次、走的是哪類直譯器」,不證明任何一次呼叫無害。
+
+    欄位是封閉的:指紋三欄(沿用 `cmd_fingerprint()`,雜湊是完整 64 碼)、
+    直譯器名(`cmd_verb` 給不出來時另記 `cmd_interpreter`)、第一個非旗標引數的
+    **basename**(只有檔名,不含目錄)。**不記完整指令或完整路徑。**
+
+    **記不下來不改判定**:放行照樣放行;吞掉例外,只多印一行。
+    """
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    name, target = undecidable_interpreter_call(command)
+    rec = {"ts": now.isoformat(), "rule": "R7", "at_commit": False}
+    rec.update(cmd_fingerprint(command))
+    if name and rec.get("cmd_verb") != name:
+        rec["cmd_interpreter"] = name
+    if target:
+        rec["cmd_target_basename"] = target
+    rec["outcome"] = OUTCOME_UNDECIDABLE_PASS
+    rec["message"] = UNDECIDABLE_PASS_MESSAGE
+    try:
+        roll_intercepts(now=now)
+    except Exception as e:
+        _err("[閘門/帳本] 攔截帳本輪替失敗(%s):%s —— 量測仍照記。\n"
+             % (rel(INTERCEPT_LOG), e))
+    path = intercept_path(now.strftime("%Y-%m"))
+    try:
+        _append_jsonl(path, rec)
+    except Exception as e:
+        _err("[閘門/帳本] 量測無法記帳(%s):%s —— 放行不受影響。\n" % (rel(path), e))
+    return rec
+
+
 def mode_hook():
     """agent 前哨:讀 PreToolUse JSON。
 
@@ -4020,7 +4228,17 @@ def mode_hook():
         if r11:
             _err("[六站閘門/前哨] %s\n" % tag_enforce(r11))
             return 2
-        msg = bash_write_violation(command)
+        msg, r7_exit = _bash_write_verdict(command)
+        if not msg and r7_exit == R7_EXIT_UNDECIDABLE:
+            # 量測(票 158 A3 之二):只在這條出口、只對直譯器呼叫記。
+            # 出口種類由判定本體給,這裡不重判;許可前綴放行的走不到這條出口。
+            # `check()` 與 `verify_gates` 不記 —— 只有前哨才有「真的有人要跑」這個事件。
+            # 記帳的任何失敗都不得改變放行結果。
+            try:
+                if undecidable_interpreter_call(command)[0]:
+                    log_undecidable_pass(command)
+            except Exception:
+                pass
         if msg:
             if shadow_active():
                 # **只有這個呼叫點給得出 command** —— R7 是唯一以指令為觸發物的規則。

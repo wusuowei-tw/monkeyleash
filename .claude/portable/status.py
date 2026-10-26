@@ -286,6 +286,11 @@ def _latest_intercept_month(gate):
     `gate.intercept_path()`,再從回傳值反推前後綴。
     寫死 `intercepts-YYYY-MM.jsonl` 的話,上游哪天改了輪替命名,
     這裡會安靜地一個檔都找不到,而「找不到」與「沒有攔截」印出來一樣。
+
+    **「最新」指最近一個含攔截的月份,回傳的紀錄也只有攔截**(票 158,裁 B):
+    量測(`passed-undecidable`)與攔截寫同一本帳,而量測是**放行**。
+    算進來的話,「最近一次攔截」會指到一次放行,讀的人以為前哨在擋。
+    最新月檔若只有量測就往前找;全部都只有量測 ⇒ 與沒有月檔同樣回 `(None, None)`。
     """
     if not _has(gate, "intercept_path"):
         return None, None
@@ -307,10 +312,28 @@ def _latest_intercept_month(gate):
                 months.append(m.group(1))
     except Exception:
         return None, None
-    if not months:
-        return None, None
-    latest = max(months)
-    return latest, (_read_jsonl(gate.intercept_path(latest)) or [])
+    for month in sorted(months, reverse=True):
+        recs, _metered = _split_metered(gate, _read_jsonl(gate.intercept_path(month)))
+        if recs:
+            return month, recs
+    return None, None
+
+
+def _metered_outcome(gate):
+    """量測紀錄的 `outcome` 值。**從產生端問**;舊版 gate 沒有這個常數時用字面值 ——
+    舊版不會寫量測,字面值在那裡只是永遠比不中。"""
+    v = getattr(gate, "OUTCOME_UNDECIDABLE_PASS", None)
+    return v if isinstance(v, str) and v else u"passed-undecidable"
+
+
+def _split_metered(gate, recs):
+    """攔截月檔的紀錄 → `(攔截, 量測)`。**以 `outcome` 判,不以 `rule` 判**;
+    沒有 `outcome` 的舊紀錄是攔截(向後相容)。`recs` 為 None 時兩邊都是空的。"""
+    tag = _metered_outcome(gate)
+    hits, metered = [], []
+    for rec in recs or []:
+        (metered if rec.get("outcome") == tag else hits).append(rec)
+    return hits, metered
 
 
 def _latest_per_file(runs, ticket):
@@ -916,8 +939,15 @@ def _evidence(root, gate, ticket):
     else:
         cur_path = gate.intercept_path(month)
         cur = _read_jsonl(cur_path)
+        # 量測(`passed-undecidable`)與攔截同一本帳,但它是**放行** —— 不進攔截筆數,
+        # 另印一行(票 158,裁 B)。混在一起的話,「被擋了幾次」會被放行次數灌水。
+        hits, metered = _split_metered(gate, cur)
         out.append(_line(u"intercepts (當月)",
-                         u"%d 筆" % len(cur) if cur is not None else u"檔不存在",
+                         u"%d 筆" % len(hits) if cur is not None else u"檔不存在",
+                         _rel(root, cur_path)))
+        out.append(_line(u"intercepts 量測 (當月)",
+                         (u"量測（%s）%d 筆" % (_metered_outcome(gate), len(metered)))
+                         if cur is not None else u"檔不存在",
                          _rel(root, cur_path)))
 
     latest, lrecs = _latest_intercept_month(gate)

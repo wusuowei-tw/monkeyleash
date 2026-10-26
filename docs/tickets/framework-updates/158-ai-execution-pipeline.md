@@ -1,6 +1,6 @@
 # 158 — AI 正式執行管道（正式執行通道／減少逐步放行／受控切站）
 
-**狀態**：**C0 已推送；A 已裁 A3（Jeff 2026-10-22 約 16:48、16:54（美東））——A 只做前綴收緊＋量測，登記通道與下游化併入 C2；A-a 紅燈完成（本機）。** A-b 實作待開工。
+**狀態**：**C0 已推送；A 已裁 A3＋B——A 只做前綴收緊＋量測，登記通道與下游化併入 C2；A-b 實作完成（本機），待獨立審查。**
 **立案**：2026-10-21（美東）。Jeff 2026-10-21 約 07:42（美東）開票 158（裁決助手記錄，非逐字原話）；建檔前確認 `docs/tickets/framework-updates/` 內無 158 開頭的檔案。
 **範圍來源**：Jeff 2026-10-20 約 20:30（美東）定 A、B；約 20:48（美東）定 C（裁決助手記錄，非逐字原話）。
 **性質**：大票 —— 分子項（B1→C0→A→C1→C2→B2），各子項實作前另行設計與裁決。
@@ -101,6 +101,16 @@
 - **A 部分完成**：A3 只做前綴收緊＋量測；〈四〉A 的「登記通道（雙鑰）」與「登記位置下游化」併入 C2。
 - 依據：A-R0 本機報告 `.dev/reports/2026-10-22T203156Z-ticket158-a-r0.md`（不進版控）。
 - **Jeff 2026-10-26 約 16:58（美東）裁定 B**：量測寫同一本攔截帳本；`_summarise_month` 與 `status.py` 兩個讀取端排除 `outcome="passed-undecidable"`；摘要另開 `metered` 格記量測次數。准改範圍加 `status.py`。（A-b 停在約束 4，見 A-b 報告。）
+- **A-b 定案（實作，裁決助手依既有授權定的細則落地）**：
+  - 雜湊沿用 `cmd_fingerprint()` 的 `cmd_sha256`，完整 64 碼。
+  - 例外表 `ENV_PREFIX_ALLOWED`：`{"NAME": {"reason": 非空字串, "values": 允許值集合}}`，恰好 `PYTHONIOENCODING`→`{"utf-8"}`、`PYTHONUTF8`→`{"1"}`；封閉集合，增刪由 Jeff 裁。
+  - 擋下訊息字樣 `[R7/環境前綴]`，點名變數名、不印值；判定放在「`WRITE_CONSTRUCT` 沒命中 ⇒ 放行」之前，例外只免這一條。
+  - Bash／PowerShell 一致（`mode_hook` 不分 `tool_name`）。
+  - 量測紀錄欄位：`ts`、`rule`（`"R7"`）、`at_commit`、`cmd_sha256`、`cmd_verb`、`cmd_len`、`outcome`（`"passed-undecidable"`）、`message`；`cmd_verb` 不是直譯器名時另記 `cmd_interpreter`；有第一個非旗標引數時記 `cmd_target_basename`（只有檔名）。
+  - `message` 固定短語：`R7 不可判定直譯器呼叫放行（量測）`。
+  - 出口種類由 `_bash_write_verdict` 提供（`bash_write_violation` 介面不變）；只有 `mode_hook` 記帳，記帳失敗不改放行結果。
+  - 摘要：每條規則一行，`count`／`by_verb` 只數攔截；量測進同一行的 `metered`（`{"passed-undecidable": {"count", "by_verb"}}`，沒有時 `{}`）；某規則當月只有量測時該行 `count` 為 0。
+  - `status.py`：「intercepts (當月)」只數攔截，另印「intercepts 量測 (當月)」；「最新存在月」取最近一個含攔截的月份，全是量測 ⇒ 未記錄。
 
 ---
 
@@ -168,7 +178,7 @@
 - ADR 編號（F- 前綴）與 friction 編號在 CLAUDE.md 正典段相撞：test_claude_md 把正典段任何 F-數字都當 friction 引用。C0-2b′ 暫以 R11 那一列不寫 ADR 編號、改指向 RULE_DIVERGENCE 宣告避開（裁決助手依既有授權，2026-10-21）。要不要改發號規則或測試，待裁。
 - 待開票：補 R7 寫入動詞表（PowerShell 短別名 sc／ac／ni／ri 等、.NET [IO.File]::Write*、ln、rsync、curl -o、wget -O、tar -x、unzip、patch）。別名清單須以 Get-Alias 實際列舉，不憑記憶（C0-3 裁定 C）。
 - 站牌不合格時，redlight 的警告在一次全套測試中會重複約 56 行（每個測試檔一行，再加 session 一行）；Jeff 2026-10-21 約 20:30（美東）決定先不處理，記為待辦。
-- A-b 實作時：記帳是否也套用於 PowerShell 的直譯器呼叫（mode_hook 不分 tool_name，預期一致）。
+- A-b 實作時：記帳是否也套用於 PowerShell 的直譯器呼叫（mode_hook 不分 tool_name，預期一致）。（A-b 已定：一致）
 - A 的「登記通道」與「登記位置下游化」併入 C2；A 只完成前綴收緊＋量測。
 
 ## 八、相關
@@ -207,3 +217,4 @@
 - 2026-10-22（美東）：A-R0 唯讀偵察；記錄 A 裁定（A3）。
 - 2026-10-26（美東）：立候選票 163；A-a 紅燈測試（錨點 A-a）。提交時 R10 擋下（synced 額外 1／不符 2，與本站無關），經 D1／D2 唯讀診斷，名冊重新登記三筆（Jeff 2026-10-26 核准）後再提交。
 - 2026-10-26（美東）：A-b 停在約束 4（讀取端會誤算）；Jeff 裁 B；讀取端紅燈 R1～R7（錨點 A-a2）。
+- 2026-10-26（美東）：A-b 實作（錨點 A-b）：環境前綴判定（例外表兩項）；mode_hook 記 passed-undecidable 量測；_summarise_month 與 status 排除量測、摘要另記 metered；t158a 18 項與 R1～R7 全綠。
