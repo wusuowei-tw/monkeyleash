@@ -9096,3 +9096,50 @@ class TestT158ADPrefixBypass:
         """D61|待觀察|例外變數的值是引號內含實際換行;在換行上切開後第一格是 `PYTHONUTF8="1`,
         引號不成對 ⇒ 不得截成合法的 `1` 放行。"""
         _t158ad_assert_blocked('PYTHONUTF8="1\nX" python x.py', "PYTHONUTF8")
+
+    # ── A-m(Jeff 2026-10-27 裁 A):A-l 審查找到 P-1 PowerShell 段內指派、P-2 段首特殊空白、
+    # P-3 巢狀大括號;規則不變,下一輪再審 ──
+
+    def test_t158ad_62_powershell_assign_inside_if_block(self):
+        """D62|必須先紅|P-1:`$env:` 指派不在段首(包在 `if (…) { }` 裡),只在段首比對就認不出。"""
+        _t158ad_assert_blocked("if ($true) { $env:PYTHONPATH='x' }; python x.py", "PYTHONPATH")
+
+    def test_t158ad_63_powershell_assign_inside_script_block(self):
+        """D63|必須先紅|P-1:同 D62,`& { … }` 呼叫腳本區塊。"""
+        _t158ad_assert_blocked("& { $env:PYTHONPATH='x' }; python x.py", "PYTHONPATH")
+
+    def test_t158ad_64_powershell_chained_assign(self):
+        """D64|必須先紅|P-1:連鎖指派 `$null = $env:X = …`,指派在段中間。"""
+        _t158ad_assert_blocked("$null = $env:PYTHONPATH = 'x'; python x.py", "PYTHONPATH")
+
+    def test_t158ad_65_powershell_assign_inside_cast(self):
+        """D65|必須先紅|P-1:`[void](…)` 包住指派。"""
+        _t158ad_assert_blocked("[void]($env:PYTHONPATH='x'); python x.py", "PYTHONPATH")
+
+    def test_t158ad_66_nbsp_before_powershell_assign(self):
+        """D66|必須先紅|P-2:段首 U+00A0,PowerShell 當空白、閘門不剝。"""
+        _t158ad_assert_blocked(" $env:PYTHONPATH='x'; python x.py", "PYTHONPATH")
+
+    def test_t158ad_67_form_feed_before_powershell_assign(self):
+        """D67|必須先紅|P-2:同 D66,段首 `\\f`。"""
+        _t158ad_assert_blocked("\f$env:PYTHONPATH='x'; python x.py", "PYTHONPATH")
+
+    def test_t158ad_68_nested_brace_expansion_inner_last(self):
+        """D68|必須先紅|P-3:大括號展開的選項本身含大括號,內層在逗號之後。"""
+        _t158ad_assert_unparseable("env PYTHON{PATH,{}}=x python x.py")
+
+    def test_t158ad_69_nested_brace_expansion_inner_first(self):
+        """D69|必須先紅|P-3:與 D68 反向排列 —— 內層先結束、逗號在後;單一正規式不可能兩種順序都對。"""
+        _t158ad_assert_unparseable("env PYTHON{{},PATH}=x python x.py")
+
+    def test_t158ad_70_powershell_allowed_value_inside_block_not_exempt(self):
+        """D70|待觀察|P-1:例外變數、例外值,但包在 `{ }` 裡;值取到段尾含 `}` ⇒ 不得算例外。"""
+        _t158ad_assert_blocked("if ($true) { $env:PYTHONUTF8='1' }; python x.py", "PYTHONUTF8")
+
+    def test_t158ad_71_powershell_env_read_passes(self):
+        """D71|對照|`$env:NAME` 後面沒有 `=`,是讀取不是指派 ⇒ 不觸發本條。"""
+        _t158ad_assert_not_prefix_blocked("echo $env:PATH; python x.py")
+
+    def test_t158ad_72_powershell_leading_allowed_value_passes(self):
+        """D72|對照|段首 `$env:` 指派、例外值(#3 同族)⇒ 不觸發本條。"""
+        _t158ad_assert_not_prefix_blocked("$env:PYTHONUTF8='1'; python x.py")
