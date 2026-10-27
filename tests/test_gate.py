@@ -9085,3 +9085,14 @@ class TestT158ADPrefixBypass:
     def test_t158ad_59_brace_expansion_with_quoted_space(self):
         """D59|必須先紅|F1:大括號內帶引號空白,bash 仍展開成兩個指派;正規式不排除空白。"""
         _t158ad_assert_unparseable("env {PYTHONPATH=x,'FOO=1 bar'} python x.py")
+
+    # ── A-k(A-j 待裁 → B,2026-10-27):換行重新參與切字,為捕捉換行後的指派而保守切 ──
+
+    def test_t158ad_60_assign_after_newline(self):
+        """D60|待觀察|換行後才出現的前綴指派;換行不參與切字時 token 是 `x.py<換行>PYTHONPATH=x`,認不出指派。"""
+        _t158ad_assert_blocked("python x.py\nPYTHONPATH=x python y.py", "PYTHONPATH")
+
+    def test_t158ad_61_quoted_newline_value_not_exempt(self):
+        """D61|待觀察|例外變數的值是引號內含實際換行;在換行上切開後第一格是 `PYTHONUTF8="1`,
+        引號不成對 ⇒ 不得截成合法的 `1` 放行。"""
+        _t158ad_assert_blocked('PYTHONUTF8="1\nX" python x.py', "PYTHONUTF8")
