@@ -651,15 +651,25 @@ _PS_ENV_ASSIGN_RE = re.compile(r"^\$env:([A-Za-z_][A-Za-z0-9_]*)\s*(\+?)=\s*(.*)
 _PS_ENV_BRACED_ASSIGN_RE = re.compile(
     r"^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}\s*(\+?)=\s*(.*)$", re.I | re.S)
 
-# 切 token 與去頭尾**只認 ASCII 空白**(票 158 A-h):shell 不在 U+00A0 這類字元上切字,
+# 切 token 與去頭尾**只認空格與 tab**(票 158 A-h／A-j):shell 不在 U+00A0 這類字元上切字,
 # 而 `str.split()`／無參數 `str.strip()` 會 —— `PYTHONUTF8=1<U+00A0>x` 會被切出
 # 一個逐字等於允許值的 `PYTHONUTF8=1`,段尾的則被 `strip()` 直接吃掉。
-_ASCII_WS = " \t\r\n\f\v"
-_ASCII_WS_SPLIT_RE = re.compile(r"[ \t\r\n\f\v]+")
+# 只認空格與 tab(票 158 A-j):`\r`、`\f`、`\v` 在 bash 裡是字的一部分,當空白切會把
+# `PYTHONUTF8=1<\v>X` 洗成 `1`。換行屬切段問題(票 164)。
+_ASCII_WS = " \t"
+_ASCII_WS_SPLIT_RE = re.compile(r"[ \t]+")
 
 # shell **先展開再執行**的語法(票 158 A-h,裁 D 第 2 條)。閘門看的是展開前的字串,
 # 展開之後的指令長什麼樣子判不出來 —— 非許可前綴段裡出現任一個就擋「無法解析」。
-_UNPARSEABLE_SYNTAX = ("$'", '$"', "${", "$(", "`", "<(", ">(")
+# `$[` 是舊式算術展開(票 158 A-j,S1):`$[PYTHONPATH=1]` 在變數已匯出時改到子程序環境。
+_UNPARSEABLE_SYNTAX = ("$'", '$"', "${", "$(", "`", "<(", ">(", "$[")
+
+# 大括號展開(票 158 A-j,F1):`env PYTHON{PATH,PATH}=x …` bash 展開成 `PYTHONPATH=x`,
+# 閘門看展開前的字串比不中。`{` 單獨出現太多(`awk '{print}'`),不能用子字串 ——
+# 只認「大括號內含逗號或 `..`」。**不排除空白**:`{PYTHONPATH=x,'FOO=1 bar'}` 大括號內帶
+# 引號空白,bash 一樣展開成兩個指派;排除空白就比不中,採保守擋。
+# 萬用字元 `*`／`?` 依賴當前目錄檔名,記票 164〈待查〉,不在這裡。
+_BRACE_EXPANSION_RE = re.compile(r"\{[^{}]*(,|\.\.)[^{}]*\}")
 
 # 段首的群組符號(票 158 A-d):`(FOO=1 …)`、`{ FOO=1 …; }`、`! FOO=1 …`。
 # 不剝的話第一個 token 不像指派,掃描在第一格就停下。
@@ -1294,13 +1304,24 @@ def _env_prefix_assignments(seg):
     return out
 
 
+def _unparseable_hits(seg):
+    """段原文(不經 `_bare`)裡 shell 先展開再執行的語法符號:子字串清單,加上大括號展開
+    (票 158 A-j,記成 `{…,…}` 或 `{a..b}`)。"""
+    hits = [s for s in _UNPARSEABLE_SYNTAX if s in seg]
+    for m in _BRACE_EXPANSION_RE.finditer(seg):
+        sym = "{…,…}" if m.group(1) == "," else "{a..b}"
+        if sym not in hits:
+            hits.append(sym)
+    return hits
+
+
 def env_prefix_violation(command):
     """R7/環境前綴(票 158 A3 之一)。回 None 或擋下訊息。
 
     **只點名變數名,不印值** —— 值可能是任何東西(含 token),而這則訊息會進影子日誌。
 
     只看**非許可前綴段**(票 158 A-h,裁 D 字面):許可段裡的展開語法與指派屬切段問題(票 164)。
-    每段先查原文有沒有 `_UNPARSEABLE_SYNTAX`(不經 `_bare`),有 ⇒ 擋「無法解析」,
+    每段先查原文有沒有 `_UNPARSEABLE_SYNTAX` 或大括號展開(不經 `_bare`),有 ⇒ 擋「無法解析」,
     訊息附列段內指派變數名 —— 變數名本來就在環境前綴訊息裡印,沒有新的外洩面。
     """
     bad = []
@@ -1308,7 +1329,7 @@ def env_prefix_violation(command):
         if _allowed_cmd_prefix(seg.strip()):
             continue
         assignments = _env_prefix_assignments(seg)
-        hits = [s for s in _UNPARSEABLE_SYNTAX if s in seg]
+        hits = _unparseable_hits(seg)
         if hits:
             names = []
             for name, _value in assignments:
@@ -1400,7 +1421,7 @@ def _bash_write_verdict(command):
     """
     if not command or not command.strip():
         return None, "empty"
-    # 頭尾也只剝 ASCII 空白(票 158 A-h):U+00A0 在段尾會被無參數 `strip()` 吃掉,
+    # 頭尾也只剝空格與 tab(票 158 A-h／A-j):U+00A0、`\f` 在段尾會被吃掉,
     # `PYTHONUTF8=1<U+00A0>` 洗成合法的 `1`。
     cmd = command.strip(_ASCII_WS)
 
