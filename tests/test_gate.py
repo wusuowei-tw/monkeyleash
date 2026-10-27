@@ -8797,3 +8797,76 @@ class TestT158AEnvPrefixAndUndecidableMeter:
             monkeypatch, capsys, "Bash", "FOO=1 " + _T158A_TOOL, shadow=True)
         assert rc == 0, (rc, err)
         assert any(m.startswith("[R7") and "FOO" in m for m in shadow_logged), shadow_logged
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#
+# **票 158 A-d 紅燈站:A-c 獨立審查發現環境前綴檢查可被繞過(A2-2)。**
+# 裁定 C′(Jeff 2026-10-26 約 20:30 美東;裁決助手記錄,非逐字原話):
+# 包裝器帶旗標、`+=`、括號與大括號包起來的指派都要擋;看不懂就擋(寧可多擋)。
+# 單一 `&` 與換行不切段是另一個洞(票 164),不在本站。
+# 指令只當字串餵給閘門,一條都不執行。
+
+_T158AD_TAG = "[R7/環境前綴]"
+
+
+def _t158ad_assert_blocked(cmd, name):
+    msg = gate.bash_write_violation(cmd)
+    assert msg and _T158AD_TAG in msg and name in msg, (cmd, msg)
+
+
+def _t158ad_assert_not_prefix_blocked(cmd):
+    msg = gate.bash_write_violation(cmd)
+    assert msg is None or _T158AD_TAG not in msg, (cmd, msg)
+
+
+class TestT158ADPrefixBypass:
+
+    def test_t158ad_01_env_unset_flag(self):
+        """D1|必須先紅|`env -u NAME` 的旗標參數讓掃描提早停下,後面的指派沒被看。"""
+        _t158ad_assert_blocked("env -u NAME FOO=1 python x.py", "FOO")
+
+    def test_t158ad_02_env_unset_long_flag(self):
+        """D2|必須先紅|同 D1,長旗標 `--unset`。"""
+        _t158ad_assert_blocked("env --unset NAME FOO=1 python x.py", "FOO")
+
+    def test_t158ad_03_env_chdir_flag(self):
+        """D3|必須先紅|同 D1,`-C` 帶目錄參數。"""
+        _t158ad_assert_blocked("env -C sub FOO=1 python x.py", "FOO")
+
+    def test_t158ad_04_sudo_flag(self):
+        """D4|必須先紅|旗標跳過只對 `env` 成立;`sudo -E` 之後的指派沒被看。"""
+        _t158ad_assert_blocked("sudo -E PYTHONPATH=x python x.py", "PYTHONPATH")
+
+    def test_t158ad_05_time_flag(self):
+        """D5|必須先紅|同 D4,`time -p`。"""
+        _t158ad_assert_blocked("time -p FOO=1 python x.py", "FOO")
+
+    def test_t158ad_06_append_assign(self):
+        """D6|必須先紅|`+=` 不被認成指派;附加不是逐字值,一律不算例外。"""
+        _t158ad_assert_blocked("PYTHONPATH+=x python x.py", "PYTHONPATH")
+
+    def test_t158ad_07_subshell_paren(self):
+        """D7|必須先紅|括號包起來,第一個 token 是 `(PYTHONPATH=x`,不像指派。"""
+        _t158ad_assert_blocked("(PYTHONPATH=x python x.py)", "PYTHONPATH")
+
+    def test_t158ad_08_brace_group(self):
+        """D8|必須先紅|大括號群組,第一個 token 是 `{`。"""
+        _t158ad_assert_blocked("{ PYTHONPATH=x python x.py; }", "PYTHONPATH")
+
+    def test_t158ad_09_powershell_append(self):
+        """D9|必須先紅|PowerShell `$env:NAME += …`,正規式只認 `=`。"""
+        _t158ad_assert_blocked("$env:PYTHONPATH += 'x'", "PYTHONPATH")
+
+    def test_t158ad_10_sudo_flag_overblocks_program_arg(self):
+        """D10|必須先紅|**刻意多擋,fail-closed 的代價**:包裝器帶旗標後分不出程式從哪開始,
+        `A=1` 其實是 make 的參數,也當成前綴判而擋。Jeff 接受「寧可多擋」。"""
+        _t158ad_assert_blocked("sudo -u root make A=1", "A")
+
+    def test_t158ad_11_env_flag_without_assign_passes(self):
+        """D11|對照|包裝器帶旗標但沒有任何指派形狀的 token ⇒ 不觸發本條。"""
+        _t158ad_assert_not_prefix_blocked("env -u NAME python x.py")
+
+    def test_t158ad_12_env_flag_allowed_value_passes(self):
+        """D12|對照|包裝器帶旗標後的指派是例外表的允許值 ⇒ 不觸發本條。"""
+        _t158ad_assert_not_prefix_blocked("env -i PYTHONIOENCODING=utf-8 python x.py")

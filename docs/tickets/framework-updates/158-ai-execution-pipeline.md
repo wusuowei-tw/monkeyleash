@@ -1,6 +1,6 @@
 # 158 — AI 正式執行管道（正式執行通道／減少逐步放行／受控切站）
 
-**狀態**：**C0 已推送；A 已裁 A3＋B——A 只做前綴收緊＋量測，登記通道與下游化併入 C2；A-b 實作完成（本機），待獨立審查。**
+**狀態**：**C0 已推送；A 已裁 A3＋B；A-c 審查發現前綴繞過，Jeff 裁 C′——A-d 修補中（本機）；& 與換行另開票 164。**
 **立案**：2026-10-21（美東）。Jeff 2026-10-21 約 07:42（美東）開票 158（裁決助手記錄，非逐字原話）；建檔前確認 `docs/tickets/framework-updates/` 內無 158 開頭的檔案。
 **範圍來源**：Jeff 2026-10-20 約 20:30（美東）定 A、B；約 20:48（美東）定 C（裁決助手記錄，非逐字原話）。
 **性質**：大票 —— 分子項（B1→C0→A→C1→C2→B2），各子項實作前另行設計與裁決。
@@ -111,6 +111,15 @@
   - 出口種類由 `_bash_write_verdict` 提供（`bash_write_violation` 介面不變）；只有 `mode_hook` 記帳，記帳失敗不改放行結果。
   - 摘要：每條規則一行，`count`／`by_verb` 只數攔截；量測進同一行的 `metered`（`{"passed-undecidable": {"count", "by_verb"}}`，沒有時 `{}`）；某規則當月只有量測時該行 `count` 為 0。
   - `status.py`：「intercepts (當月)」只數攔截，另印「intercepts 量測 (當月)」；「最新存在月」取最近一個含攔截的月份，全是量測 ⇒ 未記錄。
+- **Jeff 2026-10-26 約 19:25（美東）裁定摘要形狀 A**：量測次數放在同一條規則那一行的 `metered` 格；某規則當月只有量測時該行 `count` 為 0。
+- **A-c 獨立審查（2026-10-26）：FAIL——前綴繞過**：包裝器帶旗標（`env -u`／`--unset`／`-C`、`sudo -E`、`time -p`）、`+=`、括號與大括號包起來的指派不被檢查；`&`／換行經許可前綴先放行（BASE 既有）。P0／P1 皆 0。
+- **Jeff 2026-10-26 約 20:30（美東）裁定 C′**：A-d 修補包裝器旗標、`+=`、括號大括號形狀，看不懂就擋（寧可多擋，例如 `sudo -u root make A=1` 會被擋）；`&`／換行另開票 164、優先，158 這批推完先做。
+- **A-b 審查後待辦**（A-c 的 P2）：
+  1. `undecidable_interpreter_call`：`cmd_target_basename` 會取到旗標值（`python -W ignore x.py` → `ignore`）而非檔名。
+  2. `status._latest_intercept_month`：最新月檔讀不到時靜默往前找，顯示較舊月份。
+  3. 考卷缺口：無「記帳失敗 rc 不變」測試；R4 用本機日期對 UTC 月檔，月界附近可能不穩。
+  4. `redlight.record_run`：`tests/test_intercepts.py` 的 `impl_file` 為 null（不影響 gate.py／status.py 的紅燈判定）。
+  5. `shell_stage_card_violation`（R11）因前綴擋而多擋「帶非例外前綴且提到 pipeline.json」的指令（更嚴方向，記錄用）。
 
 ---
 
@@ -218,3 +227,4 @@
 - 2026-10-26（美東）：立候選票 163；A-a 紅燈測試（錨點 A-a）。提交時 R10 擋下（synced 額外 1／不符 2，與本站無關），經 D1／D2 唯讀診斷，名冊重新登記三筆（Jeff 2026-10-26 核准）後再提交。
 - 2026-10-26（美東）：A-b 停在約束 4（讀取端會誤算）；Jeff 裁 B；讀取端紅燈 R1～R7（錨點 A-a2）。
 - 2026-10-26（美東）：A-b 實作（錨點 A-b）：環境前綴判定（例外表兩項）；mode_hook 記 passed-undecidable 量測；_summarise_month 與 status 排除量測、摘要另記 metered；t158a 18 項與 R1～R7 全綠。
+- 2026-10-26（美東）：A-c 獨立審查 FAIL（前綴繞過），未 push；Jeff 裁摘要形狀 A、C′；開票 164；A-d 紅燈 D1～D12（錨點 A-d1）。
