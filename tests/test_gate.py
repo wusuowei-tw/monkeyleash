@@ -8870,3 +8870,23 @@ class TestT158ADPrefixBypass:
     def test_t158ad_12_env_flag_allowed_value_passes(self):
         """D12|對照|包裝器帶旗標後的指派是例外表的允許值 ⇒ 不觸發本條。"""
         _t158ad_assert_not_prefix_blocked("env -i PYTHONIOENCODING=utf-8 python x.py")
+
+    def test_t158ad_13_unlisted_launcher_stdbuf_env(self):
+        """D13|必須先紅|不在 `WRAPPERS` 的啟動器放最前面,掃描在第一格停下,後面的 `env FOO=1` 沒人看。"""
+        _t158ad_assert_blocked("stdbuf -o0 env FOO=1 python x.py", "FOO")
+
+    def test_t158ad_14_unlisted_launcher_nice_env(self):
+        """D14|必須先紅|同 D13,`nice` 不帶旗標。"""
+        _t158ad_assert_blocked("nice env PYTHONPATH=x python x.py", "PYTHONPATH")
+
+    def test_t158ad_15_unlisted_launcher_timeout_env_append(self):
+        """D15|必須先紅|同 D13,`timeout 5` 帶位置參數,且指派是 `+=`。"""
+        _t158ad_assert_blocked("timeout 5 env FOO+=x python x.py", "FOO")
+
+    def test_t158ad_16_unlisted_launcher_without_env_passes(self):
+        """D16|對照|未列名啟動器、沒有 `env`、沒有指派 ⇒ 不觸發本條。"""
+        _t158ad_assert_not_prefix_blocked("stdbuf -o0 python x.py")
+
+    def test_t158ad_17_unlisted_launcher_env_allowed_value_passes(self):
+        """D17|對照|未列名啟動器包 `env`,指派是例外表的允許值 ⇒ 不觸發本條。"""
+        _t158ad_assert_not_prefix_blocked("nice env PYTHONIOENCODING=utf-8 python x.py")
