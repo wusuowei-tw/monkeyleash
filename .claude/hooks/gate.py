@@ -641,11 +641,25 @@ ENV_PREFIX_ALLOWED = {
     },
 }
 
-# 第二組是 `+`(附加,`NAME+=value`)或空字串。**附加一律不算例外**(票 158 A-d):
-# 結果是「原值接上這一段」,不是逐字值,例外表的「值逐字相等」對它無從成立。
-_ENV_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\+?)=(.*)$", re.S)
+# 第二組是下標(`NAME[0]=value`,票 158 A-h)或空;第三組是 `+`(附加,`NAME+=value`)
+# 或空字串。**下標與附加一律不算例外**(票 158 A-d／A-h):
+# 結果不是「變數等於這個逐字值」,例外表的「值逐字相等」對它無從成立。
+_ENV_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?(\+?)=(.*)$", re.S)
 _PS_ENV_ASSIGN_RE = re.compile(r"^\$env:([A-Za-z_][A-Za-z0-9_]*)\s*(\+?)=\s*(.*)$",
                                re.I | re.S)
+# PowerShell 的大括號寫法 `${env:NAME} = …`(票 158 A-h)。
+_PS_ENV_BRACED_ASSIGN_RE = re.compile(
+    r"^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}\s*(\+?)=\s*(.*)$", re.I | re.S)
+
+# 切 token 與去頭尾**只認 ASCII 空白**(票 158 A-h):shell 不在 U+00A0 這類字元上切字,
+# 而 `str.split()`／無參數 `str.strip()` 會 —— `PYTHONUTF8=1<U+00A0>x` 會被切出
+# 一個逐字等於允許值的 `PYTHONUTF8=1`,段尾的則被 `strip()` 直接吃掉。
+_ASCII_WS = " \t\r\n\f\v"
+_ASCII_WS_SPLIT_RE = re.compile(r"[ \t\r\n\f\v]+")
+
+# shell **先展開再執行**的語法(票 158 A-h,裁 D 第 2 條)。閘門看的是展開前的字串,
+# 展開之後的指令長什麼樣子判不出來 —— 非許可前綴段裡出現任一個就擋「無法解析」。
+_UNPARSEABLE_SYNTAX = ("$'", '$"', "${", "$(", "`", "<(", ">(")
 
 # 段首的群組符號(票 158 A-d):`(FOO=1 …)`、`{ FOO=1 …; }`、`! FOO=1 …`。
 # 不剝的話第一個 token 不像指派,掃描在第一格就停下。
@@ -1199,9 +1213,9 @@ def _strip_group_openers(toks):
     return toks
 
 
-def _assignment(m, name_group, op_group, value_group):
-    """指派比對結果 → `(名, 值原文)`;附加(`+=`)的值記 None —— 沒有逐字值可比。"""
-    if m.group(op_group):
+def _assignment(m, name_group, op_group, value_group, sub_group=None):
+    """指派比對結果 → `(名, 值原文)`;附加(`+=`)或下標(`NAME[…]=`)的值記 None —— 沒有逐字值可比。"""
+    if m.group(op_group) or (sub_group is not None and m.group(sub_group)):
         return m.group(name_group), None
     return m.group(name_group), m.group(value_group)
 
@@ -1211,102 +1225,72 @@ def _bare(tok):
 
     **比對前一律先去引號、去跳脫、取程式名(票 158 A-f)**:shell 交給 `env`／`sudo` 的是
     去引號後的字串,閘門看的是原字串,兩邊看到的不一樣就是洞。
-    命令替換 `$(…)` 是切段問題,見票 164。
+    最後再剝掉開頭的 `$`(票 158 A-h):`$'PYTHONPATH=x'` 才認得出是指派。
+    這類段其實已被 `_UNPARSEABLE_SYNTAX` 擋成無法解析,這裡是雙保險。
 
-    **只給辨識(是不是指派／包裝器／旗標),不給判例外** —— 它不是 shell 的實際語意:
+    **只給辨識(是不是指派形狀),不給判例外** —— 它不是 shell 的實際語意:
     單引號裡的反斜線 shell 會保留,`'PYTHONUTF8=\\1'` 程式收到的是 `\\1`,
     拿 `_bare` 的值去比例外表就會被洗成 `1`。
     引號去掉全部而不只成對:`seg.split()` 會把一個引號字串切成好幾個 token
     (`env -S 'PYTHONPATH=x …'` 的那一格是 `'PYTHONPATH=x`),也接住 `"PYTHON"PATH=x`。
     """
-    return re.sub(r"\\(.?)", r"\1", tok, flags=re.S).replace("'", "").replace('"', "")
-
-
-def _is_wrapper(tok):
-    """原 token 或 `_bare` 之後,任一取程式名在 `WRAPPERS` 就算包裝器(多認的方向)。
-
-    兩個都看:`_bare` 先吃掉 `\\`,`C:\\x\\env.exe` 只有原 token 經 `_program_name` 認得出來;
-    `s\\udo` 則只有 `_bare` 之後認得出來。
-    """
-    return _program_name(tok) in WRAPPERS or _program_name(_bare(tok)) in WRAPPERS
+    return (re.sub(r"\\(.?)", r"\1", tok, flags=re.S)
+            .replace("'", "").replace('"', "").lstrip("$"))
 
 
 def _prefix_assignment(tok):
     """指派形狀 token → `(名, 可比例外的值或 None)`;不是指派形狀 → None。
 
     **辨識看 `_bare`,例外的值只從原 token 取(不經 `_bare`)**:原 token 含反斜線、
-    附加(`+=`)、或要剝超過一對引號才看得出指派 ⇒ 值記 None,不可能是例外。
-    無法確認實際語意逐字等於允許值 ⇒ 擋。
+    下標(`NAME[…]=`)、附加(`+=`)、或要剝超過一對引號才看得出指派 ⇒ 值記 None,
+    不可能是例外。無法確認實際語意逐字等於允許值 ⇒ 擋。
     """
     m = _ENV_ASSIGN_RE.match(_bare(tok))
     if not m:
         return None
-    if m.group(2) or "\\" in tok:
+    if m.group(2) or m.group(3) or "\\" in tok:
         return m.group(1), None
     exact = _ENV_ASSIGN_RE.match(tok)
     if exact:
-        return _assignment(exact, 1, 2, 3)
+        return _assignment(exact, 1, 3, 4, sub_group=2)
     inner = _unquote_once(tok)
     exact = _ENV_ASSIGN_RE.match(inner) if inner != tok else None
-    if exact and not exact.group(2) and not any(q in exact.group(3) for q in "'\""):
-        return exact.group(1), exact.group(3)
+    if (exact and not exact.group(2) and not exact.group(3)
+            and not any(q in exact.group(4) for q in "'\"")):
+        return exact.group(1), exact.group(4)
     return m.group(1), None
 
 
 def _env_prefix_assignments(seg):
-    """一段指令在指令位置前的環境指派:`[(名, 值原文或 None)]`(None = `+=` 附加)。
+    """一段指令裡**每一個**指派形狀的 token:`[(名, 值原文或 None)]`
+    (None = 附加、下標,或無法確認逐字值)。
 
-    三種寫法:`NAME=value …`、`env [旗標] NAME=value …`(包裝器照 `WRAPPERS` 跳)、
-    PowerShell `$env:NAME = value`(整段就是指派)。段首群組符號先剝掉。
+    PowerShell `$env:NAME = value`／`${env:NAME} = value` 整段就是指派;其餘逐 token 判,
+    段首群組符號先剝掉。
 
-    **包裝器之後出現過旗標 ⇒ fail-closed(票 158 A-d,Jeff 裁 C′)**:
-    旗標可能帶參數(`env -u NAME`、`sudo -u root`、`env -C dir`),各包裝器規則不同,
-    從字串分不出程式從哪一格開始 —— 猜錯就是 A-c 那個繞過(掃描停在旗標參數上,
-    後面的指派沒人看)。所以此時該段其餘每一個指派形狀的 token 都當成前綴判。
-    **代價是多擋**:`sudo -u root make A=1` 的 `A=1` 其實是 make 的參數,也會被擋;
+    **不找「指令位置」,整段保守擋(票 158 A-h,Jeff 2026-10-27 裁 D)**:
+    指令位置在 shell 文法裡寫法太多 —— 包裝器帶旗標、未列名啟動器、引號與跳脫、
+    重導向夾在指派前、保留字開頭、展開 —— A-d 到 A-f 逐形補了三輪,A-g 審查
+    第四輪仍找到漏。所以改成:這一段裡有指派形狀就當前綴判,不論它在指令位置前或後。
+    包裝器、旗標、保留字、重導向都不是指派形狀,略過即可,不用認。
+    **代價是多擋**:`make A=1`、`sudo -u root make A=1` 的 `A=1` 其實是程式參數,也會被擋;
     這是 Jeff 接受的「看不懂就擋」。
 
     單一 `&` 與換行不是切點,`git status & FOO=1 …` 在進到這裡之前就被許可前綴放行 ——
     那是另一個洞(票 164),本函式不處理。
     """
-    toks = _strip_group_openers(seg.split())
-    m = _PS_ENV_ASSIGN_RE.match(" ".join(toks))
-    if m:
-        name, value = _assignment(m, 1, 2, 3)
-        return [(name, value if value is None else value.strip())]
+    toks = _strip_group_openers(_ASCII_WS_SPLIT_RE.split(seg.strip(_ASCII_WS)))
+    joined = " ".join(toks)
+    for ps_re in (_PS_ENV_ASSIGN_RE, _PS_ENV_BRACED_ASSIGN_RE):
+        m = ps_re.match(joined)
+        if m:
+            name, value = _assignment(m, 1, 2, 3)
+            return [(name, value if value is None else value.strip(_ASCII_WS))]
     out = []
-    seen_wrapper = False
-    i = 0
-    while i < len(toks):
-        tok = toks[i]
-        if _is_wrapper(tok):
-            seen_wrapper = True
-            i += 1
-            continue
+    for tok in toks:
         assignment = _prefix_assignment(tok)
-        if assignment is None:
-            break
-        out.append(assignment)
-        i += 1
-    # 從哪一格起,其餘指派形狀 token 全當前綴判(None = 不觸發)。
-    tail = None
-    if seen_wrapper and any(_bare(t).startswith("-") for t in toks[i:]):
-        tail = i
-    # **段內任何位置出現包裝器 ⇒ 它之後的指派全當前綴判(票 158 A-d2 認 `env`,A-f 擴到 `WRAPPERS` 全部)**:
-    # 不在 `WRAPPERS` 的啟動器(`stdbuf -o0`、`nice`、`timeout 5`)放在最前面時,
-    # 掃描在第一格就停下,後面的 `env FOO=1`、`sudo FOO=1` 沒人看。啟動器列不完 ——
-    # 所以認包裝器本身,不去猜它前面是誰。代價是多擋(`nice sudo make A=1` 的 `A=1`)。
-    # 同一族的另一半(直譯器被未列名啟動器包住,`_command_position` 不跳過)在票 164。
-    for j, t in enumerate(toks):
-        if _is_wrapper(t):
-            k = max(j + 1, i)
-            tail = k if tail is None else min(tail, k)
-            break
-    if tail is not None:
-        for tok in toks[tail:]:
-            assignment = _prefix_assignment(tok)
-            if assignment is not None:
-                out.append(assignment)
+        if assignment is not None:
+            out.append(assignment)
     return out
 
 
@@ -1314,10 +1298,27 @@ def env_prefix_violation(command):
     """R7/環境前綴(票 158 A3 之一)。回 None 或擋下訊息。
 
     **只點名變數名,不印值** —— 值可能是任何東西(含 token),而這則訊息會進影子日誌。
+
+    只看**非許可前綴段**(票 158 A-h,裁 D 字面):許可段裡的展開語法與指派屬切段問題(票 164)。
+    每段先查原文有沒有 `_UNPARSEABLE_SYNTAX`(不經 `_bare`),有 ⇒ 擋「無法解析」,
+    訊息附列段內指派變數名 —— 變數名本來就在環境前綴訊息裡印,沒有新的外洩面。
     """
     bad = []
     for seg in SEGMENT_SPLIT_RE.split(command or ""):
-        for name, value in _env_prefix_assignments(seg):
+        if _allowed_cmd_prefix(seg.strip()):
+            continue
+        assignments = _env_prefix_assignments(seg)
+        hits = [s for s in _UNPARSEABLE_SYNTAX if s in seg]
+        if hits:
+            names = []
+            for name, _value in assignments:
+                if name not in names:
+                    names.append(name)
+            return (
+                "[R7/無法解析] 這一段含 shell 先展開再執行的語法（%s）；段內指派變數：%s。"
+                "閘門看的是展開前的字串，判不出實際指令——出口：改成不需要展開的寫法。"
+                % ("，".join(hits), "，".join(names) or "無"))
+        for name, value in assignments:
             entry = ENV_PREFIX_ALLOWED.get(name)
             if entry and value is not None and _unquote_once(value) in entry["values"]:
                 continue
@@ -1326,7 +1327,7 @@ def env_prefix_violation(command):
     if not bad:
         return None
     return (
-        "[R7/環境前綴] 指令位置前有環境變數指派:%s —— 不在例外表 "
+        "[R7/環境前綴] 非許可前綴段裡有環境變數指派形狀:%s —— 不在例外表 "
         "`ENV_PREFIX_ALLOWED`,或值不是允許值。\n"
         "     前綴會改變程式的行為(例如 PYTHONPATH 讓同一支腳本載入別的模組),\n"
         "     而那從指令字串上看不出來 —— 看不出寫入不等於沒有寫入。\n"
@@ -1399,7 +1400,9 @@ def _bash_write_verdict(command):
     """
     if not command or not command.strip():
         return None, "empty"
-    cmd = command.strip()
+    # 頭尾也只剝 ASCII 空白(票 158 A-h):U+00A0 在段尾會被無參數 `strip()` 吃掉,
+    # `PYTHONUTF8=1<U+00A0>` 洗成合法的 `1`。
+    cmd = command.strip(_ASCII_WS)
 
     # **內嵌直譯器先判**(票 112):放在許可清單之前,因為許可是**指令前綴**的性質,
     # 而內嵌程式碼的不可判定性不會因為前綴被許可就消失 ——
