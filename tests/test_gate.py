@@ -9038,3 +9038,50 @@ class TestT158ADPrefixBypass:
         msg = gate.bash_write_violation('git commit -m "$(cat f)" && python x.py')
         assert msg is None or (_T158AD_TAG not in msg
                                and _T158AD_UNPARSEABLE_TAG not in msg), msg
+
+    # ── A-j(裁 A′,Jeff 2026-10-27):A-i 審查找到 F1 大括號展開、F2 控制字元切字、S1 `$[` ──
+    # 萬用字元 `*`／`?` 依賴當前目錄檔名,記票 164〈待查〉,不在本站。
+
+    def test_t158ad_50_brace_expansion_in_name(self):
+        """D50|必須先紅|F1:大括號展開 `PYTHON{PATH,PATH}=x`,bash 展開成 `PYTHONPATH=x PYTHONPATH=x`。"""
+        _t158ad_assert_unparseable("env PYTHON{PATH,PATH}=x python x.py")
+
+    def test_t158ad_51_brace_expansion_whole_assign(self):
+        """D51|必須先紅|F1:整個指派包在大括號裡、尾逗號,bash 展開成 `PYTHONPATH=x`。"""
+        _t158ad_assert_unparseable("env {PYTHONPATH=x,} python x.py")
+
+    def test_t158ad_52_brace_sequence_expansion(self):
+        """D52|必須先紅|F1:序列式大括號展開 `{A..B}`。"""
+        _t158ad_assert_unparseable("sudo PYTHON{A..B}=x python x.py")
+
+    def test_t158ad_53_legacy_arithmetic_expansion(self):
+        """D53|必須先紅|S1:舊式算術展開 `$[…]` 裡的指派(變數已匯出時改到子程序環境)。"""
+        _t158ad_assert_unparseable("python x.py $[PYTHONPATH=1]")
+
+    def test_t158ad_54_vertical_tab_mid_value(self):
+        """D54|必須先紅|F2:`\\v` 在 bash 是字的一部分,值是 `1\\vX`;閘門在 `\\v` 上切開會洗成 `1`。"""
+        _t158ad_assert_blocked("PYTHONUTF8=1\vX python x.py", "PYTHONUTF8")
+
+    def test_t158ad_55_carriage_return_mid_value(self):
+        """D55|必須先紅|F2:同 D54,`\\r`。"""
+        _t158ad_assert_blocked("PYTHONUTF8=1\rX python x.py", "PYTHONUTF8")
+
+    def test_t158ad_56_form_feed_value_end(self):
+        """D56|待觀察|F2:`\\f` 在值尾、後接空格;bash 的值是 `1\\f` 不是逐字 `1`。"""
+        _t158ad_assert_blocked("PYTHONUTF8=1\f python x.py", "PYTHONUTF8")
+
+    def test_t158ad_57_braces_without_expansion_not_unparseable(self):
+        """D57|對照|大括號內無逗號、無 `..`,不是大括號展開 ⇒ 不被「無法解析」擋。"""
+        msg = gate.bash_write_violation("awk '{print}' f.txt")
+        assert msg is None or _T158AD_UNPARSEABLE_TAG not in msg, msg
+
+    def test_t158ad_58_tab_still_splits(self):
+        """D58|對照|tab 仍是 bash 的切字字元,`PYTHONUTF8=1` 是例外值 ⇒ 不觸發本條。"""
+        cmd = "python x.py\tPYTHONUTF8=1"
+        _t158ad_assert_not_prefix_blocked(cmd)
+        msg = gate.bash_write_violation(cmd)
+        assert msg is None or _T158AD_UNPARSEABLE_TAG not in msg, msg
+
+    def test_t158ad_59_brace_expansion_with_quoted_space(self):
+        """D59|必須先紅|F1:大括號內帶引號空白,bash 仍展開成兩個指派;正規式不排除空白。"""
+        _t158ad_assert_unparseable("env {PYTHONPATH=x,'FOO=1 bar'} python x.py")

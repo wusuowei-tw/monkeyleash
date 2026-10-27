@@ -19,10 +19,11 @@
 ## 待查
 
 - 未列名啟動器（`stdbuf`、`nice`、`timeout` 等，不在 `WRAPPERS`）包住直譯器時，`_command_position` 不跳過它們，內嵌直譯器判定與量測都看不到（例：`nice python -c …`）。〔讀碼推論，未實驗；票 158 A-d2 記錄〕
+- 萬用字元 `*`／`?`（票 158 A-i S2，Jeff 2026-10-27 裁記本票）：`env PYTHONPAT?=x …` 在當前目錄存在名為 `PYTHONPATH=x` 的檔時會被 bash 展開成指派；閘門比不中。成立條件是先建那個檔（走檔案閘門）。〔讀碼推論，未實驗〕
 
 ## 待裁
 
-- `export PYTHONPATH=x; python x.py`（指派是另一個指令、不在指令位置前）是否納入前綴規則。
+- `export PYTHONPATH=x; python x.py`（指派是另一個指令、不在指令位置前）是否納入前綴規則。同家族（不帶 `=` 的設值）：`read NAME < f`、`printf -v NAME …`、`set -a`、PowerShell `Set-Item env:NAME`、`[Environment]::SetEnvironmentVariable(…)`（票 158 A-i P2-4；`export NAME=x` 本身已被裁 D 附帶擋下）。
 
 ## 修正紀錄
 
@@ -31,3 +32,4 @@
 - 2026-10-27（美東）：併入命令替換（票 158 A-f1）。
 - 2026-10-27（美東）：命令替換的非許可前綴半邊交票 158 A-h 修補中；本票其餘項目（&／換行、許可前綴半邊、〈待查〉未列名啟動器、〈待裁〉export）不變。
 - 2026-10-27（美東）：命令替換的非許可前綴半邊已由票 158 A-h 收掉；本票其餘項目不變。
+- 2026-10-27（美東）：補〈待查〉萬用字元、〈待裁〉export 家族（票 158 A-j1）。
