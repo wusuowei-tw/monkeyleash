@@ -641,9 +641,15 @@ ENV_PREFIX_ALLOWED = {
     },
 }
 
-_ENV_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
-_PS_ENV_ASSIGN_RE = re.compile(r"^\$env:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$",
+# 第二組是 `+`(附加,`NAME+=value`)或空字串。**附加一律不算例外**(票 158 A-d):
+# 結果是「原值接上這一段」,不是逐字值,例外表的「值逐字相等」對它無從成立。
+_ENV_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\+?)=(.*)$", re.S)
+_PS_ENV_ASSIGN_RE = re.compile(r"^\$env:([A-Za-z_][A-Za-z0-9_]*)\s*(\+?)=\s*(.*)$",
                                re.I | re.S)
+
+# 段首的群組符號(票 158 A-d):`(FOO=1 …)`、`{ FOO=1 …; }`、`! FOO=1 …`。
+# 不剝的話第一個 token 不像指派,掃描在第一格就停下。
+_GROUP_OPENERS = ("(", "{", "!")
 
 # `>` / `>>` / `2>` 後面那一段就是重導向目標。`2>&1` 不算(fd 重導向,不落地)。
 REDIRECT_RE = re.compile(r"(?<!\d)(?<!&)>>?\s*([^\s;&|>]+)")
@@ -1180,34 +1186,80 @@ def _unquote_once(value):
     return value
 
 
+def _strip_group_openers(toks):
+    """剝掉段首的群組符號:第一個 token 開頭的 `(`(可多個),以及獨立的 `(`/`{`/`!`。"""
+    toks = list(toks)
+    while toks:
+        head = toks[0].lstrip("(")
+        if head in ("",) + _GROUP_OPENERS:
+            toks.pop(0)
+            continue
+        toks[0] = head
+        break
+    return toks
+
+
+def _assignment(m, name_group, op_group, value_group):
+    """指派比對結果 → `(名, 值原文)`;附加(`+=`)的值記 None —— 沒有逐字值可比。"""
+    if m.group(op_group):
+        return m.group(name_group), None
+    return m.group(name_group), m.group(value_group)
+
+
 def _env_prefix_assignments(seg):
-    """一段指令在指令位置前的環境指派:`[(名, 值原文)]`。
+    """一段指令在指令位置前的環境指派:`[(名, 值原文或 None)]`(None = `+=` 附加)。
 
     三種寫法:`NAME=value …`、`env [旗標] NAME=value …`(包裝器照 `WRAPPERS` 跳)、
-    PowerShell `$env:NAME = value`(整段就是指派)。
+    PowerShell `$env:NAME = value`(整段就是指派)。段首群組符號先剝掉。
+
+    **包裝器之後出現過旗標 ⇒ fail-closed(票 158 A-d,Jeff 裁 C′)**:
+    旗標可能帶參數(`env -u NAME`、`sudo -u root`、`env -C dir`),各包裝器規則不同,
+    從字串分不出程式從哪一格開始 —— 猜錯就是 A-c 那個繞過(掃描停在旗標參數上,
+    後面的指派沒人看)。所以此時該段其餘每一個指派形狀的 token 都當成前綴判。
+    **代價是多擋**:`sudo -u root make A=1` 的 `A=1` 其實是 make 的參數,也會被擋;
+    這是 Jeff 接受的「看不懂就擋」。
+
+    單一 `&` 與換行不是切點,`git status & FOO=1 …` 在進到這裡之前就被許可前綴放行 ——
+    那是另一個洞(票 164),本函式不處理。
     """
-    s = seg.strip()
-    m = _PS_ENV_ASSIGN_RE.match(s)
+    toks = _strip_group_openers(seg.split())
+    m = _PS_ENV_ASSIGN_RE.match(" ".join(toks))
     if m:
-        return [(m.group(1), m.group(2).strip())]
+        name, value = _assignment(m, 1, 2, 3)
+        return [(name, value if value is None else value.strip())]
     out = []
-    toks = s.split()
+    seen_wrapper = False
     i = 0
-    after_env = False
     while i < len(toks):
         tok = toks[i]
         if tok.lower() in WRAPPERS:
-            after_env = tok.lower() == "env"
-            i += 1
-            continue
-        if after_env and tok.startswith("-"):
+            seen_wrapper = True
             i += 1
             continue
         m = _ENV_ASSIGN_RE.match(tok)
         if not m:
             break
-        out.append((m.group(1), m.group(2)))
+        out.append(_assignment(m, 1, 2, 3))
         i += 1
+    # 從哪一格起,其餘指派形狀 token 全當前綴判(None = 不觸發)。
+    tail = None
+    if seen_wrapper and any(t.startswith("-") for t in toks[i:]):
+        tail = i
+    # **段內任何位置出現 `env` ⇒ 它之後的指派全當前綴判(票 158 A-d2,Jeff 裁)**:
+    # 不在 `WRAPPERS` 的啟動器(`stdbuf -o0`、`nice`、`timeout 5`)放在最前面時,
+    # 掃描在第一格就停下,後面的 `env FOO=1` 沒人看。啟動器列不完,而 `env` 的
+    # 用途就是設環境 —— 所以認 `env` 本身,不去猜它前面是誰。
+    # 同一族的另一半(直譯器被未列名啟動器包住,`_command_position` 不跳過)在票 164。
+    for j, t in enumerate(toks):
+        if _program_name(t) == "env":
+            k = max(j + 1, i)
+            tail = k if tail is None else min(tail, k)
+            break
+    if tail is not None:
+        for tok in toks[tail:]:
+            m = _ENV_ASSIGN_RE.match(tok)
+            if m:
+                out.append(_assignment(m, 1, 2, 3))
     return out
 
 
@@ -1220,7 +1272,7 @@ def env_prefix_violation(command):
     for seg in SEGMENT_SPLIT_RE.split(command or ""):
         for name, value in _env_prefix_assignments(seg):
             entry = ENV_PREFIX_ALLOWED.get(name)
-            if entry and _unquote_once(value) in entry["values"]:
+            if entry and value is not None and _unquote_once(value) in entry["values"]:
                 continue
             if name not in bad:
                 bad.append(name)
