@@ -8820,6 +8820,14 @@ def _t158ad_assert_not_prefix_blocked(cmd):
     assert msg is None or _T158AD_TAG not in msg, (cmd, msg)
 
 
+_T158AD_UNPARSEABLE_TAG = "[R7/無法解析]"
+
+
+def _t158ad_assert_unparseable(cmd):
+    msg = gate.bash_write_violation(cmd)
+    assert msg and _T158AD_UNPARSEABLE_TAG in msg, (cmd, msg)
+
+
 class TestT158ADPrefixBypass:
 
     def test_t158ad_01_env_unset_flag(self):
@@ -8954,3 +8962,79 @@ class TestT158ADPrefixBypass:
     def test_t158ad_33_double_layer_quotes_not_exempt(self):
         """D33|待觀察|兩層引號;例外判定只准剝一對 ⇒ 不算例外。"""
         _t158ad_assert_blocked('env ""PYTHONUTF8=1"" python x.py', "PYTHONUTF8")
+
+    # ── A-h(裁 D,Jeff 2026-10-27):A-g 審查找到 N1～N4,改成整段保守擋 ──
+    # 非許可前綴段裡任何位置有指派形狀 ⇒ 當前綴判;有 shell 先展開再執行的語法 ⇒ 無法解析。
+
+    def test_t158ad_34_redirect_before_assign(self):
+        """D34|必須先紅|N1:重導向在指派前,第一個 token 不像指派,掃描在第一格停下。"""
+        _t158ad_assert_blocked("2>&1 PYTHONPATH=x python x.py", "PYTHONPATH")
+
+    def test_t158ad_35_input_redirect_before_assign(self):
+        """D35|必須先紅|N1:輸入重導向在指派前。"""
+        _t158ad_assert_blocked("</dev/null PYTHONPATH=x python x.py", "PYTHONPATH")
+
+    def test_t158ad_36_reserved_word_if(self):
+        """D36|必須先紅|N2:保留字 `if` 開頭,指派在第一段。"""
+        _t158ad_assert_blocked("if PYTHONPATH=x python x.py; then :; fi", "PYTHONPATH")
+
+    def test_t158ad_37_reserved_word_then(self):
+        """D37|必須先紅|N2:指派在 `then` 之後,第二段。"""
+        _t158ad_assert_blocked("if true; then PYTHONPATH=x python x.py; fi", "PYTHONPATH")
+
+    def test_t158ad_38_ansi_c_quote(self):
+        """D38|必須先紅|N3:ANSI-C 引號 `$'…'`,shell 先展開再交給 env。"""
+        _t158ad_assert_unparseable("env $'PYTHONPATH=x' python x.py")
+
+    def test_t158ad_39_param_expansion_in_name(self):
+        """D39|必須先紅|N4:變數名中間有參數展開。"""
+        _t158ad_assert_unparseable("env PYTHON${X}PATH=x python x.py")
+
+    def test_t158ad_40_param_expansion_before_wrapper(self):
+        """D40|必須先紅|N4:包裝器名前接一個展開成空字串的參數展開。"""
+        _t158ad_assert_unparseable("${PATH:0:0}env PYTHONPATH=x python x.py")
+
+    def test_t158ad_41_command_substitution(self):
+        """D41|必須先紅|命令替換 `$(…)` 裡的前綴(原併票 164 的非許可前綴半邊)。"""
+        _t158ad_assert_unparseable("$(PYTHONPATH=x python x.py)")
+
+    def test_t158ad_42_backtick_substitution(self):
+        """D42|必須先紅|同 D41,反引號。"""
+        _t158ad_assert_unparseable("echo `PYTHONPATH=x python x.py`")
+
+    def test_t158ad_43_powershell_braced_env(self):
+        """D43|必須先紅|PowerShell `${env:NAME}=`;擋為無法解析或環境前綴皆可。"""
+        msg = gate.bash_write_violation("${env:PYTHONPATH}='x'")
+        assert msg and (_T158AD_UNPARSEABLE_TAG in msg
+                        or (_T158AD_TAG in msg and "PYTHONPATH" in msg)), msg
+
+    def test_t158ad_44_subscript_assign(self):
+        """D44|必須先紅|`NAME[0]=` 下標指派不被認成指派。"""
+        _t158ad_assert_blocked("PYTHONPATH[0]=x python x.py", "PYTHONPATH")
+
+    def test_t158ad_45_unicode_space_mid_segment(self):
+        """D45|待觀察|U+00A0 不是 shell 的切字字元,值不是逐字 `1`;`str.split()` 會在它上面切開。"""
+        _t158ad_assert_blocked("PYTHONUTF8=1 x python x.py", "PYTHONUTF8")
+
+    def test_t158ad_46_long_option_not_assign(self):
+        """D46|對照|`--opt=val` 以 `-` 開頭,不是指派形狀 ⇒ 不觸發本條。"""
+        cmd = "python x.py --opt=val"
+        _t158ad_assert_not_prefix_blocked(cmd)
+        msg = gate.bash_write_violation(cmd)
+        assert msg is None or _T158AD_UNPARSEABLE_TAG not in msg, msg
+
+    def test_t158ad_47_allowed_prefix_substitution_known_gap(self):
+        """D47|對照|**已知缺口**:許可前綴整段先放行,裁 D 不改這條(票 164 的切段家族)。"""
+        msg = gate.bash_write_violation("git status $(date)")
+        assert msg is None or (_T158AD_TAG not in msg
+                               and _T158AD_UNPARSEABLE_TAG not in msg), msg
+
+    def test_t158ad_48_unicode_space_segment_end(self):
+        """D48|待觀察|U+00A0 在段尾;無參數 `strip()` 會吃掉它,把值洗成允許值 `1`。"""
+        _t158ad_assert_blocked("python x.py PYTHONUTF8=1 ", "PYTHONUTF8")
+
+    def test_t158ad_49_mixed_allowed_segment_expansion_skipped(self):
+        """D49|對照|混合指令:許可前綴段裡的展開語法不查(屬票 164),另一段無指派無展開。"""
+        msg = gate.bash_write_violation('git commit -m "$(cat f)" && python x.py')
+        assert msg is None or (_T158AD_TAG not in msg
+                               and _T158AD_UNPARSEABLE_TAG not in msg), msg
