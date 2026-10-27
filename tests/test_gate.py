@@ -8890,3 +8890,67 @@ class TestT158ADPrefixBypass:
     def test_t158ad_17_unlisted_launcher_env_allowed_value_passes(self):
         """D17|對照|未列名啟動器包 `env`,指派是例外表的允許值 ⇒ 不觸發本條。"""
         _t158ad_assert_not_prefix_blocked("nice env PYTHONIOENCODING=utf-8 python x.py")
+
+    def test_t158ad_18_env_double_quoted_assign(self):
+        """D18|必須先紅|指派整個加雙引號,shell 交給 env 的是去引號後的 `PYTHONPATH=x`。"""
+        _t158ad_assert_blocked('env "PYTHONPATH=x" python x.py', "PYTHONPATH")
+
+    def test_t158ad_19_env_single_quoted_assign(self):
+        """D19|必須先紅|同 D18,單引號。"""
+        _t158ad_assert_blocked("env 'FOO=1' python x.py", "FOO")
+
+    def test_t158ad_20_env_escaped_equals(self):
+        """D20|必須先紅|`=` 前加反斜線跳脫,shell 去跳脫後仍是指派。"""
+        _t158ad_assert_blocked("env PYTHONPATH\\=x python x.py", "PYTHONPATH")
+
+    def test_t158ad_21_env_split_string(self):
+        """D21|必須先紅|`env -S` 把整串指令塞在一個引號字串裡,指派藏在引號開頭。"""
+        _t158ad_assert_blocked("env -S 'PYTHONPATH=x python x.py'", "PYTHONPATH")
+
+    def test_t158ad_22_wrapper_with_path(self):
+        """D22|必須先紅|包裝器帶路徑,`tok.lower() in WRAPPERS` 認不出來。"""
+        _t158ad_assert_blocked("/usr/bin/sudo PYTHONPATH=x python x.py", "PYTHONPATH")
+
+    def test_t158ad_23_wrapper_quoted(self):
+        """D23|必須先紅|包裝器加引號。"""
+        _t158ad_assert_blocked('"sudo" PYTHONPATH=x python x.py', "PYTHONPATH")
+
+    def test_t158ad_24_wrapper_quoted_flag(self):
+        """D24|必須先紅|旗標加引號,`startswith("-")` 看不到。"""
+        _t158ad_assert_blocked('sudo "-E" PYTHONPATH=x python x.py', "PYTHONPATH")
+
+    def test_t158ad_25_unlisted_launcher_sudo(self):
+        """D25|必須先紅|未列名啟動器包住 `sudo`;A-d2 的段內掃描只認 `env`。"""
+        _t158ad_assert_blocked("nice sudo PYTHONPATH=x python x.py", "PYTHONPATH")
+
+    def test_t158ad_26_env_quoted_allowed_value_passes(self):
+        """D26|對照|整個指派加一對引號,剝一對之後逐字是允許值 ⇒ 不觸發本條。"""
+        _t158ad_assert_not_prefix_blocked('env "PYTHONIOENCODING=utf-8" python x.py')
+
+    def test_t158ad_27_wrapper_with_path_without_assign_passes(self):
+        """D27|對照|包裝器帶路徑但沒有指派 ⇒ 不觸發本條。"""
+        _t158ad_assert_not_prefix_blocked("/usr/bin/sudo python x.py")
+
+    def test_t158ad_28_wrapper_name_with_inner_escape(self):
+        """D28|必須先紅|包裝器名中間有反斜線跳脫;`_program_name` 把 `\\` 換成 `/` 後 basename 是 `udo`。"""
+        _t158ad_assert_blocked("s\\udo PYTHONPATH=x python x.py", "PYTHONPATH")
+
+    def test_t158ad_29_wrapper_name_with_leading_escape(self):
+        """D29|待觀察|包裝器名前加反斜線跳脫。"""
+        _t158ad_assert_blocked("\\sudo PYTHONPATH=x python x.py", "PYTHONPATH")
+
+    def test_t158ad_30_quoted_backslash_value_not_laundered(self):
+        """D30|待觀察|單引號裡的反斜線 shell 會保留,程式收到 `\\1` 不是 `1`;去跳脫後比例外表會被洗成允許值。"""
+        _t158ad_assert_blocked("env 'PYTHONUTF8=\\1' python x.py", "PYTHONUTF8")
+
+    def test_t158ad_31_unquoted_backslash_value_not_exempt(self):
+        """D31|待觀察|無引號時 shell 會吃掉反斜線變 `1`,但閘門無法確認實際語意 ⇒ 仍擋。"""
+        _t158ad_assert_blocked("PYTHONUTF8=\\1 python x.py", "PYTHONUTF8")
+
+    def test_t158ad_32_env_quoted_allowed_value_utf8_passes(self):
+        """D32|對照|同 D26,`PYTHONUTF8=1` 剝一對引號後逐字是允許值 ⇒ 不觸發本條。"""
+        _t158ad_assert_not_prefix_blocked('env "PYTHONUTF8=1" python x.py')
+
+    def test_t158ad_33_double_layer_quotes_not_exempt(self):
+        """D33|待觀察|兩層引號;例外判定只准剝一對 ⇒ 不算例外。"""
+        _t158ad_assert_blocked('env ""PYTHONUTF8=1"" python x.py', "PYTHONUTF8")
