@@ -645,8 +645,10 @@ ENV_PREFIX_ALLOWED = {
 # 或空字串。**下標與附加一律不算例外**(票 158 A-d／A-h):
 # 結果不是「變數等於這個逐字值」,例外表的「值逐字相等」對它無從成立。
 _ENV_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?(\+?)=(.*)$", re.S)
-_PS_ENV_ASSIGN_RE = re.compile(r"^\$env:([A-Za-z_][A-Za-z0-9_]*)\s*(\+?)=\s*(.*)$",
-                               re.I | re.S)
+# PowerShell `$env:NAME = …` **不錨在段首**(票 158 A-m,P-1):指派可以包在
+# `if (…) { }`、`& { }`、`[void](…)` 裡,或接在 `$null = ` 之後 —— 只比段首就認不出。
+# 用 `finditer` 在段內任何位置找;值另取(見 `_ps_env_assignments`)。
+_PS_ENV_ASSIGN_RE = re.compile(r"\$env:([A-Za-z_][A-Za-z0-9_]*)\s*(\+?)=", re.I)
 # PowerShell 的大括號寫法 `${env:NAME} = …`(票 158 A-h)。
 _PS_ENV_BRACED_ASSIGN_RE = re.compile(
     r"^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}\s*(\+?)=\s*(.*)$", re.I | re.S)
@@ -660,6 +662,11 @@ _PS_ENV_BRACED_ASSIGN_RE = re.compile(
 _ASCII_WS = " \t\n"
 _ASCII_WS_SPLIT_RE = re.compile(r"[ \t\n]+")
 
+# 辨識前剝掉 token 開頭的非 ASCII 可見字元(票 158 A-m,P-2):PowerShell 把 U+00A0、`\f`、`\v`
+# 當空白,`<U+00A0>$env:PYTHONPATH=x` 對它就是指派;切字與頭尾剝除仍照 bash 語意不動,
+# 只在 `_bare`(辨識用)剝 —— 剝多了只會讓更多 token 被認成指派(多擋方向)。
+_LEADING_JUNK_RE = re.compile(r"^[^\x21-\x7e]+")
+
 # shell **先展開再執行**的語法(票 158 A-h,裁 D 第 2 條)。閘門看的是展開前的字串,
 # 展開之後的指令長什麼樣子判不出來 —— 非許可前綴段裡出現任一個就擋「無法解析」。
 # `$[` 是舊式算術展開(票 158 A-j,S1):`$[PYTHONPATH=1]` 在變數已匯出時改到子程序環境。
@@ -670,7 +677,9 @@ _UNPARSEABLE_SYNTAX = ("$'", '$"', "${", "$(", "`", "<(", ">(", "$[")
 # 只認「大括號內含逗號或 `..`」。**不排除空白**:`{PYTHONPATH=x,'FOO=1 bar'}` 大括號內帶
 # 引號空白,bash 一樣展開成兩個指派;排除空白就比不中,採保守擋。
 # 萬用字元 `*`／`?` 依賴當前目錄檔名,記票 164〈待查〉,不在這裡。
-_BRACE_EXPANSION_RE = re.compile(r"\{[^{}]*(,|\.\.)[^{}]*\}")
+# **不用單一正規式**(票 158 A-m,P-3):選項本身含大括號時,`[^{}]` 碰到內層 `{` 就失敗,
+# 而任何一條正規式都只涵蓋一種巢狀順序(`{PATH,{}}` 與 `{{},PATH}` 不可能同時對)。
+# 改用深度計數,見 `_brace_expansion_hit`。
 
 # 段首的群組符號(票 158 A-d):`(FOO=1 …)`、`{ FOO=1 …; }`、`! FOO=1 …`。
 # 不剝的話第一個 token 不像指派,掃描在第一格就停下。
@@ -1244,7 +1253,9 @@ def _bare(tok):
     拿 `_bare` 的值去比例外表就會被洗成 `1`。
     引號去掉全部而不只成對:`seg.split()` 會把一個引號字串切成好幾個 token
     (`env -S 'PYTHONPATH=x …'` 的那一格是 `'PYTHONPATH=x`),也接住 `"PYTHON"PATH=x`。
+    第一步先剝開頭的非 ASCII 可見字元(票 158 A-m,P-2;理由見 `_LEADING_JUNK_RE`)。
     """
+    tok = _LEADING_JUNK_RE.sub("", tok)
     return (re.sub(r"\\(.?)", r"\1", tok, flags=re.S)
             .replace("'", "").replace('"', "").lstrip("$"))
 
@@ -1272,12 +1283,31 @@ def _prefix_assignment(tok):
     return m.group(1), None
 
 
+def _ps_env_assignments(seg):
+    """段內**每一個** PowerShell `$env:NAME = …` 指派:`[(名, 值或 None)]`(票 158 A-m,P-1)。
+
+    值取 `=` 之後到段尾。值裡還有另一個 `$env:` 指派、`;`、`}`、`)`、引號不成對,
+    或是 `+=` ⇒ 值記 None —— 指派包在區塊或括號裡時,段尾不是值的結尾,
+    無法確認逐字值就不可能是例外(多擋方向)。`$env:NAME` 後面沒有 `=` 是讀取,不收。
+    """
+    out = []
+    for m in _PS_ENV_ASSIGN_RE.finditer(seg):
+        value = seg[m.end():].strip(_ASCII_WS)
+        if (m.group(2) or _PS_ENV_ASSIGN_RE.search(value)
+                or any(c in value for c in ";})")
+                or value.count("'") % 2 or value.count('"') % 2):
+            value = None
+        out.append((m.group(1), value))
+    return out
+
+
 def _env_prefix_assignments(seg):
     """一段指令裡**每一個**指派形狀的 token:`[(名, 值原文或 None)]`
     (None = 附加、下標,或無法確認逐字值)。
 
-    PowerShell `$env:NAME = value`／`${env:NAME} = value` 整段就是指派;其餘逐 token 判,
-    段首群組符號先剝掉。
+    PowerShell `$env:NAME = value` 在段內任何位置都找(`_ps_env_assignments`);
+    `${env:NAME} = value` 只比段首(`${` 本來就擋成無法解析,這裡只為訊息點名);
+    其餘逐 token 判,段首群組符號先剝掉。
 
     **不找「指令位置」,整段保守擋(票 158 A-h,Jeff 2026-10-27 裁 D)**:
     指令位置在 shell 文法裡寫法太多 —— 包裝器帶旗標、未列名啟動器、引號與跳脫、
@@ -1290,14 +1320,13 @@ def _env_prefix_assignments(seg):
     單一 `&` 與換行不是切點,`git status & FOO=1 …` 在進到這裡之前就被許可前綴放行 ——
     那是另一個洞(票 164),本函式不處理。
     """
-    toks = _strip_group_openers(_ASCII_WS_SPLIT_RE.split(seg.strip(_ASCII_WS)))
-    joined = " ".join(toks)
-    for ps_re in (_PS_ENV_ASSIGN_RE, _PS_ENV_BRACED_ASSIGN_RE):
-        m = ps_re.match(joined)
-        if m:
-            name, value = _assignment(m, 1, 2, 3)
-            return [(name, value if value is None else value.strip(_ASCII_WS))]
-    out = []
+    seg = seg.strip(_ASCII_WS)
+    toks = _strip_group_openers(_ASCII_WS_SPLIT_RE.split(seg))
+    out = _ps_env_assignments(seg)
+    m = _PS_ENV_BRACED_ASSIGN_RE.match(" ".join(toks))
+    if m:
+        name, value = _assignment(m, 1, 2, 3)
+        out.append((name, value if value is None else value.strip(_ASCII_WS)))
     for tok in toks:
         assignment = _prefix_assignment(tok)
         if assignment is not None:
@@ -1305,12 +1334,39 @@ def _env_prefix_assignments(seg):
     return out
 
 
+def _brace_expansion_hit(seg):
+    """段原文裡的大括號展開:`["{…,…}"]`、`["{a..b}"]`、兩者或空(票 158 A-j／A-m,P-3)。
+
+    逐字元掃描、維護深度堆疊,每一層各記「這一層自己有沒有看到 `,`／`..`」;
+    遇 `}` 彈出的那一層有看到 ⇒ 命中。巢狀順序不影響(`{PATH,{}}`、`{{},PATH}` 都中)。
+    深度 0 的 `,`／`..` 不算。**不成對的大括號不算命中**(多出的 `}`、掃完仍未關的 `{`):
+    bash 只展開同一個字裡成對的 `{…}`;`{ cmd; }` 群組被 `;` 切段後留下的單個 `{`
+    在 bash 也不是展開 —— 當命中會把群組裡的指派改判成「無法解析」。
+    代價(多擋):`awk '{print a,b}'` 這類大括號內有逗號的程式文字也會中。
+    """
+    stack = []
+    hits = []
+    for i, c in enumerate(seg):
+        if c == "{":
+            stack.append(set())
+        elif c == "}":
+            if stack:
+                for sym in ("{…,…}", "{a..b}"):
+                    if sym in stack[-1] and sym not in hits:
+                        hits.append(sym)
+                stack.pop()
+        elif stack and c == ",":
+            stack[-1].add("{…,…}")
+        elif stack and seg.startswith("..", i):
+            stack[-1].add("{a..b}")
+    return hits
+
+
 def _unparseable_hits(seg):
     """段原文(不經 `_bare`)裡 shell 先展開再執行的語法符號:子字串清單,加上大括號展開
     (票 158 A-j,記成 `{…,…}` 或 `{a..b}`)。"""
     hits = [s for s in _UNPARSEABLE_SYNTAX if s in seg]
-    for m in _BRACE_EXPANSION_RE.finditer(seg):
-        sym = "{…,…}" if m.group(1) == "," else "{a..b}"
+    for sym in _brace_expansion_hit(seg):
         if sym not in hits:
             hits.append(sym)
     return hits
