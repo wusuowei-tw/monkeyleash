@@ -651,13 +651,14 @@ _PS_ENV_ASSIGN_RE = re.compile(r"^\$env:([A-Za-z_][A-Za-z0-9_]*)\s*(\+?)=\s*(.*)
 _PS_ENV_BRACED_ASSIGN_RE = re.compile(
     r"^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}\s*(\+?)=\s*(.*)$", re.I | re.S)
 
-# 切 token 與去頭尾**只認空格與 tab**(票 158 A-h／A-j):shell 不在 U+00A0 這類字元上切字,
+# 切 token 與去頭尾**只認空格、tab、換行**(票 158 A-h／A-j／A-k):shell 不在 U+00A0 這類字元上切字,
 # 而 `str.split()`／無參數 `str.strip()` 會 —— `PYTHONUTF8=1<U+00A0>x` 會被切出
 # 一個逐字等於允許值的 `PYTHONUTF8=1`,段尾的則被 `strip()` 直接吃掉。
-# 只認空格與 tab(票 158 A-j):`\r`、`\f`、`\v` 在 bash 裡是字的一部分,當空白切會把
-# `PYTHONUTF8=1<\v>X` 洗成 `1`。換行屬切段問題(票 164)。
-_ASCII_WS = " \t"
-_ASCII_WS_SPLIT_RE = re.compile(r"[ \t]+")
+# 只認空格、tab、換行(票 158 A-j／A-k):`\r`、`\f`、`\v` 在 bash 裡是字的一部分,當空白切會把
+# `PYTHONUTF8=1<\v>X` 洗成 `1`;換行是為了捕捉換行後的指派而保守切——不等於解析 shell
+# (引號、跳脫、內嵌程式碼裡的換行語意不同),副作用靠測試與審查確認。
+_ASCII_WS = " \t\n"
+_ASCII_WS_SPLIT_RE = re.compile(r"[ \t\n]+")
 
 # shell **先展開再執行**的語法(票 158 A-h,裁 D 第 2 條)。閘門看的是展開前的字串,
 # 展開之後的指令長什麼樣子判不出來 —— 非許可前綴段裡出現任一個就擋「無法解析」。
@@ -1421,7 +1422,7 @@ def _bash_write_verdict(command):
     """
     if not command or not command.strip():
         return None, "empty"
-    # 頭尾也只剝空格與 tab(票 158 A-h／A-j):U+00A0、`\f` 在段尾會被吃掉,
+    # 頭尾也只剝空格、tab、換行(票 158 A-h／A-j／A-k):U+00A0、`\f` 在段尾會被吃掉,
     # `PYTHONUTF8=1<U+00A0>` 洗成合法的 `1`。
     cmd = command.strip(_ASCII_WS)
 
