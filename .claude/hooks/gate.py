@@ -1206,6 +1206,53 @@ def _assignment(m, name_group, op_group, value_group):
     return m.group(name_group), m.group(value_group)
 
 
+def _bare(tok):
+    """辨識用的純文字:拿掉所有反斜線跳脫(`\\=` → `=`、`\\s` → `s`)與所有引號字元。
+
+    **比對前一律先去引號、去跳脫、取程式名(票 158 A-f)**:shell 交給 `env`／`sudo` 的是
+    去引號後的字串,閘門看的是原字串,兩邊看到的不一樣就是洞。
+    命令替換 `$(…)` 是切段問題,見票 164。
+
+    **只給辨識(是不是指派／包裝器／旗標),不給判例外** —— 它不是 shell 的實際語意:
+    單引號裡的反斜線 shell 會保留,`'PYTHONUTF8=\\1'` 程式收到的是 `\\1`,
+    拿 `_bare` 的值去比例外表就會被洗成 `1`。
+    引號去掉全部而不只成對:`seg.split()` 會把一個引號字串切成好幾個 token
+    (`env -S 'PYTHONPATH=x …'` 的那一格是 `'PYTHONPATH=x`),也接住 `"PYTHON"PATH=x`。
+    """
+    return re.sub(r"\\(.?)", r"\1", tok, flags=re.S).replace("'", "").replace('"', "")
+
+
+def _is_wrapper(tok):
+    """原 token 或 `_bare` 之後,任一取程式名在 `WRAPPERS` 就算包裝器(多認的方向)。
+
+    兩個都看:`_bare` 先吃掉 `\\`,`C:\\x\\env.exe` 只有原 token 經 `_program_name` 認得出來;
+    `s\\udo` 則只有 `_bare` 之後認得出來。
+    """
+    return _program_name(tok) in WRAPPERS or _program_name(_bare(tok)) in WRAPPERS
+
+
+def _prefix_assignment(tok):
+    """指派形狀 token → `(名, 可比例外的值或 None)`;不是指派形狀 → None。
+
+    **辨識看 `_bare`,例外的值只從原 token 取(不經 `_bare`)**:原 token 含反斜線、
+    附加(`+=`)、或要剝超過一對引號才看得出指派 ⇒ 值記 None,不可能是例外。
+    無法確認實際語意逐字等於允許值 ⇒ 擋。
+    """
+    m = _ENV_ASSIGN_RE.match(_bare(tok))
+    if not m:
+        return None
+    if m.group(2) or "\\" in tok:
+        return m.group(1), None
+    exact = _ENV_ASSIGN_RE.match(tok)
+    if exact:
+        return _assignment(exact, 1, 2, 3)
+    inner = _unquote_once(tok)
+    exact = _ENV_ASSIGN_RE.match(inner) if inner != tok else None
+    if exact and not exact.group(2) and not any(q in exact.group(3) for q in "'\""):
+        return exact.group(1), exact.group(3)
+    return m.group(1), None
+
+
 def _env_prefix_assignments(seg):
     """一段指令在指令位置前的環境指派:`[(名, 值原文或 None)]`(None = `+=` 附加)。
 
@@ -1232,34 +1279,34 @@ def _env_prefix_assignments(seg):
     i = 0
     while i < len(toks):
         tok = toks[i]
-        if tok.lower() in WRAPPERS:
+        if _is_wrapper(tok):
             seen_wrapper = True
             i += 1
             continue
-        m = _ENV_ASSIGN_RE.match(tok)
-        if not m:
+        assignment = _prefix_assignment(tok)
+        if assignment is None:
             break
-        out.append(_assignment(m, 1, 2, 3))
+        out.append(assignment)
         i += 1
     # 從哪一格起,其餘指派形狀 token 全當前綴判(None = 不觸發)。
     tail = None
-    if seen_wrapper and any(t.startswith("-") for t in toks[i:]):
+    if seen_wrapper and any(_bare(t).startswith("-") for t in toks[i:]):
         tail = i
-    # **段內任何位置出現 `env` ⇒ 它之後的指派全當前綴判(票 158 A-d2,Jeff 裁)**:
+    # **段內任何位置出現包裝器 ⇒ 它之後的指派全當前綴判(票 158 A-d2 認 `env`,A-f 擴到 `WRAPPERS` 全部)**:
     # 不在 `WRAPPERS` 的啟動器(`stdbuf -o0`、`nice`、`timeout 5`)放在最前面時,
-    # 掃描在第一格就停下,後面的 `env FOO=1` 沒人看。啟動器列不完,而 `env` 的
-    # 用途就是設環境 —— 所以認 `env` 本身,不去猜它前面是誰。
+    # 掃描在第一格就停下,後面的 `env FOO=1`、`sudo FOO=1` 沒人看。啟動器列不完 ——
+    # 所以認包裝器本身,不去猜它前面是誰。代價是多擋(`nice sudo make A=1` 的 `A=1`)。
     # 同一族的另一半(直譯器被未列名啟動器包住,`_command_position` 不跳過)在票 164。
     for j, t in enumerate(toks):
-        if _program_name(t) == "env":
+        if _is_wrapper(t):
             k = max(j + 1, i)
             tail = k if tail is None else min(tail, k)
             break
     if tail is not None:
         for tok in toks[tail:]:
-            m = _ENV_ASSIGN_RE.match(tok)
-            if m:
-                out.append(_assignment(m, 1, 2, 3))
+            assignment = _prefix_assignment(tok)
+            if assignment is not None:
+                out.append(assignment)
     return out
 
 
