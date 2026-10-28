@@ -4,7 +4,7 @@
 
 ## 問題
 
-`SEGMENT_SPLIT_RE` 只切 `&&`、`||`、`;`、`|`；單一 `&`（背景執行）與換行不是切點。`git status & <任意指令>`、`git status`＋換行＋`<任意指令>` 整條只有一段、以許可前綴開頭 ⇒ `_bash_write_verdict` 在環境前綴與寫入判定之前就回 `allowed-prefix` 放行，量測也不記。〔讀碼推論，未實驗〕——另一形（票 158 A-l）：非許可段內不帶空白的 `&`，`python a.py&PYTHONPATH=x python b.py` 的格 `a.py&PYTHONPATH=x` 比不中指派；修切段時要連非許可段的 token 切分一起處理。〔讀碼推論，未實驗〕
+`SEGMENT_SPLIT_RE` 只切 `&&`、`||`、`;`、`|`；單一 `&`（背景執行）與換行不是切點。`git status & <任意指令>`、`git status`＋換行＋`<任意指令>` 整條只有一段、以許可前綴開頭 ⇒ `_bash_write_verdict` 在環境前綴與寫入判定之前就回 `allowed-prefix` 放行，量測也不記。〔讀碼推論，未實驗〕——另一形（票 158 A-l）：非許可段內不帶空白的 `&`，`python a.py&PYTHONPATH=x python b.py` 的格 `a.py&PYTHONPATH=x` 比不中指派；修切段時要連非許可段的 token 切分一起處理。〔讀碼推論，未實驗〕——同根另一形：`|&`（管線含 stderr）緊貼指派時 `|` 被切掉留下 `&NAME=…`，`_bare` 不剝 `&` ⇒ 不收（票 158 A-r）。〔讀碼推論，未實驗〕
 
 - **命令替換也不是切點**（票 158 A-e B1，Jeff 2026-10-27 裁併入本票）：`$(…)`、反引號、`<(…)`／`>(…)` 裡的指令整個被當成外層那一段的一部分。`$(PYTHONPATH=x python x.py)` 首 token 不像指派 ⇒ 環境前綴檢查看不到；`git status $(…)` 整段以許可前綴開頭 ⇒ 更早就放行。〔讀碼推論，未實驗〕——2026-10-27 Jeff 裁 D：非許可前綴段內的命令替換語法**已由票 158 A-h 收掉**（`edb4179` 之後的 A-h2 commit）（擋為「無法解析」）；許可前綴段（`git status $(…)`）仍由本票的切段問題涵蓋。完成與否以票 158 A-h 定案為準。——許可前綴段內另有兩類同屬本票（票 158 A-n P2）：bash 帶指派語意的參數展開（`${NAME:=…}`、`${NAME=…}`）、PowerShell 引數模式下的括號運算式。〔讀碼推論，未實驗〕
 
@@ -23,7 +23,7 @@
 
 ## 待裁
 
-- `export PYTHONPATH=x; python x.py`（指派是另一個指令、不在指令位置前）是否納入前綴規則。同家族（不帶 `=` 的設值）：`read NAME < f`、`printf -v NAME …`、`set -a`、PowerShell `Set-Item env:NAME`、`[Environment]::SetEnvironmentVariable(…)`（票 158 A-i P2-4；`export NAME=x` 本身已被裁 D 附帶擋下）。——PowerShell 動態求值同族（票 158 A-p X3）：`iex`／`Invoke-Expression`／`[scriptblock]` 已由票 158 A-q 擋成無法解析；`Invoke-Command`／`icm`（有 `-FilePath` 正當用法，名稱不擋）、`.Invoke(`、`Start-Job`、`&` 接變數或 `gcm` 取得的命令物件待裁。〔讀碼推論，未實驗〕
+- `export PYTHONPATH=x; python x.py`（指派是另一個指令、不在指令位置前）是否納入前綴規則。同家族（不帶 `=` 的設值）：`read NAME < f`、`printf -v NAME …`、`set -a`、PowerShell `Set-Item env:NAME`、`[Environment]::SetEnvironmentVariable(…)`（票 158 A-i P2-4；`export NAME=x` 本身已被裁 D 附帶擋下）。——PowerShell 動態求值同族（票 158 A-p X3）：`iex`／`Invoke-Expression`／`[scriptblock]` 已由票 158 A-q 擋成無法解析；`Invoke-Command`／`icm`（有 `-FilePath` 正當用法，名稱不擋）、`.Invoke(`、`Start-Job`、`&` 接變數或 `gcm` 取得的命令物件待裁；另有 `$ExecutionContext.InvokeCommand.InvokeScript(`／`.NewScriptBlock(`（票 158 A-r）。〔讀碼推論，未實驗〕
 
 ## 修正紀錄
 
@@ -37,3 +37,4 @@
 - 2026-10-27（美東）：補許可段內兩類設值寫法（票 158 A-o1）。
 - 2026-10-28（美東）：補 PowerShell 動態求值其餘寫法（票 158 A-q1）。
 - 2026-10-28（美東）：Invoke-Command／icm 移入待裁（票 158 A-q2）。
+- 2026-10-28（美東）：補 |& 與 $ExecutionContext.InvokeCommand 系（票 158 A-s1）。

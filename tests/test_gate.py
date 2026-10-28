@@ -9210,3 +9210,67 @@ class TestT158ADPrefixBypass:
     def test_t158ad_87_unbalanced_quote_inside_open_brace(self):
         """D87|回歸|X2(裁 C):大括號展開中途斷引號 —— 大括號未關時引號不成對 ⇒ 仍擋無法解析。"""
         _t158ad_assert_unparseable("env {'}',PYTHON'PATH}=x python x.py")
+
+    def test_t158ad_88_quoted_separator_before_brace_expansion(self):
+        """D88|必須先紅|Y1a:引號內的分隔符讓切段把引號切開,後段大括號展開走「停止計數」而漏掉。"""
+        _t158ad_assert_unparseable("env -u 'a;b' {PYTHONPATH,X}=x python x.py")
+
+    def test_t158ad_89_quoted_separators_mispair_quotes(self):
+        """D89|必須先紅|Y1b:同 D88,段尾再有一個引號內分隔符,後段引號配錯對、大括號被當引號內跳過。"""
+        _t158ad_assert_unparseable("env -u 'a;b' {PYTHONPATH,X}=x python x.py 'c;d'")
+
+    def test_t158ad_90_quoted_separator_inside_brace_option(self):
+        """D90|回歸|Y1:引號內分隔符放在大括號選項裡,切段從選項中間切開 —— 現行已由裁 C(大括號未關時引號不成對)擋。"""
+        _t158ad_assert_unparseable("env {X';',PYTHONPATH}=x python x.py")
+
+    def test_t158ad_91_real_second_segment_after_quoted_separator(self):
+        """D91|回歸|引號內有分隔符,引號外的真分隔符切出的第二段仍擋。"""
+        _t158ad_assert_blocked("echo 'x;y'; PYTHONPATH=x python x.py", "PYTHONPATH")
+
+    def test_t158ad_92_allowed_prefix_with_quoted_separator(self):
+        """D92|對照|引號內分隔符、整條是許可前綴 ⇒ 不得被環境前綴擋。"""
+        _t158ad_assert_not_prefix_blocked('git commit -m "a; b"')
+
+    def test_t158ad_93_powershell_call_operator_quoted_iex(self):
+        """D93|必須先紅|Y2a:呼叫運算子緊貼引號包住的名稱,比對不中。"""
+        cmd = "&\"iex\" ('$env:PYTHON'+'PATH=x'); python x.py"
+        _t158ad_assert_unparseable(cmd)
+        assert "iex" in gate.bash_write_violation(cmd)
+
+    def test_t158ad_94_powershell_call_operator_glued_iex(self):
+        """D94|必須先紅|Y2a:同 D93,無引號、名稱與括號都緊貼。"""
+        _t158ad_assert_unparseable("&iex('$env:PYTHON'+'PATH=x'); python x.py")
+
+    def test_t158ad_95_powershell_module_qualified_invoke_expression(self):
+        """D95|必須先紅|Y2b:模組限定名,比對不中。"""
+        _t158ad_assert_unparseable(
+            "Microsoft.PowerShell.Utility\\Invoke-Expression ('$env:PYTHON'+'PATH=x'); python x.py")
+
+    def test_t158ad_96_backslash_quote_inside_double_quotes(self):
+        """D96|回歸|雙引號內反斜線接雙引號:掃描器照 bash 視為跳脫,另一種讀法下分號是真分隔符,由原切法那一輪擋。"""
+        _t158ad_assert_blocked("\"a\\\"; $env:PYTHONPATH='x'; python x.py\"", "PYTHONPATH")
+
+    def test_t158ad_97_backtick_quote_inside_double_quotes(self):
+        """D97|回歸|同 D96,雙引號內反引號接雙引號 —— 原切法第一段的反引號先擋;第二段的環境前綴由 D96 覆蓋。"""
+        _t158ad_assert_unparseable("\"a`\"; $env:PYTHONPATH='x'; python x.py\"")
+
+    def test_t158ad_98_escaped_backslash_closes_quote(self):
+        """D98|回歸|雙引號內是跳脫的反斜線、引號正常關閉,其後分號是真分隔符。"""
+        _t158ad_assert_blocked("\"\\\\\"; PYTHONPATH=x python x.py", "PYTHONPATH")
+
+    def test_t158ad_99_recognition_layer_ignores_quotes(self):
+        """D99|回歸|相鄰單引號讓掃描器把整條視為引號內;辨識層不認引號,指派仍收。"""
+        _t158ad_assert_blocked("'a''; PYTHONPATH=x python x.py'", "PYTHONPATH")
+
+    def test_t158ad_100_backslash_before_separator_in_allowed_prefix(self):
+        """D100|回歸|A-s 讀碼 S1:引號外反斜線後的分號,另一種讀法下仍是分隔符;原切法那一輪擋。"""
+        assert gate.bash_write_violation("git log x\\; Set-Content pkg/evil.py x") is not None
+
+    def test_t158ad_101_backtick_quote_in_allowed_prefix(self):
+        """D101|回歸|A-s 讀碼 S3:引號外反引號接雙引號,掃描器判為未關引號;原切法那一輪擋。"""
+        assert gate.bash_write_violation("git log `\"; Set-Content pkg/evil.py x") is not None
+
+    def test_t158ad_102_backslash_separator_inline_interpreter(self):
+        """D102|回歸|同 D100,第二段是內嵌直譯器;原切法那一輪擋。"""
+        msg = gate.bash_write_violation("git log x\\; python -c \"print(1)\"")
+        assert msg and "[R7/內嵌直譯器]" in msg, msg
