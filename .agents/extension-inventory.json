@@ -445,8 +445,8 @@
     },
     {
       "path": "skills/<bucket>/manifest.json",
-      "sha256": "5062093c1732990cf210f4de22caff99f2adc453c9dcaffbb1bd8044e56960e9",
-      "note": "Jeff 核准 2026-10-28 本次重新登記；可查歷史共 5 次（票 158 A-o-R2 形狀審查）"
+      "sha256": "98a9af301dd07c6ad42960622251bb961de4c8f19b1279a7e3c1af3abba2dc2b",
+      "note": "Jeff 核准 2026-10-28 本次重新登記；可查歷史共 6 次（票 158 A-q-R 形狀審查）"
     },
     {
       "path": "skills/<bucket>/morning/SKILL.md",
@@ -820,13 +820,13 @@
     },
     {
       "path": "skills/<bucket>/skill-creator/SKILL.md",
-      "sha256": "db7ec49392b8fc124a86b5274019c416db76125ef86de6a53b23fb50f206eb18",
-      "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
+      "sha256": "1d51c0b077c24489baa7fdb6c7072ff0c94479dab7110dad2fc6039a47a4bed4",
+      "note": "synced 2026-10-28（UTC）；Jeff 核准 2026-10-28（票 158 A-q-R 形狀審查）"
     },
     {
       "path": "skills/<bucket>/skill-creator/agents/analyzer.md",
-      "sha256": "bf68f4cac5a56c673a928c2e6d619586c5b93ea364026ab37547772cb45a663a",
-      "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
+      "sha256": "e92372af8ac9254a905de7392a8d9f8dd7dccf0ea181d16e2bc58ac52ecea0a8",
+      "note": "synced 2026-10-28（UTC）；Jeff 核准 2026-10-28（票 158 A-q-R 形狀審查）"
     },
     {
       "path": "skills/<bucket>/skill-creator/agents/comparator.md",
@@ -835,8 +835,8 @@
     },
     {
       "path": "skills/<bucket>/skill-creator/agents/grader.md",
-      "sha256": "57134da0c1a4eea33fbd74a1c9c44aa814f07d6bc64de303edb586f941e5d21a",
-      "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
+      "sha256": "a8ab34e7e5e0ae3414c2f067a805cb1f5372f8f3ac02119e1536f0ad60c27d32",
+      "note": "synced 2026-10-28（UTC）；Jeff 核准 2026-10-28（票 158 A-q-R 形狀審查）"
     },
     {
       "path": "skills/<bucket>/skill-creator/assets/eval_review.html",
@@ -855,8 +855,8 @@
     },
     {
       "path": "skills/<bucket>/skill-creator/references/schemas.md",
-      "sha256": "527f1c2627e6c072f13737bb5753d09ab9e596071b061de157734cb26011e1fc",
-      "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
+      "sha256": "59b0ef8b7e7c469d3edb1ed44e94b8fa6afae7ee417f15f84a3bcc216f42342a",
+      "note": "synced 2026-10-28（UTC）；Jeff 核准 2026-10-28（票 158 A-q-R 形狀審查）"
     },
     {
       "path": "skills/<bucket>/skill-creator/scripts/__init__.py",
@@ -865,8 +865,8 @@
     },
     {
       "path": "skills/<bucket>/skill-creator/scripts/aggregate_benchmark.py",
-      "sha256": "f654c4a1c4caccd910c704a9ff5f604337f91b071f94cdbb848b8e1577b4b6ba",
-      "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
+      "sha256": "61ee33ebec3ccb19743ebe5866338f4718e56021b48499b0f62ac008b099fe08",
+      "note": "synced 2026-10-28（UTC）；Jeff 核准 2026-10-28（票 158 A-q-R 形狀審查）"
     },
     {
       "path": "skills/<bucket>/skill-creator/scripts/generate_report.py",
