@@ -667,6 +667,13 @@ _ASCII_WS_SPLIT_RE = re.compile(r"[ \t\n]+")
 # 只在 `_bare`(辨識用)剝 —— 剝多了只會讓更多 token 被認成指派(多擋方向)。
 _LEADING_JUNK_RE = re.compile(r"^[^\x21-\x7e]+")
 
+# 辨識前再剝掉 token 開頭的群組字元 `(`、`)`、`{`、`}`、`!`(票 158 A-o):bash 的 `(`／`)` 是控制字元、
+# 本身就會切字,閘門的切字不切它 —— 保留字後緊貼子殼層(`then (NAME=x cmd)`)是合法寫法,
+# 那一格是 `(NAME=x`,錨在開頭的指派正規式比不中。段首由 `_strip_group_openers` 處理,
+# 這裡對**每一個** token 都剝。只在 `_bare`(辨識用)剝;例外值仍只從原 token 取 ——
+# 原 token 開頭帶括號 ⇒ 取不到純值 ⇒ 不可能是例外(多擋方向)。
+_LEADING_GROUP_RE = re.compile(r"^[(){}!]+")
+
 # shell **先展開再執行**的語法(票 158 A-h,裁 D 第 2 條)。閘門看的是展開前的字串,
 # 展開之後的指令長什麼樣子判不出來 —— 非許可前綴段裡出現任一個就擋「無法解析」。
 # `$[` 是舊式算術展開(票 158 A-j,S1):`$[PYTHONPATH=1]` 在變數已匯出時改到子程序環境。
@@ -1221,7 +1228,10 @@ def _unquote_once(value):
 
 
 def _strip_group_openers(toks):
-    """剝掉段首的群組符號:第一個 token 開頭的 `(`(可多個),以及獨立的 `(`/`{`/`!`。"""
+    """剝掉段首的群組符號:第一個 token 開頭的 `(`(可多個),以及獨立的 `(`/`{`/`!`。
+
+    非段首的括號由 `_bare` 處理(票 158 A-o;理由見 `_LEADING_GROUP_RE`)。
+    """
     toks = list(toks)
     while toks:
         head = toks[0].lstrip("(")
@@ -1253,9 +1263,13 @@ def _bare(tok):
     拿 `_bare` 的值去比例外表就會被洗成 `1`。
     引號去掉全部而不只成對:`seg.split()` 會把一個引號字串切成好幾個 token
     (`env -S 'PYTHONPATH=x …'` 的那一格是 `'PYTHONPATH=x`),也接住 `"PYTHON"PATH=x`。
-    第一步先剝開頭的非 ASCII 可見字元(票 158 A-m,P-2;理由見 `_LEADING_JUNK_RE`)。
+    第一步先剝開頭的非 ASCII 可見字元(票 158 A-m,P-2;理由見 `_LEADING_JUNK_RE`),
+    再剝開頭的群組字元(票 158 A-o;理由見 `_LEADING_GROUP_RE`),兩者交替到不再變化。
     """
-    tok = _LEADING_JUNK_RE.sub("", tok)
+    prev = None
+    while tok != prev:
+        prev = tok
+        tok = _LEADING_GROUP_RE.sub("", _LEADING_JUNK_RE.sub("", tok))
     return (re.sub(r"\\(.?)", r"\1", tok, flags=re.S)
             .replace("'", "").replace('"', "").lstrip("$"))
 
