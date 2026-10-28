@@ -9159,3 +9159,50 @@ class TestT158ADPrefixBypass:
     def test_t158ad_76_subshell_without_assign_passes(self):
         """D76|對照|子殼層裡沒有指派形狀的 token ⇒ 不觸發本條。"""
         _t158ad_assert_not_prefix_blocked("if true; then (python x.py); fi")
+
+    # ── A-q(Jeff 2026-10-28 裁 A):A-p 審查找到 X1 格中括號、X2 被保護的大括號、
+    # X3 PowerShell 動態求值;規則不變,A-r 再審 ──
+
+    def test_t158ad_77_subshell_glued_to_then(self):
+        """D77|必須先紅|X1:保留字與子殼層之間不留空白,那一格是 `then(PYTHONPATH=x`,以字母開頭。"""
+        _t158ad_assert_blocked("if true; then(PYTHONPATH=x python x.py); fi", "PYTHONPATH")
+
+    def test_t158ad_78_assign_glued_to_case_pattern(self):
+        """D78|必須先紅|X1:`case` 樣式結尾的 `)` 緊接指派,那一格是 `x)PYTHONPATH=x`。"""
+        _t158ad_assert_blocked("case x in x)PYTHONPATH=x python x.py;; esac", "PYTHONPATH")
+
+    def test_t158ad_79_glued_subshell_allowed_value_not_exempt(self):
+        """D79|待觀察|X1:例外變數、例外值,但原 token 含括號 ⇒ 取不到純值 ⇒ 不得算例外。"""
+        _t158ad_assert_blocked("if true; then(PYTHONUTF8=1 python x.py); fi", "PYTHONUTF8")
+
+    def test_t158ad_80_single_quoted_brace_in_first_option(self):
+        """D80|必須先紅|X2:單引號保護的 `}` 在第一個選項內,bash 不把它當關閉,仍展開。"""
+        _t158ad_assert_unparseable("env {'}',PYTHONPATH}=x python x.py")
+
+    def test_t158ad_81_escaped_brace_in_first_option(self):
+        """D81|必須先紅|X2:同 D80,反斜線保護。"""
+        _t158ad_assert_unparseable("env {\\},PYTHONPATH}=x python x.py")
+
+    def test_t158ad_82_double_quoted_brace_in_first_option(self):
+        """D82|必須先紅|X2:同 D80,雙引號保護。"""
+        _t158ad_assert_unparseable('env {"}",PYTHONPATH}=x python x.py')
+
+    def test_t158ad_83_plain_brace_expansion_still_unparseable(self):
+        """D83|回歸|A-i F1 既有形狀:未保護的大括號展開仍擋。"""
+        _t158ad_assert_unparseable("env {PYTHONPATH,X}=x python x.py")
+
+    def test_t158ad_84_powershell_iex_concatenation(self):
+        """D84|必須先紅|X3:`iex` 加字串拼接在執行期組出 `$env:` 指派,字串比對認不出。"""
+        cmd = "iex ('$env:PYTHON'+'PATH=x'); python x.py"
+        _t158ad_assert_unparseable(cmd)
+        assert "iex" in gate.bash_write_violation(cmd)
+
+    def test_t158ad_85_powershell_invoke_expression_concatenation(self):
+        """D85|必須先紅|X3:同 D84,完整名稱 `Invoke-Expression`。"""
+        _t158ad_assert_unparseable("Invoke-Expression ('$env:PYTHON'+'PATH=x'); python x.py")
+
+    def test_t158ad_86_powershell_iex_glued_paren(self):
+        """D86|必須先紅|X3:同 D84,名稱與括號緊貼、無空白。"""
+        cmd = "iex('$env:PYTHON'+'PATH=x'); python x.py"
+        _t158ad_assert_unparseable(cmd)
+        assert "iex" in gate.bash_write_violation(cmd)
