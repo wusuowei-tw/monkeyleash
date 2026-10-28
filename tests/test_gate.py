@@ -9143,3 +9143,19 @@ class TestT158ADPrefixBypass:
     def test_t158ad_72_powershell_leading_allowed_value_passes(self):
         """D72|對照|段首 `$env:` 指派、例外值(#3 同族)⇒ 不觸發本條。"""
         _t158ad_assert_not_prefix_blocked("$env:PYTHONUTF8='1'; python x.py")
+
+    def test_t158ad_73_subshell_after_then(self):
+        """D73|必須先紅|A-n:指派緊貼 `(` 且不在段首(保留字 `then` 之後接子殼層)。"""
+        _t158ad_assert_blocked("if true; then (PYTHONPATH=x python x.py); fi", "PYTHONPATH")
+
+    def test_t158ad_74_subshell_after_do(self):
+        """D74|必須先紅|A-n:同 D73,保留字 `do` 之後接子殼層。"""
+        _t158ad_assert_blocked("for i in 1; do (PYTHONPATH=x python x.py); done", "PYTHONPATH")
+
+    def test_t158ad_75_subshell_allowed_value_not_exempt(self):
+        """D75|待觀察|A-n:例外變數、例外值,但 token 開頭帶 `(` ⇒ 原 token 取不到純值 ⇒ 不得算例外。"""
+        _t158ad_assert_blocked('if true; then (PYTHONUTF8="1" python x.py); fi', "PYTHONUTF8")
+
+    def test_t158ad_76_subshell_without_assign_passes(self):
+        """D76|對照|子殼層裡沒有指派形狀的 token ⇒ 不觸發本條。"""
+        _t158ad_assert_not_prefix_blocked("if true; then (python x.py); fi")
