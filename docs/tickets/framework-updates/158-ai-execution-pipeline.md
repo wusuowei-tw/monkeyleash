@@ -1,6 +1,6 @@
 # 158 — AI 正式執行管道（正式執行通道／減少逐步放行／受控切站）
 
-**狀態**：**C0 已推送；A 已裁 A3＋B＋C′＋C＋D＋A′＋A＋A＋A；A-r 審查找到 Y1（切段不認引號，A-q 退步）、Y2，Jeff 裁 (c)——A-s 修補中（本機）；& 與換行切段見票 164；名冊更新流程見票 165。**
+**狀態**：**C0 已推送；A 已裁 A3＋B＋C′＋C＋D＋A′＋A＋A＋A＋(c)——A-s 修補完成（本機），待獨立審查；& 與換行切段見票 164；名冊更新流程見票 165（push 後第一優先）。**
 **立案**：2026-10-21（美東）。Jeff 2026-10-21 約 07:42（美東）開票 158（裁決助手記錄，非逐字原話）；建檔前確認 `docs/tickets/framework-updates/` 內無 158 開頭的檔案。
 **範圍來源**：Jeff 2026-10-20 約 20:30（美東）定 A、B；約 20:48（美東）定 C（裁決助手記錄，非逐字原話）。
 **性質**：大票 —— 分子項（B1→C0→A→C1→C2→B2），各子項實作前另行設計與裁決。
@@ -137,10 +137,11 @@
 - **違規紀錄（A-o-R2 第二段）**：兩個 L2 Edit 同則（gate.py），裁決助手依 2026-10-27 常設授權裁記錄後繼續；另停下後兩個唯讀 L1 同則，不在常設授權範圍，Jeff 2026-10-28 明確接受（僅此一次）。
 - **A-p 獨立審查（2026-10-28）：FAIL——疑似前綴繞過 3 形**：身分、訊息、名冊、檔案集合、測試 3134 全符；A2 第 1～20 項全審。X1：bash 的 `(`／`)` 在任何位置切字而閘門不切，A-o 只剝格開頭的括號 ⇒ `then(NAME=…`、`x)NAME=…` 不收、放行。X2：`_brace_expansion_hit` 不理會引號與反斜線，被保護的 `}` 在第一個選項內 ⇒ 提早彈出 ⇒ 不中、放行。X3：PowerShell `iex`／`Invoke-Expression` 加字串拼接組出 `$env:` 指派 ⇒ 不收、不算無法解析、放行。P0／P1 0；P2 六項見下。違規 2（自寫背景完成通知、多開全套），Jeff 接受記錄並新增常設規則。
 - **Jeff 2026-10-28 約 10:50（美東）裁定 A**：A-q 修 X1（辨識時 `_bare` 後以括號切片、任一片為指派即收；例外仍只看原 token）、X2（大括號計數跳過引號內與反斜線後的字元；引號不成對即擋）、X3（非許可段出現 `iex`／`Invoke-Expression`／`Invoke-Command`／`icm`／`[scriptblock]` 擋無法解析）。**規則不變，A-r 再審一輪，任何疑似繞過仍一律停。** 新增常設規則：VS 不得自行寫出系統／背景任務完成通知；同一 repo 不得並行跑 pytest。
-- **A-q 定案**：辨識時 `_bare` 後以 `[(){}]+` 切片、任一片比中 `_ENV_ASSIGN_RE` 即收（例外仍只看原 token，原 token 含括號 ⇒ 不算例外）；`_brace_expansion_hit` 跳過單引號內、雙引號內與反斜線後的字元，**大括號未關時**碰到不成對引號即命中、否則停止計數交既有 refuse 路徑（Jeff 2026-10-28 約 12:58 裁 C，因舊測試「無法可靠切分」訊息）；`_unparseable_hits` 對切片後的 token 新增 `iex`／`Invoke-Expression` 與段內 `[scriptblock]`（`Invoke-Command`／`icm` 因 `-FilePath` 正當用法移票 164 待裁，Jeff 裁 A）。
+- **A-q 定案**：辨識時 `_bare` 後以 `[(){}]+` 切片、任一片比中 `_ENV_ASSIGN_RE` 即收（例外仍只看原 token，原 token 含括號 ⇒ 不算例外）；`_brace_expansion_hit` 跳過單引號內、雙引號內與反斜線後的字元，**大括號未關時**碰到不成對引號即命中、否則停止計數（整條引號不成對的處理見 A-s 定案）（Jeff 2026-10-28 約 12:58 裁 C，因舊測試「無法可靠切分」訊息）；`_unparseable_hits` 對切片後的 token 新增 `iex`／`Invoke-Expression` 與段內 `[scriptblock]`（`Invoke-Command`／`icm` 因 `-FilePath` 正當用法移票 164 待裁，Jeff 裁 A）。
 - **A-q-R 登記（2026-10-28）**：R10 第七次擋下（manifest.json＋skill-creator 五檔）；A-q-R 形狀審查（待查：SKILL.md 家目錄字樣、三檔 HTML 標籤、aggregate_benchmark.py 寫檔 2 處與長字串）Jeff 接受並核准登記六筆（manifest.json 可查歷史共 6 次）；違規紀錄：A-q-R 第一段執行腳本與 Read 同則，Jeff 2026-10-28 接受（僅此一次）。
 - **A-r 獨立審查（2026-10-28）：FAIL——疑似前綴繞過 2 類、P1 1**：身分、訊息、名冊、檔案集合、測試 3145 全符；A2 全審。Y1：`SEGMENT_SPLIT_RE` 切段不認引號，引號內分隔符使後段引號不成對（走裁 C 停止計數）或配錯對（大括號被當引號內跳過）⇒ 展開不計、放行；A-q 之前擋得住（退步）；裁決助手另推：只改大括號計數的補法都可再繞，根因是切段。Y2：`&"iex"`／`&iex`、模組限定名 `Microsoft.PowerShell.Utility\Invoke-Expression` 比不中。P1-1：「A-q 定案」與 docstring 寫「交既有 refuse 路徑」，但該路徑只對寫入構造。P2 七項見下。違規 0。
 - **Jeff 2026-10-28 約 14:35（美東）裁定 (c)，約 15:20 改裁 A（聯集）**：A-s 讀碼發現只用 bash 規則認引號切段會在 PowerShell 讀法下放行 `git log x\; Set-Content …` 等三形（現行擋得住）；改為新增 `_split_segments`（認引號切段，規則明寫）與原 `SEGMENT_SPLIT_RE` **兩種切法都跑、任一擋就擋**，許可前綴要兩種切法下每段都許可才放行；量測維持原切法；裁 C 保留（`unbalanced` 只是掃描器判定、不等於 shell 解析結果；寫入構造由 `_quoting_is_ambiguous` 擋）；Y2 以 `_ps_eval_name` 剝開頭 `&`、取模組限定名最後一段；P1-1 與票 164／165 文字一併修。**規則不變，A-t 再審一輪，任何疑似繞過仍一律停。**
+- **A-s 定案**：新增 `_split_segments`（認引號與反斜線的切段，分隔符集合同 `SEGMENT_SPLIT_RE`；規則明寫：單引號無跳脫、相鄰引號視為重開、雙引號內 `\"` 視為跳脫、反引號為一般字元、引號外反斜線字面化——PowerShell 讀法由原切法那一輪補）與 `_both_splits`；`_bash_write_verdict`／`env_prefix_violation`／`inline_interpreter_hit`／`_write_targets` 改為兩種切法聯集、任一擋就擋，許可前綴需兩種切法下每段都許可；量測維持原切法；`unbalanced` 只表示掃描器判為引號不平衡、不等於 shell 解析結果，本條不因此擋，含寫入構造者由 `_quoting_is_ambiguous` 擋——**取代**「A-q 定案」中「交既有 refuse 路徑」的描述；辨識層不認引號是切段之外的安全網（D99）；X3 比對改 `_ps_eval_name`（剝開頭 `&`、取模組限定名最後一段）。
 - **A-q 審查後待辦**（A-r 的 P2）：
   1. `_bare`／`_GROUP_SPLIT_RE`：格首或格中括號切開後像指派的正當寫法被擋（`awk {a=1}`、PowerShell `{$v=…`／`($v=…`、`!NAME=…`、`f(a=1)`）。
   2. `_brace_expansion_hit`：切段把引號切開時大括號未關的段報「引號不成對」（A-s 切段認引號後應消失，A-t 確認）。
@@ -308,3 +309,4 @@
 - 2026-10-28（美東）：A-p 獨立審查 FAIL（X1 格中括號、X2 被保護的大括號、X3 PowerShell 動態求值），未 push；Jeff 裁 A；A-q 紅燈 D77～D86（錨點 A-q1）。
 - 2026-10-28（美東）：A-q 實作（錨點 A-q2）：括號切片辨識、大括號計數認引號與跳脫、PowerShell 動態求值擋無法解析；舊測試 4 題衝突，Jeff 裁 ①C ②A；D1～D87 全綠；全套 3145 passed。
 - 2026-10-28（美東）：A-r 獨立審查 FAIL（Y1 切段不認引號、Y2 iex 名稱變體、P1-1 描述不符），未 push；Jeff 裁 (c)；A-s 紅燈 D88～D102（錨點 A-s1）。
+- 2026-10-28（美東）：A-s 實作（錨點 A-s2）：認引號切段、iex 名稱變體；D1～D102 全綠；全套 3160 passed。

@@ -722,6 +722,77 @@ REDIRECT_RE = re.compile(r"(?<!\d)(?<!&)>>?\s*([^\s;&|>]+)")
 SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|\|")
 
 
+def _split_segments(cmd):
+    """認引號的切段(票 158 A-s,Y1):回 `(段清單, unbalanced)`。段是原字串的切片,不去引號、不去反斜線。
+
+    bash 在引號內不切段;`SEGMENT_SPLIT_RE` 不認引號,引號裡的分隔符會把一個引號字串切成兩半,
+    後段的引號因此不成對或配錯對,大括號展開就漏掉了。本掃描器自己的規則(**不是**任何 shell 的完整語意):
+
+      單引號     到下一個單引號為止,內部沒有跳脫;緊接的第二個單引號視為重新開引號
+                 (PowerShell 的 `''` 字面引號與 bash 的相鄰引號串接都被當成仍在引號內,方向保守)
+      雙引號     到下一個未被反斜線跳脫的雙引號為止;`\\"` 視為跳脫、反引號是一般字元(bash 規則)
+      引號外     反斜線跳過其後一個字元(bash 字面化)
+      分隔符     引號外的 `&&`、`||`、`;`、`|` 才切 —— 集合與 `SEGMENT_SPLIT_RE` 相同;
+                 單一 `&` 與換行仍不切(票 164)
+
+    PowerShell 的 `\\` 是字面、`` `" `` 才是跳脫,讀法與上面不同 —— 本掃描器只照 bash 規則,
+    PowerShell 讀法下的分隔符由原切法那一輪補(`_both_splits`,Jeff 裁 A)。
+
+    `unbalanced` 只表示本掃描器判為結束時仍在引號內、或以引號外反斜線結尾,
+    **不等於** shell 的解析結果;呼叫端不因此擋。
+    """
+    segments = []
+    quote = None
+    start = 0
+    i = 0
+    n = len(cmd)
+    while i < n:
+        c = cmd[i]
+        if quote == "'":
+            if c == "'":
+                quote = None
+            i += 1
+            continue
+        if quote == '"':
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                quote = None
+            i += 1
+            continue
+        if c == "\\":
+            i += 2
+            continue
+        if c in "'\"":
+            quote = c
+            i += 1
+            continue
+        if cmd.startswith("&&", i) or cmd.startswith("||", i):
+            segments.append(cmd[start:i])
+            i += 2
+            start = i
+            continue
+        if c in ";|":
+            segments.append(cmd[start:i])
+            i += 1
+            start = i
+            continue
+        i += 1
+    segments.append(cmd[start:])
+    return segments, quote is not None or i > n
+
+
+def _both_splits(cmd):
+    """`[原切法段清單, 認引號切法段清單]`(票 158 A-s,Jeff 裁 A)。
+
+    同一條指令字串 bash 與 PowerShell 都可能執行,兩邊對引號與跳脫的讀法不同;
+    只用認引號切法,另一種讀法下的分隔符會被吞進同一段。兩種都跑、任一種判擋就擋 ——
+    原切法那一輪一字不改,舊行為是新行為的子集(多擋方向)。
+    """
+    return [SEGMENT_SPLIT_RE.split(cmd), _split_segments(cmd)[0]]
+
+
 def _allowed_cmd_prefix(seg):
     """這一段是不是以許可指令開頭。**前綴後須為空白或字串尾**(票 76 A1)。
 
@@ -904,7 +975,12 @@ def _write_targets(command):
     # `rm -rf x; cd y && ls` 會把 `cd`、`y`、`ls` 全當成 rm 的目標。
     # 分隔符還可能**黏在 token 上**(`fresh9;`),所以用切的,不是比對 token。
     # 切段定義與許可判定同一份(票 76 A2,見 SEGMENT_SPLIT_RE)。
-    segments = [s for s in SEGMENT_SPLIT_RE.split(command) if s.strip()]
+    # 兩種切法的段取聯集,原切法在前、重複的段只留一份(票 158 A-s,見 `_both_splits`)。
+    segments = []
+    for split in _both_splits(command):
+        for s in split:
+            if s.strip() and s not in segments:
+                segments.append(s)
     # **兩個變數,不是一個**(票 36)。原本只有 `saw_construct`,於是
     #   「有寫入構造」與「抽到了目標」混成同一件事 —— 而它們不是:
     #   動詞認得(construct=True)但運算元全被跳過(target=False)時,
@@ -1200,8 +1276,9 @@ def inline_interpreter_hit(command):
 
     逐段判(`SEGMENT_SPLIT_RE`,與許可判定同一份切段來源,票 76 A2)——
     `git status && python -c "…"` 的第二段一樣要判。
+    兩種切法各判一輪,任一命中即命中(票 158 A-s,見 `_both_splits`)。
     """
-    for seg in SEGMENT_SPLIT_RE.split(command or ""):
+    for seg in [s for split in _both_splits(command or "") for s in split]:
         toks = seg.split()
         i = _command_position(toks)
         if i >= len(toks):
@@ -1385,7 +1462,10 @@ def _brace_expansion_hit(seg):
     未跳脫的雙引號、引號外反斜線之後的一個字元,全部跳過 —— bash 不把被保護的 `{`／`}`／`,`
     當展開語法,`{'}',NAME}` 照樣展開;不跳過就會在被保護的 `}` 提早彈出外層而比不中。
     段結束時仍在引號內:大括號未關 ⇒ 命中(`_UNBALANCED_QUOTE`;展開中途斷引號,判不出 bash
-    怎麼讀);沒有未關的大括號 ⇒ 停止計數、不新增命中,交既有 refuse 路徑(票 158 A-q 續做,Jeff 裁 C)。
+    怎麼讀);沒有未關的大括號 ⇒ 停止計數、不新增命中(票 158 A-q 續做,Jeff 裁 C)。
+    整條引號不成對的處理(票 158 A-s):段由 `_both_splits` 切出,認引號那一輪的 `unbalanced`
+    只表示本站掃描器判為引號不平衡,**不等於** shell 的解析結果,本條不因此擋;另一種讀法下的
+    分隔符由原切法那一輪照舊切出;含寫入構造者由既有 `_quoting_is_ambiguous` refuse 路徑擋。
     """
     stack = []
     hits = []
@@ -1436,6 +1516,33 @@ def _closing_quote(seg, i):
     return -1
 
 
+_PS_EVAL_LEAD = "&(){}!'\""
+_PATH_SEP_RE = re.compile(r"[\\/]")
+
+
+def _ps_eval_name(tok):
+    """原 token 是不是 PowerShell 動態求值的名稱:回 `_PS_DYNAMIC_EVAL` 裡的那一個或 None(票 158 A-s,Y2)。
+
+    PowerShell 的呼叫運算子可以緊貼名稱(`&iex`、`&"iex"`),cmdlet 也可以用模組限定名
+    (`模組名\\Invoke-Expression`)—— `_bare` 不剝 `&`、不取最後一段,兩種都比不中。
+    取小寫,反覆剝開頭的非 ASCII 可見字元、`&`、括號類、`!`、引號;剝尾端的引號、`)`、`;`;
+    再以 `_GROUP_SPLIT_RE` 切片。比對兩種順序:整段取最後一個 `\\`／`/` 之後再切片,
+    以及先切片再對每一片取最後一段 —— 名稱後緊貼的括號引數裡有斜線時,前者會取到引數那一段。
+    """
+    name = tok.lower()
+    prev = None
+    while name != prev:
+        prev = name
+        name = _LEADING_JUNK_RE.sub("", name).lstrip(_PS_EVAL_LEAD)
+    name = name.rstrip("'\");")
+    pieces = _GROUP_SPLIT_RE.split(_PATH_SEP_RE.split(name)[-1])
+    pieces += [_PATH_SEP_RE.split(p)[-1] for p in _GROUP_SPLIT_RE.split(name)]
+    for piece in pieces:
+        if piece in _PS_DYNAMIC_EVAL:
+            return piece
+    return None
+
+
 def _unparseable_hits(seg):
     """段原文(不經 `_bare`)裡 shell 先展開再執行的語法符號:子字串清單,加上大括號展開
     (票 158 A-j,記成 `{…,…}` 或 `{a..b}`),再加上 PowerShell 動態求值字樣
@@ -1449,6 +1556,11 @@ def _unparseable_hits(seg):
             name = piece.lower()
             if name in _PS_DYNAMIC_EVAL and name not in hits:
                 hits.append(name)
+        # 呼叫運算子緊貼、模組限定名(票 158 A-s,Y2);上面那條保留 —— 它接得住
+        # 引號或跳脫夾在名稱中間的寫法,本條不剝那些,兩條都跑(多擋方向)。
+        name = _ps_eval_name(tok)
+        if name and name not in hits:
+            hits.append(name)
     if _PS_SCRIPTBLOCK in seg.lower() and _PS_SCRIPTBLOCK not in hits:
         hits.append(_PS_SCRIPTBLOCK)
     return hits
@@ -1462,9 +1574,22 @@ def env_prefix_violation(command):
     只看**非許可前綴段**(票 158 A-h,裁 D 字面):許可段裡的展開語法與指派屬切段問題(票 164)。
     每段先查原文有沒有 `_UNPARSEABLE_SYNTAX` 或大括號展開(不經 `_bare`),有 ⇒ 擋「無法解析」,
     訊息附列段內指派變數名 —— 變數名本來就在環境前綴訊息裡印,沒有新的外洩面。
+
+    兩種切法各跑一輪(票 158 A-s,見 `_both_splits`),原切法那一輪先跑,任一輪有訊息就回先擋者;
+    許可段照舊跳過,以各自切法判定。認引號那一輪的 `unbalanced` 不新增擋下(裁 C 保留,
+    理由見 `_split_segments`)。
     """
+    for segments in _both_splits(command or ""):
+        msg = _env_prefix_round(segments)
+        if msg:
+            return msg
+    return None
+
+
+def _env_prefix_round(segments):
+    """`env_prefix_violation` 對一種切法的段清單判一輪:回 None 或擋下訊息。"""
     bad = []
-    for seg in SEGMENT_SPLIT_RE.split(command or ""):
+    for seg in segments:
         if _allowed_cmd_prefix(seg.strip()):
             continue
         assignments = _env_prefix_assignments(seg)
@@ -1574,9 +1699,12 @@ def _bash_write_verdict(command):
     # 逐段比對:`a && b` 的每一段都要在許可清單裡才算數,
     # 否則 `git status && rm -rf x` 會整條被許可。
     # 前綴比對帶邊界(票 76 A1)—— `gitfoo` 不是 `git`,見 _allowed_cmd_prefix。
-    segments = [s.strip() for s in SEGMENT_SPLIT_RE.split(cmd) if s.strip()]
+    # 兩種切法下每一段都許可才走這條出口(票 158 A-s,見 `_both_splits`);
+    # 訊息用的 offenders／mixed 仍取原切法。
+    splits = [[s.strip() for s in split if s.strip()] for split in _both_splits(cmd)]
+    segments = splits[0]
     seg_ok = [_allowed_cmd_prefix(seg) for seg in segments]
-    if segments and all(seg_ok):
+    if all(split and all(_allowed_cmd_prefix(seg) for seg in split) for split in splits):
         return None, "allowed-prefix"
     # **哪幾段落出許可清單** —— 只拿來寫訊息,判定邏輯一個字都不動(票 13)。
     offenders = [seg for seg, ok in zip(segments, seg_ok) if not ok]
