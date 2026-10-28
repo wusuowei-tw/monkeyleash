@@ -679,6 +679,23 @@ _LEADING_GROUP_RE = re.compile(r"^[(){}!]+")
 # `$[` 是舊式算術展開(票 158 A-j,S1):`$[PYTHONPATH=1]` 在變數已匯出時改到子程序環境。
 _UNPARSEABLE_SYNTAX = ("$'", '$"', "${", "$(", "`", "<(", ">(", "$[")
 
+# 辨識時再以群組字元切片(票 158 A-q,X1):bash 的 `(`／`)` 在字的**任何位置**都是切字點,
+# 不只開頭 —— `then(NAME=x cmd)`、`case` 樣式結尾緊接的 `x)NAME=x`,那一格以字母開頭,
+# 剝開頭(`_LEADING_GROUP_RE`)救不到。`{`／`}` 一併切(多擋方向)。只給辨識;
+# 例外值仍只從原 token 取 —— 原 token 含任一括號 ⇒ 取不到純值 ⇒ 不可能是例外。
+_GROUP_SPLIT_RE = re.compile(r"[(){}]+")
+
+# PowerShell 動態求值(票 158 A-q,X3):把字串在**執行期**變成程式 ——
+# `iex ('$env:PYTHON'+'PATH=x')` 的指派要等拼接完才存在,字串比對追不完拼接、格式化與變數,
+# 所以名稱本身出現就擋「無法解析」。比對的是 `_bare` 後再以 `_GROUP_SPLIT_RE` 切片的每一片
+# (接住 `iex('…')` 名稱與括號緊貼),不分大小寫。其他動態求值寫法見票 164〈待裁〉。
+# `Invoke-Command`／`icm` 有正當的 `-FilePath` 用法,名稱本身不擋,列票 164 待裁。
+_PS_DYNAMIC_EVAL = ("iex", "invoke-expression")
+_PS_SCRIPTBLOCK = "[scriptblock]"
+
+# 大括號計數時、大括號未關而引號不成對(票 158 A-q,X2):判不出 bash 怎麼讀那一段 ⇒ 當無法解析。
+_UNBALANCED_QUOTE = "引號不成對"
+
 # 大括號展開(票 158 A-j,F1):`env PYTHON{PATH,PATH}=x …` bash 展開成 `PYTHONPATH=x`,
 # 閘門看展開前的字串比不中。`{` 單獨出現太多(`awk '{print}'`),不能用子字串 ——
 # 只認「大括號內含逗號或 `..`」。**不排除空白**:`{PYTHONPATH=x,'FOO=1 bar'}` 大括號內帶
@@ -1280,11 +1297,17 @@ def _prefix_assignment(tok):
     **辨識看 `_bare`,例外的值只從原 token 取(不經 `_bare`)**:原 token 含反斜線、
     下標(`NAME[…]=`)、附加(`+=`)、或要剝超過一對引號才看得出指派 ⇒ 值記 None,
     不可能是例外。無法確認實際語意逐字等於允許值 ⇒ 擋。
+    辨識用值再以群組字元切片,**任一片**是指派就收,名字取該片(票 158 A-q,X1;
+    理由見 `_GROUP_SPLIT_RE`);原 token 含任一括號 ⇒ 值記 None。
     """
-    m = _ENV_ASSIGN_RE.match(_bare(tok))
+    m = None
+    for piece in _GROUP_SPLIT_RE.split(_bare(tok)):
+        m = _ENV_ASSIGN_RE.match(piece)
+        if m:
+            break
     if not m:
         return None
-    if m.group(2) or m.group(3) or "\\" in tok:
+    if m.group(2) or m.group(3) or "\\" in tok or _GROUP_SPLIT_RE.search(tok):
         return m.group(1), None
     exact = _ENV_ASSIGN_RE.match(tok)
     if exact:
@@ -1356,11 +1379,30 @@ def _brace_expansion_hit(seg):
     深度 0 的 `,`／`..` 不算。**不成對的大括號不算命中**(多出的 `}`、掃完仍未關的 `{`):
     bash 只展開同一個字裡成對的 `{…}`;`{ cmd; }` 群組被 `;` 切段後留下的單個 `{`
     在 bash 也不是展開 —— 當命中會把群組裡的指派改判成「無法解析」。
-    代價(多擋):`awk '{print a,b}'` 這類大括號內有逗號的程式文字也會中。
+    代價(多擋):大括號內有逗號、且大括號沒被引號保護的程式文字也會中。
+
+    **被保護的字元不參與計數**(票 158 A-q,X2):單引號內到下一個單引號、雙引號內到下一個
+    未跳脫的雙引號、引號外反斜線之後的一個字元,全部跳過 —— bash 不把被保護的 `{`／`}`／`,`
+    當展開語法,`{'}',NAME}` 照樣展開;不跳過就會在被保護的 `}` 提早彈出外層而比不中。
+    段結束時仍在引號內:大括號未關 ⇒ 命中(`_UNBALANCED_QUOTE`;展開中途斷引號,判不出 bash
+    怎麼讀);沒有未關的大括號 ⇒ 停止計數、不新增命中,交既有 refuse 路徑(票 158 A-q 續做,Jeff 裁 C)。
     """
     stack = []
     hits = []
-    for i, c in enumerate(seg):
+    i = 0
+    while i < len(seg):
+        c = seg[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c in "'\"":
+            end = _closing_quote(seg, i)
+            if end < 0:
+                if stack and _UNBALANCED_QUOTE not in hits:
+                    hits.append(_UNBALANCED_QUOTE)
+                return hits
+            i = end + 1
+            continue
         if c == "{":
             stack.append(set())
         elif c == "}":
@@ -1373,16 +1415,42 @@ def _brace_expansion_hit(seg):
             stack[-1].add("{…,…}")
         elif stack and seg.startswith("..", i):
             stack[-1].add("{a..b}")
+        i += 1
     return hits
+
+
+def _closing_quote(seg, i):
+    """`seg[i]` 是引號:回對應的關閉引號位置,沒有 ⇒ -1。
+
+    雙引號內反斜線跳脫下一個字元;單引號內沒有跳脫(bash 語意)。
+    """
+    quote = seg[i]
+    j = i + 1
+    while j < len(seg):
+        if quote == '"' and seg[j] == "\\":
+            j += 2
+            continue
+        if seg[j] == quote:
+            return j
+        j += 1
+    return -1
 
 
 def _unparseable_hits(seg):
     """段原文(不經 `_bare`)裡 shell 先展開再執行的語法符號:子字串清單,加上大括號展開
-    (票 158 A-j,記成 `{…,…}` 或 `{a..b}`)。"""
+    (票 158 A-j,記成 `{…,…}` 或 `{a..b}`),再加上 PowerShell 動態求值字樣
+    (票 158 A-q,X3;理由見 `_PS_DYNAMIC_EVAL`,訊息只列固定字面)。"""
     hits = [s for s in _UNPARSEABLE_SYNTAX if s in seg]
     for sym in _brace_expansion_hit(seg):
         if sym not in hits:
             hits.append(sym)
+    for tok in _ASCII_WS_SPLIT_RE.split(seg):
+        for piece in _GROUP_SPLIT_RE.split(_bare(tok)):
+            name = piece.lower()
+            if name in _PS_DYNAMIC_EVAL and name not in hits:
+                hits.append(name)
+    if _PS_SCRIPTBLOCK in seg.lower() and _PS_SCRIPTBLOCK not in hits:
+        hits.append(_PS_SCRIPTBLOCK)
     return hits
 
 

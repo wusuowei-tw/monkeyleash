@@ -23,7 +23,7 @@
 
 ## 待裁
 
-- `export PYTHONPATH=x; python x.py`（指派是另一個指令、不在指令位置前）是否納入前綴規則。同家族（不帶 `=` 的設值）：`read NAME < f`、`printf -v NAME …`、`set -a`、PowerShell `Set-Item env:NAME`、`[Environment]::SetEnvironmentVariable(…)`（票 158 A-i P2-4；`export NAME=x` 本身已被裁 D 附帶擋下）。——PowerShell 動態求值同族（票 158 A-p X3）：`iex`／`Invoke-Expression`／`Invoke-Command`／`icm`／`[scriptblock]` 由票 158 A-q 修補中（完成與否見票 158「A-q 定案」）；其餘寫法（`.Invoke(`、`Start-Job`、`&` 接變數或 `gcm` 取得的命令物件）待裁。〔讀碼推論，未實驗〕
+- `export PYTHONPATH=x; python x.py`（指派是另一個指令、不在指令位置前）是否納入前綴規則。同家族（不帶 `=` 的設值）：`read NAME < f`、`printf -v NAME …`、`set -a`、PowerShell `Set-Item env:NAME`、`[Environment]::SetEnvironmentVariable(…)`（票 158 A-i P2-4；`export NAME=x` 本身已被裁 D 附帶擋下）。——PowerShell 動態求值同族（票 158 A-p X3）：`iex`／`Invoke-Expression`／`[scriptblock]` 已由票 158 A-q 擋成無法解析；`Invoke-Command`／`icm`（有 `-FilePath` 正當用法，名稱不擋）、`.Invoke(`、`Start-Job`、`&` 接變數或 `gcm` 取得的命令物件待裁。〔讀碼推論，未實驗〕
 
 ## 修正紀錄
 
@@ -36,3 +36,4 @@
 - 2026-10-27（美東）：補 & 不帶空白形（票 158 A-m1）。
 - 2026-10-27（美東）：補許可段內兩類設值寫法（票 158 A-o1）。
 - 2026-10-28（美東）：補 PowerShell 動態求值其餘寫法（票 158 A-q1）。
+- 2026-10-28（美東）：Invoke-Command／icm 移入待裁（票 158 A-q2）。

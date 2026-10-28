@@ -9206,3 +9206,7 @@ class TestT158ADPrefixBypass:
         cmd = "iex('$env:PYTHON'+'PATH=x'); python x.py"
         _t158ad_assert_unparseable(cmd)
         assert "iex" in gate.bash_write_violation(cmd)
+
+    def test_t158ad_87_unbalanced_quote_inside_open_brace(self):
+        """D87|回歸|X2(裁 C):大括號展開中途斷引號 —— 大括號未關時引號不成對 ⇒ 仍擋無法解析。"""
+        _t158ad_assert_unparseable("env {'}',PYTHON'PATH}=x python x.py")
