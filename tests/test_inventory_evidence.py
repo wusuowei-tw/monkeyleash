@@ -1143,3 +1143,745 @@ def test_ie_N2_unclassified_stops_without_package(fx):
     assert "無法分類" in err
     [run] = fx.runs()
     assert sorted(os.listdir(str(fx.evid / run))) == ["checkpoint.jsonl", "snapshot.json"]
+
+
+# ══ 站二:核准代記、登記前重驗、登記前後核對、完整 resume ═══════════════════════
+#
+# 「登記」與「接回」是 VS 依現有程序做的動作,工具不做;這裡在假 repo 裡用 git 模擬它們,
+# 工具只負責前後核對。
+
+APPROVED_AT = "2026-10-29T12:00:00-04:00"
+STATEMENT = "代理人代記 Jeff 對此證據包指紋的明確核准；不是獨立人類授權證明"
+
+
+def run_cmd(fx, sub, *rest, claude=False):
+    argv = [sub, "--repo", str(fx.repo)] + list(rest)
+    if claude:
+        argv += ["--claude-root", str(fx.claude)]
+    code = ie.main(argv)
+    cap = fx.capsys.readouterr()
+    return code, cap.out, cap.err
+
+
+def fingerprint_of(fx, run):
+    return ie.package_fingerprint(fx.load(run, "package.json"))
+
+
+def approve(fx, run, fp=None, approved_at=APPROVED_AT):
+    return run_cmd(fx, "record-approval", "--run", run, "--fingerprint", fp if fp is not None else fingerprint_of(fx, run),
+                   "--approved-at", approved_at, "--note", "test approval")
+
+
+def pre_register(fx, run):
+    return run_cmd(fx, "pre-register", "--run", run, claude=True)
+
+
+def post_register(fx, run):
+    return run_cmd(fx, "post-register", "--run", run, claude=True)
+
+
+def post_reattach(fx, run):
+    return run_cmd(fx, "post-reattach", "--run", run)
+
+
+def setup_partial(fx):
+    p = fx.repo / "tracked.txt"
+    p.write_bytes(b"two\n")
+    git(fx.repo, "add", "--", "tracked.txt")
+    p.write_bytes(b"three\n")
+
+
+def setup_work(fx):
+    """原工作:部分暫存(tracked.txt)、暫存新增(new.txt)、暫存刪除(gone.txt)。"""
+    (fx.repo / "gone.txt").write_bytes(b"gone\n")
+    fx.commit_all("gone")
+    setup_partial(fx)
+    (fx.repo / "new.txt").write_bytes(b"n\n")
+    git(fx.repo, "add", "--", "new.txt")
+    git(fx.repo, "rm", "-q", "--", "gone.txt")
+
+
+def to_s5(fx):
+    setup_work(fx)
+    drift_live(fx)
+    run = fx.complete()
+    code, out, err = approve(fx, run)
+    assert code == ie.EXIT_OK, err
+    code, out, err = pre_register(fx, run)
+    assert code == ie.EXIT_OK, err
+    return run
+
+
+def register(fx, run, extra=None, content=None):
+    """模擬 VS 的登記:退出暫存,以候選名冊做一個只改名冊的 commit。"""
+    git(fx.repo, "reset", "-q")
+    data = content if content is not None else (fx.evid / run / "candidate-inventory.json").read_bytes()
+    (fx.repo / INVENTORY_REL).write_bytes(data)
+    git(fx.repo, "add", "--", INVENTORY_REL)
+    if extra:
+        extra()
+    git(fx.repo, "commit", "-q", "-m", "register")
+
+
+def reattach(fx, run, skip=()):
+    """模擬 VS 的接回:把快照的待提交區端放回去。"""
+    for s in fx.load(run, "snapshot.json")["staged"]:
+        if s["path"] == INVENTORY_REL or s["path"] in skip:
+            continue
+        if s["index"]["exists"]:
+            git(fx.repo, "update-index", "--add", "--cacheinfo",
+                "%s,%s,%s" % (s["index"]["mode"], s["index"]["blob"], s["path"]))
+        else:
+            git(fx.repo, "rm", "-q", "--cached", "--", s["path"])
+
+
+def to_s6(fx):
+    run = to_s5(fx)
+    register(fx, run)
+    code, out, err = post_register(fx, run)
+    assert code == ie.EXIT_OK, err
+    return run
+
+
+def to_s8(fx):
+    run = to_s6(fx)
+    reattach(fx, run)
+    code, out, err = post_reattach(fx, run)
+    assert code == ie.EXIT_OK, err
+    return run
+
+
+def steps_of(fx, run, result="completed"):
+    return [e["step"] for e in fx.events(run) if e["result"] == result]
+
+
+def frozen(fx):
+    """repo(含證據目錄)、.git/index 與 HEAD 的完整狀態。"""
+    return (tree_bytes(fx.repo), (fx.repo / ".git" / "index").read_bytes(), git_out(fx.repo, "rev-parse", "HEAD"))
+
+
+def swap_steps(fx, run, a, b):
+    cp = fx.evid / run / "checkpoint.jsonl"
+    lines = read_lines(cp)
+    ia = [i for i, line in enumerate(lines) if json.loads(line)["step"] == a][0]
+    ib = [i for i, line in enumerate(lines) if json.loads(line)["step"] == b][0]
+    lines[ia], lines[ib] = lines[ib], lines[ia]
+    write_lines(cp, lines)
+
+
+# ── U 區:網址常數 ─────────────────────────────────────────────────────────────
+
+def test_ie_U1_origin_constant_is_single_full_literal():
+    import urllib.parse
+    parts = urllib.parse.urlsplit(ie.ORIGIN_URL)
+    assert (parts.scheme, parts.netloc) == ("https", "github.com")
+    assert len([seg for seg in parts.path.split("/") if seg]) == 2
+    assert not parts.query and not parts.fragment
+    lines = MODULE_PATH.read_bytes().decode("utf-8").splitlines()
+    assert ('ORIGIN_URL = "%s"' % ie.ORIGIN_URL) in lines
+
+
+def test_ie_U2_split_constants_removed():
+    assert not hasattr(ie, "ORIGIN_SCHEME") and not hasattr(ie, "ORIGIN_LOCATION")
+    src = MODULE_PATH.read_bytes().decode("utf-8")
+    assert "ORIGIN_SCHEME" not in src and "ORIGIN_LOCATION" not in src
+
+
+# ── B 區補:名冊或 allowlist 在待提交區有變更 ─────────────────────────────────
+
+@pytest.mark.parametrize("rel", [INVENTORY_REL, ALLOWLIST_REL])
+def test_ie_B3_policy_staged_change_refused(fx, rel):
+    p = fx.repo / rel
+    p.write_bytes(p.read_bytes() + b"\n")
+    git(fx.repo, "add", "--", rel)
+    code, out, err = fx.collect()
+    assert code == ie.EXIT_UNSUPPORTED
+    assert "待提交區" in err
+    assert not (fx.repo / ".dev").exists()
+
+
+# ── P 區:核准代記 ─────────────────────────────────────────────────────────────
+
+def test_ie_P1_record_approval_writes_full_approval(fx):
+    run = fx.complete()
+    fp = fingerprint_of(fx, run)
+    code, out, err = approve(fx, run)
+    assert code == ie.EXIT_OK, err
+    raw = (fx.evid / run / "approval.json").read_bytes()
+    doc = json.loads(raw.decode("utf-8"))
+    assert sorted(doc) == sorted(["format_version", "run_id", "package_fingerprint", "approved_at",
+                                  "recorded_at", "recorded_by", "statement", "note"])
+    assert (doc["run_id"], doc["package_fingerprint"], doc["approved_at"]) == (run, fp, APPROVED_AT)
+    assert (doc["recorded_by"], doc["statement"], doc["note"]) == ("agent-proxy", STATEMENT, "test approval")
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", doc["recorded_at"])
+    [s4] = [e for e in fx.events(run) if e["step"] == "S4"]
+    assert s4["result"] == "completed"
+    assert s4["fingerprints"] == {"package_fingerprint": fp, "approval.json": sha(raw)}
+    last = fx.index()[-1]
+    assert (last["event"], last["package_fingerprint"]) == ("approval_recorded", fp)
+    assert not (fx.evid / ".lock").exists()
+
+
+@pytest.mark.parametrize("variant", ["short", "upper", "space", "other"])
+def test_ie_P2_fingerprint_must_match_exactly(fx, variant):
+    run = fx.complete()
+    fp = fingerprint_of(fx, run)
+    given = {"short": fp[:12], "upper": fp.upper(), "space": " " + fp + " ", "other": "0" * 64}[variant]
+    before = tree_bytes(fx.evid)
+    code, out, err = approve(fx, run, given)
+    assert code == ie.EXIT_MISMATCH
+    assert tree_bytes(fx.evid) == before
+
+
+def test_ie_P3_requires_completed_s3(fx, monkeypatch):
+    monkeypatch.setattr(ie, "_sleep", lambda seconds: (fx.bucket / "a.txt").write_bytes(b"drifted\n"))
+    assert fx.collect()[0] == ie.EXIT_MISMATCH
+    [run] = fx.runs()
+    before = tree_bytes(fx.evid)
+    code, out, err = approve(fx, run, "0" * 64)
+    assert code == ie.EXIT_MISMATCH
+    assert tree_bytes(fx.evid) == before
+
+
+def test_ie_P4_second_approval_refused_and_original_kept(fx):
+    run = fx.complete()
+    assert approve(fx, run)[0] == ie.EXIT_OK
+    before = tree_bytes(fx.evid)
+    code, out, err = approve(fx, run)
+    assert code == ie.EXIT_MISMATCH
+    assert tree_bytes(fx.evid) == before
+
+
+def test_ie_P5_approved_at_requires_timezone(fx):
+    run = fx.complete()
+    before = tree_bytes(fx.evid)
+    code, out, err = approve(fx, run, approved_at="2026-10-29T12:00:00")
+    assert code == ie.EXIT_PRECONDITION
+    assert tree_bytes(fx.evid) == before
+
+
+# ── Q 區:登記前重驗(pre-register,已合併原 verify)───────────────────────────
+
+def test_ie_Q1_pre_register_all_match_passes(fx):
+    setup_work(fx)
+    run = fx.complete()
+    assert approve(fx, run)[0] == ie.EXIT_OK
+    approval = (fx.evid / run / "approval.json").read_bytes()
+    code, out, err = pre_register(fx, run)
+    assert code == ie.EXIT_OK, err
+    assert "登記" in out
+    assert steps_of(fx, run)[-1] == "S5"
+    [s5] = [e for e in fx.events(run) if e["step"] == "S5"]
+    assert sorted(s5["fingerprints"]) == ["approval.json", "package_fingerprint", "sample_1", "sample_2"]
+    assert s5["fingerprints"]["approval.json"] == sha(approval)
+    assert len(s5["detail"]["sample_times"]) == 2
+    assert (fx.evid / run / "approval.json").read_bytes() == approval
+
+
+def test_ie_Q2_only_sample_time_differs_passes(fx):
+    run = fx.complete()
+    saved_times = [s["time"] for s in fx.load(run, "diff.json")["samples"]]
+    assert approve(fx, run)[0] == ie.EXIT_OK
+    code, out, err = pre_register(fx, run)
+    assert code == ie.EXIT_OK, err
+    [s5] = [e for e in fx.events(run) if e["step"] == "S5"]
+    assert not set(s5["detail"]["sample_times"]) & set(saved_times)
+
+
+def test_ie_Q3_resample_respects_settle_seconds(fx, monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(ie, "_sleep", lambda seconds: sleeps.append(seconds))
+    code, out, err = fx.collect("--settle-seconds", "7")
+    assert code == ie.EXIT_OK, err
+    run = fx.runs()[-1]
+    assert sleeps == [7]
+    assert approve(fx, run)[0] == ie.EXIT_OK
+    assert pre_register(fx, run)[0] == ie.EXIT_OK
+    assert sleeps == [7, 7]
+
+
+def _q_change(fx, monkeypatch, kind):
+    if kind == "head":
+        git(fx.repo, "commit", "-q", "-m", "moved")
+    elif kind == "staged":
+        (fx.repo / "extra.txt").write_bytes(b"e\n")
+        git(fx.repo, "add", "--", "extra.txt")
+    elif kind == "partial":
+        p = fx.repo / "tracked.txt"
+        p.write_bytes(b"four\n")
+        git(fx.repo, "add", "--", "tracked.txt")
+        p.write_bytes(b"three\n")
+    elif kind == "worktree":
+        (fx.repo / "tracked.txt").write_bytes(b"five\n")
+    elif kind in ("inventory_staged", "allowlist_staged"):
+        rel = INVENTORY_REL if kind == "inventory_staged" else ALLOWLIST_REL
+        p = fx.repo / rel
+        p.write_bytes(p.read_bytes() + b"\n")
+        git(fx.repo, "add", "--", rel)
+    elif kind == "binding":
+        (fx.bucket / "a.txt").write_bytes(b"rebound\n")
+    elif kind == "candidate":
+        real = ie.build_candidate
+        monkeypatch.setattr(ie, "build_candidate", lambda inv, diffs, rid: dict(real(inv, diffs, rid), schema="x"))
+    else:
+        raise AssertionError(kind)
+
+
+@pytest.mark.parametrize("kind", ["head", "staged", "partial", "worktree", "inventory_staged",
+                                  "allowlist_staged", "binding", "candidate"])
+def test_ie_Q4_mismatch_voids_approval(fx, monkeypatch, kind):
+    setup_partial(fx)
+    run = fx.complete()
+    assert approve(fx, run)[0] == ie.EXIT_OK
+    fp = fingerprint_of(fx, run)
+    approval = (fx.evid / run / "approval.json").read_bytes()
+    _q_change(fx, monkeypatch, kind)
+    code, out, err = pre_register(fx, run)
+    assert code == ie.EXIT_MISMATCH, err
+    assert "不適用" in err
+    assert "S5" not in steps_of(fx, run)
+    [void] = [e for e in fx.events(run) if e["result"] == "approval_void"]
+    assert void["fingerprints"] == {"package_fingerprint": fp, "approval.json": sha(approval)}
+    assert void["detail"]["mismatches"]
+    assert (fx.evid / run / "approval.json").read_bytes() == approval
+    last = fx.index()[-1]
+    assert (last["event"], last["package_fingerprint"]) == ("approval_void", fp)
+
+
+@pytest.mark.parametrize("kind", ["no_approval", "approval_modified", "evidence_modified", "jsonl_truncated"])
+def test_ie_Q5_untrusted_evidence_stops_without_writing(fx, kind):
+    run = fx.complete()
+    if kind != "no_approval":
+        assert approve(fx, run)[0] == ie.EXIT_OK
+    rd = fx.evid / run
+    if kind == "approval_modified":
+        (rd / "approval.json").write_bytes((rd / "approval.json").read_bytes() + b" ")
+    elif kind == "evidence_modified":
+        (rd / "diff.json").write_bytes((rd / "diff.json").read_bytes() + b" ")
+    elif kind == "jsonl_truncated":
+        with open(str(rd / "checkpoint.jsonl"), "ab") as fh:
+            fh.write(b'{"step": "S5"')
+    before = tree_bytes(fx.evid)
+    code, out, err = pre_register(fx, run)
+    assert code == ie.EXIT_MISMATCH
+    assert tree_bytes(fx.evid) == before
+
+
+# ── X 區:核准不適用 ───────────────────────────────────────────────────────────
+
+def test_ie_X1_void_approval_never_reusable(fx):
+    run = fx.complete()
+    assert approve(fx, run)[0] == ie.EXIT_OK
+    fp = fingerprint_of(fx, run)
+    approval = (fx.evid / run / "approval.json").read_bytes()
+    p = fx.repo / "tracked.txt"
+    original = p.read_bytes()
+    p.write_bytes(b"changed\n")
+    code, out, err = pre_register(fx, run)
+    assert code == ie.EXIT_MISMATCH and "不適用" in err
+    p.write_bytes(original)                      # 現場改回與快照完全相同
+    for step in (pre_register, post_register, post_reattach):
+        code, out, err = step(fx, run)
+        assert code == ie.EXIT_MISMATCH, step.__name__
+        assert "不適用" in err, step.__name__
+    assert approve(fx, run)[0] == ie.EXIT_MISMATCH
+    assert (fx.evid / run / "approval.json").read_bytes() == approval
+    [void] = [e for e in fx.events(run) if e["result"] == "approval_void"]
+    assert void["fingerprints"] == {"package_fingerprint": fp, "approval.json": sha(approval)}
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_MISMATCH
+    assert "重新 collect" in out
+
+
+# ── G 區:登記後核對 ───────────────────────────────────────────────────────────
+
+def test_ie_G1_post_register_passes(fx):
+    run = to_s5(fx)
+    register(fx, run)
+    code, out, err = post_register(fx, run)
+    assert code == ie.EXIT_OK, err
+    assert "接回" in out
+    [s6] = [e for e in fx.events(run) if e["step"] == "S6'" and e["result"] == "completed"]
+    assert s6["detail"]["new_head"] == git_out(fx.repo, "rev-parse", "HEAD")
+
+
+def _g_change(fx, run, kind):
+    if kind == "parent":
+        register(fx, run)
+        (fx.repo / "later.txt").write_bytes(b"l\n")
+        git(fx.repo, "add", "--", "later.txt")
+        git(fx.repo, "commit", "-q", "-m", "later")
+    elif kind == "extra_file":
+        def extra():
+            (fx.repo / "other.txt").write_bytes(b"o\n")
+            git(fx.repo, "add", "--", "other.txt")
+        register(fx, run, extra=extra)
+    elif kind == "mode":
+        register(fx, run, extra=lambda: git(fx.repo, "update-index", "--chmod=+x", "--", ".gitignore"))
+    elif kind == "blob":
+        register(fx, run, content=(fx.evid / run / "candidate-inventory.json").read_bytes() + b"\n")
+    elif kind == "r10":
+        register(fx, run)
+        (fx.bucket / "c.txt").write_bytes(b"changed after register\n")
+    elif kind == "work":
+        register(fx, run)
+        (fx.repo / "tracked.txt").write_bytes(b"four\n")
+    else:
+        raise AssertionError(kind)
+
+
+@pytest.mark.parametrize("kind", ["parent", "extra_file", "mode", "blob", "r10", "work"])
+def test_ie_G2_post_register_mismatch_keeps_commit(fx, kind):
+    run = to_s5(fx)
+    _g_change(fx, run, kind)
+    head = git_out(fx.repo, "rev-parse", "HEAD")
+    index = (fx.repo / ".git" / "index").read_bytes()
+    work = dict((k, v) for k, v in tree_bytes(fx.repo).items() if not k.startswith(".dev/"))
+    code, out, err = post_register(fx, run)
+    assert code == ie.EXIT_MISMATCH, err
+    assert git_out(fx.repo, "rev-parse", "HEAD") == head
+    assert (fx.repo / ".git" / "index").read_bytes() == index
+    assert dict((k, v) for k, v in tree_bytes(fx.repo).items() if not k.startswith(".dev/")) == work
+    last = fx.events(run)[-1]
+    assert (last["step"], last["result"]) == ("S6'", "stopped")
+    assert "S6'" not in steps_of(fx, run)
+
+
+# ── H 區:接回後核對 ───────────────────────────────────────────────────────────
+
+def test_ie_H1_post_reattach_passes_and_closes(fx):
+    run = to_s6(fx)
+    reattach(fx, run)
+    code, out, err = post_reattach(fx, run)
+    assert code == ie.EXIT_OK, err
+    assert steps_of(fx, run)[-2:] == ["S7'", "S8"]
+    fp = fingerprint_of(fx, run)
+    head = git_out(fx.repo, "rev-parse", "HEAD")
+    [s8] = [e for e in fx.events(run) if e["step"] == "S8"]
+    assert (s8["detail"]["run_id"], s8["detail"]["package_fingerprint"], s8["detail"]["new_head"]) == (run, fp, head)
+    last = fx.index()[-1]
+    assert (last["event"], last["package_fingerprint"], last["new_head"]) == ("run_completed", fp, head)
+
+
+def _h_change(fx, run, kind):
+    if kind == "missing_one":
+        reattach(fx, run, skip={"new.txt"})
+    elif kind == "extra_one":
+        reattach(fx, run)
+        (fx.repo / "u.txt").write_bytes(b"u\n")
+        git(fx.repo, "add", "--", "u.txt")
+    elif kind == "blob_differs":
+        reattach(fx, run, skip={"tracked.txt"})
+        git(fx.repo, "add", "--", "tracked.txt")
+    elif kind == "deleted_present":
+        reattach(fx, run, skip={"gone.txt"})
+    elif kind == "partial_differs":
+        reattach(fx, run)
+        blob = git_out(fx.repo, "rev-parse", "HEAD:tracked.txt")
+        git(fx.repo, "update-index", "--cacheinfo", "100644,%s,tracked.txt" % blob)
+    elif kind == "worktree":
+        reattach(fx, run)
+        (fx.repo / "tracked.txt").write_bytes(b"five\n")
+    else:
+        raise AssertionError(kind)
+
+
+@pytest.mark.parametrize("kind", ["missing_one", "extra_one", "blob_differs", "deleted_present",
+                                  "partial_differs", "worktree"])
+def test_ie_H2_post_reattach_mismatch_stops_without_changes(fx, kind):
+    run = to_s6(fx)
+    _h_change(fx, run, kind)
+    head = git_out(fx.repo, "rev-parse", "HEAD")
+    index = (fx.repo / ".git" / "index").read_bytes()
+    work = dict((k, v) for k, v in tree_bytes(fx.repo).items() if not k.startswith(".dev/"))
+    code, out, err = post_reattach(fx, run)
+    assert code == ie.EXIT_MISMATCH, err
+    assert git_out(fx.repo, "rev-parse", "HEAD") == head
+    assert (fx.repo / ".git" / "index").read_bytes() == index
+    assert dict((k, v) for k, v in tree_bytes(fx.repo).items() if not k.startswith(".dev/")) == work
+    assert "S7'" not in steps_of(fx, run)
+    assert (fx.events(run)[-1]["step"], fx.events(run)[-1]["result"]) == ("S7'", "stopped")
+
+
+def test_ie_H3_untracked_difference_listed_unverified(fx):
+    run = to_s6(fx)
+    reattach(fx, run)
+    (fx.repo / "late.txt").write_bytes(b"late\n")
+    code, out, err = post_reattach(fx, run)
+    assert code == ie.EXIT_OK, err
+    assert "late.txt" in out and "內容未驗證" in out
+    [s7] = [e for e in fx.events(run) if e["step"] == "S7'"]
+    assert s7["detail"]["untracked_added"] == ["late.txt"]
+    assert s7["detail"]["content_verified"] is False
+    [s8] = [e for e in fx.events(run) if e["step"] == "S8"]
+    assert s8["detail"]["untracked_diff_count"] == 1
+
+
+# ── W 區:resume 完整版 ───────────────────────────────────────────────────────
+
+def test_ie_W1_resume_after_s3_and_s4(fx):
+    run = fx.complete()
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_OK and "record-approval" in out
+    assert approve(fx, run)[0] == ie.EXIT_OK
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_OK and "pre-register" in out
+
+
+def test_ie_W2_s5_not_registered_points_to_registration(fx):
+    run = to_s5(fx)
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_OK, err
+    assert "尚未登記" in out and "post-register" in out
+
+
+def test_ie_W3_s5_registered_points_to_post_register_only(fx):
+    run = to_s5(fx)
+    register(fx, run)
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_OK, err
+    assert "post-register" in out
+    assert "尚未登記" not in out
+
+
+@pytest.mark.parametrize("kind", ["two_commits", "other_file"])
+def test_ie_W4_s5_unrecognized_state_stops(fx, kind):
+    run = to_s5(fx)
+    if kind == "two_commits":
+        register(fx, run)
+        git(fx.repo, "commit", "-q", "--allow-empty", "-m", "second")
+    else:
+        _g_change(fx, run, "extra_file")
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_MISMATCH
+    assert "無法辨識" in err
+
+
+def test_ie_W5_s6_not_reattached_points_to_reattach(fx):
+    run = to_s6(fx)
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_OK, err
+    assert "尚未接回" in out and "post-reattach" in out
+
+
+@pytest.mark.parametrize("skip", [(), ("new.txt",)])
+def test_ie_W6_s6_reattached_points_to_post_reattach_only(fx, skip):
+    run = to_s6(fx)
+    reattach(fx, run, skip=skip)
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_OK, err
+    assert "post-reattach" in out
+    assert "尚未接回" not in out
+
+
+@pytest.mark.parametrize("kind", ["foreign_staged", "head_moved"])
+def test_ie_W7_s6_unrecognized_state_stops(fx, kind):
+    run = to_s6(fx)
+    if kind == "foreign_staged":
+        (fx.repo / "u.txt").write_bytes(b"u\n")
+        git(fx.repo, "add", "--", "u.txt")
+    else:
+        git(fx.repo, "commit", "-q", "--allow-empty", "-m", "moved")
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_MISMATCH
+
+
+def test_ie_W8_void_points_to_recollect_only(fx):
+    run = fx.complete()
+    assert approve(fx, run)[0] == ie.EXIT_OK
+    (fx.repo / "tracked.txt").write_bytes(b"changed\n")
+    assert pre_register(fx, run)[0] == ie.EXIT_MISMATCH
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_MISMATCH
+    assert "重新 collect" in out
+    assert "下一步:pre-register" not in out and "post-register" not in out
+
+
+def _closing_interrupted(fx, monkeypatch, target):
+    run = to_s6(fx)
+    reattach(fx, run)
+    real = getattr(ie, target)
+
+    def boom(*args):
+        raise ie.Stop(ie.EXIT_INTERNAL, "test interruption")
+    monkeypatch.setattr(ie, target, boom)
+    code, out, err = post_reattach(fx, run)
+    assert code == ie.EXIT_INTERNAL
+    monkeypatch.setattr(ie, target, real)
+    return run
+
+
+@pytest.mark.parametrize("target,s8_before", [("_write_s8", 0), ("_index_run_completed", 1)])
+def test_ie_W9_closing_interrupted_then_completed(fx, monkeypatch, target, s8_before):
+    run = _closing_interrupted(fx, monkeypatch, target)
+    assert steps_of(fx, run).count("S7'") == 1
+    assert steps_of(fx, run).count("S8") == s8_before
+    before = frozen(fx)
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_OK, err
+    assert "核對已完成、收尾紀錄未完成" in out
+    assert "流程已完成" not in out
+    assert frozen(fx) == before
+    code, out, err = post_reattach(fx, run)
+    assert code == ie.EXIT_OK, err
+    assert steps_of(fx, run).count("S7'") == 1
+    assert steps_of(fx, run).count("S8") == 1
+    assert [r["event"] for r in fx.index()].count("run_completed") == 1
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_OK, err
+    assert "流程已完成" in out
+
+
+def test_ie_W10_s8_and_index_completion_inconsistent_stops(fx):
+    run = to_s8(fx)
+    recs = fx.index()
+    for r in recs:
+        if r["event"] == "run_completed":
+            r["new_head"] = "0" * 40
+    write_lines(fx.evid / "index.jsonl", [line_of(r) for r in recs])
+    before = frozen(fx)
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_MISMATCH
+    assert frozen(fx) == before
+
+
+@pytest.mark.parametrize("kind", ["swap_s4_s5", "duplicate_s5"])
+def test_ie_W11_new_step_order_violation_stops(fx, kind):
+    run = to_s5(fx)
+    if kind == "swap_s4_s5":
+        swap_steps(fx, run, "S4", "S5")
+    else:
+        cp = fx.evid / run / "checkpoint.jsonl"
+        lines = read_lines(cp)
+        write_lines(cp, lines + [lines[-1]])
+    before = frozen(fx)
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_MISMATCH
+    assert frozen(fx) == before
+
+
+def test_ie_W12_stopped_event_reason_printed(fx):
+    run = to_s5(fx)
+    _g_change(fx, run, "work")
+    assert post_register(fx, run)[0] == ie.EXIT_MISMATCH
+    (fx.repo / "tracked.txt").write_bytes(b"three\n")
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_OK, err
+    assert "停下" in out and "post-register" in out
+
+
+def test_ie_W13_resume_never_writes_or_locks(fx, monkeypatch):
+    run = to_s6(fx)
+    reattach(fx, run, skip={"new.txt"})
+    calls = []
+
+    def no_lock(*args):
+        calls.append(args)
+        raise AssertionError("resume 不得取鎖")
+    monkeypatch.setattr(ie, "_acquire_lock", no_lock)
+    before = frozen(fx)
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_OK, err
+    assert frozen(fx) == before
+    assert calls == []
+
+
+# ── L 區補:每個會寫入的子命令都要拿鎖 ─────────────────────────────────────────
+
+@pytest.mark.parametrize("sub", ["record-approval", "pre-register", "post-register", "post-reattach"])
+def test_ie_L5_writers_stop_when_lock_held(fx, sub):
+    run = fx.complete()
+    fp = fingerprint_of(fx, run)
+    (fx.evid / ".lock").write_bytes(b'{"pid": 1, "run_id": "someone-else"}\n')
+    before = tree_bytes(fx.evid)
+    if sub == "record-approval":
+        code, out, err = approve(fx, run, fp)
+    else:
+        code, out, err = run_cmd(fx, sub, "--run", run, claude=(sub != "post-reattach"))
+    assert code == ie.EXIT_MISMATCH
+    assert "鎖" in err
+    assert tree_bytes(fx.evid) == before
+
+
+def test_ie_L6_run_dir_created_after_lock(fx, monkeypatch):
+    real = ie._acquire_lock
+    seen = []
+
+    def spy(evid, run_id):
+        seen.append(os.path.exists(os.path.join(evid, run_id)))
+        return real(evid, run_id)
+    monkeypatch.setattr(ie, "_acquire_lock", spy)
+    fx.complete()
+    assert seen == [False]
+
+
+# ── M 區補:新增子命令仍只用唯讀 git ───────────────────────────────────────────
+
+def test_ie_M5_new_subcommands_only_read_only_git(fx, monkeypatch):
+    calls = []
+    state = {"on": False}
+    real = subprocess.run
+
+    def recorder(*args, **kwargs):
+        if state["on"]:
+            calls.append([str(a) for a in (args[0] if args else kwargs["args"])])
+        return real(*args, **kwargs)
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    def tool(fn, *args):
+        state["on"] = True
+        try:
+            return fn(*args)
+        finally:
+            state["on"] = False
+    setup_work(fx)
+    drift_live(fx)
+    assert tool(fx.collect)[0] == ie.EXIT_OK
+    run = fx.runs()[-1]
+    assert tool(approve, fx, run)[0] == ie.EXIT_OK
+    assert tool(pre_register, fx, run)[0] == ie.EXIT_OK
+    register(fx, run)
+    assert tool(post_register, fx, run)[0] == ie.EXIT_OK
+    reattach(fx, run)
+    assert tool(post_reattach, fx, run)[0] == ie.EXIT_OK
+    assert tool(fx.resume, run)[0] == ie.EXIT_OK
+    assert calls
+    for argv in calls:
+        assert os.path.basename(argv[0]).lower().startswith("git"), argv
+        sub, rest = _git_subcommand(argv)
+        assert sub in READ_ONLY_GIT and sub not in FORBIDDEN_GIT, argv
+        if sub == "hash-object":
+            assert "-w" not in rest, argv
+        if sub == "remote":
+            assert rest[:1] == ["get-url"], argv
+        if sub == "config":
+            assert "--get" in rest, argv
+
+
+# ── V 區補:新增原件與事件的證據重驗 ───────────────────────────────────────────
+
+@pytest.mark.parametrize("kind", ["approval_modified", "s4_event_missing", "s5_before_s4", "void_fingerprint_mismatch"])
+def test_ie_V2_extended_evidence_tamper_stops(fx, kind):
+    run = fx.complete()
+    assert approve(fx, run)[0] == ie.EXIT_OK
+    rd = fx.evid / run
+    cp = rd / "checkpoint.jsonl"
+    if kind == "approval_modified":
+        (rd / "approval.json").write_bytes((rd / "approval.json").read_bytes() + b" ")
+    elif kind == "s4_event_missing":
+        write_lines(cp, [line for line in read_lines(cp) if json.loads(line)["step"] != "S4"])
+    elif kind == "s5_before_s4":
+        assert pre_register(fx, run)[0] == ie.EXIT_OK
+        swap_steps(fx, run, "S4", "S5")
+    else:
+        (fx.repo / "tracked.txt").write_bytes(b"changed\n")
+        assert pre_register(fx, run)[0] == ie.EXIT_MISMATCH
+        recs = fx.events(run)
+        for r in recs:
+            if r["result"] == "approval_void":
+                r["fingerprints"]["package_fingerprint"] = "1" * 64
+        write_lines(cp, [line_of(r) for r in recs])
+    before = frozen(fx)
+    assert fx.resume(run)[0] == ie.EXIT_MISMATCH
+    assert pre_register(fx, run)[0] == ie.EXIT_MISMATCH
+    assert frozen(fx) == before

@@ -1,22 +1,28 @@
 # -*- coding: utf-8 -*-
-"""票 165 站一:R10 名冊的證據蒐集(`collect`)與接續驗證(`resume`)。
+"""票 165:R10 名冊的證據蒐集、核准代記、登記前重驗、登記前後核對與接續驗證。
 
 **只讀比記。** 讀 git、讀 R10 的觀測結果(`redlight.extension_report`),把指紋寫進
-`.dev/inventory-evidence/`;**不改 index、不改 refs、不寫 `.agents/`** —— 登記是站二的事,
-而且由人做。工具只呼叫唯讀 git 子命令(`_git` 的白名單是封閉集合,枚舉不比對)。
+`.dev/inventory-evidence/`;**不改 index、不改 refs、不寫 `.agents/`** —— 登記與接回原工作
+是 VS 依現有程序與另行授權做的動作,工具只在那兩個動作的前後核對。
+工具只呼叫唯讀 git 子命令(`_git` 的白名單是封閉集合,枚舉不比對)。
 
 repo 識別(根 commit + origin)只是**防誤用檢查**,不是安全邊界,也不是授權;
 不保證擋住所有下游或刻意複製設定的副本。不論識別結果,每次仍逐項過四項使用前提。
 
 本檔標 skip(只供本專案使用,不出貨到下游):識別值寫死的是這個 repo。
 
-站二預留(驗收基線 4～6):核准代記綁 `package.json` 的證據包指紋;登記前重驗用
-`baseline`(HEAD、名冊與 allowlist 在 HEAD 的 blob、名冊 schema 版本);登記後核對用
-`candidate`(候選名冊的 blob 與 SHA256)。本站不實作那三步。
+步驟:S0b 快照 → S1 現場兩次取樣 → S2 候選名冊 → S3 證據包(collect);
+S4 核准代記(record-approval);S5 登記前重驗(pre-register,含原 verify);
+S6' 登記後核對(post-register);S7' 接回後核對與 S8 收尾(post-reattach)。
+resume 完全唯讀、不取鎖,依階段核對現場並指出下一步。
 
 用法(經 gatepy):
   sh .claude/bin/gatepy .claude/portable/inventory_evidence.py collect [--repo R] [--claude-root C] [--settle-seconds N]
-  sh .claude/bin/gatepy .claude/portable/inventory_evidence.py resume --run <執行代號> [--repo R]
+  sh .claude/bin/gatepy .claude/portable/inventory_evidence.py record-approval --run <代號> --fingerprint <64 碼> --approved-at <ISO 8601> --note <文字>
+  sh .claude/bin/gatepy .claude/portable/inventory_evidence.py pre-register --run <代號> [--claude-root C]
+  sh .claude/bin/gatepy .claude/portable/inventory_evidence.py post-register --run <代號> [--claude-root C]
+  sh .claude/bin/gatepy .claude/portable/inventory_evidence.py post-reattach --run <代號>
+  sh .claude/bin/gatepy .claude/portable/inventory_evidence.py resume --run <代號>
 
 退出碼:0 通過;2 使用前提不符;3 不支援狀態(含 submodule、特殊檔案、repo 識別不符);
 4 失配或不穩定;5 內部錯誤(不確定一律當失敗)。
@@ -36,14 +42,11 @@ import time
 from datetime import datetime, timezone
 
 FORMAT_VERSION = 1
-TOOL_VERSION = "165.1"
+TOOL_VERSION = "165.2"
 
-# repo 識別值(站一 A4 實讀,物件格式 sha1)。origin 拆成兩段只是為了讓網址不以
-# 「字母 + 冒號 + 斜線」的形狀出現在原始碼裡;比對的是組起來的完整字串。
+# repo 識別值(站一 A4 實讀,物件格式 sha1)。
 ROOT_COMMIT = "91335c8e212d21230b03bd26acc04a7e87590f3c"
-ORIGIN_SCHEME = "https"
-ORIGIN_LOCATION = "github.com/wusuowei-tw/monkeyleash"
-ORIGIN_URL = ORIGIN_SCHEME + "://" + ORIGIN_LOCATION
+ORIGIN_URL = "https://github.com/wusuowei-tw/monkeyleash"
 
 EXIT_OK = 0
 EXIT_PRECONDITION = 2
@@ -59,15 +62,20 @@ TMP_PREFIX = ".tmp-"
 INVENTORY_REL = ".agents/extension-inventory.json"
 ALLOWLIST_REL = ".agents/extension-allowlist.json"
 
-STEPS = ("S0b", "S1", "S2", "S3")
+STEPS = ("S0b", "S1", "S2", "S3", "S4", "S5", "S6'", "S7'", "S8")
 STEP_ARTIFACTS = {"S0b": ("snapshot.json",), "S1": ("diff.json",), "S2": ("candidate-inventory.json",),
-                  "S3": ("package.json", "summary.md")}
+                  "S3": ("package.json", "summary.md"), "S4": ("approval.json",)}
 ARTIFACT_STEP = dict((name, step) for step, names in STEP_ARTIFACTS.items() for name in names)
 PACKAGE_ARTIFACTS = ("snapshot.json", "diff.json", "candidate-inventory.json")
+RESULT_COMPLETED, RESULT_STOPPED, RESULT_VOID = "completed", "stopped", "approval_void"
 RUN_ID_RE = re.compile(r"\A\d{8}T\d{6}Z-[0-9a-f]{7}\Z")
 NOTE_PREFIX = "inventory-evidence "
 UNCONFIRMED = u"未確認"
 UNTRACKED_NOTE = u"未驗證其內容是否改變"
+APPROVAL_KEYS = ("format_version", "run_id", "package_fingerprint", "approved_at", "recorded_at",
+                 "recorded_by", "statement", "note")
+APPROVAL_BY = "agent-proxy"
+APPROVAL_STATEMENT = u"代理人代記 Jeff 對此證據包指紋的明確核准；不是獨立人類授權證明"
 
 _ID_LENGTH = {"sha1": 40, "sha256": 64}
 _ZERO_MODE = "000000"
@@ -79,6 +87,8 @@ _EXPECT_SIDES = {"added": (False, True), "deleted": (True, False), "modified": (
 _GIT_READ_ONLY = frozenset(("rev-parse", "rev-list", "remote", "diff", "ls-files", "check-ignore", "config"))
 _VIEW_KEYS = ("repo_identity", "head", "state_flags", "staged", "partially_staged", "protected_scope", "policy")
 _LABELS = (("added", u"新增"), ("deleted", u"刪除"), ("mismatch", u"內容不符"), ("contract", u"contract"))
+_COUNT_KEYS = ("missing", "extra", "mismatch", "structure_errors")
+_VOID_ADVICE = u"此核准已不適用;需重新 collect,並重新取得 Jeff 對新證據包的核准"
 
 _REDLIGHT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hooks", "redlight.py")
 
@@ -253,15 +263,19 @@ def check_preconditions(root, write_rel=None):
             raise Stop(EXIT_INTERNAL, u"git check-ignore 失敗(退出碼 %d)" % proc.returncode)
 
 
+def _head(root, length):
+    proc = _git(root, ["rev-parse", "--verify", "-q", "HEAD"])
+    if proc.returncode != 0:
+        raise Stop(EXIT_UNSUPPORTED, u"不支援的狀態:HEAD 不存在")
+    return _full_id(_text(proc.stdout), length, u"HEAD")
+
+
 def _identity(root):
     fmt = _text(_git_ok(root, ["rev-parse", "--show-object-format"]))
     if fmt not in _ID_LENGTH:
         raise Stop(EXIT_INTERNAL, u"不認得的物件格式")
     length = _ID_LENGTH[fmt]
-    head = _git(root, ["rev-parse", "--verify", "-q", "HEAD"])
-    if head.returncode != 0:
-        raise Stop(EXIT_UNSUPPORTED, u"不支援的狀態:HEAD 不存在")
-    head = _full_id(_text(head.stdout), length, u"HEAD")
+    head = _head(root, length)
     roots = _text(_git_ok(root, ["rev-list", "--max-parents=0", "HEAD"])).split()
     for r in roots:
         _full_id(r, length, u"根 commit")
@@ -317,6 +331,8 @@ def _refuse_unsupported_state(root, flags):
         raise Stop(EXIT_UNSUPPORTED, u"不支援的狀態:有 %d 個衝突路徑" % len(flags["conflict_paths"]))
     if _z(_git_ok(root, ["diff", "--name-only", "-z", "--", INVENTORY_REL, ALLOWLIST_REL])):
         raise Stop(EXIT_UNSUPPORTED, u"不支援的狀態:名冊或 allowlist 有未暫存修改")
+    if _z(_git_ok(root, ["diff", "--cached", "--name-only", "-z", "--", INVENTORY_REL, ALLOWLIST_REL])):
+        raise Stop(EXIT_UNSUPPORTED, u"不支援的狀態:名冊或 allowlist 在待提交區有變更")
 
 
 def _cached_raw(root):
@@ -336,7 +352,7 @@ def _side(mode, oid, length):
 
 
 def parse_cached_raw(raw, length):
-    """`git diff --cached --raw -z --no-renames --no-abbrev` → 待提交項目清單。
+    """`git diff --raw -z --no-renames --no-abbrev`(`--cached` 或兩個 commit 之間)→ 項目清單。
 
     零值(全零、完整長度)是「這一端不存在」的標記:記成 `{"exists": False}`,不當 blob。
     零值出現在與狀態不符的一端、兩端皆零、模式與 ID 只有一個是零值、ID 不是完整長度 ⇒ Stop(5)。
@@ -345,12 +361,12 @@ def parse_cached_raw(raw, length):
     if toks and toks[-1] == b"":
         toks.pop()
     if len(toks) % 2:
-        raise Stop(EXIT_INTERNAL, u"git diff --cached --raw 輸出不完整")
+        raise Stop(EXIT_INTERNAL, u"git diff --raw 輸出不完整")
     out = []
     for i in range(0, len(toks), 2):
         parts = toks[i].decode("ascii", "replace").split(" ")
         if len(parts) != 5 or not parts[0].startswith(":"):
-            raise Stop(EXIT_INTERNAL, u"git diff --cached --raw 輸出格式不符")
+            raise Stop(EXIT_INTERNAL, u"git diff --raw 輸出格式不符")
         src_mode, dst_mode, src_id, dst_id, status = parts[0][1:], parts[1], parts[2], parts[3], parts[4]
         if status not in _STATUS:
             raise Stop(EXIT_INTERNAL, u"不支援的待提交狀態 %s" % status)
@@ -426,8 +442,6 @@ def build_snapshot(root, ident):
     reliable = _exec_reliable(root)
     protected = [_worktree_state(root, p, reliable) for p in scope]
     by_path = dict((e["path"], e) for e in protected)
-    untracked = sorted(p for p in _z(_git_ok(root, ["ls-files", "-o", "--exclude-standard", "-z"]))
-                       if not _is_evidence_path(p))
     return {
         "repo_identity": {"root_commit": ident["root_commit"], "origin": ident["origin"],
                           "object_format": ident["object_format"], "id_length": length},
@@ -439,9 +453,17 @@ def build_snapshot(root, ident):
                    "allowlist": _policy_ids(root, ALLOWLIST_REL, length, by_path[ALLOWLIST_REL])},
         "protected_scope": protected,
         "executable_mode_reliable": reliable,
-        "untracked": {"count": len(untracked), "paths": untracked, "content_verified": False,
-                      "note": UNTRACKED_NOTE},
+        "untracked": _untracked_record(_untracked(root)),
     }
+
+
+def _untracked(root):
+    return sorted(p for p in _z(_git_ok(root, ["ls-files", "-o", "--exclude-standard", "-z"]))
+                  if not _is_evidence_path(p))
+
+
+def _untracked_record(paths):
+    return {"count": len(paths), "paths": paths, "content_verified": False, "note": UNTRACKED_NOTE}
 
 
 def state_view(snap):
@@ -519,8 +541,7 @@ def cross_check(counts, synced, structure_errors):
     """逐項分類的少 / 多 / 不符 / 結構錯誤數,必須與同一次 `synced_verification` 的計數完全相同。
     相符只代表數量一致,不代表逐項分類一定正確。"""
     mine = (counts["missing"], counts["extra"], counts["mismatch"], structure_errors)
-    theirs = tuple(synced.get(k) for k in ("missing", "extra", "mismatch", "structure_errors")) \
-        if isinstance(synced, dict) else None
+    theirs = tuple(synced.get(k) for k in _COUNT_KEYS) if isinstance(synced, dict) else None
     if mine != theirs:
         raise Stop(EXIT_MISMATCH, u"交叉核對不符:逐項分類(少 %d／多 %d／不符 %d／結構錯誤 %d)與 R10 計數不同;"
                                   u"視為無法分類" % mine)
@@ -550,7 +571,15 @@ def _sample_key(s):
 
 
 def _sample_record(s):
-    return {"time": s["time"], "r10_state": s["r10_state"], "live": s["live"], "contracts": s["contracts"]}
+    synced = s["synced"] if isinstance(s["synced"], dict) else {}
+    return {"time": s["time"], "r10_state": s["r10_state"], "live": s["live"], "contracts": s["contracts"],
+            "counts": {"classification": s["classification"]["counts"],
+                       "r10": dict((k, synced.get(k)) for k in _COUNT_KEYS)}}
+
+
+def _binding(record):
+    """樣本的綁定資料:每項路徑、內容指紋、contract 結果、R10 狀態與計數。取樣時間不屬綁定資料。"""
+    return dict((k, record.get(k)) for k in ("live", "contracts", "r10_state", "counts"))
 
 
 # ── 寫檔(暫存檔 → 改名;不覆寫)與 JSONL ───────────────────────────────────
@@ -612,16 +641,27 @@ def _append_jsonl(path, rec, label):
         os.fsync(fh.fileno())
 
 
-def _event(ctx, step, result, reason, fingerprints):
-    _append_jsonl(os.path.join(ctx["run_dir"], CHECKPOINT_NAME),
-                  {"time": _iso(_now()), "run_id": ctx["run_id"], "step": step, "result": result,
-                   "reason": reason, "fingerprints": fingerprints or {}}, CHECKPOINT_NAME)
+def _event(ctx, step, result, reason, fingerprints, detail=None):
+    rec = {"time": _iso(_now()), "run_id": ctx["run_id"], "step": step, "result": result,
+           "reason": reason, "fingerprints": fingerprints or {}}
+    if detail is not None:
+        rec["detail"] = detail
+    _append_jsonl(os.path.join(ctx["run_dir"], CHECKPOINT_NAME), rec, CHECKPOINT_NAME)
 
 
-def _index(ctx, event, reason=None, fingerprint=None):
-    _append_jsonl(os.path.join(ctx["evid"], INDEX_NAME),
-                  {"time": _iso(_now()), "run_id": ctx["run_id"], "event": event, "reason": reason,
-                   "package_fingerprint": fingerprint}, INDEX_NAME)
+def _index(ctx, event, reason=None, fingerprint=None, extra=None):
+    rec = {"time": _iso(_now()), "run_id": ctx["run_id"], "event": event, "reason": reason,
+           "package_fingerprint": fingerprint}
+    rec.update(extra or {})
+    _append_jsonl(os.path.join(ctx["evid"], INDEX_NAME), rec, INDEX_NAME)
+
+
+def _load(run_dir, name):
+    try:
+        with io.open(os.path.join(run_dir, name), "rb") as fh:
+            return json.loads(fh.read().decode("utf-8"))
+    except Exception:
+        raise Stop(EXIT_MISMATCH, u"%s 無法解析" % name)
 
 
 # ── 全域鎖 ────────────────────────────────────────────────────────────────────
@@ -654,7 +694,7 @@ def _release_lock(path, content):
     return True
 
 
-# ── 既有證據的掃描與重驗(S9)────────────────────────────────────────────────
+# ── 既有證據的掃描與重驗 ──────────────────────────────────────────────────────
 
 def scan_evidence(evid, holding_lock):
     """未完成資料、遺留鎖、壞 JSONL、不認得的項目 ⇒ Stop,不自動清理。"""
@@ -682,7 +722,7 @@ def _scan_run(run_dir, run_id):
     if any(f.startswith(TMP_PREFIX) for f in files):
         raise Stop(EXIT_MISMATCH, u"執行 %s 留有暫存檔(未完成資料);不自動清理" % run_id)
     events = _read_jsonl(os.path.join(run_dir, CHECKPOINT_NAME), CHECKPOINT_NAME)
-    done = set(e.get("step") for e in events if e.get("result") == "completed")
+    done = set(e.get("step") for e in events if e.get("result") == RESULT_COMPLETED)
     for f in sorted(files):
         if f == CHECKPOINT_NAME:
             continue
@@ -698,22 +738,31 @@ def _file_sha(path):
         return _sha256(fh.read())
 
 
+def _is_full_hex(value):
+    return isinstance(value, str) and len(value) in _ID_LENGTH.values() \
+        and all(c in "0123456789abcdef" for c in value)
+
+
 def verify_run(evid, run_id):
-    """重驗保存的證據本身(S9 第 1～3 項)。回傳 `(最後完成步驟或 None, 證據包指紋或 None)`。"""
+    """重驗保存的證據本身:原件 SHA256、證據包指紋、摘要、approval.json、事件順序與一致性。
+
+    任一不符 ⇒ Stop(4),不覆寫、不修補。回傳本執行的狀態摘要(`info`)。
+    """
     run_dir = os.path.join(evid, run_id)
     events = _read_jsonl(os.path.join(run_dir, CHECKPOINT_NAME), CHECKPOINT_NAME)
     for e in events:
         if e.get("run_id") != run_id:
             raise Stop(EXIT_MISMATCH, u"事件的執行代號與目錄不符")
-        if e.get("result") not in ("completed", "stopped"):
+        if e.get("result") not in (RESULT_COMPLETED, RESULT_STOPPED, RESULT_VOID):
             raise Stop(EXIT_MISMATCH, u"事件結果欄不認得")
-    completed = [e for e in events if e.get("result") == "completed"]
+    completed = [e for e in events if e.get("result") == RESULT_COMPLETED]
     steps = [e.get("step") for e in completed]
     if steps != list(STEPS[:len(steps)]):
         raise Stop(EXIT_MISMATCH, u"完成事件順序不符(跳步、重複或倒序)")
+    by_step = dict((e["step"], e) for e in completed)
     for e in completed:
         recorded = e.get("fingerprints") or {}
-        for name in STEP_ARTIFACTS[e["step"]]:
+        for name in STEP_ARTIFACTS.get(e["step"], ()):
             path = os.path.join(run_dir, name)
             if not os.path.isfile(path):
                 raise Stop(EXIT_MISMATCH, u"%s 有完成事件,但原件 %s 不存在" % (e["step"], name))
@@ -725,13 +774,9 @@ def verify_run(evid, run_id):
     done = [r for r in mine if r.get("event") == "collect_completed"]
     fp = None
     if "S3" in steps:
-        try:
-            with io.open(os.path.join(run_dir, "package.json"), "rb") as fh:
-                pkg = json.loads(fh.read().decode("utf-8"))
-        except Exception:
-            raise Stop(EXIT_MISMATCH, u"package.json 無法解析")
+        pkg = _load(run_dir, "package.json")
         fp = package_fingerprint(pkg)
-        if fp != (completed[3].get("fingerprints") or {}).get("package_fingerprint"):
+        if fp != (by_step["S3"].get("fingerprints") or {}).get("package_fingerprint"):
             raise Stop(EXIT_MISMATCH, u"依 package.json 重算的證據包指紋與 S3 完成事件不符")
         if len(done) != 1 or done[0].get("package_fingerprint") != fp:
             raise Stop(EXIT_MISMATCH, u"index.jsonl 的 collect 完成紀錄與 S3 完成事件不符")
@@ -739,21 +784,78 @@ def verify_run(evid, run_id):
         for name in PACKAGE_ARTIFACTS:
             if not isinstance(arts, dict) or arts.get(name) != _file_sha(os.path.join(run_dir, name)):
                 raise Stop(EXIT_MISMATCH, u"package.json 記錄的 %s SHA256 與實際不符" % name)
+        for e in completed[3:]:
+            if (e.get("fingerprints") or {}).get("package_fingerprint") != fp:
+                raise Stop(EXIT_MISMATCH, u"%s 完成事件的證據包指紋與證據包不符" % e["step"])
     elif done:
         raise Stop(EXIT_MISMATCH, u"index.jsonl 有 collect 完成紀錄,但 checkpoint 沒有 S3 完成事件")
-    return (steps[-1] if steps else None), fp
+    for r in mine:
+        if r.get("package_fingerprint") is not None and r.get("package_fingerprint") != fp:
+            raise Stop(EXIT_MISMATCH, u"index.jsonl 紀錄的證據包指紋與證據包不符")
+    approval_sha = None
+    if "S4" in steps:
+        approval_sha = _file_sha(os.path.join(run_dir, "approval.json"))
+        doc = _load(run_dir, "approval.json")
+        if not isinstance(doc, dict) or set(doc) != set(APPROVAL_KEYS) or doc.get("run_id") != run_id \
+                or doc.get("package_fingerprint") != fp or doc.get("recorded_by") != APPROVAL_BY \
+                or doc.get("statement") != APPROVAL_STATEMENT:
+            raise Stop(EXIT_MISMATCH, u"approval.json 內容不完整或與證據包不符")
+    voids = [e for e in events if e.get("result") == RESULT_VOID]
+    for v in voids:
+        if "S4" not in steps or len(steps) > STEPS.index("S4") + 1:
+            raise Stop(EXIT_MISMATCH, u"核准不適用事件與完成步驟矛盾")
+        fps = v.get("fingerprints") or {}
+        if fps.get("package_fingerprint") != fp or fps.get("approval.json") != approval_sha:
+            raise Stop(EXIT_MISMATCH, u"核准不適用事件的指紋與證據包或 approval.json 不符")
+    s6_head = None
+    if "S6'" in steps:
+        s6_head = (by_step["S6'"].get("detail") or {}).get("new_head")
+        if not _is_full_hex(s6_head):
+            raise Stop(EXIT_MISMATCH, u"S6' 完成事件沒有完整的新 HEAD")
+    s8 = (by_step["S8"].get("detail") or {}) if "S8" in steps else None
+    if s8 is not None and (s8.get("run_id"), s8.get("package_fingerprint"), s8.get("new_head")) != (run_id, fp, s6_head):
+        raise Stop(EXIT_MISMATCH, u"S8 收尾事件與證據包或 S6' 不一致")
+    finals = [r for r in mine if r.get("event") == "run_completed"]
+    if len(finals) > 1:
+        raise Stop(EXIT_MISMATCH, u"index.jsonl 有重複的全域完成紀錄")
+    if finals:
+        if s8 is None:
+            raise Stop(EXIT_MISMATCH, u"index.jsonl 有全域完成紀錄,但 checkpoint 沒有 S8 收尾事件")
+        if (finals[0].get("package_fingerprint"), finals[0].get("new_head")) != (s8.get("package_fingerprint"),
+                                                                               s8.get("new_head")):
+            raise Stop(EXIT_MISMATCH, u"S8 收尾事件與全域完成紀錄不一致(證據包指紋或新 HEAD)")
+    last_done = max([i for i, e in enumerate(events) if e.get("result") == RESULT_COMPLETED] or [-1])
+    return {"steps": steps, "last": steps[-1] if steps else None, "fp": fp, "by_step": by_step,
+            "voids": voids, "approval_sha": approval_sha, "s6_head": s6_head, "s8": s8,
+            "final_recorded": bool(finals),
+            "stopped_after": [e for e in events[last_done + 1:] if e.get("result") == RESULT_STOPPED]}
 
 
-# ── 各步驟 ────────────────────────────────────────────────────────────────────
+# ── collect 的步驟 ────────────────────────────────────────────────────────────
 
 def step_s0b(ctx, core):
     snap = dict(core)
     snap.update({"format_version": FORMAT_VERSION, "run_id": ctx["run_id"], "tool_version": TOOL_VERSION,
                  "created_at": _iso(_now())})
     digest = _write_artifact(ctx, "snapshot.json", _json_bytes(snap))
-    _event(ctx, "S0b", "completed", None, {"snapshot.json": digest})
+    _event(ctx, "S0b", RESULT_COMPLETED, None, {"snapshot.json": digest})
     ctx["snapshot"] = snap
     ctx["sha"] = {"snapshot.json": digest}
+
+
+def _sample_problems(s):
+    """一次樣本本身的問題(無法分類、contract 失敗、交叉核對)→ 原因文字或 None。"""
+    if s["classification"]["unclassified"]:
+        return u"有 %d 項無法分類" % len(s["classification"]["unclassified"])
+    failed = sorted(set(u"%s/%s" % (c["result"]["category"], c["result"]["field"])
+                        for c in s["contracts"] if c["result"] is not None))
+    if failed:
+        return u"contract 驗證失敗(%s)" % u"、".join(failed)
+    try:
+        cross_check(s["classification"]["counts"], s["synced"], s["structure_errors"])
+    except Stop as e:
+        return e.reason
+    return None
 
 
 def step_s1(ctx):
@@ -764,20 +866,16 @@ def step_s1(ctx):
     for s in (first, second):
         if s["inventory_blob"] != head_blob:
             raise Stop(EXIT_MISMATCH, u"R10 讀到的名冊與快照的 HEAD 端不符")
-        if s["classification"]["unclassified"]:
-            raise Stop(EXIT_MISMATCH, u"有 %d 項無法分類;不產生候選與證據包" % len(s["classification"]["unclassified"]))
-        failed = sorted(set(u"%s/%s" % (c["result"]["category"], c["result"]["field"])
-                            for c in s["contracts"] if c["result"] is not None))
-        if failed:
-            raise Stop(EXIT_MISMATCH, u"contract 驗證失敗(%s);不產生候選與證據包" % u"、".join(failed))
-        cross_check(s["classification"]["counts"], s["synced"], s["structure_errors"])
+        problem = _sample_problems(s)
+        if problem:
+            raise Stop(EXIT_MISMATCH, u"%s;不產生候選與證據包" % problem)
     if _sample_key(first) != _sample_key(second):
         raise Stop(EXIT_MISMATCH, u"兩次樣本不同(stable 為假);不產生候選")
     doc = {"format_version": FORMAT_VERSION, "run_id": ctx["run_id"], "settle_seconds": ctx["settle"],
            "samples": [_sample_record(first), _sample_record(second)], "stable": True,
            "differences": second["classification"]["differences"], "unclassified": []}
     digest = _write_artifact(ctx, "diff.json", _json_bytes(doc))
-    _event(ctx, "S1", "completed", None, {"diff.json": digest})
+    _event(ctx, "S1", RESULT_COMPLETED, None, {"diff.json": digest})
     ctx["sha"]["diff.json"] = digest
     ctx["sample"] = second
 
@@ -810,7 +908,7 @@ def step_s2(ctx):
     data = _json_bytes(cand)
     digest = _write_artifact(ctx, "candidate-inventory.json", data)
     blob = git_blob_id(data, ctx["ident"]["object_format"])
-    _event(ctx, "S2", "completed", None, {"candidate-inventory.json": digest, "candidate_blob": blob})
+    _event(ctx, "S2", RESULT_COMPLETED, None, {"candidate-inventory.json": digest, "candidate_blob": blob})
     ctx["sha"]["candidate-inventory.json"] = digest
     ctx["candidate"] = {"blob": blob, "sha256": digest}
 
@@ -855,17 +953,17 @@ def step_s3(ctx):
     fp = package_fingerprint(pkg)
     summary = render_summary(diffs, fp, snap["untracked"]["count"]).encode("utf-8")
     sum_sha = _write_artifact(ctx, "summary.md", summary)
-    _event(ctx, "S3", "completed", None, {"package_fingerprint": fp, "package.json": pkg_sha,
-                                          "summary.md": sum_sha})
+    _event(ctx, "S3", RESULT_COMPLETED, None, {"package_fingerprint": fp, "package.json": pkg_sha,
+                                               "summary.md": sum_sha})
     ctx["fingerprint"] = fp
 
 
-# ── 子命令 ────────────────────────────────────────────────────────────────────
+# ── collect ───────────────────────────────────────────────────────────────────
 
 def _log_stop(ctx, reason):
     try:
         if ctx["run_dir_created"]:
-            _event(ctx, ctx["step"] or "S0a", "stopped", reason, None)
+            _event(ctx, ctx["step"] or "S0a", RESULT_STOPPED, reason, None)
         _index(ctx, "stopped", reason=reason)
     except Exception:
         _err(u"停下事件無法記錄;證據可能不完整")
@@ -880,7 +978,7 @@ def collect(root, claude_root, settle):
     run_id = "%s-%s" % (_now().strftime("%Y%m%dT%H%M%SZ"), ident["head"][:7])
     evid = _abs(root, EVIDENCE_REL)
     _check_chain(root, EVIDENCE_REL)
-    os.makedirs(evid, exist_ok=True)
+    os.makedirs(evid, exist_ok=True)            # 證據根目錄:鎖檔要有地方放,取鎖前建立
     _check_chain(root, EVIDENCE_REL)
     lock_path, lock_content = _acquire_lock(evid, run_id)
     ctx = {"root": root, "run_id": run_id, "run_dir": os.path.join(evid, run_id), "evid": evid,
@@ -894,7 +992,7 @@ def collect(root, claude_root, settle):
         started = True
         check_preconditions(root, EVIDENCE_REL + "/" + run_id)
         try:
-            os.mkdir(ctx["run_dir"])
+            os.mkdir(ctx["run_dir"])            # 執行目錄:取鎖之後才建立
         except FileExistsError:
             raise Stop(EXIT_MISMATCH, u"執行目錄 %s 已存在;不覆寫" % run_id)
         ctx["run_dir_created"] = True
@@ -924,38 +1022,393 @@ def collect(root, claude_root, settle):
     return code
 
 
-def resume(root, run_id):
+# ── 既有執行的子命令(取鎖 → 掃描 → 證據重驗 → 本體)──────────────────────────
+
+def _open_run(root, run_id):
+    """唯讀前置:使用前提、repo 識別、執行代號與目錄。回傳 `(root, ident, evid)`。"""
     root = os.path.abspath(os.fspath(root))
     _toplevel(root)
     check_preconditions(root)
     ident = _identity(root)
     if not RUN_ID_RE.match(run_id or ""):
         raise Stop(EXIT_PRECONDITION, u"執行代號格式不符")
+    check_preconditions(root, EVIDENCE_REL + "/" + run_id)
     evid = _abs(root, EVIDENCE_REL)
+    if not os.path.isdir(os.path.join(evid, run_id)):
+        raise Stop(EXIT_MISMATCH, u"找不到執行 %s" % run_id)
+    return root, ident, evid
+
+
+def _locked(root, run_id, body, claude_root=None):
+    root, ident, evid = _open_run(root, run_id)
+    lock_path, lock_content = _acquire_lock(evid, run_id)
+    try:
+        scan_evidence(evid, holding_lock=True)
+        info = verify_run(evid, run_id)       # 證據本身不可信 ⇒ Stop(4),什麼都不寫
+        ctx = {"root": root, "run_id": run_id, "run_dir": os.path.join(evid, run_id), "evid": evid,
+               "ident": ident, "info": info, "claude_root": claude_root}
+        return body(ctx)
+    finally:
+        if not _release_lock(lock_path, lock_content):
+            _err(u"全域鎖已不存在或內容與本次不符;未刪除")
+
+
+def _require_usable_approval(info):
+    if info["voids"]:
+        raise Stop(EXIT_MISMATCH, u"核准不適用事件存在,不得沿用該核准;" + _VOID_ADVICE)
+    if "S4" not in info["steps"]:
+        raise Stop(EXIT_MISMATCH, u"沒有核准代記(S4 未完成)")
+
+
+def _fps(info):
+    return {"package_fingerprint": info["fp"], "approval.json": info["approval_sha"]}
+
+
+def _stop_with_record(ctx, step, label, mismatches):
+    """失配:保留現狀,寫停下事件與 index 紀錄,停(4)。不還原、不改 index、不刪任何東西。"""
+    reason = u"%s不符:%s;保留現狀,不自動還原" % (label, u"、".join(m["item"] for m in mismatches))
+    _event(ctx, step, RESULT_STOPPED, reason, _fps(ctx["info"]), {"mismatches": mismatches})
+    _index(ctx, "stopped", reason=reason, fingerprint=ctx["info"]["fp"])
+    raise Stop(EXIT_MISMATCH, reason)
+
+
+# ── S4 record-approval ────────────────────────────────────────────────────────
+
+def record_approval(root, run_id, fingerprint, approved_at, note):
+    try:
+        when = datetime.fromisoformat(approved_at)
+    except (TypeError, ValueError):
+        raise Stop(EXIT_PRECONDITION, u"--approved-at 不是 ISO 8601 時間")
+    if when.tzinfo is None:
+        raise Stop(EXIT_PRECONDITION, u"--approved-at 必須帶時區")
+
+    def body(ctx):
+        info = ctx["info"]
+        if "S3" not in info["steps"]:
+            raise Stop(EXIT_MISMATCH, u"S3 尚未完成;沒有可核准的證據包")
+        if "S4" in info["steps"] or os.path.lexists(os.path.join(ctx["run_dir"], "approval.json")):
+            raise Stop(EXIT_MISMATCH, u"已有核准代記;不得第二次代記、不得覆寫")
+        if fingerprint != info["fp"]:
+            raise Stop(EXIT_MISMATCH, u"--fingerprint 與證據包指紋不逐字相同(不接受短碼、大小寫不同或前後空白)")
+        doc = {"format_version": FORMAT_VERSION, "run_id": run_id, "package_fingerprint": info["fp"],
+               "approved_at": approved_at, "recorded_at": _iso(_now()), "recorded_by": APPROVAL_BY,
+               "statement": APPROVAL_STATEMENT, "note": note}
+        digest = _write_artifact(ctx, "approval.json", _json_bytes(doc))
+        _event(ctx, "S4", RESULT_COMPLETED, None, {"package_fingerprint": info["fp"], "approval.json": digest})
+        _index(ctx, "approval_recorded", fingerprint=info["fp"])
+        _out(u"已代記核准:證據包指紋 %s\n下一步:pre-register\n" % info["fp"])
+        return EXIT_OK
+    return _locked(root, run_id, body)
+
+
+# ── S5 pre-register(含原 verify)─────────────────────────────────────────────
+
+def _resample(ctx, settle):
+    """照 settle_seconds 間隔重新取樣兩次。樣本本身出問題 ⇒ 回 `(None, 原因)`。"""
+    try:
+        first = sample(ctx["root"], ctx["claude_root"])
+        _sleep(settle)
+        second = sample(ctx["root"], ctx["claude_root"])
+    except Stop as e:
+        if e.code == EXIT_INTERNAL:
+            raise
+        return None, e.reason
+    return (first, second), None
+
+
+def pre_register(root, run_id, claude_root):
+    """登記前重驗。五項要求:(1) 證據原件、指紋、摘要、事件順序重驗(`_locked` → `verify_run`);
+    (2) 核准代記有效(`verify_run` + `_require_usable_approval`);(3) 現場狀態與快照完全相符;
+    (4) 重新取樣的綁定資料與已保存樣本相符;(5) 候選名冊重算位元組相同。
+    (1)(2) 失敗 ⇒ 什麼都不寫;(3)～(5) 任一不符 ⇒ 核准不適用。"""
+    def body(ctx):
+        info = ctx["info"]
+        _require_usable_approval(info)
+        if "S5" in info["steps"]:
+            raise Stop(EXIT_MISMATCH, u"S5 已完成;不重做")
+        snap = _load(ctx["run_dir"], "snapshot.json")
+        diff = _load(ctx["run_dir"], "diff.json")
+        with io.open(os.path.join(ctx["run_dir"], "candidate-inventory.json"), "rb") as fh:
+            saved_candidate = fh.read()
+        mismatches = []
+        # (3) 現場狀態與快照
+        try:
+            current = build_snapshot(ctx["root"], ctx["ident"])
+        except Stop as e:
+            if e.code == EXIT_INTERNAL:
+                raise
+            current = None
+            mismatches.append({"item": "state", "snapshot": None, "live": e.reason})
+        if current is not None:
+            for key in _VIEW_KEYS:
+                if current.get(key) != snap.get(key):
+                    mismatches.append({"item": key, "snapshot": snap.get(key), "live": current.get(key)})
+        # (4) 重新取樣:兩次本身須穩定、與已保存樣本的綁定資料相符
+        saved = _binding(diff["samples"][-1])
+        samples, problem = _resample(ctx, diff["settle_seconds"])
+        records = []
+        if samples is None:
+            mismatches.append({"item": "resample", "snapshot": None, "live": problem})
+        else:
+            records = [_sample_record(s) for s in samples]
+            b1, b2 = _binding(records[0]), _binding(records[1])
+            if b1 != b2:
+                mismatches.append({"item": "resample_unstable", "snapshot": b1, "live": b2})
+            if b2 != saved:
+                mismatches.append({"item": "resample_binding", "snapshot": saved, "live": b2})
+            # (5) 候選名冊重算
+            second = samples[1]
+            again = _json_bytes(build_candidate(second["inventory"], second["classification"]["differences"],
+                                                run_id))
+            if again != saved_candidate:
+                mismatches.append({"item": "candidate", "snapshot": _sha256(saved_candidate),
+                                   "live": _sha256(again)})
+        if mismatches:
+            reason = u"核准不適用:%s 與快照或已保存證據不符;%s" % (
+                u"、".join(m["item"] for m in mismatches), _VOID_ADVICE)
+            _event(ctx, "S5", RESULT_VOID, reason, _fps(info), {"mismatches": mismatches})
+            _index(ctx, "approval_void", reason=reason, fingerprint=info["fp"])
+            raise Stop(EXIT_MISMATCH, reason)
+        fps = _fps(info)
+        fps.update({"sample_1": _sha256(_canonical(records[0])), "sample_2": _sha256(_canonical(records[1]))})
+        _event(ctx, "S5", RESULT_COMPLETED, None, fps, {"sample_times": [r["time"] for r in records]})
+        _index(ctx, "pre_register_completed", fingerprint=info["fp"])
+        _out(u"登記前重驗通過。\n下一步:由 VS 依現有程序與另行授權退出暫存、以候選名冊登記;"
+             u"工具不執行這些動作。登記後執行 post-register。\n")
+        return EXIT_OK
+    return _locked(root, run_id, body, claude_root)
+
+
+# ── S6' post-register ─────────────────────────────────────────────────────────
+
+def _commit_parents(root, length):
+    toks = _text(_git_ok(root, ["rev-list", "--parents", "-n", "1", "HEAD"])).split()
+    for t in toks:
+        _full_id(t, length, u"commit ID")
+    return toks[0], toks[1:]
+
+
+def _registration_commit_problem(root, snap_head, length):
+    """HEAD 是否恰好是「父節點 = 快照 HEAD、只改名冊一檔(不改模式)」的登記 commit。
+    是 ⇒ None;否 ⇒ 不符項目清單。"""
+    head, parents = _commit_parents(root, length)
+    if parents != [snap_head]:
+        return [{"item": "parent", "snapshot": snap_head, "live": parents}]
+    entries = parse_cached_raw(_git_ok(root, ["diff", "--raw", "-z", "--no-renames", "--no-abbrev",
+                                              parents[0], head]), length)
+    only = len(entries) == 1 and entries[0]["path"] == INVENTORY_REL and entries[0]["status"] == "modified" \
+        and entries[0]["head"]["mode"] == entries[0]["index"]["mode"]
+    if not only:
+        return [{"item": "changed_paths", "snapshot": [INVENTORY_REL],
+                 "live": [{"path": e["path"], "status": e["status"], "from_mode": e["head"].get("mode"),
+                           "to_mode": e["index"].get("mode")} for e in entries]}]
+    return None
+
+
+def _scope_mismatches(root, snap, exclude):
+    """待保護範圍(`exclude` 除外)的工作區指紋與快照比較。"""
+    out = []
+    reliable = snap["executable_mode_reliable"]
+    if _exec_reliable(root) != reliable:
+        out.append({"item": "executable_mode_reliable", "snapshot": reliable, "live": not reliable})
+    for e in snap["protected_scope"]:
+        if e["path"] in exclude:
+            continue
+        try:
+            cur = _worktree_state(root, e["path"], reliable)
+        except Stop as s:
+            if s.code == EXIT_INTERNAL:
+                raise
+            cur = {"path": e["path"], "unsupported": s.reason}
+        if cur != e:
+            out.append({"item": "worktree", "path": e["path"], "snapshot": e, "live": cur})
+    return out
+
+
+def post_register(root, run_id, claude_root):
+    def body(ctx):
+        info = ctx["info"]
+        _require_usable_approval(info)
+        if "S5" not in info["steps"]:
+            raise Stop(EXIT_MISMATCH, u"S5 尚未完成;先執行 pre-register")
+        if "S6'" in info["steps"]:
+            raise Stop(EXIT_MISMATCH, u"S6' 已完成;不重做")
+        rroot, length = ctx["root"], ctx["ident"]["id_length"]
+        snap = _load(ctx["run_dir"], "snapshot.json")
+        cand_blob = (info["by_step"]["S2"].get("fingerprints") or {}).get("candidate_blob")
+        mismatches = _registration_commit_problem(rroot, snap["head"]["commit"], length) or []
+        proc = _git(rroot, ["rev-parse", "--verify", "-q", "HEAD:" + INVENTORY_REL])
+        blob = _text(proc.stdout) if proc.returncode == 0 else None
+        if blob != cand_blob:
+            mismatches.append({"item": "inventory_blob", "snapshot": cand_blob, "live": blob})
+        report = _extension_report(rroot, ctx["claude_root"])
+        inv = report.get("inventory") if isinstance(report.get("inventory"), dict) else {}
+        synced = report.get("synced") if isinstance(report.get("synced"), dict) else {}
+        if inv.get("state") != "ok" or synced.get("verified") is not True:
+            mismatches.append({"item": "r10", "snapshot": {"inventory": "ok", "synced_verified": True},
+                               "live": {"inventory": inv.get("state"), "synced_verified": synced.get("verified"),
+                                        "synced_reason": synced.get("reason")}})
+        mismatches += _scope_mismatches(rroot, snap, {INVENTORY_REL})
+        if mismatches:
+            _stop_with_record(ctx, "S6'", u"登記後核對", mismatches)
+        head = _head(rroot, length)
+        _event(ctx, "S6'", RESULT_COMPLETED, None, _fps(info), {"new_head": head})
+        _index(ctx, "post_register_completed", fingerprint=info["fp"], extra={"new_head": head})
+        _out(u"登記後核對通過;新 HEAD %s\n下一步:由 VS 依現有程序與另行授權接回原工作,然後執行 post-reattach。\n"
+             % head)
+        return EXIT_OK
+    return _locked(root, run_id, body, claude_root)
+
+
+# ── S7' post-reattach 與 S8 收尾 ──────────────────────────────────────────────
+
+def _reattach_mismatches(root, snap, candidate_sha):
+    out = []
+    staged = [s for s in snap["staged"] if s["path"] != INVENTORY_REL]
+    for s in staged:
+        rows = [(r[1], r[2], r[3]) for r in _ls_stage(root, [s["path"]]) if r[0] == s["path"]]
+        if s["index"]["exists"]:
+            want = [(s["index"]["mode"], s["index"]["blob"], "0")]
+            if rows != want:
+                out.append({"item": "staged", "path": s["path"], "snapshot": s["index"], "live": rows})
+        elif rows:
+            out.append({"item": "deleted_present", "path": s["path"], "snapshot": s["index"], "live": rows})
+    expected = sorted(s["path"] for s in staged)
+    cached = sorted(p for p in _z(_git_ok(root, ["diff", "--cached", "--name-only", "-z"]))
+                    if not _is_evidence_path(p))
+    if cached != expected:
+        out.append({"item": "cached_diff", "snapshot": expected, "live": cached})
+    for p in snap["partially_staged"]:
+        rows = [(r[1], r[2]) for r in _ls_stage(root, [p["path"]]) if r[0] == p["path"]]
+        if rows != [(p["mode"], p["blob"])]:
+            out.append({"item": "partially_staged", "path": p["path"], "snapshot": p, "live": rows})
+    out += _scope_mismatches(root, snap, {INVENTORY_REL})
+    inv = _worktree_state(root, INVENTORY_REL, snap["executable_mode_reliable"])
+    if inv.get("sha256") != candidate_sha:
+        out.append({"item": "inventory_worktree", "snapshot": candidate_sha, "live": inv.get("sha256")})
+    return out
+
+
+def _write_s8(ctx, summary):
+    _event(ctx, "S8", RESULT_COMPLETED, None, {"package_fingerprint": ctx["info"]["fp"]}, summary)
+
+
+def _index_run_completed(ctx, summary):
+    _index(ctx, "run_completed", fingerprint=summary["package_fingerprint"],
+           extra={"new_head": summary["new_head"], "untracked_diff_count": summary["untracked_diff_count"]})
+
+
+def post_reattach(root, run_id):
+    def body(ctx):
+        info = ctx["info"]
+        _require_usable_approval(info)
+        if "S6'" not in info["steps"]:
+            raise Stop(EXIT_MISMATCH, u"S6' 尚未完成;先執行 post-register")
+        rroot, length = ctx["root"], ctx["ident"]["id_length"]
+        head = _head(rroot, length)
+        if head != info["s6_head"]:
+            raise Stop(EXIT_MISMATCH, u"HEAD 已不是 S6' 記錄的 HEAD;不核對、不寫入")
+        if "S8" in info["steps"] and info["final_recorded"]:
+            _out(u"流程已完成:執行 %s、證據包指紋 %s、新 HEAD %s;不重寫\n" % (run_id, info["fp"], head))
+            return EXIT_OK
+        snap = _load(ctx["run_dir"], "snapshot.json")
+        cand_sha = (info["by_step"]["S2"].get("fingerprints") or {}).get("candidate-inventory.json")
+        mismatches = _reattach_mismatches(rroot, snap, cand_sha)
+        current = _untracked(rroot)
+        added = sorted(set(current) - set(snap["untracked"]["paths"]))
+        removed = sorted(set(snap["untracked"]["paths"]) - set(current))
+        if mismatches:
+            _stop_with_record(ctx, "S7'", u"接回後核對", mismatches)
+        detail = {"untracked_added": added, "untracked_removed": removed, "content_verified": False,
+                  "note": UNTRACKED_NOTE}
+        if "S7'" not in info["steps"]:
+            _event(ctx, "S7'", RESULT_COMPLETED, None, _fps(info), detail)
+        summary = {"run_id": run_id, "package_fingerprint": info["fp"], "new_head": head,
+                   "untracked_diff_count": len(added) + len(removed)}
+        if "S8" not in info["steps"]:
+            _write_s8(ctx, summary)
+        if not info["final_recorded"]:
+            _index_run_completed(ctx, summary)
+        lines = [u"接回後核對通過。"]
+        for p in added:
+            lines.append(u"未追蹤檔新增:%s(內容未驗證)" % p)
+        for p in removed:
+            lines.append(u"未追蹤檔消失:%s(內容未驗證)" % p)
+        lines.append(u"流程已完成:執行 %s、證據包指紋 %s、新 HEAD %s" % (run_id, info["fp"], head))
+        _out(u"\n".join(lines) + u"\n")
+        return EXIT_OK
+    return _locked(root, run_id, body)
+
+
+# ── resume(完全唯讀,不取鎖)────────────────────────────────────────────────
+
+def _resume_s5(root, snap, length):
+    snap_head = snap["head"]["commit"]
+    if _head(root, length) == snap_head:
+        return u"尚未登記:由 VS 依現有程序與授權登記,然後執行 post-register"
+    problem = _registration_commit_problem(root, snap_head, length)
+    if problem is None:
+        return u"已登記:直接執行 post-register(不需再登記)"
+    raise Stop(EXIT_MISMATCH, u"無法辨識目前狀態:HEAD 不是快照 HEAD,也不是只改名冊的單一登記 commit(%s)"
+               % u"、".join(p["item"] for p in problem))
+
+
+def _resume_s6(root, snap, info, length):
+    if _head(root, length) != info["s6_head"]:
+        raise Stop(EXIT_MISMATCH, u"無法辨識目前狀態:HEAD 已不是 S6' 記錄的 HEAD")
+    cached = set(p for p in _z(_git_ok(root, ["diff", "--cached", "--name-only", "-z"])) if not _is_evidence_path(p))
+    expected = set(s["path"] for s in snap["staged"] if s["path"] != INVENTORY_REL)
+    if not cached:
+        return u"尚未接回:由 VS 依現有程序與授權接回原工作,然後執行 post-reattach"
+    if cached <= expected:
+        return u"已接回或部分接回:直接執行 post-reattach 核對(不需再接回)"
+    raise Stop(EXIT_MISMATCH, u"無法辨識目前狀態:待提交區有 %d 個快照以外的差異路徑" % len(cached - expected))
+
+
+def resume(root, run_id):
+    root, ident, evid = _open_run(root, run_id)
     if os.path.lexists(os.path.join(evid, LOCK_NAME)):
         raise Stop(EXIT_MISMATCH, _LOCK_HELD)
     scan_evidence(evid, holding_lock=False)
-    if not os.path.isdir(os.path.join(evid, run_id)):
-        raise Stop(EXIT_MISMATCH, u"找不到執行 %s" % run_id)
-    last, fp = verify_run(evid, run_id)
+    info = verify_run(evid, run_id)
+    last = info["last"]
     if last is None:
         raise Stop(EXIT_MISMATCH, u"執行 %s 沒有任何完成步驟;請重新 collect" % run_id)
-    try:
-        with io.open(os.path.join(evid, run_id, "snapshot.json"), "rb") as fh:
-            snap = json.loads(fh.read().decode("utf-8"))
-    except Exception:
-        raise Stop(EXIT_MISMATCH, u"snapshot.json 無法解析")
-    if state_view(build_snapshot(root, ident)) != state_view(snap):
-        raise Stop(EXIT_MISMATCH, u"目前狀態(HEAD／待提交項目／待保護範圍／名冊與 allowlist)與快照不符;"
-                                  u"請重新 collect")
-    if last == "S3":
-        _out(u"執行 %s 已完成;證據包指紋:%s\n下一步:站二核准代記(本站不實作)\n" % (run_id, fp))
-    else:
-        nxt = STEPS[STEPS.index(last) + 1]
-        _out(u"執行 %s 最後完成步驟 %s;證據與目前狀態相符\n下一步:%s(本站 resume 不代寫;請重新 collect)\n"
-             % (run_id, last, nxt))
+    for e in info["stopped_after"]:
+        _out(u"前一次在 %s 停下:%s(不建議自動修復)\n" % (e.get("step"), e.get("reason")))
+    if info["voids"]:
+        _out(u"核准不適用:%s\n%s\n" % (info["voids"][-1].get("reason"), _VOID_ADVICE))
+        return EXIT_MISMATCH
+    snap = _load(os.path.join(evid, run_id), "snapshot.json")
+    length = ident["id_length"]
+    pos = STEPS.index(last)
+    if pos <= STEPS.index("S4"):
+        if state_view(build_snapshot(root, ident)) != state_view(snap):
+            raise Stop(EXIT_MISMATCH, u"目前狀態(HEAD／待提交項目／待保護範圍／名冊與 allowlist)與快照不符;"
+                                      u"請重新 collect")
+        if last == "S3":
+            _out(u"執行 %s 證據包已完成;證據包指紋:%s\n下一步:等待 Jeff 核准此證據包指紋,再執行 record-approval 代記\n"
+                 % (run_id, info["fp"]))
+        elif last == "S4":
+            _out(u"執行 %s 已有核准代記;證據與目前狀態相符\n下一步:pre-register\n" % run_id)
+        else:
+            _out(u"執行 %s 最後完成步驟 %s;證據與目前狀態相符\n下一步:%s(resume 不代寫;請重新 collect)\n"
+                 % (run_id, last, STEPS[pos + 1]))
+        return EXIT_OK
+    if last == "S5":
+        _out(u"下一步:%s\n" % _resume_s5(root, snap, length))
+        return EXIT_OK
+    if last == "S6'":
+        _out(u"下一步:%s\n" % _resume_s6(root, snap, info, length))
+        return EXIT_OK
+    if last == "S7'" or not info["final_recorded"]:
+        _out(u"核對已完成、收尾紀錄未完成;下一步:執行 post-reattach 補完收尾(resume 不補寫、不宣稱完成)\n")
+        return EXIT_OK
+    _out(u"流程已完成:執行 %s、證據包指紋 %s、新 HEAD %s\n" % (run_id, info["fp"], info["s8"]["new_head"]))
     return EXIT_OK
 
+
+# ── 命令列 ────────────────────────────────────────────────────────────────────
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="inventory_evidence")
@@ -964,9 +1417,21 @@ def main(argv=None):
     c.add_argument("--repo", default=".")
     c.add_argument("--claude-root", default=None)
     c.add_argument("--settle-seconds", type=int, default=60)
-    r = sub.add_parser("resume")
-    r.add_argument("--repo", default=".")
-    r.add_argument("--run", required=True)
+    a = sub.add_parser("record-approval")
+    a.add_argument("--repo", default=".")
+    a.add_argument("--run", required=True)
+    a.add_argument("--fingerprint", required=True)
+    a.add_argument("--approved-at", required=True)
+    a.add_argument("--note", required=True)
+    for name in ("pre-register", "post-register"):
+        p = sub.add_parser(name)
+        p.add_argument("--repo", default=".")
+        p.add_argument("--run", required=True)
+        p.add_argument("--claude-root", default=None)
+    for name in ("post-reattach", "resume"):
+        p = sub.add_parser(name)
+        p.add_argument("--repo", default=".")
+        p.add_argument("--run", required=True)
     try:
         args = parser.parse_args(argv)
     except SystemExit as e:
@@ -976,6 +1441,14 @@ def main(argv=None):
             if args.settle_seconds < 0:
                 raise Stop(EXIT_PRECONDITION, u"--settle-seconds 不得為負")
             return collect(args.repo, args.claude_root, args.settle_seconds)
+        if args.cmd == "record-approval":
+            return record_approval(args.repo, args.run, args.fingerprint, args.approved_at, args.note)
+        if args.cmd == "pre-register":
+            return pre_register(args.repo, args.run, args.claude_root)
+        if args.cmd == "post-register":
+            return post_register(args.repo, args.run, args.claude_root)
+        if args.cmd == "post-reattach":
+            return post_reattach(args.repo, args.run)
         return resume(args.repo, args.run)
     except Stop as e:
         _err(e.reason)
