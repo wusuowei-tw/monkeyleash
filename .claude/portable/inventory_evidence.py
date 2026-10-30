@@ -16,8 +16,11 @@ S4 核准代記(record-approval);S5 登記前重驗(pre-register,含原 verify);
 S6' 登記後核對(post-register);S7' 接回後核對與 S8 收尾(post-reattach)。
 resume 完全唯讀、不取鎖,依階段核對現場並指出下一步。
 
+repo 位置在每次呼叫開頭固定一次(realpath;POSIX 另開一個根目錄 fd),之後證據目錄內的每一個
+路徑、取鎖、讀鎖、寫入、放鎖都用它,不再重新解析。
 兩本 JSONL 流水帳只經 `_jsonl_open` 讀寫(W1:不跟隨連結,平台做不到就拒絕);
-原件、鎖檔、證據目錄的建立與刪除同樣不跟隨連結(POSIX 方式甲 dir_fd 鏈;Windows 釘住父目錄)。
+原件、鎖檔、證據目錄的建立與刪除同樣不跟隨連結(POSIX 方式甲 dir_fd 鏈;Windows 從 repo 根目錄
+起釘住後才建立,建立後核對最終路徑)。
 停下紀錄只在證據重驗通過、鎖仍是自己的、目標安全時才寫(W2)。
 
 用法(經 gatepy):
@@ -226,14 +229,53 @@ def _is_evidence_path(rel):
 
 
 def _site(root):
-    """本次呼叫的 repo 位置:`root` 供路徑拼接;`real`(realpath,呼叫開頭取一次並固定)供最終路徑核對。"""
-    root = os.path.abspath(os.fspath(root))
-    return {"root": root, "real": os.path.realpath(root)}
+    """本次呼叫的 repo 位置:呼叫開頭取一次 realpath 並固定(`root` 與 `real` 都是它);之後證據目錄內的
+    每一個路徑都以它組成,不再由 `abspath`、呼叫者給的字串或證據目錄位置反推。
+    POSIX(方式甲)另以它開一個根目錄 fd(`fd`),本次呼叫的 dir_fd 鏈都從這個 fd 出發;開 fd 後 lstat
+    固定路徑,(st_dev, st_ino) 須與 fd 相同,否則 Stop(2)。用完以 `_close_site` 關閉。"""
+    real = os.path.realpath(os.path.abspath(os.fspath(root)))
+    site = {"root": real, "real": real, "fd": None}
+    if _w1_method() == "dirfd":
+        try:
+            fd = _open_dirfd(site, ["."], os.O_RDONLY | os.O_DIRECTORY)
+        except OSError as e:
+            raise Stop(EXIT_PRECONDITION, u"使用前提不符:指定的 repo 位置無法以 dir_fd 開啟(%s)" % type(e).__name__)
+        try:
+            st, lst = _fstat(fd), _lstat(real)
+        except OSError as e:
+            os.close(fd)
+            raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:repo 根目錄無法核對(%s)" % type(e).__name__)
+        if (st.st_dev, st.st_ino) != (lst.st_dev, lst.st_ino):
+            os.close(fd)
+            raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:repo 根目錄在開啟後已不是同一個目錄;拒絕執行")
+        site["fd"] = fd
+    return site
+
+
+def _close_site(site):
+    """關閉 `_site` 開的根目錄 fd(只關一次)。"""
+    fd = site.get("fd")
+    if fd is not None:
+        site["fd"] = None
+        os.close(fd)
 
 
 def _evidence_site(evid):
-    """由證據根目錄位置反推 repo 位置(證據根目錄恆為 `<repo>/.dev/inventory-evidence`)。"""
+    """由證據根目錄位置反推 repo 位置(證據根目錄恆為 `<repo>/.dev/inventory-evidence`)。
+    只供不帶固定基準的直接呼叫(單元測試)使用;工具自己的取鎖、讀鎖、放鎖一律用路徑帶的固定基準,不經這裡。"""
     return _site(os.path.dirname(os.path.dirname(os.path.abspath(evid))))
+
+
+class _Anchored(str):
+    """以本次呼叫固定的 repo 實際路徑組成的路徑字串;`site` 是它的固定基準。
+    證據根目錄與鎖檔經它傳遞,取鎖、讀鎖、放鎖都用它的 `site`,不再由字串反推 repo 位置
+    (因此 `_acquire_lock(evid, run_id)`／`_release_lock(path, content)` 保留原簽名)。"""
+
+
+def _anchored(site, parts):
+    path = _Anchored(os.path.join(site["real"], *parts))
+    path.site = site
+    return path
 
 
 def _is_evidence_root(path):
@@ -610,9 +652,10 @@ def _binding(record):
 # ── 開檔方式(W1 與目錄釘住共用)───────────────────────────────────────────────
 #
 # 開檔前檢查只是第一道。開檔方式本身要抵抗「檢查後父目錄或目標被替換」:
-# 方式甲(POSIX)從 repo 根目錄逐層 dir_fd + O_NOFOLLOW;方式乙(Windows)對已開的 handle
-# 核對最終路徑。方式乙是開檔後才核對,所以建立新檔時父目錄必須已釘住:Windows 逐層持有
-# 不給 FILE_SHARE_DELETE 的目錄 handle(持有期間不能改名、刪除、換成 junction)。
+# 方式甲(POSIX)從本次呼叫的根目錄 fd 逐層 dir_fd + O_NOFOLLOW;方式乙(Windows)對已開的 handle
+# 核對最終路徑。方式乙是開檔後才核對,所以建立新檔時父目錄必須已釘住:Windows 從 repo 根目錄本身起
+# 逐層持有不給 FILE_SHARE_DELETE 的目錄 handle(持有期間不能改名、刪除、換成 junction),
+# 建立用的路徑字串一律以呼叫開頭固定的 realpath 組成,建立後再核對新項目的最終路徑。
 # 兩種都不能用 ⇒ 拒絕讀寫,不退回不安全的寫法。
 
 _W1_UNAVAILABLE = (u"使用前提(d)不符:平台無法保證不跟隨連結(沒有 dir_fd/O_NOFOLLOW/O_DIRECTORY,"
@@ -660,6 +703,13 @@ class _Win32(object):
 
     def open_dir(self, path):
         h = self.k.CreateFileW(path, self.ACCESS, self.SHARE, None, self.OPEN_EXISTING, self.FLAGS, None)
+        if h is None or h == self.invalid:
+            raise self._fail("CreateFileW")
+        return h
+
+    def open_entry(self, path):
+        """建立後核對用:只取屬性、分享模式全開(不妨礙其他 handle)、不跟隨 reparse point。"""
+        h = self.k.CreateFileW(path, 0x0080, 0x0001 | 0x0002 | 0x0004, None, self.OPEN_EXISTING, self.FLAGS, None)
         if h is None or h == self.invalid:
             raise self._fail("CreateFileW")
         return h
@@ -747,26 +797,47 @@ def _unpin(pins):
             k.close(h)
 
 
+def _pin_one(k, want, label):
+    """Windows:開 `want`(固定 realpath 組成)的目錄 handle 並持有(不給 FILE_SHARE_DELETE);核對不是
+    reparse point、是目錄、最終路徑等於 `want`(不分大小寫)。做不到 ⇒ Stop(2),不留 handle。"""
+    try:
+        h = k.open_dir(want)
+    except OSError as e:
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:無法釘住 %s(%s);拒絕建立" % (label, type(e).__name__))
+    try:
+        attrs = k.attributes(h)
+        final = k.final_path(h)
+    except OSError as e:
+        k.close(h)
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:無法釘住 %s(%s);拒絕建立" % (label, type(e).__name__))
+    if attrs & _REPARSE_POINT or not attrs & _DIRECTORY:
+        k.close(h)
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 是 reparse point 或不是目錄;拒絕建立" % label)
+    if os.path.normcase(final) != os.path.normcase(want):
+        k.close(h)
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 的最終路徑與預期不符;拒絕建立" % label)
+    return h
+
+
+def _pin_root(site):
+    """Windows:釘住 repo 根目錄本身(呼叫開頭固定的 realpath)。持有期間根目錄與它的上層都不能被改名、
+    刪除或換成 junction。做不到 ⇒ Stop(2)。"""
+    k = _win32()
+    if k is None:
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:無法釘住 repo 根目錄;拒絕建立")
+    return [_pin_one(k, site["real"], u"repo 根目錄")]
+
+
 def _pin_parts(site, parts):
-    """Windows:`parts`(相對 repo)逐層開目錄 handle 並持有(不給 FILE_SHARE_DELETE),持有期間這幾層
-    不能被改名、刪除或換成 junction。每層核對不是 reparse point、是目錄、最終路徑與預期相同。做不到 ⇒ Stop(2)。"""
+    """Windows:`parts`(相對 repo)逐層以固定 realpath 組成的路徑開目錄 handle 並持有(不給
+    FILE_SHARE_DELETE)。repo 根目錄由呼叫端以 `_pin_root` 釘住。做不到 ⇒ Stop(2)。"""
     k = _win32()
     if k is None:
         raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:無法釘住父目錄;拒絕建立")
     pins = []
     try:
         for i in range(1, len(parts) + 1):
-            sub = "/".join(parts[:i])
-            try:
-                pins.append(k.open_dir(_abs(site["root"], sub)))
-                attrs = k.attributes(pins[-1])
-                final = k.final_path(pins[-1])
-            except OSError as e:
-                raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:無法釘住 %s(%s);拒絕建立" % (sub, type(e).__name__))
-            if attrs & _REPARSE_POINT or not attrs & _DIRECTORY:
-                raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 是 reparse point 或不是目錄;拒絕建立" % sub)
-            if os.path.normcase(final) != os.path.normcase(os.path.join(site["real"], *parts[:i])):
-                raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 的最終路徑與預期不符;拒絕建立" % sub)
+            pins.append(_pin_one(k, os.path.join(site["real"], *parts[:i]), "/".join(parts[:i])))
     except Stop:
         _unpin(pins)
         raise
@@ -774,32 +845,74 @@ def _pin_parts(site, parts):
 
 
 def _pin_dirs(site, rel):
-    """Windows:釘住證據目錄內 `rel` 的父目錄鏈(從 `.dev` 起)。"""
+    """Windows:釘住證據目錄內 `rel` 的父目錄鏈(從 `.dev` 起;repo 根目錄由呼叫端以 `_pin_root` 釘住)。"""
     return _pin_parts(site, _evidence_parts(rel)[:-1])
+
+
+def _pin_chain(site, parts):
+    """Windows:從 repo 根目錄本身起釘住到 `parts`(相對 repo)的最後一層。"""
+    pins = _pin_root(site)
+    try:
+        pins += _pin_parts(site, parts)
+    except Stop:
+        _unpin(pins)
+        raise
+    return pins
 
 
 @contextlib.contextmanager
 def _pinned(site, rel):
-    """Windows 上釘住 `rel` 的父目錄鏈直到離開(原件、鎖檔的建立與刪除);其他平台不做事。"""
-    pins = _pin_dirs(site, rel) if _w1_method() == "finalpath" else []
+    """Windows 上從 repo 根目錄起釘住 `rel` 的父目錄鏈直到離開(原件、鎖檔的建立、讀取與刪除);
+    其他平台不做事。"""
+    pins = _pin_chain(site, _evidence_parts(rel)[:-1]) if _w1_method() == "finalpath" else []
     try:
         yield
     finally:
         _unpin(pins)
 
 
+def _final_matches(site, parts, fd=None):
+    """方式乙:`fd`(或以只取屬性的 handle 開 `parts`)的最終路徑是否等於「固定 realpath + parts」
+    (不分大小寫)。無法核對 ⇒ False。"""
+    want = os.path.join(site["real"], *parts)
+    try:
+        if fd is not None:
+            got = _final_path(fd)
+        else:
+            k = _win32()
+            h = k.open_entry(want)
+            try:
+                got = k.final_path(h)
+            finally:
+                k.close(h)
+    except (OSError, Stop, AttributeError):
+        return False
+    return os.path.normcase(got) == os.path.normcase(want)
+
+
+def _verify_created(site, parts, fd=None):
+    """Windows 建立後補強:新建的檔或目錄最終路徑須與預期相同。不符 ⇒ Stop(5);
+    已建立的項目保留、不寫內容、不刪除。"""
+    if not _final_matches(site, parts, fd):
+        raise Stop(EXIT_INTERNAL, u"%s 建立後最終路徑核對不符;已建立的項目保留、未寫入內容、未刪除" % "/".join(parts))
+
+
 def _open_dirfd(site, parts, flags):
-    """方式甲:從 repo 實際路徑起逐層 `os.open(名稱, O_DIRECTORY|O_NOFOLLOW, dir_fd=上一層)`,最後以
-    dir_fd + O_NOFOLLOW 開 `parts[-1]`(`parts` 相對 repo);每一層都不經字串路徑重新解析。"""
-    dfd = _open_fd(site["real"], os.O_RDONLY | os.O_DIRECTORY)
+    """方式甲:從本次呼叫的根目錄 fd(`site["fd"]`)起逐層 `os.open(名稱, O_DIRECTORY|O_NOFOLLOW,
+    dir_fd=上一層)`,最後以 dir_fd + O_NOFOLLOW 開 `parts[-1]`(`parts` 相對 repo);不以字串重開根目錄,
+    每一層都不經字串路徑重新解析。`fd` 為 None 只發生在 `_site` 開那個根目錄 fd 的時候。"""
+    base = site.get("fd")
+    dfd = base if base is not None else _open_fd(site["real"], os.O_RDONLY | os.O_DIRECTORY)
     try:
         for name in parts[:-1]:
             nfd = _open_fd(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
-            os.close(dfd)
+            if dfd != base:
+                os.close(dfd)
             dfd = nfd
         return _open_fd(parts[-1], flags | os.O_NOFOLLOW, dir_fd=dfd)
     finally:
-        os.close(dfd)
+        if dfd != base:
+            os.close(dfd)
 
 
 def _dir_fd(site, parts):
@@ -823,7 +936,8 @@ def _require_dirfd(op, *funcs, **kw):
 
 def _make_dir(site, parts, exist_ok):
     """建立證據根目錄或執行目錄(`parts` 相對 repo)。POSIX 方式甲:在父目錄 fd 上 mkdir;
-    Windows:釘住已存在的父目錄鏈後 mkdir。已存在且 `exist_ok` 為假 ⇒ FileExistsError。"""
+    Windows:從 repo 根目錄起釘住已存在的父目錄鏈後,以固定 realpath 組成的路徑 mkdir,建立後核對最終路徑。
+    已存在且 `exist_ok` 為假 ⇒ FileExistsError。"""
     method = _w1_method()
     if method == "dirfd":
         _require_dirfd(u"建立目錄", os.mkdir)
@@ -836,12 +950,15 @@ def _make_dir(site, parts, exist_ok):
         finally:
             os.close(dfd)
     elif method == "finalpath":
-        pins = _pin_parts(site, parts[:-1])
+        pins = _pin_chain(site, parts[:-1])
         try:
-            os.mkdir(_abs(site["root"], "/".join(parts)))
-        except FileExistsError:
-            if not exist_ok:
-                raise
+            try:
+                os.mkdir(os.path.join(site["real"], *parts))
+            except FileExistsError:
+                if not exist_ok:
+                    raise
+            else:
+                _verify_created(site, parts)
         finally:
             _unpin(pins)
     else:
@@ -850,20 +967,24 @@ def _make_dir(site, parts, exist_ok):
 
 # ── 寫檔(暫存檔 → 改名;不覆寫)──────────────────────────────────────────────
 
-def _publish(tmp, final):
-    """暫存檔 → 正式檔名。正式檔名已存在 ⇒ Stop(4),不覆寫(`os.link` 本身就不覆寫)。"""
+def _publish(tmp, final, check=None):
+    """暫存檔 → 正式檔名。正式檔名已存在 ⇒ Stop(4),不覆寫(`os.link` 本身就不覆寫)。
+    `check` 在連結建立後、刪暫存檔前執行(Windows 建立後核對);它停下時兩個名字都保留。"""
     try:
         os.link(tmp, final)
     except FileExistsError:
         raise Stop(EXIT_MISMATCH, u"原件 %s 已存在;不覆寫" % os.path.basename(final))
     except OSError as e:
         raise Stop(EXIT_INTERNAL, u"原件 %s 改名失敗(%s)" % (os.path.basename(final), type(e).__name__))
+    if check is not None:
+        check()
     os.unlink(tmp)
 
 
 def _write_artifact(ctx, name, data):
     """原件:暫存檔(O_EXCL)→ link 成正式檔名 → 刪暫存檔。POSIX 三步都在執行目錄的 dir_fd 上做
-    (方式甲,不跟隨連結);Windows 在釘住父目錄期間做。"""
+    (方式甲,不跟隨連結);Windows 從 repo 根目錄釘住父目錄期間,以固定 realpath 組成的路徑做,
+    暫存檔與正式檔名建立後各核對一次最終路徑。"""
     final = os.path.join(ctx["run_dir"], name)
     if os.path.lexists(final):
         raise Stop(EXIT_MISMATCH, u"原件 %s 已存在;不覆寫" % name)
@@ -885,11 +1006,18 @@ def _write_artifact(ctx, name, data):
         finally:
             os.close(dfd)
     elif method == "finalpath":
+        parts = _evidence_parts(ctx["run_id"])
         with _pinned(ctx, ctx["run_id"] + "/" + name):
-            fd = os.open(os.path.join(ctx["run_dir"], tmp),
+            fd = os.open(os.path.join(ctx["real"], *(parts + [tmp])),
                          os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
+            try:
+                _verify_created(ctx, parts + [tmp], fd)
+            except BaseException:
+                os.close(fd)
+                raise
             _write_fd(fd, data)
-            _publish(os.path.join(ctx["run_dir"], tmp), final)
+            _publish(os.path.join(ctx["real"], *(parts + [tmp])), os.path.join(ctx["real"], *(parts + [name])),
+                     check=lambda: _verify_created(ctx, parts + [name]))
     else:
         raise Stop(EXIT_PRECONDITION, _W1_UNAVAILABLE)
     return _sha256(data)
@@ -970,7 +1098,7 @@ class _JsonlFile(object):
 
 def _jsonl_open(site, rel, write):
     """W1 受保護開檔:兩本 JSONL 的讀取與追加都只經過這裡。`rel` 是證據目錄內的相對位置。
-    讀:目標不存在 ⇒ None。寫:不存在就建立(O_CREAT|O_EXCL;建立當下父目錄已釘住)。
+    讀:目標不存在 ⇒ None。寫:不存在就建立(O_CREAT|O_EXCL;建立當下從 repo 根目錄起的父目錄鏈已釘住)。
     建立後核對不符 ⇒ Stop(5),已建立的檔保留、不寫內容、不刪除。"""
     method = _w1_method()
     if method is None:
@@ -987,8 +1115,9 @@ def _jsonl_open(site, rel, write):
             fd = _open_dirfd(site, _evidence_parts(rel), flags)
         else:
             if before is None:
-                pins = _pin_dirs(site, rel)     # 方式乙是開檔後才核對,不可單獨用於建立
-            fd = _open_fd(_abs(site["root"], EVIDENCE_REL + "/" + rel), flags)
+                pins = _pin_root(site)          # 方式乙是開檔後才核對,不可單獨用於建立
+                pins += _pin_dirs(site, rel)
+            fd = _open_fd(os.path.join(site["real"], *_evidence_parts(rel)), flags)
     except Stop:
         _unpin(pins)
         raise
@@ -1110,13 +1239,52 @@ def _index_rec(ctx, event, reason=None, fingerprint=None, extra=None):
     return rec
 
 
-def _require_own_lock(ctx):
-    """寫入前重讀鎖檔:內容須與取得時逐字相同。"""
-    path, content = ctx["lock"]
+import contextvars                          # 只供下方範圍標記使用(與定義放在一起)
+
+_FORMAL = contextvars.ContextVar("inventory_evidence_formal_depth", default=0)
+
+
+@contextlib.contextmanager
+def _formal_flow():
+    """正式子命令的執行範圍(collect、經 `_locked` 的寫入子命令、resume 在進入點設定)。範圍內鎖的取得、
+    重讀與釋放收到不帶固定基準的路徑一律 Stop(5),不退回 `_evidence_site`;範圍外(直接呼叫)維持相容分支。
+    以 contextvars 記錄目前層數:每個執行緒各有自己的值(新執行緒從 0 開始),不共用、也不會清掉別的執行緒
+    的標記;巢狀進入加一層,離開時在 finally 以 token 還原成進入前的值(例外離開也一定還原),只動自己這一層。"""
+    token = _FORMAL.set(_FORMAL.get() + 1)
     try:
-        with io.open(path, "rb") as fh:
-            current = fh.read()
-    except OSError:
+        yield
+    finally:
+        _FORMAL.reset(token)
+
+
+def _anchor_of(path, what):
+    """取 `path` 帶的固定基準。正式流程中不帶基準 ⇒ Stop(5)(不由字串反推);範圍外回 None 交呼叫端相容處理。"""
+    site = getattr(path, "site", None)
+    if site is None and _FORMAL.get():
+        raise Stop(EXIT_INTERNAL, u"內部錯誤:正式流程中%s不帶固定基準;拒絕,不由路徑反推 repo 位置" % what)
+    return site
+
+
+def _require_own_lock(ctx):
+    """寫入前重讀鎖檔:內容須與取得時逐字相同。讀的位置是取鎖時的固定基準(鎖路徑帶的 `site`):
+    POSIX 經根目錄 fd 的 dir_fd 鏈;Windows 從 repo 根目錄釘住後讀,並核對已開檔的最終路徑。
+    正式流程中鎖路徑不帶基準 ⇒ Stop(5)。"""
+    path, content = ctx["lock"]
+    site = _anchor_of(path, u"鎖位置") or ctx
+    current = None
+    try:
+        if _w1_method() == "dirfd":
+            fd = _open_dirfd(site, _evidence_parts(LOCK_NAME), os.O_RDONLY)
+            try:
+                current = _read_fd(fd)
+            finally:
+                os.close(fd)
+        else:
+            with _pinned(site, LOCK_NAME):
+                with io.open(path, "rb") as fh:
+                    if _w1_method() != "finalpath" or _final_matches(site, _evidence_parts(LOCK_NAME), fh.fileno()):
+                        current = fh.read()
+    except (OSError, Stop):
         current = None
     if current != content:
         raise Stop(EXIT_INTERNAL, u"全域鎖已不是本程序的(內容不符或不存在);不寫入")
@@ -1171,23 +1339,41 @@ _LOCK_HELD = u"全域鎖已存在(並行執行中或前次遺留);不刪除、�
 
 
 def _acquire_lock(evid, run_id):
-    """O_EXCL 建立鎖檔。POSIX 在證據根目錄的 dir_fd 上建立(方式甲);Windows 由呼叫端釘住父目錄。"""
-    path = os.path.join(evid, LOCK_NAME)
+    """O_EXCL 建立鎖檔。位置一律取自 `evid` 帶的固定基準(`_Anchored`:本次呼叫開頭固定的 repo 實際路徑,
+    POSIX 為由它開出的根目錄 fd),不由字串反推。POSIX 在證據根目錄的 dir_fd 上建立(方式甲);Windows 由
+    呼叫端從 repo 根目錄釘住後以固定路徑建立,建立後核對最終路徑(不符 ⇒ 5,不寫內容、不刪除)。
+    `evid` 是不帶基準的一般字串時:正式流程中 ⇒ Stop(5);範圍外(只有直接呼叫的單元測試)就地取一次基準、
+    用完關閉。"""
+    site = _anchor_of(evid, u"鎖位置")
+    own = site is None
+    if own:
+        site = _evidence_site(evid)
+    parts = _evidence_parts(LOCK_NAME)
+    path = os.path.join(site["real"], *parts) if own else _anchored(site, parts)
     content = _canonical({"pid": os.getpid(), "run_id": run_id, "started": _iso(_now())}) + b"\n"
     method = _w1_method()
     try:
-        if method == "dirfd":
-            dfd = _dir_fd(_evidence_site(evid), EVIDENCE_REL.split("/"))
-            try:
-                fd = os.open(LOCK_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=dfd)
-            finally:
-                os.close(dfd)
-        elif method == "finalpath":
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
-        else:
-            raise Stop(EXIT_PRECONDITION, _W1_UNAVAILABLE)
-    except FileExistsError:
-        raise Stop(EXIT_MISMATCH, _LOCK_HELD)
+        try:
+            if method == "dirfd":
+                dfd = _dir_fd(site, EVIDENCE_REL.split("/"))
+                try:
+                    fd = os.open(LOCK_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=dfd)
+                finally:
+                    os.close(dfd)
+            elif method == "finalpath":
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
+                try:
+                    _verify_created(site, parts, fd)
+                except BaseException:
+                    os.close(fd)
+                    raise
+            else:
+                raise Stop(EXIT_PRECONDITION, _W1_UNAVAILABLE)
+        except FileExistsError:
+            raise Stop(EXIT_MISMATCH, _LOCK_HELD)
+    finally:
+        if own:
+            _close_site(site)
     with os.fdopen(fd, "wb") as fh:
         fh.write(content)
     return path, content
@@ -1223,11 +1409,25 @@ def _release_lock_dirfd(site, content):
 
 def _release_lock(path, content):
     """只刪內容與自己相符的鎖。回傳是否刪了;讀不到或刪除失敗 ⇒ False。
-    POSIX 上證據根目錄內的鎖檔改走方式甲(不跟隨連結)。"""
-    if _w1_method() == "dirfd" and os.path.basename(path) == LOCK_NAME and _is_evidence_root(os.path.dirname(path)):
-        return _release_lock_dirfd(_evidence_site(os.path.dirname(path)), content)
+    `path` 帶固定基準(取鎖時回傳的 `_Anchored`)時:POSIX 經根目錄 fd 的 dir_fd 鏈(不跟隨連結);
+    Windows 讀檔後核對最終路徑(呼叫端已從 repo 根目錄釘住)。正式流程中不帶基準 ⇒ Stop(5)(呼叫端
+    `_finish_lock` 當作釋放失敗);範圍外不帶基準的證據根目錄鎖檔(只有直接呼叫的單元測試)在 POSIX
+    就地取一次基準。"""
+    site = _anchor_of(path, u"鎖位置")
+    method = _w1_method()
+    if method == "dirfd" and site is not None:
+        return _release_lock_dirfd(site, content)
+    if method == "dirfd" and os.path.basename(path) == LOCK_NAME and _is_evidence_root(os.path.dirname(path)):
+        own = _evidence_site(os.path.dirname(path))
+        try:
+            return _release_lock_dirfd(own, content)
+        finally:
+            _close_site(own)
     try:
         with io.open(path, "rb") as fh:
+            if site is not None and method == "finalpath" \
+                    and not _final_matches(site, _evidence_parts(LOCK_NAME), fh.fileno()):
+                return False
             current = fh.read()
     except OSError:
         return False
@@ -1541,14 +1741,22 @@ def _log_stop(ctx, reason):
 
 
 def collect(root, claude_root, settle):
-    site = _site(root)
+    with _formal_flow():
+        site = _site(root)
+        try:
+            return _collect(site, claude_root, settle)
+        finally:
+            _close_site(site)
+
+
+def _collect(site, claude_root, settle):
     root = site["root"]
     _toplevel(root)
     check_preconditions(root)
     ident = _identity(root)
     core = build_snapshot(root, ident)
     run_id = "%s-%s" % (_now().strftime("%Y%m%dT%H%M%SZ"), ident["head"][:7])
-    evid = _abs(root, EVIDENCE_REL)
+    evid = _anchored(site, EVIDENCE_REL.split("/"))
     _check_chain(root, EVIDENCE_REL)
     parts = EVIDENCE_REL.split("/")
     for i in range(1, len(parts) + 1):
@@ -1556,9 +1764,10 @@ def collect(root, claude_root, settle):
     _check_chain(root, EVIDENCE_REL)
     with _pinned(site, LOCK_NAME):
         lock = _acquire_lock(evid, run_id)
-    ctx = {"root": root, "real": site["real"], "run_id": run_id, "run_dir": os.path.join(evid, run_id),
-           "evid": evid, "ident": ident, "claude_root": claude_root, "settle": settle, "step": None,
-           "run_dir_created": False, "lock": lock, "verified": False, "recorded": False}
+    ctx = {"root": root, "real": site["real"], "fd": site["fd"], "run_id": run_id,
+           "run_dir": os.path.join(evid, run_id), "evid": evid, "ident": ident, "claude_root": claude_root,
+           "settle": settle, "step": None, "run_dir_created": False, "lock": lock, "verified": False,
+           "recorded": False}
     started = broken = False
     code, reason = EXIT_INTERNAL, None
     try:
@@ -1600,30 +1809,43 @@ def collect(root, claude_root, settle):
 # ── 既有執行的子命令(取鎖 → 掃描 → 證據重驗 → 本體)──────────────────────────
 
 def _open_run(root, run_id):
-    """唯讀前置:使用前提、repo 識別、執行代號與目錄。回傳 `(site, ident, evid)`。"""
+    """唯讀前置:使用前提、repo 識別、執行代號與目錄。回傳 `(site, ident, evid)`;`site` 由呼叫端以
+    `_close_site` 關閉(這裡停下時自己關)。"""
     site = _site(root)
-    root = site["root"]
-    _toplevel(root)
-    check_preconditions(root)
-    ident = _identity(root)
-    if not RUN_ID_RE.match(run_id or ""):
-        raise Stop(EXIT_PRECONDITION, u"執行代號格式不符")
-    check_preconditions(root, EVIDENCE_REL + "/" + run_id)
-    evid = _abs(root, EVIDENCE_REL)
-    if not os.path.isdir(os.path.join(evid, run_id)):
-        raise Stop(EXIT_MISMATCH, u"找不到執行 %s" % run_id)
+    try:
+        root = site["root"]
+        _toplevel(root)
+        check_preconditions(root)
+        ident = _identity(root)
+        if not RUN_ID_RE.match(run_id or ""):
+            raise Stop(EXIT_PRECONDITION, u"執行代號格式不符")
+        check_preconditions(root, EVIDENCE_REL + "/" + run_id)
+        evid = _anchored(site, EVIDENCE_REL.split("/"))
+        if not os.path.isdir(os.path.join(evid, run_id)):
+            raise Stop(EXIT_MISMATCH, u"找不到執行 %s" % run_id)
+    except BaseException:
+        _close_site(site)
+        raise
     return site, ident, evid
 
 
 def _locked(root, run_id, body, step, claude_root=None):
     """取鎖 → 掃描 → 證據重驗 → 本體。重驗通過後的任何停下(程序順序錯、內部錯誤、失配),
     若本次還沒記過,就在 W2 前提下補記一筆停下(F-5);重驗失敗或寫入途中失敗不寫。"""
-    site, ident, evid = _open_run(root, run_id)
+    with _formal_flow():
+        site, ident, evid = _open_run(root, run_id)
+        try:
+            return _locked_run(site, ident, evid, run_id, body, step, claude_root)
+        finally:
+            _close_site(site)
+
+
+def _locked_run(site, ident, evid, run_id, body, step, claude_root):
     with _pinned(site, LOCK_NAME):
         lock = _acquire_lock(evid, run_id)
-    ctx = {"root": site["root"], "real": site["real"], "run_id": run_id, "run_dir": os.path.join(evid, run_id),
-           "evid": evid, "ident": ident, "claude_root": claude_root, "lock": lock, "step": step,
-           "verified": False, "recorded": False, "info": None}
+    ctx = {"root": site["root"], "real": site["real"], "fd": site["fd"], "run_id": run_id,
+           "run_dir": os.path.join(evid, run_id), "evid": evid, "ident": ident, "claude_root": claude_root,
+           "lock": lock, "step": step, "verified": False, "recorded": False, "info": None}
     code, reason, broken = EXIT_INTERNAL, None, False
     try:
         scan_evidence(ctx, holding_lock=True)
@@ -1916,7 +2138,8 @@ def post_reattach(root, run_id):
             _out(u"流程已完成:執行 %s、證據包指紋 %s、新 HEAD %s;不重寫\n" % (run_id, info["fp"], head))
             return EXIT_OK
         if info["s8"] is not None and info["s8"].get("new_head") != head:
-            _stop_with_record(ctx, "S8", u"收尾補寫前核對",
+            # 收尾前提不通過:停下紀錄記在 S7'(不新增、不改寫 S8)。
+            _stop_with_record(ctx, "S7'", u"收尾補寫前核對",
                               [{"item": "s8_head", "snapshot": info["s8"].get("new_head"), "live": head}])
         snap = _load(ctx["run_dir"], "snapshot.json")
         cand_sha = (info["by_step"]["S2"].get("fingerprints") or {}).get("candidate-inventory.json")
@@ -1977,7 +2200,16 @@ def _resume_s6(root, snap, info, length):
 
 
 def resume(root, run_id):
-    site, ident, evid = _open_run(root, run_id)
+    with _formal_flow():
+        site, ident, evid = _open_run(root, run_id)
+        try:
+            return _resume(site, ident, evid, run_id)
+        finally:
+            _close_site(site)
+
+
+def _resume(site, ident, evid, run_id):
+    _anchor_of(evid, u"證據根目錄")
     root = site["root"]
     if os.path.lexists(os.path.join(evid, LOCK_NAME)):
         raise Stop(EXIT_MISMATCH, _LOCK_HELD)

@@ -2147,6 +2147,7 @@ def test_ie_Y10_closing_requires_all_checks(fx, monkeypatch, target, change):
             return real(*args)
         monkeypatch.setattr(ie, "_reattach_mismatches", steal)
         before = without_lock(tree_bytes(fx.evid))
+    pre = tree_bytes(fx.evid)
     code, out, err = post_reattach(fx, run)
     assert code == (ie.EXIT_INTERNAL if change == "lock" else ie.EXIT_MISMATCH), err
     assert steps_of(fx, run).count("S8") == s8_before
@@ -2154,6 +2155,369 @@ def test_ie_Y10_closing_requires_all_checks(fx, monkeypatch, target, change):
     if change == "lock":
         assert "失配未記錄" in err
         assert without_lock(tree_bytes(fx.evid)) == before
+    cp_key = run + "/checkpoint.jsonl"
+    after = tree_bytes(fx.evid)
+    s8_pre = [x for x in pre[cp_key].split(b"\n") if x and json.loads(x)["step"] == "S8"
+              and json.loads(x)["result"] == "completed"]
+    s8_post = [x for x in after[cp_key].split(b"\n") if x and json.loads(x)["step"] == "S8"
+               and json.loads(x)["result"] == "completed"]
+    assert s8_post == s8_pre
+    assert len(s8_post) == (1 if target == "_index_run_completed" else 0)
+    if change == "lock":
+        assert (after[cp_key], after["index.jsonl"]) == (pre[cp_key], pre["index.jsonl"])
+    else:
+        assert_one_stop_recorded(fx, run, pre)
+        cp_new = json.loads(after[cp_key][len(pre[cp_key]):].decode("utf-8"))
+        ix_new = json.loads(after["index.jsonl"][len(pre["index.jsonl"]):].decode("utf-8"))
+        assert (cp_new["step"], cp_new["result"]) == ("S7'", "stopped")
+        assert (ix_new["step"], ix_new["event"]) == ("S7'", "stopped")
+        assert cp_new["detail"]["mismatches"]
+        assert all("snapshot" in m and "live" in m for m in cp_new["detail"]["mismatches"])
+
+
+@pytest.mark.parametrize("target", ["_write_s8", "_index_run_completed"])
+def test_ie_Z3_closing_check_failed_with_bad_evidence_writes_nothing(fx, monkeypatch, target):
+    run = _closing_interrupted(fx, monkeypatch, target)
+    move_head(fx)
+    with open(str(fx.evid / run / "checkpoint.jsonl"), "ab") as fh:
+        fh.write(b'{"step"')
+    before = tree_bytes(fx.evid)
+    code, out, err = post_reattach(fx, run)
+    assert code == ie.EXIT_MISMATCH, err
+    assert tree_bytes(fx.evid) == before
+
+
+@POSIX_DIRFD
+@pytest.mark.parametrize("when", ["before_lock", "before_release"])
+def test_ie_Z1a_posix_repo_link_retargeted_mid_call_stays_fixed(fx, monkeypatch, when):
+    link, other = fx.tmp / "repo-link", fx.tmp / "other"
+    oevid = other / ".dev" / "inventory-evidence"
+    oevid.mkdir(parents=True)
+    (oevid / "keep.txt").write_bytes(b"keep\n")
+    _dir_symlink(fx.repo, link)
+
+    def retarget():
+        os.unlink(str(link))
+        _dir_symlink(other, link)
+    if when == "before_lock":
+        real = ie._identity
+
+        def identity(root):
+            out = real(root)
+            retarget()
+            return out
+        monkeypatch.setattr(ie, "_identity", identity)
+    else:
+        real = ie._finish_lock
+
+        def finish(ctx, code):
+            (oevid / ".lock").write_bytes((fx.evid / ".lock").read_bytes())
+            retarget()
+            return real(ctx, code)
+        monkeypatch.setattr(ie, "_finish_lock", finish)
+    before = tree_bytes(other)
+    code = ie.main(["collect", "--repo", str(link), "--claude-root", str(fx.claude), "--settle-seconds", "0"])
+    err = fx.capsys.readouterr().err
+    assert code == ie.EXIT_OK, err
+    after = tree_bytes(other)
+    if when == "before_release":
+        assert ".dev/inventory-evidence/.lock" in after       # 外部那份沒被刪(放鎖刪的是固定位置的鎖)
+        del after[".dev/inventory-evidence/.lock"]
+    assert after == before
+    assert not (fx.evid / ".lock").exists()
+    [run] = fx.runs()
+    assert sorted(os.listdir(str(fx.evid / run))) == ARTIFACTS_DONE
+    assert [r["event"] for r in fx.index()] == ["start", "collect_completed"]
+
+
+def test_ie_Z1b_lock_location_not_resolved_again(fx, monkeypatch):
+    other = fx.tmp / "other"
+    oevid = other / ".dev" / "inventory-evidence"
+    oevid.mkdir(parents=True)
+    calls = []
+
+    def elsewhere(evid):
+        calls.append(evid)
+        return {"root": str(other), "real": str(other), "fd": None}
+    monkeypatch.setattr(ie, "_evidence_site", elsewhere)
+    seen = []
+    real = ie._acquire_lock
+
+    def spy(evid, run_id):
+        lock = real(evid, run_id)
+        seen.append(os.path.normcase(lock[0]))
+        return lock
+    monkeypatch.setattr(ie, "_acquire_lock", spy)
+    code, out, err = fx.collect()
+    assert code == ie.EXIT_OK, err
+    assert calls == []
+    assert seen == [os.path.normcase(os.path.join(os.path.realpath(str(fx.evid)), ".lock"))]
+    assert os.listdir(str(oevid)) == []
+    assert not (fx.evid / ".lock").exists()
+    assert [r["event"] for r in fx.index()] == ["start", "collect_completed"]
+
+
+@POSIX_DIRFD
+def test_ie_Z1c_posix_root_identity_differs_after_open_stops(fx, monkeypatch):
+    from types import SimpleNamespace
+    real = ie._lstat
+    root = os.path.realpath(str(fx.repo))
+
+    def other_identity(path):
+        st = real(path)
+        if os.fspath(path) == root:
+            return SimpleNamespace(st_mode=st.st_mode, st_nlink=st.st_nlink, st_dev=st.st_dev, st_ino=st.st_ino + 1)
+        return st
+    monkeypatch.setattr(ie, "_lstat", other_identity)
+    code, out, err = fx.collect()
+    assert code == ie.EXIT_PRECONDITION, err
+    assert not (fx.repo / ".dev").exists()
+
+
+@pytest.mark.parametrize("sub", WRITERS + ["resume"])
+def test_ie_Z1d_formal_flow_refuses_unanchored_path(fx, monkeypatch, sub):
+    if sub == "collect":
+        run = None
+    elif sub == "pre-register":
+        run = fx.complete()
+        assert approve(fx, run)[0] == ie.EXIT_OK
+    elif sub == "post-register":
+        run = to_s5(fx)
+        register(fx, run)
+    elif sub == "post-reattach":
+        run = to_s6(fx)
+        reattach(fx, run)
+    else:
+        run = fx.complete()
+    orig_acquire, orig_release = ie._acquire_lock, ie._release_lock
+    calls, state = [], {"at": None, "lock": None}
+    real_site = ie._evidence_site
+    monkeypatch.setattr(ie, "_evidence_site", lambda evid: calls.append(evid) or real_site(evid))
+
+    def snap():
+        if state["at"] is None:
+            state["at"] = tree_bytes(fx.evid) if fx.evid.exists() else {}
+    if sub == "collect":
+        def acquire(evid, run_id):
+            snap()
+            return orig_acquire(str(evid), run_id)
+    else:
+        def acquire(evid, run_id):
+            lock = orig_acquire(evid, run_id)
+            state["lock"] = lock[1]
+            return lock
+    monkeypatch.setattr(ie, "_acquire_lock", acquire)
+    if sub in ("record-approval", "pre-register", "post-register"):
+        real_own = ie._require_own_lock
+
+        def own(ctx):
+            snap()
+            path, content = ctx["lock"]
+            return real_own(dict(ctx, lock=(str(path), content)))
+        monkeypatch.setattr(ie, "_require_own_lock", own)
+    elif sub == "post-reattach":
+        def release(path, content):
+            snap()
+            return orig_release(str(path), content)
+        monkeypatch.setattr(ie, "_release_lock", release)
+    elif sub == "resume":
+        real_open = ie._open_run
+
+        def open_run(root, run_id):
+            site, ident, evid = real_open(root, run_id)
+            snap()
+            return site, ident, str(evid)
+        monkeypatch.setattr(ie, "_open_run", open_run)
+    if sub == "record-approval":
+        code, out, err = approve(fx, run)
+    else:
+        code, out, err = run_any(fx, sub, run)
+    assert code == ie.EXIT_INTERNAL, err
+    assert calls == []
+    assert state["at"] is not None
+    if sub == "record-approval":
+        assert run + "/approval.json" in state["at"]          # 觸發前已合法寫入的原件
+    after = tree_bytes(fx.evid)
+    if ".lock" in state["at"] and ".lock" not in after:       # 唯一允許:釋放本程序觸發前已持有的鎖
+        assert state["at"][".lock"] == state["lock"]
+        after[".lock"] = state["at"][".lock"]
+    assert after == state["at"]
+    direct = fx.tmp / "direct" / ".dev" / "inventory-evidence"     # 不在正式流程內:相容分支仍可用
+    direct.mkdir(parents=True)
+    path, content = orig_acquire(str(direct), RUN_X)
+    assert (direct / ".lock").read_bytes() == content
+    assert orig_release(path, content) is True
+    assert not (direct / ".lock").exists()
+
+
+@pytest.mark.parametrize("case", ["nested", "exception", "sequential", "threads"])
+def test_ie_Z1e_formal_scope_isolation(fx, case):
+    import threading
+    evid_a = fx.tmp / "a" / ".dev" / "inventory-evidence"
+    evid_b = fx.tmp / "b" / ".dev" / "inventory-evidence"
+    evid_a.mkdir(parents=True)
+    evid_b.mkdir(parents=True)
+
+    def compat_ok(evid):
+        path, content = ie._acquire_lock(str(evid), RUN_X)
+        assert ie._release_lock(path, content) is True
+        assert not (evid / ".lock").exists()
+
+    def refused(evid):
+        with pytest.raises(ie.Stop) as e:
+            ie._acquire_lock(str(evid), RUN_X)
+        assert e.value.code == ie.EXIT_INTERNAL
+        assert not (evid / ".lock").exists()
+    if case == "nested":
+        with ie._formal_flow():
+            with ie._formal_flow():
+                refused(evid_a)
+            refused(evid_a)                     # 離開內層後外層仍生效
+        compat_ok(evid_a)                       # 全部離開後相容分支恢復
+    elif case == "exception":
+        with ie._formal_flow():
+            with pytest.raises(RuntimeError):
+                with ie._formal_flow():
+                    raise RuntimeError("boom")
+            refused(evid_a)                     # 內層例外離開,外層仍生效
+        with pytest.raises(RuntimeError):
+            with ie._formal_flow():
+                raise RuntimeError("boom")
+        compat_ok(evid_a)
+    elif case == "sequential":
+        run = fx.complete()
+        for _ in range(2):
+            code, out, err = fx.resume(run)
+            assert code == ie.EXIT_OK, err
+            compat_ok(evid_a)                   # 前一次正式流程不殘留標記
+    else:
+        a_in, a_check, a_leave = threading.Event(), threading.Event(), threading.Event()
+        results, errors = {}, []
+
+        def thread_a():
+            try:
+                with ie._formal_flow():
+                    a_in.set()
+                    if not a_check.wait(60):
+                        raise AssertionError("thread A timeout")
+                    try:
+                        ie._acquire_lock(str(evid_a), RUN_X)
+                        results["a"] = "accepted"
+                    except ie.Stop as e:
+                        results["a"] = e.code
+                    if not a_leave.wait(60):
+                        raise AssertionError("thread A timeout")
+            except BaseException as e:
+                errors.append(("a", e))
+
+        def thread_b():
+            try:
+                path, content = ie._acquire_lock(str(evid_b), RUN_X)     # B 不在範圍內
+                results["b_compat"] = ie._release_lock(path, content)
+                with ie._formal_flow():
+                    pass
+                results["b_scope"] = "left"
+            except BaseException as e:
+                errors.append(("b", e))
+        ta = threading.Thread(target=thread_a, daemon=True)
+        ta.start()
+        assert a_in.wait(60)
+        tb = threading.Thread(target=thread_b, daemon=True)
+        tb.start()
+        tb.join(60)
+        assert not tb.is_alive()
+        a_check.set()                           # B 進出自己的範圍之後,A 仍須拒絕
+        a_leave.set()
+        ta.join(60)
+        assert not ta.is_alive()
+        assert errors == []
+        assert results == {"b_compat": True, "b_scope": "left", "a": ie.EXIT_INTERNAL}
+        assert not (evid_a / ".lock").exists()
+        compat_ok(evid_b)                       # A 離開後 B 不受影響
+
+
+@WINDOWS_ONLY
+def test_ie_Z2a_junction_repo_retargeted_creates_only_in_real_repo(fx, monkeypatch):
+    link, other = fx.tmp / "repo-link", fx.tmp / "other"
+    other.mkdir()
+    _junction(fx.repo, link)
+    real = ie._check_chain
+    state = {"done": False}
+
+    def check_then_retarget(root, rel):
+        out = real(root, rel)
+        if not state["done"]:
+            state["done"] = True
+            os.rmdir(str(link))
+            _junction(other, link)
+        return out
+    monkeypatch.setattr(ie, "_check_chain", check_then_retarget)
+    code = ie.main(["collect", "--repo", str(link), "--claude-root", str(fx.claude), "--settle-seconds", "0"])
+    err = fx.capsys.readouterr().err
+    assert state["done"]
+    assert code == ie.EXIT_OK, err
+    assert os.listdir(str(other)) == []
+    [run] = fx.runs()
+    assert sorted(os.listdir(str(fx.evid / run))) == ARTIFACTS_DONE
+    assert [r["event"] for r in fx.index()] == ["start", "collect_completed"]
+    assert not (fx.evid / ".lock").exists()
+
+
+@WINDOWS_ONLY
+def test_ie_Z2b_pinned_repo_root_and_parent_cannot_be_renamed(tmp_path, monkeypatch):
+    outer = tmp_path / "outer"
+    base = outer / "site"
+    evid = base / ".dev" / "inventory-evidence"
+    evid.mkdir(parents=True)
+    site = ie._site(str(base))
+    real = ie._pin_dirs
+    seen = []
+
+    def pin_then_try_rename(site_, rel):
+        pins = real(site_, rel)
+        for victim in (base, outer):
+            try:
+                os.rename(str(victim), str(victim) + "-moved")
+                seen.append("renamed")
+            except OSError:
+                seen.append("refused")
+        return pins
+    monkeypatch.setattr(ie, "_pin_dirs", pin_then_try_rename)
+    ie._append_records(site, [("index.jsonl", {"x": 1})])
+    assert seen == ["refused", "refused"]
+    assert (evid / "index.jsonl").read_bytes() == b'{"x": 1}\n'
+    assert os.listdir(str(tmp_path)) == ["outer"]
+    assert os.listdir(str(outer)) == ["site"]
+
+
+@WINDOWS_ONLY
+def test_ie_Z2c_root_pin_failure_refuses_create(fx, monkeypatch):
+    k = ie._win32()
+    real = k.open_dir
+    root = os.path.normcase(os.path.realpath(str(fx.repo)))
+
+    def refuse_root(path):
+        if os.path.normcase(path) == root:
+            raise OSError(5, "simulated")
+        return real(path)
+    monkeypatch.setattr(k, "open_dir", refuse_root)
+    before = tree_bytes(fx.tmp)
+    code, out, err = fx.collect()
+    assert code == ie.EXIT_PRECONDITION, err
+    assert "(d)" in err
+    assert not (fx.repo / ".dev").exists()
+    assert tree_bytes(fx.tmp) == before
+
+
+@WINDOWS_ONLY
+def test_ie_Z2d_created_final_path_mismatch_stops_without_content(fx, monkeypatch):
+    real = ie._final_path
+    monkeypatch.setattr(ie, "_final_path", lambda fd: real(fd) + "-moved")
+    code, out, err = fx.collect()
+    assert code == ie.EXIT_INTERNAL, err
+    assert "建立後" in err
+    assert sorted(os.listdir(str(fx.evid))) == [".lock"]
+    assert (fx.evid / ".lock").read_bytes() == b""
 
 
 @pytest.mark.parametrize("target", ["_write_s8", "_index_run_completed"])
