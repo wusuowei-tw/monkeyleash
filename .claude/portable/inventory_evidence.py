@@ -16,6 +16,10 @@ S4 核准代記(record-approval);S5 登記前重驗(pre-register,含原 verify);
 S6' 登記後核對(post-register);S7' 接回後核對與 S8 收尾(post-reattach)。
 resume 完全唯讀、不取鎖,依階段核對現場並指出下一步。
 
+兩本 JSONL 流水帳只經 `_jsonl_open` 讀寫(W1:不跟隨連結,平台做不到就拒絕);
+原件、鎖檔、證據目錄的建立與刪除同樣不跟隨連結(POSIX 方式甲 dir_fd 鏈;Windows 釘住父目錄)。
+停下紀錄只在證據重驗通過、鎖仍是自己的、目標安全時才寫(W2)。
+
 用法(經 gatepy):
   sh .claude/bin/gatepy .claude/portable/inventory_evidence.py collect [--repo R] [--claude-root C] [--settle-seconds N]
   sh .claude/bin/gatepy .claude/portable/inventory_evidence.py record-approval --run <代號> --fingerprint <64 碼> --approved-at <ISO 8601> --note <文字>
@@ -29,6 +33,7 @@ resume 完全唯讀、不取鎖,依階段核對現場並指出下一步。
 """
 
 import argparse
+import contextlib
 import hashlib
 import importlib.util
 import io
@@ -42,7 +47,7 @@ import time
 from datetime import datetime, timezone
 
 FORMAT_VERSION = 1
-TOOL_VERSION = "165.2"
+TOOL_VERSION = "165.3"
 
 # repo 識別值(站一 A4 實讀,物件格式 sha1)。
 ROOT_COMMIT = "91335c8e212d21230b03bd26acc04a7e87590f3c"
@@ -81,6 +86,7 @@ _ID_LENGTH = {"sha1": 40, "sha256": 64}
 _ZERO_MODE = "000000"
 _GITLINK = "160000"
 _REPARSE_POINT = 0x400
+_DIRECTORY = 0x10
 _STATUS = {"A": "added", "M": "modified", "T": "modified", "D": "deleted"}
 _EXPECT_SIDES = {"added": (False, True), "deleted": (True, False), "modified": (True, True)}
 # 唯讀 git 子命令(封閉集合)。`remote` 只准 `get-url`,`config` 只准 `--get`。
@@ -111,6 +117,10 @@ class Stop(Exception):
         Exception.__init__(self, reason)
         self.code = code
         self.reason = reason
+
+
+class _WriteFailed(Stop):
+    """寫入途中失敗:已寫的保留,不回滾、不截斷、不修補、不重試、不換位置寫。"""
 
 
 def _now():
@@ -213,6 +223,21 @@ def _abs(root, rel):
 def _is_evidence_path(rel):
     rel = rel.replace("\\", "/")
     return rel == EVIDENCE_REL or rel.startswith(EVIDENCE_REL + "/")
+
+
+def _site(root):
+    """本次呼叫的 repo 位置:`root` 供路徑拼接;`real`(realpath,呼叫開頭取一次並固定)供最終路徑核對。"""
+    root = os.path.abspath(os.fspath(root))
+    return {"root": root, "real": os.path.realpath(root)}
+
+
+def _evidence_site(evid):
+    """由證據根目錄位置反推 repo 位置(證據根目錄恆為 `<repo>/.dev/inventory-evidence`)。"""
+    return _site(os.path.dirname(os.path.dirname(os.path.abspath(evid))))
+
+
+def _is_evidence_root(path):
+    return os.path.abspath(path).replace("\\", "/").endswith("/" + EVIDENCE_REL)
 
 
 # ── 使用前提與 repo 識別 ──────────────────────────────────────────────────────
@@ -582,7 +607,248 @@ def _binding(record):
     return dict((k, record.get(k)) for k in ("live", "contracts", "r10_state", "counts"))
 
 
-# ── 寫檔(暫存檔 → 改名;不覆寫)與 JSONL ───────────────────────────────────
+# ── 開檔方式(W1 與目錄釘住共用)───────────────────────────────────────────────
+#
+# 開檔前檢查只是第一道。開檔方式本身要抵抗「檢查後父目錄或目標被替換」:
+# 方式甲(POSIX)從 repo 根目錄逐層 dir_fd + O_NOFOLLOW;方式乙(Windows)對已開的 handle
+# 核對最終路徑。方式乙是開檔後才核對,所以建立新檔時父目錄必須已釘住:Windows 逐層持有
+# 不給 FILE_SHARE_DELETE 的目錄 handle(持有期間不能改名、刪除、換成 junction)。
+# 兩種都不能用 ⇒ 拒絕讀寫,不退回不安全的寫法。
+
+_W1_UNAVAILABLE = (u"使用前提(d)不符:平台無法保證不跟隨連結(沒有 dir_fd/O_NOFOLLOW/O_DIRECTORY,"
+                   u"也無法核對已開檔的最終路徑);拒絕讀寫 JSONL")
+
+
+class _Win32(object):
+    """Windows 的最終路徑核對與目錄釘住(ctypes)。載入失敗 ⇒ `_win32()` 回 None。"""
+    ACCESS = 0x0001 | 0x0080                # FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES
+    SHARE = 0x0001 | 0x0002                 # FILE_SHARE_READ | FILE_SHARE_WRITE(不給 FILE_SHARE_DELETE)
+    FLAGS = 0x02000000 | 0x00200000         # FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT
+    OPEN_EXISTING = 3
+    BUF = 32768
+
+    def __init__(self):
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.GetFinalPathNameByHandleW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+        k.GetFinalPathNameByHandleW.restype = wintypes.DWORD
+        k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                  wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        k.CreateFileW.restype = wintypes.HANDLE
+        k.GetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+        k.GetFileInformationByHandle.restype = wintypes.BOOL
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        k.CloseHandle.restype = wintypes.BOOL
+        self.k, self.ctypes, self.msvcrt = k, ctypes, msvcrt
+        self.invalid = wintypes.HANDLE(-1).value
+
+    def _fail(self, what):
+        return OSError(self.ctypes.get_last_error(), what)
+
+    def final_path(self, handle):
+        buf = self.ctypes.create_unicode_buffer(self.BUF)
+        n = self.k.GetFinalPathNameByHandleW(handle, buf, self.BUF, 0)
+        if n == 0 or n >= self.BUF:
+            raise self._fail("GetFinalPathNameByHandleW")
+        path = buf.value
+        return path[4:] if path.startswith("\\\\?\\") else path
+
+    def fd_final_path(self, fd):
+        return self.final_path(self.msvcrt.get_osfhandle(fd))
+
+    def open_dir(self, path):
+        h = self.k.CreateFileW(path, self.ACCESS, self.SHARE, None, self.OPEN_EXISTING, self.FLAGS, None)
+        if h is None or h == self.invalid:
+            raise self._fail("CreateFileW")
+        return h
+
+    def attributes(self, handle):
+        info = (self.ctypes.c_uint32 * 13)()        # BY_HANDLE_FILE_INFORMATION;第一欄是屬性
+        if not self.k.GetFileInformationByHandle(handle, self.ctypes.byref(info)):
+            raise self._fail("GetFileInformationByHandle")
+        return info[0]
+
+    def close(self, handle):
+        self.k.CloseHandle(handle)
+
+
+_WIN32 = []
+
+
+def _win32():
+    if os.name != "nt":
+        return None
+    if not _WIN32:
+        try:
+            _WIN32.append(_Win32())
+        except Exception:
+            _WIN32.append(None)
+    return _WIN32[0]
+
+
+def _w1_method():
+    """方式甲 `"dirfd"`、方式乙 `"finalpath"`;兩者都不能用 ⇒ None。"""
+    if hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY") and os.open in os.supports_dir_fd:
+        return "dirfd"
+    if _win32() is not None:
+        return "finalpath"
+    return None
+
+
+def _lstat(path):
+    return os.lstat(path)
+
+
+def _fstat(fd):
+    return os.fstat(fd)
+
+
+def _os_write(fd, data):
+    return os.write(fd, data)
+
+
+def _open_fd(path, flags, dir_fd=None):
+    return os.open(path, flags, 0o644, dir_fd=dir_fd)
+
+
+def _read_fd(fd):
+    chunks = []
+    while True:
+        chunk = os.read(fd, 1 << 20)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _write_fd(fd, data):
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def _final_path(fd):
+    k = _win32()
+    if k is None:
+        raise Stop(EXIT_PRECONDITION, _W1_UNAVAILABLE)
+    return k.fd_final_path(fd)
+
+
+def _evidence_parts(rel):
+    return (EVIDENCE_REL + "/" + rel).split("/")
+
+
+def _unpin(pins):
+    if pins:
+        k = _win32()
+        for h in reversed(pins):
+            k.close(h)
+
+
+def _pin_parts(site, parts):
+    """Windows:`parts`(相對 repo)逐層開目錄 handle 並持有(不給 FILE_SHARE_DELETE),持有期間這幾層
+    不能被改名、刪除或換成 junction。每層核對不是 reparse point、是目錄、最終路徑與預期相同。做不到 ⇒ Stop(2)。"""
+    k = _win32()
+    if k is None:
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:無法釘住父目錄;拒絕建立")
+    pins = []
+    try:
+        for i in range(1, len(parts) + 1):
+            sub = "/".join(parts[:i])
+            try:
+                pins.append(k.open_dir(_abs(site["root"], sub)))
+                attrs = k.attributes(pins[-1])
+                final = k.final_path(pins[-1])
+            except OSError as e:
+                raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:無法釘住 %s(%s);拒絕建立" % (sub, type(e).__name__))
+            if attrs & _REPARSE_POINT or not attrs & _DIRECTORY:
+                raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 是 reparse point 或不是目錄;拒絕建立" % sub)
+            if os.path.normcase(final) != os.path.normcase(os.path.join(site["real"], *parts[:i])):
+                raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 的最終路徑與預期不符;拒絕建立" % sub)
+    except Stop:
+        _unpin(pins)
+        raise
+    return pins
+
+
+def _pin_dirs(site, rel):
+    """Windows:釘住證據目錄內 `rel` 的父目錄鏈(從 `.dev` 起)。"""
+    return _pin_parts(site, _evidence_parts(rel)[:-1])
+
+
+@contextlib.contextmanager
+def _pinned(site, rel):
+    """Windows 上釘住 `rel` 的父目錄鏈直到離開(原件、鎖檔的建立與刪除);其他平台不做事。"""
+    pins = _pin_dirs(site, rel) if _w1_method() == "finalpath" else []
+    try:
+        yield
+    finally:
+        _unpin(pins)
+
+
+def _open_dirfd(site, parts, flags):
+    """方式甲:從 repo 實際路徑起逐層 `os.open(名稱, O_DIRECTORY|O_NOFOLLOW, dir_fd=上一層)`,最後以
+    dir_fd + O_NOFOLLOW 開 `parts[-1]`(`parts` 相對 repo);每一層都不經字串路徑重新解析。"""
+    dfd = _open_fd(site["real"], os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for name in parts[:-1]:
+            nfd = _open_fd(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
+            os.close(dfd)
+            dfd = nfd
+        return _open_fd(parts[-1], flags | os.O_NOFOLLOW, dir_fd=dfd)
+    finally:
+        os.close(dfd)
+
+
+def _dir_fd(site, parts):
+    """方式甲取目錄 fd(`parts` 相對 repo;空清單 ⇒ repo 根目錄)。途中有連結或開不到 ⇒ Stop(2)。"""
+    try:
+        return _open_dirfd(site, parts or ["."], os.O_RDONLY | os.O_DIRECTORY)
+    except OSError as e:
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 無法以 dir_fd 安全開啟(%s)"
+                   % ("/".join(parts) or ".", type(e).__name__))
+
+
+def _require_dirfd(op, *funcs, **kw):
+    """方式甲需要的 dir_fd 能力;缺任一項 ⇒ 這條路徑在本平台拒絕執行(2),不退回字串路徑。"""
+    missing = [f.__name__ for f in funcs if f not in os.supports_dir_fd]
+    missing += [f.__name__ + "(follow_symlinks=False)" for f in kw.get("follow", ())
+                if f not in os.supports_follow_symlinks]
+    if missing:
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:平台不支援以 dir_fd 安全%s(缺 %s);拒絕執行"
+                   % (op, u"、".join(missing)))
+
+
+def _make_dir(site, parts, exist_ok):
+    """建立證據根目錄或執行目錄(`parts` 相對 repo)。POSIX 方式甲:在父目錄 fd 上 mkdir;
+    Windows:釘住已存在的父目錄鏈後 mkdir。已存在且 `exist_ok` 為假 ⇒ FileExistsError。"""
+    method = _w1_method()
+    if method == "dirfd":
+        _require_dirfd(u"建立目錄", os.mkdir)
+        dfd = _dir_fd(site, parts[:-1])
+        try:
+            os.mkdir(parts[-1], 0o777, dir_fd=dfd)
+        except FileExistsError:
+            if not exist_ok:
+                raise
+        finally:
+            os.close(dfd)
+    elif method == "finalpath":
+        pins = _pin_parts(site, parts[:-1])
+        try:
+            os.mkdir(_abs(site["root"], "/".join(parts)))
+        except FileExistsError:
+            if not exist_ok:
+                raise
+        finally:
+            _unpin(pins)
+    else:
+        raise Stop(EXIT_PRECONDITION, _W1_UNAVAILABLE)
+
+
+# ── 寫檔(暫存檔 → 改名;不覆寫)──────────────────────────────────────────────
 
 def _publish(tmp, final):
     """暫存檔 → 正式檔名。正式檔名已存在 ⇒ Stop(4),不覆寫(`os.link` 本身就不覆寫)。"""
@@ -596,26 +862,155 @@ def _publish(tmp, final):
 
 
 def _write_artifact(ctx, name, data):
+    """原件:暫存檔(O_EXCL)→ link 成正式檔名 → 刪暫存檔。POSIX 三步都在執行目錄的 dir_fd 上做
+    (方式甲,不跟隨連結);Windows 在釘住父目錄期間做。"""
     final = os.path.join(ctx["run_dir"], name)
     if os.path.lexists(final):
         raise Stop(EXIT_MISMATCH, u"原件 %s 已存在;不覆寫" % name)
-    tmp = os.path.join(ctx["run_dir"], TMP_PREFIX + name)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(data)
-        fh.flush()
-        os.fsync(fh.fileno())
-    _publish(tmp, final)
+    tmp = TMP_PREFIX + name
+    method = _w1_method()
+    if method == "dirfd":
+        _require_dirfd(u"寫入原件", os.link, os.unlink, follow=(os.link,))
+        dfd = _dir_fd(ctx, _evidence_parts(ctx["run_id"]))
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=dfd)
+            _write_fd(fd, data)
+            try:
+                os.link(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd, follow_symlinks=False)
+            except FileExistsError:
+                raise Stop(EXIT_MISMATCH, u"原件 %s 已存在;不覆寫" % name)
+            except OSError as e:
+                raise Stop(EXIT_INTERNAL, u"原件 %s 改名失敗(%s)" % (name, type(e).__name__))
+            os.unlink(tmp, dir_fd=dfd)
+        finally:
+            os.close(dfd)
+    elif method == "finalpath":
+        with _pinned(ctx, ctx["run_id"] + "/" + name):
+            fd = os.open(os.path.join(ctx["run_dir"], tmp),
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
+            _write_fd(fd, data)
+            _publish(os.path.join(ctx["run_dir"], tmp), final)
+    else:
+        raise Stop(EXIT_PRECONDITION, _W1_UNAVAILABLE)
     return _sha256(data)
 
 
-def _read_jsonl(path, label):
-    """讀 JSONL:任何一行不是完整 JSON 物件,或最後一個字元不是換行 ⇒ Stop(4),不修補。"""
+# ── JSONL 受保護開檔(W1)────────────────────────────────────────────────────
+
+def _jsonl_precheck(site, rel):
+    """開檔前檢查(第一道,不能單獨當保證):父目錄鏈不是連結;目標若存在,須是一般檔、
+    不是 symlink/reparse point、st_nlink 為 1。目標不存在 ⇒ None。"""
+    parts = _evidence_parts(rel)
+    _check_chain(site["root"], "/".join(parts[:-1]))
     try:
-        with io.open(path, "rb") as fh:
-            data = fh.read()
+        st = _lstat(_abs(site["root"], "/".join(parts)))
     except FileNotFoundError:
-        return []
+        return None
+    except OSError as e:
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 無法檢查(%s)" % (rel, type(e).__name__))
+    if stat.S_ISLNK(st.st_mode) or (getattr(st, "st_file_attributes", 0) & _REPARSE_POINT):
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 是 symlink/junction/reparse point" % rel)
+    if not stat.S_ISREG(st.st_mode):
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 不是一般檔" % rel)
+    if st.st_nlink != 1:
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 有其他硬連結(st_nlink=%d)" % (rel, st.st_nlink))
+    return st
+
+
+def _check_opened(site, rel, fd, method, before):
+    """開檔後核對(同一個 fd):一般檔、st_nlink 為 1;原已存在時 (st_dev, st_ino) 與開檔前相同;
+    方式乙另核最終路徑必須等於「repo 實際路徑 + 證據目錄 + 預期相對路徑」(不分大小寫)。"""
+    st = _fstat(fd)
+    if not stat.S_ISREG(st.st_mode):
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 開啟的不是一般檔" % rel)
+    if st.st_nlink != 1:
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 有其他硬連結(st_nlink=%d)" % (rel, st.st_nlink))
+    if before is not None and (st.st_dev, st.st_ino) != (before.st_dev, before.st_ino):
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 在檢查後被替換(開檔前後不是同一個檔)" % rel)
+    if method == "finalpath":
+        want = os.path.join(site["real"], *_evidence_parts(rel))
+        try:
+            got = _final_path(fd)
+        except OSError as e:
+            raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 無法取得最終路徑(%s)" % (rel, type(e).__name__))
+        if os.path.normcase(got) != os.path.normcase(want):
+            raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 的實際位置不是證據目錄內的預期位置(最終路徑不符)" % rel)
+
+
+class _JsonlFile(object):
+    """`_jsonl_open` 開好並核對過的 JSONL;讀、尾行檢查、追加都在同一個 fd 上,不再以路徑重開。"""
+
+    def __init__(self, fd, pins, label):
+        self.fd, self.pins, self.label = fd, pins, label
+
+    def read_all(self):
+        os.lseek(self.fd, 0, os.SEEK_SET)
+        return _read_fd(self.fd)
+
+    def check_tail(self):
+        size = os.lseek(self.fd, 0, os.SEEK_END)
+        if size:
+            os.lseek(self.fd, size - 1, os.SEEK_SET)
+            if os.read(self.fd, 1) != b"\n":
+                raise Stop(EXIT_MISMATCH, u"%s 最後一行不完整(不以換行結尾);視為壞資料,不修補" % self.label)
+
+    def append(self, line):
+        n = _os_write(self.fd, line)
+        if n != len(line):
+            raise OSError(u"寫入不足(%d/%d 位元組)" % (n, len(line)))
+        os.fsync(self.fd)
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+        _unpin(self.pins)
+        self.pins = []
+
+
+def _jsonl_open(site, rel, write):
+    """W1 受保護開檔:兩本 JSONL 的讀取與追加都只經過這裡。`rel` 是證據目錄內的相對位置。
+    讀:目標不存在 ⇒ None。寫:不存在就建立(O_CREAT|O_EXCL;建立當下父目錄已釘住)。
+    建立後核對不符 ⇒ Stop(5),已建立的檔保留、不寫內容、不刪除。"""
+    method = _w1_method()
+    if method is None:
+        raise Stop(EXIT_PRECONDITION, _W1_UNAVAILABLE)
+    before = _jsonl_precheck(site, rel)
+    if before is None and not write:
+        return None
+    flags = (os.O_RDWR | os.O_APPEND if write else os.O_RDONLY) | getattr(os, "O_BINARY", 0)
+    if before is None:
+        flags |= os.O_CREAT | os.O_EXCL
+    pins = []
+    try:
+        if method == "dirfd":
+            fd = _open_dirfd(site, _evidence_parts(rel), flags)
+        else:
+            if before is None:
+                pins = _pin_dirs(site, rel)     # 方式乙是開檔後才核對,不可單獨用於建立
+            fd = _open_fd(_abs(site["root"], EVIDENCE_REL + "/" + rel), flags)
+    except Stop:
+        _unpin(pins)
+        raise
+    except OSError as e:
+        _unpin(pins)
+        raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:%s 無法安全開啟(%s)" % (rel, type(e).__name__))
+    f = _JsonlFile(fd, pins, rel.rsplit("/", 1)[-1])
+    try:
+        _check_opened(site, rel, fd, method, before)
+    except Stop as e:
+        f.close()
+        if before is None:
+            raise Stop(EXIT_INTERNAL, u"%s 建立後核對不符(%s);已建立的檔保留、未寫入內容、未刪除" % (rel, e.reason))
+        raise
+    except BaseException:
+        f.close()
+        raise
+    return f
+
+
+def _parse_jsonl(data, label):
+    """任何一行不是完整 JSON 物件,或最後一個字元不是換行 ⇒ Stop(4),不修補。"""
     if not data:
         return []
     if not data.endswith(b"\n"):
@@ -632,28 +1027,134 @@ def _read_jsonl(path, label):
     return out
 
 
-def _append_jsonl(path, rec, label):
-    _read_jsonl(path, label)        # 尾行不完整就不接著寫
+def _read_jsonl(site, rel, label):
+    """經 W1 讀 JSONL(從同一個 fd 讀全部內容);不存在 ⇒ 空清單。"""
+    f = _jsonl_open(site, rel, write=False)
+    if f is None:
+        return []
+    try:
+        data = f.read_all()
+    finally:
+        f.close()
+    return _parse_jsonl(data, label)
+
+
+def _open_for_append(site, rel):
+    """W1 開檔後,在同一個 fd 上做尾行換行檢查與全文解析;壞資料 ⇒ Stop(4),不寫。"""
+    f = _jsonl_open(site, rel, write=True)
+    try:
+        f.check_tail()
+        _parse_jsonl(f.read_all(), f.label)
+    except BaseException:
+        f.close()
+        raise
+    return f
+
+
+def _put(f, rec, done, rest):
+    """在已核對的 fd 上寫一行;失敗 ⇒ `_WriteFailed`(5),說明已寫與未寫,保留實際結果。"""
     line = (json.dumps(rec, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
-    with io.open(path, "ab") as fh:
-        fh.write(line)
-        fh.flush()
-        os.fsync(fh.fileno())
+    try:
+        f.append(line)
+    except Exception as e:
+        raise _WriteFailed(EXIT_INTERNAL, u"%s 寫入失敗或不完整(%s:%s;可能留下半行);已完整寫入:%s;"
+                                          u"未寫入:%s;保留實際結果,不回滾、不截斷、不修補、不重試"
+                           % (f.label, type(e).__name__, e, u"、".join(done) or u"無", u"、".join(rest) or u"無"))
 
 
-def _event(ctx, step, result, reason, fingerprints, detail=None):
+def _append_records(site, items):
+    """W1 追加,可一次多本:`items` 是 `[(rel, rec)]`,依序寫(停下紀錄先 checkpoint 後 index)。
+    全部開檔、核對、尾行檢查都通過才寫第一個位元組;任一不過 ⇒ 原 Stop 拋出,一個位元組都沒寫。
+    寫入途中失敗 ⇒ `_WriteFailed`(5),說明已寫與未寫;保留實際結果,不回滾、不截斷、不重試。"""
+    files = []
+    try:
+        for rel, _rec in items:
+            files.append(_open_for_append(site, rel))
+        for i, (f, (_rel, rec)) in enumerate(zip(files, items)):
+            _put(f, rec, [g.label for g in files[:i]], [g.label for g in files[i + 1:]])
+    finally:
+        for f in files:
+            f.close()
+
+
+@contextlib.contextmanager
+def _books(site, rels):
+    """一次打開並核對幾本 JSONL(W1、尾行、全文),之後的追加都寫在這幾個 fd 上;離開時關閉。
+    用於「幾本都安全才寫第一本」,而檢查與寫入用的是同一個 fd,不另開核對。"""
+    files = {}
+    try:
+        for rel in rels:
+            files[rel] = _open_for_append(site, rel)
+        yield files
+    finally:
+        for f in files.values():
+            f.close()
+
+
+def _checkpoint_rel(ctx):
+    return ctx["run_id"] + "/" + CHECKPOINT_NAME
+
+
+def _event_rec(ctx, step, result, reason, fingerprints, detail=None):
     rec = {"time": _iso(_now()), "run_id": ctx["run_id"], "step": step, "result": result,
            "reason": reason, "fingerprints": fingerprints or {}}
     if detail is not None:
         rec["detail"] = detail
-    _append_jsonl(os.path.join(ctx["run_dir"], CHECKPOINT_NAME), rec, CHECKPOINT_NAME)
+    return rec
 
 
-def _index(ctx, event, reason=None, fingerprint=None, extra=None):
+def _index_rec(ctx, event, reason=None, fingerprint=None, extra=None):
     rec = {"time": _iso(_now()), "run_id": ctx["run_id"], "event": event, "reason": reason,
            "package_fingerprint": fingerprint}
     rec.update(extra or {})
-    _append_jsonl(os.path.join(ctx["evid"], INDEX_NAME), rec, INDEX_NAME)
+    return rec
+
+
+def _require_own_lock(ctx):
+    """寫入前重讀鎖檔:內容須與取得時逐字相同。"""
+    path, content = ctx["lock"]
+    try:
+        with io.open(path, "rb") as fh:
+            current = fh.read()
+    except OSError:
+        current = None
+    if current != content:
+        raise Stop(EXIT_INTERNAL, u"全域鎖已不是本程序的(內容不符或不存在);不寫入")
+
+
+def _append(ctx, items):
+    _require_own_lock(ctx)
+    _append_records(ctx, items)
+
+
+def _event(ctx, step, result, reason, fingerprints, detail=None):
+    _append(ctx, [(_checkpoint_rel(ctx), _event_rec(ctx, step, result, reason, fingerprints, detail))])
+
+
+def _index(ctx, event, reason=None, fingerprint=None, extra=None):
+    _append(ctx, [(INDEX_NAME, _index_rec(ctx, event, reason, fingerprint, extra))])
+
+
+def _record_stop(ctx, step, result, reason, fingerprints, detail, index_event, with_checkpoint=True):
+    """W2:停下或核准不適用的紀錄,先 checkpoint 後 index,同一次停下各一筆。
+    前提:證據重驗已通過(collect 為既有證據掃描通過)、鎖仍是自己的、兩本都通過 W1。
+    寫入前拒絕 ⇒ Stop(5)「失配未記錄」,一個位元組都沒寫;寫入途中失敗 ⇒ Stop(5) 說明已寫與未寫。"""
+    ctx["recorded"] = True
+    fps = fingerprints or {}
+    items = []
+    if with_checkpoint:
+        items.append((_checkpoint_rel(ctx), _event_rec(ctx, step, result, reason, fps, detail)))
+    items.append((INDEX_NAME, _index_rec(ctx, index_event, reason, fps.get("package_fingerprint"), {"step": step})))
+    try:
+        if not ctx.get("verified"):
+            raise Stop(EXIT_INTERNAL, u"證據重驗未通過")
+        _append(ctx, items)
+    except _WriteFailed as e:
+        raise Stop(EXIT_INTERNAL, u"%s;停下紀錄寫入途中失敗:%s" % (reason, e.reason))
+    except Stop as e:
+        raise Stop(EXIT_INTERNAL, u"%s;失配未記錄:%s" % (reason, e.reason))
+    except Exception as e:
+        raise Stop(EXIT_INTERNAL, u"%s;失配未記錄:內部錯誤(%s)" % (reason, type(e).__name__))
 
 
 def _load(run_dir, name):
@@ -670,10 +1171,21 @@ _LOCK_HELD = u"全域鎖已存在(並行執行中或前次遺留);不刪除、�
 
 
 def _acquire_lock(evid, run_id):
+    """O_EXCL 建立鎖檔。POSIX 在證據根目錄的 dir_fd 上建立(方式甲);Windows 由呼叫端釘住父目錄。"""
     path = os.path.join(evid, LOCK_NAME)
     content = _canonical({"pid": os.getpid(), "run_id": run_id, "started": _iso(_now())}) + b"\n"
+    method = _w1_method()
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
+        if method == "dirfd":
+            dfd = _dir_fd(_evidence_site(evid), EVIDENCE_REL.split("/"))
+            try:
+                fd = os.open(LOCK_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=dfd)
+            finally:
+                os.close(dfd)
+        elif method == "finalpath":
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
+        else:
+            raise Stop(EXIT_PRECONDITION, _W1_UNAVAILABLE)
     except FileExistsError:
         raise Stop(EXIT_MISMATCH, _LOCK_HELD)
     with os.fdopen(fd, "wb") as fh:
@@ -681,23 +1193,72 @@ def _acquire_lock(evid, run_id):
     return path, content
 
 
+def _release_lock_dirfd(site, content):
+    """方式甲:在證據根目錄的 dir_fd 上讀鎖檔(O_NOFOLLOW)、內容相符才 unlink。"""
+    if os.unlink not in os.supports_dir_fd:
+        return False
+    try:
+        dfd = _dir_fd(site, EVIDENCE_REL.split("/"))
+    except Stop:
+        return False
+    try:
+        try:
+            fd = _open_dirfd(site, _evidence_parts(LOCK_NAME), os.O_RDONLY)
+        except OSError:
+            return False
+        try:
+            current = _read_fd(fd)
+        finally:
+            os.close(fd)
+        if current != content:
+            return False
+        try:
+            os.unlink(LOCK_NAME, dir_fd=dfd)
+        except OSError:
+            return False
+        return True
+    finally:
+        os.close(dfd)
+
+
 def _release_lock(path, content):
-    """只刪內容與自己相符的鎖。回傳是否刪了。"""
+    """只刪內容與自己相符的鎖。回傳是否刪了;讀不到或刪除失敗 ⇒ False。
+    POSIX 上證據根目錄內的鎖檔改走方式甲(不跟隨連結)。"""
+    if _w1_method() == "dirfd" and os.path.basename(path) == LOCK_NAME and _is_evidence_root(os.path.dirname(path)):
+        return _release_lock_dirfd(_evidence_site(os.path.dirname(path)), content)
     try:
         with io.open(path, "rb") as fh:
             current = fh.read()
-    except FileNotFoundError:
+    except OSError:
         return False
     if current != content:
         return False
-    os.unlink(path)
+    try:
+        os.unlink(path)
+    except OSError:
+        return False
     return True
+
+
+def _finish_lock(ctx, code):
+    """W3:受控結束只釋放自己的鎖;釋放失敗 ⇒ 原本成功改 5,原本非 0 保留原碼並加註。"""
+    path, content = ctx["lock"]
+    try:
+        with _pinned(ctx, LOCK_NAME):
+            released = _release_lock(path, content)
+    except Stop:
+        released = False
+    if released:
+        return code
+    _err(u"全域鎖已不存在、內容與本次不符或無法刪除;未刪除(鎖釋放失敗)")
+    return EXIT_INTERNAL if code == EXIT_OK else code
 
 
 # ── 既有證據的掃描與重驗 ──────────────────────────────────────────────────────
 
-def scan_evidence(evid, holding_lock):
+def scan_evidence(site, holding_lock):
     """未完成資料、遺留鎖、壞 JSONL、不認得的項目 ⇒ Stop,不自動清理。"""
+    evid = _abs(site["root"], EVIDENCE_REL)
     if not os.path.isdir(evid):
         return
     for name in sorted(os.listdir(evid)):
@@ -707,21 +1268,21 @@ def scan_evidence(evid, holding_lock):
                 continue
             raise Stop(EXIT_MISMATCH, _LOCK_HELD)
         if name == INDEX_NAME:
-            _read_jsonl(full, INDEX_NAME)
+            _read_jsonl(site, INDEX_NAME, INDEX_NAME)
             continue
         st = os.lstat(full)
         if stat.S_ISLNK(st.st_mode) or (getattr(st, "st_file_attributes", 0) & _REPARSE_POINT):
             raise Stop(EXIT_PRECONDITION, u"使用前提(d)不符:證據目錄內有 symlink/junction/reparse point")
         if not RUN_ID_RE.match(name) or not stat.S_ISDIR(st.st_mode):
             raise Stop(EXIT_MISMATCH, u"證據目錄內有不認得的項目;不自動清理")
-        _scan_run(full, name)
+        _scan_run(site, name)
 
 
-def _scan_run(run_dir, run_id):
-    files = os.listdir(run_dir)
+def _scan_run(site, run_id):
+    files = os.listdir(_abs(site["root"], EVIDENCE_REL + "/" + run_id))
     if any(f.startswith(TMP_PREFIX) for f in files):
         raise Stop(EXIT_MISMATCH, u"執行 %s 留有暫存檔(未完成資料);不自動清理" % run_id)
-    events = _read_jsonl(os.path.join(run_dir, CHECKPOINT_NAME), CHECKPOINT_NAME)
+    events = _read_jsonl(site, run_id + "/" + CHECKPOINT_NAME, CHECKPOINT_NAME)
     done = set(e.get("step") for e in events if e.get("result") == RESULT_COMPLETED)
     for f in sorted(files):
         if f == CHECKPOINT_NAME:
@@ -743,13 +1304,18 @@ def _is_full_hex(value):
         and all(c in "0123456789abcdef" for c in value)
 
 
-def verify_run(evid, run_id):
-    """重驗保存的證據本身:原件 SHA256、證據包指紋、摘要、approval.json、事件順序與一致性。
+_INCONSISTENT = u"紀錄不一致:checkpoint 與 index.jsonl 的%s無法逐筆對應;不補寫,請人工確認"
+
+
+def verify_run(site, run_id):
+    """重驗保存的證據本身:原件 SHA256、證據包指紋、摘要、approval.json、事件順序與一致性,
+    以及 checkpoint 與 index 兩本紀錄的逐筆對應(停下／核准不適用、S3、S4、S8)。
 
     任一不符 ⇒ Stop(4),不覆寫、不修補。回傳本執行的狀態摘要(`info`)。
+    唯一不判不一致的缺配對是「checkpoint 已有 S8、index 缺 run_completed」(收尾補寫,裁定 B1)。
     """
-    run_dir = os.path.join(evid, run_id)
-    events = _read_jsonl(os.path.join(run_dir, CHECKPOINT_NAME), CHECKPOINT_NAME)
+    run_dir = os.path.join(_abs(site["root"], EVIDENCE_REL), run_id)
+    events = _read_jsonl(site, run_id + "/" + CHECKPOINT_NAME, CHECKPOINT_NAME)
     for e in events:
         if e.get("run_id") != run_id:
             raise Stop(EXIT_MISMATCH, u"事件的執行代號與目錄不符")
@@ -768,9 +1334,17 @@ def verify_run(evid, run_id):
                 raise Stop(EXIT_MISMATCH, u"%s 有完成事件,但原件 %s 不存在" % (e["step"], name))
             if recorded.get(name) != _file_sha(path):
                 raise Stop(EXIT_MISMATCH, u"原件 %s 的 SHA256 與完成事件不符" % name)
-    mine = [r for r in _read_jsonl(os.path.join(evid, INDEX_NAME), INDEX_NAME) if r.get("run_id") == run_id]
+    mine = [r for r in _read_jsonl(site, INDEX_NAME, INDEX_NAME) if r.get("run_id") == run_id]
     if not any(r.get("event") == "start" for r in mine):
         raise Stop(EXIT_MISMATCH, u"index.jsonl 沒有本執行的開始紀錄")
+    marks = [(e.get("step"), e.get("result"), e.get("reason"), (e.get("fingerprints") or {}).get("package_fingerprint"))
+             for e in events if e.get("result") in (RESULT_STOPPED, RESULT_VOID)]
+    logged = [(r.get("step"), r.get("event"), r.get("reason"), r.get("package_fingerprint"))
+              for r in mine if r.get("event") in (RESULT_STOPPED, RESULT_VOID)]
+    if marks != logged:
+        raise Stop(EXIT_MISMATCH, _INCONSISTENT % u"停下／核准不適用紀錄(步驟、種類、原因、順序或指紋)")
+    if len([r for r in mine if r.get("event") == "approval_recorded"]) != (1 if "S4" in steps else 0):
+        raise Stop(EXIT_MISMATCH, _INCONSISTENT % u"核准代記(S4 與 approval_recorded)")
     done = [r for r in mine if r.get("event") == "collect_completed"]
     fp = None
     if "S3" in steps:
@@ -961,16 +1535,14 @@ def step_s3(ctx):
 # ── collect ───────────────────────────────────────────────────────────────────
 
 def _log_stop(ctx, reason):
-    try:
-        if ctx["run_dir_created"]:
-            _event(ctx, ctx["step"] or "S0a", RESULT_STOPPED, reason, None)
-        _index(ctx, "stopped", reason=reason)
-    except Exception:
-        _err(u"停下事件無法記錄;證據可能不完整")
+    """collect 取鎖後的停下:執行目錄已建立才寫 checkpoint,index 一律寫;前提與失敗處理同 W2。"""
+    _record_stop(ctx, ctx["step"] or "S0a", RESULT_STOPPED, reason, None, None, "stopped",
+                 with_checkpoint=ctx["run_dir_created"])
 
 
 def collect(root, claude_root, settle):
-    root = os.path.abspath(os.fspath(root))
+    site = _site(root)
+    root = site["root"]
     _toplevel(root)
     check_preconditions(root)
     ident = _identity(root)
@@ -978,21 +1550,25 @@ def collect(root, claude_root, settle):
     run_id = "%s-%s" % (_now().strftime("%Y%m%dT%H%M%SZ"), ident["head"][:7])
     evid = _abs(root, EVIDENCE_REL)
     _check_chain(root, EVIDENCE_REL)
-    os.makedirs(evid, exist_ok=True)            # 證據根目錄:鎖檔要有地方放,取鎖前建立
+    parts = EVIDENCE_REL.split("/")
+    for i in range(1, len(parts) + 1):
+        _make_dir(site, parts[:i], exist_ok=True)   # 證據根目錄:鎖檔要有地方放,取鎖前建立
     _check_chain(root, EVIDENCE_REL)
-    lock_path, lock_content = _acquire_lock(evid, run_id)
-    ctx = {"root": root, "run_id": run_id, "run_dir": os.path.join(evid, run_id), "evid": evid,
-           "ident": ident, "claude_root": claude_root, "settle": settle, "step": None,
-           "run_dir_created": False}
-    started = False
+    with _pinned(site, LOCK_NAME):
+        lock = _acquire_lock(evid, run_id)
+    ctx = {"root": root, "real": site["real"], "run_id": run_id, "run_dir": os.path.join(evid, run_id),
+           "evid": evid, "ident": ident, "claude_root": claude_root, "settle": settle, "step": None,
+           "run_dir_created": False, "lock": lock, "verified": False, "recorded": False}
+    started = broken = False
     code, reason = EXIT_INTERNAL, None
     try:
-        scan_evidence(evid, holding_lock=True)
+        scan_evidence(ctx, holding_lock=True)
+        ctx["verified"] = True                  # W2 前提 1 在 collect 的對應:既有證據掃描通過
         _index(ctx, "start")
         started = True
         check_preconditions(root, EVIDENCE_REL + "/" + run_id)
         try:
-            os.mkdir(ctx["run_dir"])            # 執行目錄:取鎖之後才建立
+            _make_dir(ctx, _evidence_parts(run_id), exist_ok=False)     # 執行目錄:取鎖之後才建立
         except FileExistsError:
             raise Stop(EXIT_MISMATCH, u"執行目錄 %s 已存在;不覆寫" % run_id)
         ctx["run_dir_created"] = True
@@ -1008,25 +1584,25 @@ def collect(root, claude_root, settle):
         _out(u"證據包指紋:%s\n" % ctx["fingerprint"])
         code = EXIT_OK
     except Stop as e:
-        code, reason = e.code, e.reason
+        code, reason, broken = e.code, e.reason, isinstance(e, _WriteFailed)
     except Exception as e:
         code, reason = EXIT_INTERNAL, u"內部錯誤(%s);不確定一律當失敗" % type(e).__name__
     if reason is not None:
-        if started:
-            _log_stop(ctx, reason)
+        if started and not broken:
+            try:
+                _log_stop(ctx, reason)
+            except Stop as e:
+                code, reason = e.code, e.reason
         _err(reason)
-    if not _release_lock(lock_path, lock_content):
-        _err(u"全域鎖已不存在或內容與本次不符;未刪除")
-        if code == EXIT_OK:
-            code = EXIT_INTERNAL
-    return code
+    return _finish_lock(ctx, code)
 
 
 # ── 既有執行的子命令(取鎖 → 掃描 → 證據重驗 → 本體)──────────────────────────
 
 def _open_run(root, run_id):
-    """唯讀前置:使用前提、repo 識別、執行代號與目錄。回傳 `(root, ident, evid)`。"""
-    root = os.path.abspath(os.fspath(root))
+    """唯讀前置:使用前提、repo 識別、執行代號與目錄。回傳 `(site, ident, evid)`。"""
+    site = _site(root)
+    root = site["root"]
     _toplevel(root)
     check_preconditions(root)
     ident = _identity(root)
@@ -1036,21 +1612,36 @@ def _open_run(root, run_id):
     evid = _abs(root, EVIDENCE_REL)
     if not os.path.isdir(os.path.join(evid, run_id)):
         raise Stop(EXIT_MISMATCH, u"找不到執行 %s" % run_id)
-    return root, ident, evid
+    return site, ident, evid
 
 
-def _locked(root, run_id, body, claude_root=None):
-    root, ident, evid = _open_run(root, run_id)
-    lock_path, lock_content = _acquire_lock(evid, run_id)
+def _locked(root, run_id, body, step, claude_root=None):
+    """取鎖 → 掃描 → 證據重驗 → 本體。重驗通過後的任何停下(程序順序錯、內部錯誤、失配),
+    若本次還沒記過,就在 W2 前提下補記一筆停下(F-5);重驗失敗或寫入途中失敗不寫。"""
+    site, ident, evid = _open_run(root, run_id)
+    with _pinned(site, LOCK_NAME):
+        lock = _acquire_lock(evid, run_id)
+    ctx = {"root": site["root"], "real": site["real"], "run_id": run_id, "run_dir": os.path.join(evid, run_id),
+           "evid": evid, "ident": ident, "claude_root": claude_root, "lock": lock, "step": step,
+           "verified": False, "recorded": False, "info": None}
+    code, reason, broken = EXIT_INTERNAL, None, False
     try:
-        scan_evidence(evid, holding_lock=True)
-        info = verify_run(evid, run_id)       # 證據本身不可信 ⇒ Stop(4),什麼都不寫
-        ctx = {"root": root, "run_id": run_id, "run_dir": os.path.join(evid, run_id), "evid": evid,
-               "ident": ident, "info": info, "claude_root": claude_root}
-        return body(ctx)
-    finally:
-        if not _release_lock(lock_path, lock_content):
-            _err(u"全域鎖已不存在或內容與本次不符;未刪除")
+        scan_evidence(ctx, holding_lock=True)
+        ctx["info"] = verify_run(ctx, run_id)       # 證據本身不可信 ⇒ Stop(4),什麼都不寫
+        ctx["verified"] = True
+        code = body(ctx)
+    except Stop as e:
+        code, reason, broken = e.code, e.reason, isinstance(e, _WriteFailed)
+    except Exception as e:
+        code, reason = EXIT_INTERNAL, u"內部錯誤(%s);不確定一律當失敗" % type(e).__name__
+    if reason is not None:
+        if ctx["verified"] and not ctx["recorded"] and not broken:
+            try:
+                _record_stop(ctx, ctx["step"], RESULT_STOPPED, reason, _fps(ctx["info"]), None, "stopped")
+            except Stop as e:
+                code, reason = e.code, e.reason
+        _err(reason)
+    return _finish_lock(ctx, code)
 
 
 def _require_usable_approval(info):
@@ -1065,10 +1656,9 @@ def _fps(info):
 
 
 def _stop_with_record(ctx, step, label, mismatches):
-    """失配:保留現狀,寫停下事件與 index 紀錄,停(4)。不還原、不改 index、不刪任何東西。"""
+    """失配:保留現狀,在 W2 前提下寫停下事件與 index 紀錄,停(4)。不還原、不改 index、不刪任何東西。"""
     reason = u"%s不符:%s;保留現狀,不自動還原" % (label, u"、".join(m["item"] for m in mismatches))
-    _event(ctx, step, RESULT_STOPPED, reason, _fps(ctx["info"]), {"mismatches": mismatches})
-    _index(ctx, "stopped", reason=reason, fingerprint=ctx["info"]["fp"])
+    _record_stop(ctx, step, RESULT_STOPPED, reason, _fps(ctx["info"]), {"mismatches": mismatches}, "stopped")
     raise Stop(EXIT_MISMATCH, reason)
 
 
@@ -1098,7 +1688,7 @@ def record_approval(root, run_id, fingerprint, approved_at, note):
         _index(ctx, "approval_recorded", fingerprint=info["fp"])
         _out(u"已代記核准:證據包指紋 %s\n下一步:pre-register\n" % info["fp"])
         return EXIT_OK
-    return _locked(root, run_id, body)
+    return _locked(root, run_id, body, "S4")
 
 
 # ── S5 pre-register(含原 verify)─────────────────────────────────────────────
@@ -1166,8 +1756,7 @@ def pre_register(root, run_id, claude_root):
         if mismatches:
             reason = u"核准不適用:%s 與快照或已保存證據不符;%s" % (
                 u"、".join(m["item"] for m in mismatches), _VOID_ADVICE)
-            _event(ctx, "S5", RESULT_VOID, reason, _fps(info), {"mismatches": mismatches})
-            _index(ctx, "approval_void", reason=reason, fingerprint=info["fp"])
+            _record_stop(ctx, "S5", RESULT_VOID, reason, _fps(info), {"mismatches": mismatches}, RESULT_VOID)
             raise Stop(EXIT_MISMATCH, reason)
         fps = _fps(info)
         fps.update({"sample_1": _sha256(_canonical(records[0])), "sample_2": _sha256(_canonical(records[1]))})
@@ -1176,7 +1765,7 @@ def pre_register(root, run_id, claude_root):
         _out(u"登記前重驗通過。\n下一步:由 VS 依現有程序與另行授權退出暫存、以候選名冊登記;"
              u"工具不執行這些動作。登記後執行 post-register。\n")
         return EXIT_OK
-    return _locked(root, run_id, body, claude_root)
+    return _locked(root, run_id, body, "S5", claude_root)
 
 
 # ── S6' post-register ─────────────────────────────────────────────────────────
@@ -1257,7 +1846,7 @@ def post_register(root, run_id, claude_root):
         _out(u"登記後核對通過;新 HEAD %s\n下一步:由 VS 依現有程序與另行授權接回原工作,然後執行 post-reattach。\n"
              % head)
         return EXIT_OK
-    return _locked(root, run_id, body, claude_root)
+    return _locked(root, run_id, body, "S6'", claude_root)
 
 
 # ── S7' post-reattach 與 S8 收尾 ──────────────────────────────────────────────
@@ -1283,19 +1872,34 @@ def _reattach_mismatches(root, snap, candidate_sha):
         if rows != [(p["mode"], p["blob"])]:
             out.append({"item": "partially_staged", "path": p["path"], "snapshot": p, "live": rows})
     out += _scope_mismatches(root, snap, {INVENTORY_REL})
-    inv = _worktree_state(root, INVENTORY_REL, snap["executable_mode_reliable"])
+    try:
+        inv = _worktree_state(root, INVENTORY_REL, snap["executable_mode_reliable"])
+    except Stop as s:                           # 變成目錄、特殊檔等不支援類型 ⇒ 失配項,不穿出
+        if s.code == EXIT_INTERNAL:
+            raise
+        inv = {"path": INVENTORY_REL, "unsupported": s.reason}
     if inv.get("sha256") != candidate_sha:
-        out.append({"item": "inventory_worktree", "snapshot": candidate_sha, "live": inv.get("sha256")})
+        out.append({"item": "inventory_worktree", "snapshot": candidate_sha,
+                    "live": inv.get("unsupported") or inv.get("sha256")})
     return out
 
 
-def _write_s8(ctx, summary):
-    _event(ctx, "S8", RESULT_COMPLETED, None, {"package_fingerprint": ctx["info"]["fp"]}, summary)
+def _write_s8(ctx, summary, books):
+    """S8 寫在 `_books` 已打開並核對過的 checkpoint fd 上;寫前重讀鎖。"""
+    _require_own_lock(ctx)
+    rest = [INDEX_NAME] if INDEX_NAME in books else []
+    _put(books[_checkpoint_rel(ctx)],
+         _event_rec(ctx, "S8", RESULT_COMPLETED, None, {"package_fingerprint": ctx["info"]["fp"]}, summary), [], rest)
 
 
-def _index_run_completed(ctx, summary):
-    _index(ctx, "run_completed", fingerprint=summary["package_fingerprint"],
-           extra={"new_head": summary["new_head"], "untracked_diff_count": summary["untracked_diff_count"]})
+def _index_run_completed(ctx, summary, books):
+    """run_completed 寫在 `_books` 已打開並核對過的 index fd 上(同一個 fd,不另開);寫前重讀鎖。"""
+    _require_own_lock(ctx)
+    done = [CHECKPOINT_NAME] if _checkpoint_rel(ctx) in books else []
+    _put(books[INDEX_NAME],
+         _index_rec(ctx, "run_completed", None, summary["package_fingerprint"],
+                    {"new_head": summary["new_head"], "untracked_diff_count": summary["untracked_diff_count"]}),
+         done, [])
 
 
 def post_reattach(root, run_id):
@@ -1307,10 +1911,13 @@ def post_reattach(root, run_id):
         rroot, length = ctx["root"], ctx["ident"]["id_length"]
         head = _head(rroot, length)
         if head != info["s6_head"]:
-            raise Stop(EXIT_MISMATCH, u"HEAD 已不是 S6' 記錄的 HEAD;不核對、不寫入")
+            _stop_with_record(ctx, "S7'", u"接回後核對", [{"item": "head", "snapshot": info["s6_head"], "live": head}])
         if "S8" in info["steps"] and info["final_recorded"]:
             _out(u"流程已完成:執行 %s、證據包指紋 %s、新 HEAD %s;不重寫\n" % (run_id, info["fp"], head))
             return EXIT_OK
+        if info["s8"] is not None and info["s8"].get("new_head") != head:
+            _stop_with_record(ctx, "S8", u"收尾補寫前核對",
+                              [{"item": "s8_head", "snapshot": info["s8"].get("new_head"), "live": head}])
         snap = _load(ctx["run_dir"], "snapshot.json")
         cand_sha = (info["by_step"]["S2"].get("fingerprints") or {}).get("candidate-inventory.json")
         mismatches = _reattach_mismatches(rroot, snap, cand_sha)
@@ -1323,12 +1930,16 @@ def post_reattach(root, run_id):
                   "note": UNTRACKED_NOTE}
         if "S7'" not in info["steps"]:
             _event(ctx, "S7'", RESULT_COMPLETED, None, _fps(info), detail)
-        summary = {"run_id": run_id, "package_fingerprint": info["fp"], "new_head": head,
-                   "untracked_diff_count": len(added) + len(removed)}
-        if "S8" not in info["steps"]:
-            _write_s8(ctx, summary)
-        if not info["final_recorded"]:
-            _index_run_completed(ctx, summary)
+        # 收尾:要寫的幾本先一起通過 W1,才寫第一本;之後就寫在同一批 fd 上(不另開核對)。
+        # 已有 S8 只補 run_completed,內容取自 S8(裁定 B1 的唯一例外)。
+        ctx["step"] = "S8"
+        summary = info["s8"] or {"run_id": run_id, "package_fingerprint": info["fp"], "new_head": head,
+                                 "untracked_diff_count": len(added) + len(removed)}
+        rels = ([] if "S8" in info["steps"] else [_checkpoint_rel(ctx)]) + [INDEX_NAME]
+        with _books(ctx, rels) as books:
+            if "S8" not in info["steps"]:
+                _write_s8(ctx, summary, books)
+            _index_run_completed(ctx, summary, books)
         lines = [u"接回後核對通過。"]
         for p in added:
             lines.append(u"未追蹤檔新增:%s(內容未驗證)" % p)
@@ -1337,7 +1948,7 @@ def post_reattach(root, run_id):
         lines.append(u"流程已完成:執行 %s、證據包指紋 %s、新 HEAD %s" % (run_id, info["fp"], head))
         _out(u"\n".join(lines) + u"\n")
         return EXIT_OK
-    return _locked(root, run_id, body)
+    return _locked(root, run_id, body, "S7'")
 
 
 # ── resume(完全唯讀,不取鎖)────────────────────────────────────────────────
@@ -1366,11 +1977,12 @@ def _resume_s6(root, snap, info, length):
 
 
 def resume(root, run_id):
-    root, ident, evid = _open_run(root, run_id)
+    site, ident, evid = _open_run(root, run_id)
+    root = site["root"]
     if os.path.lexists(os.path.join(evid, LOCK_NAME)):
         raise Stop(EXIT_MISMATCH, _LOCK_HELD)
-    scan_evidence(evid, holding_lock=False)
-    info = verify_run(evid, run_id)
+    scan_evidence(site, holding_lock=False)
+    info = verify_run(site, run_id)
     last = info["last"]
     if last is None:
         raise Stop(EXIT_MISMATCH, u"執行 %s 沒有任何完成步驟;請重新 collect" % run_id)

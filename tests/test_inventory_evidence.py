@@ -1322,6 +1322,27 @@ def test_ie_P1_record_approval_writes_full_approval(fx):
     assert not (fx.evid / ".lock").exists()
 
 
+def assert_one_stop_recorded(fx, run, before):
+    """修正站裁定 A1:停下後原件與 approval.json 位元組不變;checkpoint.jsonl 與 index.jsonl 各新增恰好一筆
+    stopped(執行代號、步驟、事件種類、reason 相同,先 checkpoint 後 index);證據目錄沒有其他新增或改動。"""
+    after = tree_bytes(fx.evid)
+    cp_key = run + "/checkpoint.jsonl"
+    assert sorted(after) == sorted(before)
+    for key in before:
+        if key not in (cp_key, "index.jsonl"):
+            assert after[key] == before[key], key
+    new = []
+    for key in (cp_key, "index.jsonl"):
+        assert after[key].startswith(before[key]), key
+        added = after[key][len(before[key]):].split(b"\n")
+        assert len(added) == 2 and added[1] == b"", key
+        new.append(json.loads(added[0].decode("utf-8")))
+    cp, ix = new
+    assert cp["result"] == "stopped" and cp["run_id"] == run
+    assert (cp["run_id"], cp["step"], cp["result"], cp["reason"]) == (ix["run_id"], ix["step"], ix["event"], ix["reason"])
+    assert cp["time"] < ix["time"]
+
+
 @pytest.mark.parametrize("variant", ["short", "upper", "space", "other"])
 def test_ie_P2_fingerprint_must_match_exactly(fx, variant):
     run = fx.complete()
@@ -1330,7 +1351,7 @@ def test_ie_P2_fingerprint_must_match_exactly(fx, variant):
     before = tree_bytes(fx.evid)
     code, out, err = approve(fx, run, given)
     assert code == ie.EXIT_MISMATCH
-    assert tree_bytes(fx.evid) == before
+    assert_one_stop_recorded(fx, run, before)
 
 
 def test_ie_P3_requires_completed_s3(fx, monkeypatch):
@@ -1340,7 +1361,7 @@ def test_ie_P3_requires_completed_s3(fx, monkeypatch):
     before = tree_bytes(fx.evid)
     code, out, err = approve(fx, run, "0" * 64)
     assert code == ie.EXIT_MISMATCH
-    assert tree_bytes(fx.evid) == before
+    assert_one_stop_recorded(fx, run, before)
 
 
 def test_ie_P4_second_approval_refused_and_original_kept(fx):
@@ -1349,7 +1370,7 @@ def test_ie_P4_second_approval_refused_and_original_kept(fx):
     before = tree_bytes(fx.evid)
     code, out, err = approve(fx, run)
     assert code == ie.EXIT_MISMATCH
-    assert tree_bytes(fx.evid) == before
+    assert_one_stop_recorded(fx, run, before)
 
 
 def test_ie_P5_approved_at_requires_timezone(fx):
@@ -1357,6 +1378,7 @@ def test_ie_P5_approved_at_requires_timezone(fx):
     before = tree_bytes(fx.evid)
     code, out, err = approve(fx, run, approved_at="2026-10-29T12:00:00")
     assert code == ie.EXIT_PRECONDITION
+    assert "時區" in err
     assert tree_bytes(fx.evid) == before
 
 
@@ -1464,7 +1486,834 @@ def test_ie_Q5_untrusted_evidence_stops_without_writing(fx, kind):
     before = tree_bytes(fx.evid)
     code, out, err = pre_register(fx, run)
     assert code == ie.EXIT_MISMATCH
+    if kind == "no_approval":
+        assert_one_stop_recorded(fx, run, before)
+    else:
+        assert tree_bytes(fx.evid) == before
+
+
+# ══ 修正站一(Y 區):安全追加寫入、失配紀錄前提、鎖釋放(站三 F-1～F-7)═══════════════
+
+WRITERS = ["collect", "record-approval", "pre-register", "post-register", "post-reattach"]
+OTHER_LOCK = b'{"pid": 1, "run_id": "someone-else"}\n'
+WINDOWS_ONLY = pytest.mark.skipif(
+    os.name != "nt", reason="junction 與目錄 handle 釘住只在 Windows 上可用;POSIX 由 dir_fd 題涵蓋(framework-updates/165)")
+POSIX_DIRFD = pytest.mark.skipif(
+    not (hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY") and os.open in os.supports_dir_fd),
+    reason="平台沒有 dir_fd + O_NOFOLLOW + O_DIRECTORY;Windows 由 junction 與釘住題涵蓋(framework-updates/165)")
+
+
+def run_any(fx, sub, run):
+    if sub == "collect":
+        return fx.collect()
+    if sub == "resume":
+        return fx.resume(run)
+    if sub == "record-approval":
+        return approve(fx, run, "0" * 64)
+    return run_cmd(fx, sub, "--run", run, claude=(sub != "post-reattach"))
+
+
+def site_of(fx):
+    return ie._site(str(fx.repo))
+
+
+def without_lock(tree):
+    return dict((k, v) for k, v in tree.items() if k != ".lock")
+
+
+def stop_marks(fx, run):
+    cp = [e for e in fx.events(run) if e["result"] in ("stopped", "approval_void")]
+    ix = [r for r in fx.index() if r["run_id"] == run and r["event"] in ("stopped", "approval_void")]
+    return cp, ix
+
+
+def work_tree(fx):
+    return dict((k, v) for k, v in tree_bytes(fx.repo).items() if not k.startswith(".dev/"))
+
+
+def move_head(fx):
+    """只把 HEAD 移到一個新的空 commit;index 與工作區不動。"""
+    new = git_out(fx.repo, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "moved")
+    git(fx.repo, "update-ref", "HEAD", new)
+    return new
+
+
+def unstable(fx, monkeypatch):
+    monkeypatch.setattr(ie, "_sleep", lambda seconds: (fx.bucket / "a.txt").write_bytes(b"drifted\n"))
+
+
+def fake_site(tmp, index=b'{"a": 1}\n'):
+    """不需要 git 的最小證據目錄:直接測 W1 的開檔函式。"""
+    base = tmp / "site"
+    evid = base / ".dev" / "inventory-evidence"
+    evid.mkdir(parents=True)
+    if index is not None:
+        (evid / "index.jsonl").write_bytes(index)
+    return ie._site(str(base)), evid
+
+
+def _symlink_file_or_skip(tmp):
+    target, link = tmp / "probe-target", tmp / "probe-link"
+    target.write_bytes(b"")
+    try:
+        os.symlink(str(target), str(link))
+    except (OSError, NotImplementedError, AttributeError) as e:
+        pytest.skip("平台不允許建立檔案 symlink(%s);硬連結題與 junction 題涵蓋(framework-updates/165)" % type(e).__name__)
+
+
+def _hardlink_or_skip(src, dst):
+    try:
+        os.link(str(src), str(dst))
+    except (OSError, NotImplementedError, AttributeError) as e:
+        pytest.skip("平台不允許建立硬連結(%s)(framework-updates/165)" % type(e).__name__)
+
+
+def _jsonl_path(fx, run, target):
+    return fx.evid / "index.jsonl" if target == "index" else fx.evid / run / "checkpoint.jsonl"
+
+
+def _junction(target, link):
+    import _winapi
+    _winapi.CreateJunction(str(target), str(link))
+
+
+def _dir_symlink(target, link):
+    os.symlink(str(target), str(link), target_is_directory=True)
+
+
+def _swap_after_precheck(monkeypatch, evid, outside, moved, link):
+    """替身包住開檔前檢查:它回傳之後,才把證據根目錄換成指向外部目錄的連結。"""
+    real = ie._jsonl_precheck
+    state = {"swapped": False}
+
+    def swap(site, rel):
+        st = real(site, rel)
+        if not state["swapped"]:
+            state["swapped"] = True
+            os.rename(str(evid), str(moved))
+            link(outside, evid)
+        return st
+    monkeypatch.setattr(ie, "_jsonl_precheck", swap)
+    return state
+
+
+# ── Y1 F-1:post-reattach 遇到 HEAD 已不是 S6' 記錄 ⇒ 記錄並停 ────────────────────
+
+def test_ie_Y1_post_reattach_head_moved_records_stop(fx):
+    run = to_s6(fx)
+    reattach(fx, run)
+    s6_head = git_out(fx.repo, "rev-parse", "HEAD")
+    moved = move_head(fx)
+    index = (fx.repo / ".git" / "index").read_bytes()
+    work = work_tree(fx)
+    kept = dict((k, v) for k, v in tree_bytes(fx.evid / run).items() if k != "checkpoint.jsonl")
+    code, out, err = post_reattach(fx, run)
+    assert code == ie.EXIT_MISMATCH, err
+    last = fx.events(run)[-1]
+    assert (last["step"], last["result"]) == ("S7'", "stopped")
+    assert last["detail"]["mismatches"] == [{"item": "head", "snapshot": s6_head, "live": moved}]
+    ix = fx.index()[-1]
+    assert (ix["event"], ix["step"], ix["reason"]) == ("stopped", "S7'", last["reason"])
+    assert git_out(fx.repo, "rev-parse", "HEAD") == moved
+    assert (fx.repo / ".git" / "index").read_bytes() == index
+    assert work_tree(fx) == work
+    assert dict((k, v) for k, v in tree_bytes(fx.evid / run).items() if k != "checkpoint.jsonl") == kept
+    assert not (fx.evid / ".lock").exists()
+
+
+# ── Y2 F-2:受保護開檔(W1)────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("target", ["index", "checkpoint"])
+@pytest.mark.parametrize("sub", WRITERS + ["resume"])
+def test_ie_Y2_symlinked_jsonl_stops(fx, sub, target):
+    _symlink_file_or_skip(fx.tmp)
+    run = fx.complete()
+    path = _jsonl_path(fx, run, target)
+    outside = fx.tmp / "outside.jsonl"
+    outside.write_bytes(path.read_bytes())
+    path.unlink()
+    os.symlink(str(outside), str(path))
+    data = outside.read_bytes()
+    before = tree_bytes(fx.evid)
+    code, out, err = run_any(fx, sub, run)
+    assert code == ie.EXIT_PRECONDITION, err
+    assert "(d)" in err
+    assert outside.read_bytes() == data
     assert tree_bytes(fx.evid) == before
+
+
+@pytest.mark.parametrize("target", ["index", "checkpoint"])
+@pytest.mark.parametrize("sub", WRITERS + ["resume"])
+def test_ie_Y2_hardlinked_jsonl_stops(fx, sub, target):
+    run = fx.complete()
+    path = _jsonl_path(fx, run, target)
+    outside = fx.tmp / "outside.jsonl"
+    _hardlink_or_skip(path, outside)
+    data = outside.read_bytes()
+    before = tree_bytes(fx.evid)
+    code, out, err = run_any(fx, sub, run)
+    assert code == ie.EXIT_PRECONDITION, err
+    assert "(d)" in err
+    assert outside.read_bytes() == data
+    assert tree_bytes(fx.evid) == before
+
+
+@WINDOWS_ONLY
+def test_ie_Y2_evidence_dir_swapped_after_precheck_resume_stops(fx, monkeypatch):
+    import shutil
+    run = fx.complete()
+    outside, moved = fx.tmp / "outside", fx.tmp / "moved"
+    shutil.copytree(str(fx.evid), str(outside))
+    out_before = tree_bytes(outside)
+    state = _swap_after_precheck(monkeypatch, fx.evid, outside, moved, _junction)
+    code, out, err = fx.resume(run)
+    assert state["swapped"]
+    assert code == ie.EXIT_PRECONDITION, err
+    assert "(d)" in err
+    assert tree_bytes(outside) == out_before
+
+
+@WINDOWS_ONLY
+@pytest.mark.parametrize("mode", ["read", "append"])
+def test_ie_Y2_parent_swapped_after_precheck_existing_stops(tmp_path, monkeypatch, mode):
+    site, evid = fake_site(tmp_path)
+    outside, moved = tmp_path / "outside", tmp_path / "moved"
+    outside.mkdir()
+    (outside / "index.jsonl").write_bytes(b'{"outside": 1}\n')
+    state = _swap_after_precheck(monkeypatch, evid, outside, moved, _junction)
+    with pytest.raises(ie.Stop) as e:
+        if mode == "read":
+            ie._read_jsonl(site, "index.jsonl", "index.jsonl")
+        else:
+            ie._append_records(site, [("index.jsonl", {"x": 1})])
+    assert state["swapped"]
+    assert e.value.code == ie.EXIT_PRECONDITION and "(d)" in e.value.reason
+    assert (outside / "index.jsonl").read_bytes() == b'{"outside": 1}\n'
+    assert (moved / "index.jsonl").read_bytes() == b'{"a": 1}\n'
+
+
+@WINDOWS_ONLY
+def test_ie_Y2_create_swap_before_pin_refused(tmp_path, monkeypatch):
+    site, evid = fake_site(tmp_path, index=None)
+    outside, moved = tmp_path / "outside", tmp_path / "moved"
+    outside.mkdir()
+    state = _swap_after_precheck(monkeypatch, evid, outside, moved, _junction)
+    with pytest.raises(ie.Stop) as e:
+        ie._append_records(site, [("index.jsonl", {"x": 1})])
+    assert state["swapped"]
+    assert e.value.code == ie.EXIT_PRECONDITION and "(d)" in e.value.reason
+    assert os.listdir(str(outside)) == []
+    assert os.listdir(str(moved)) == []
+
+
+@WINDOWS_ONLY
+def test_ie_Y2_create_with_pinned_parents_cannot_be_swapped(tmp_path, monkeypatch):
+    site, evid = fake_site(tmp_path, index=None)
+    outside, moved = tmp_path / "outside", tmp_path / "moved"
+    outside.mkdir()
+    real = ie._pin_dirs
+    seen = []
+
+    def pin_then_try_swap(site_, rel):
+        pins = real(site_, rel)
+        try:
+            os.rename(str(evid), str(moved))
+            seen.append("renamed")
+        except PermissionError:
+            seen.append("rename_refused")
+        seen.append(len(pins))
+        return pins
+    monkeypatch.setattr(ie, "_pin_dirs", pin_then_try_swap)
+    ie._append_records(site, [("index.jsonl", {"x": 1})])
+    assert seen == ["rename_refused", 2]
+    assert (evid / "index.jsonl").read_bytes() == b'{"x": 1}\n'
+    assert os.listdir(str(outside)) == []
+    assert not moved.exists()
+
+
+@POSIX_DIRFD
+@pytest.mark.parametrize("mode", ["read", "append", "create"])
+def test_ie_Y2_posix_parent_swapped_after_precheck_stops(tmp_path, monkeypatch, mode):
+    site, evid = fake_site(tmp_path, index=None if mode == "create" else b'{"a": 1}\n')
+    outside, moved = tmp_path / "outside", tmp_path / "moved"
+    outside.mkdir()
+    if mode != "create":
+        (outside / "index.jsonl").write_bytes(b'{"outside": 1}\n')
+    state = _swap_after_precheck(monkeypatch, evid, outside, moved, _dir_symlink)
+    with pytest.raises(ie.Stop) as e:
+        if mode == "read":
+            ie._read_jsonl(site, "index.jsonl", "index.jsonl")
+        else:
+            ie._append_records(site, [("index.jsonl", {"x": 1})])
+    assert state["swapped"]
+    assert e.value.code == ie.EXIT_PRECONDITION
+    if mode == "create":
+        assert os.listdir(str(outside)) == []
+    else:
+        assert (outside / "index.jsonl").read_bytes() == b'{"outside": 1}\n'
+
+
+def test_ie_Y2_cannot_pin_parents_refuses_create(tmp_path, monkeypatch):
+    site, evid = fake_site(tmp_path, index=None)
+    monkeypatch.setattr(ie, "_w1_method", lambda: "finalpath")
+    monkeypatch.setattr(ie, "_win32", lambda: None)
+    with pytest.raises(ie.Stop) as e:
+        ie._append_records(site, [("index.jsonl", {"x": 1})])
+    assert e.value.code == ie.EXIT_PRECONDITION
+    assert os.listdir(str(evid)) == []
+
+
+@pytest.mark.parametrize("mode", ["read", "append"])
+def test_ie_Y2_target_replaced_after_check_stops(tmp_path, monkeypatch, mode):
+    from types import SimpleNamespace
+    site, evid = fake_site(tmp_path)
+    real = ie._fstat
+
+    def other_identity(fd):
+        st = real(fd)
+        return SimpleNamespace(st_mode=st.st_mode, st_nlink=st.st_nlink, st_dev=st.st_dev, st_ino=st.st_ino + 1)
+    monkeypatch.setattr(ie, "_fstat", other_identity)
+    with pytest.raises(ie.Stop) as e:
+        if mode == "read":
+            ie._read_jsonl(site, "index.jsonl", "index.jsonl")
+        else:
+            ie._append_records(site, [("index.jsonl", {"x": 1})])
+    assert e.value.code == ie.EXIT_PRECONDITION and "(d)" in e.value.reason
+    assert (evid / "index.jsonl").read_bytes() == b'{"a": 1}\n'
+
+
+@pytest.mark.parametrize("mode", ["read", "append"])
+def test_ie_Y2_reparse_attribute_stops(tmp_path, monkeypatch, mode):
+    from types import SimpleNamespace
+    site, evid = fake_site(tmp_path)
+    real = ie._lstat
+
+    def reparse(path):
+        st = real(path)
+        if str(path).endswith("index.jsonl"):
+            return SimpleNamespace(st_mode=st.st_mode, st_nlink=st.st_nlink, st_dev=st.st_dev, st_ino=st.st_ino,
+                                   st_file_attributes=0x400)
+        return st
+    monkeypatch.setattr(ie, "_lstat", reparse)
+    with pytest.raises(ie.Stop) as e:
+        if mode == "read":
+            ie._read_jsonl(site, "index.jsonl", "index.jsonl")
+        else:
+            ie._append_records(site, [("index.jsonl", {"x": 1})])
+    assert e.value.code == ie.EXIT_PRECONDITION and "(d)" in e.value.reason
+    assert (evid / "index.jsonl").read_bytes() == b'{"a": 1}\n'
+
+
+@pytest.mark.parametrize("sub", ["collect", "record-approval", "resume"])
+def test_ie_Y2_no_safe_open_method_refuses(fx, monkeypatch, sub):
+    run = fx.complete()
+    monkeypatch.setattr(ie, "_w1_method", lambda: None)
+    before = tree_bytes(fx.evid)
+    code, out, err = run_any(fx, sub, run)
+    assert code == ie.EXIT_PRECONDITION, err
+    assert "平台無法保證" in err
+    assert tree_bytes(fx.evid) == before
+
+
+def test_ie_Y2_bad_tail_checked_on_same_fd(tmp_path, monkeypatch):
+    import io
+    site, evid = fake_site(tmp_path, index=b'{"a": 1}\n{"b": 2}')
+    opened = []
+    real_open_fd = ie._open_fd
+
+    def spy_open_fd(path, flags, dir_fd=None):
+        opened.append(str(path))
+        return real_open_fd(path, flags, dir_fd=dir_fd)
+    real_io_open = io.open
+    path_opened = []
+
+    def spy_io_open(file, *args, **kwargs):
+        path_opened.append(str(file))
+        return real_io_open(file, *args, **kwargs)
+    monkeypatch.setattr(ie, "_open_fd", spy_open_fd)
+    monkeypatch.setattr(ie.io, "open", spy_io_open)
+    with pytest.raises(ie.Stop) as e:
+        ie._append_records(site, [("index.jsonl", {"x": 1})])
+    monkeypatch.setattr(ie.io, "open", real_io_open)     # 之後是測試自己讀檔,不屬工具的開檔
+    assert not [p for p in path_opened if p.endswith(".jsonl")]
+    assert e.value.code == ie.EXIT_MISMATCH and "最後一行不完整" in e.value.reason
+    assert (evid / "index.jsonl").read_bytes() == b'{"a": 1}\n{"b": 2}'
+    assert len([p for p in opened if p.endswith("index.jsonl")]) == 1
+
+
+# ── Y3 W2:紀錄前提與寫入失敗 ─────────────────────────────────────────────────
+
+@pytest.mark.parametrize("kind", ["lock", "hardlink", "tail"])
+def test_ie_Y3_record_refused_before_write(fx, monkeypatch, kind):
+    run = fx.complete()
+    real = ie.verify_run
+    snap = {}
+
+    def sabotage(site, run_id):
+        info = real(site, run_id)
+        if kind == "lock":
+            (fx.evid / ".lock").write_bytes(OTHER_LOCK)
+        elif kind == "hardlink":
+            _hardlink_or_skip(fx.evid / "index.jsonl", fx.tmp / "outside.jsonl")
+        else:
+            with open(str(fx.evid / "index.jsonl"), "ab") as fh:
+                fh.write(b"{")
+        snap["tree"] = tree_bytes(fx.evid)
+        return info
+    monkeypatch.setattr(ie, "verify_run", sabotage)
+    code, out, err = approve(fx, run, "0" * 64)
+    assert code == ie.EXIT_INTERNAL, err
+    assert "失配未記錄" in err
+    assert without_lock(tree_bytes(fx.evid)) == without_lock(snap["tree"])
+    if kind == "lock":
+        assert (fx.evid / ".lock").read_bytes() == OTHER_LOCK
+
+
+def test_ie_Y3_half_line_kept_and_detected(fx, monkeypatch):
+    run = fx.complete()
+    real_write, orig = os.write, ie._os_write
+    monkeypatch.setattr(ie, "_os_write", lambda fd, data: real_write(fd, data[:len(data) // 2]))
+    code, out, err = approve(fx, run, "0" * 64)
+    monkeypatch.setattr(ie, "_os_write", orig)
+    assert code == ie.EXIT_INTERNAL, err
+    assert "寫入途中失敗" in err
+    assert not (fx.evid / run / "checkpoint.jsonl").read_bytes().endswith(b"\n")
+    before = without_lock(tree_bytes(fx.evid))
+    for call in (lambda: fx.resume(run), lambda: approve(fx, run), fx.collect):
+        code, out, err = call()
+        assert code == ie.EXIT_MISMATCH, err
+        assert "不完整" in err
+        assert without_lock(tree_bytes(fx.evid)) == before
+
+
+def test_ie_Y3_checkpoint_written_index_failed_is_inconsistent(fx, monkeypatch):
+    run = fx.complete()
+    real_write, orig = os.write, ie._os_write
+    calls = []
+
+    def second_fails(fd, data):
+        calls.append(len(data))
+        if len(calls) == 2:
+            raise OSError("simulated")
+        return real_write(fd, data)
+    monkeypatch.setattr(ie, "_os_write", second_fails)
+    code, out, err = approve(fx, run, "0" * 64)
+    monkeypatch.setattr(ie, "_os_write", orig)
+    assert code == ie.EXIT_INTERNAL, err
+    assert "寫入途中失敗" in err
+    cp, ix = stop_marks(fx, run)
+    assert len(cp) == 1 and ix == []
+    before = tree_bytes(fx.evid)
+    for call in (lambda: fx.resume(run), lambda: approve(fx, run)):
+        code, out, err = call()
+        assert code == ie.EXIT_MISMATCH, err
+        assert "紀錄不一致" in err
+        assert tree_bytes(fx.evid) == before
+    with pytest.raises(ie.Stop) as e:
+        ie.verify_run(site_of(fx), run)
+    assert e.value.code == ie.EXIT_MISMATCH and "紀錄不一致" in e.value.reason
+
+
+def test_ie_Y3_index_without_checkpoint_is_inconsistent(fx):
+    run = fx.complete()
+    assert approve(fx, run, "0" * 64)[0] == ie.EXIT_MISMATCH
+    cp = fx.evid / run / "checkpoint.jsonl"
+    lines = read_lines(cp)
+    assert json.loads(lines[-1])["result"] == "stopped"
+    write_lines(cp, lines[:-1])
+    before = tree_bytes(fx.evid)
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_MISMATCH
+    assert "紀錄不一致" in err
+    assert tree_bytes(fx.evid) == before
+
+
+# ── Y4 F-3:名冊工作區位置變成目錄 ⇒ 失配,記錄並停 ──────────────────────────────
+
+def test_ie_Y4_inventory_path_became_directory_records_stop(fx):
+    run = to_s6(fx)
+    reattach(fx, run)
+    inv = fx.repo / INVENTORY_REL
+    inv.unlink()
+    inv.mkdir()
+    head = git_out(fx.repo, "rev-parse", "HEAD")
+    index = (fx.repo / ".git" / "index").read_bytes()
+    work = work_tree(fx)
+    code, out, err = post_reattach(fx, run)
+    assert code == ie.EXIT_MISMATCH, err
+    last = fx.events(run)[-1]
+    assert (last["step"], last["result"]) == ("S7'", "stopped")
+    assert "inventory_worktree" in [m["item"] for m in last["detail"]["mismatches"]]
+    ix = fx.index()[-1]
+    assert (ix["event"], ix["step"], ix["reason"]) == ("stopped", "S7'", last["reason"])
+    assert git_out(fx.repo, "rev-parse", "HEAD") == head
+    assert (fx.repo / ".git" / "index").read_bytes() == index
+    assert work_tree(fx) == work
+    assert inv.is_dir()
+
+
+# ── Y5 F-4:帶時區的對照題 ─────────────────────────────────────────────────────
+
+def test_ie_Y5_approved_at_with_timezone_passes_argument_check(fx, monkeypatch):
+    unstable(fx, monkeypatch)
+    assert fx.collect()[0] == ie.EXIT_MISMATCH
+    [run] = fx.runs()
+    code, out, err = approve(fx, run, "0" * 64, approved_at="2026-10-29T12:00:00-04:00")
+    assert code == ie.EXIT_MISMATCH, err
+    assert "S3 尚未完成" in err
+    assert "時區" not in err
+
+
+# ── Y6 F-5:經 _locked 的停下各記一筆 ──────────────────────────────────────────
+
+def test_ie_Y6_order_error_records_exactly_one_stop_pair(fx):
+    run = fx.complete()
+    assert approve(fx, run)[0] == ie.EXIT_OK
+    before = tree_bytes(fx.evid)
+    code, out, err = post_register(fx, run)
+    assert code == ie.EXIT_MISMATCH
+    assert "S5 尚未完成" in err
+    assert_one_stop_recorded(fx, run, before)
+    ie.verify_run(site_of(fx), run)
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_OK, err
+    assert "停下" in out and "S5 尚未完成" in out and "pre-register" in out
+
+
+def test_ie_Y6_retry_after_recorded_stop_succeeds(fx):
+    run = fx.complete()
+    assert approve(fx, run, "0" * 64)[0] == ie.EXIT_MISMATCH
+    code, out, err = approve(fx, run)
+    assert code == ie.EXIT_OK, err
+    assert steps_of(fx, run)[-1] == "S4"
+    ie.verify_run(site_of(fx), run)
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_OK, err
+    assert "pre-register" in out
+
+
+@pytest.mark.parametrize("kind", ["artifact_missing", "tail_incomplete", "order_conflict"])
+def test_ie_Y6_incomplete_run_with_bad_evidence_not_recorded(fx, monkeypatch, kind):
+    unstable(fx, monkeypatch)
+    assert fx.collect()[0] == ie.EXIT_MISMATCH
+    [run] = fx.runs()
+    rd = fx.evid / run
+    cp = rd / "checkpoint.jsonl"
+    if kind == "artifact_missing":
+        (rd / "snapshot.json").unlink()
+    elif kind == "tail_incomplete":
+        with open(str(cp), "ab") as fh:
+            fh.write(b'{"step"')
+    else:
+        lines = read_lines(cp)
+        write_lines(cp, [lines[0]] + lines)
+    before = tree_bytes(fx.evid)
+    code, out, err = approve(fx, run, "0" * 64)
+    assert code == ie.EXIT_MISMATCH, err
+    assert tree_bytes(fx.evid) == before
+
+
+def test_ie_Y6_recorded_mismatch_not_recorded_twice(fx):
+    run = to_s5(fx)
+    _g_change(fx, run, "work")
+    assert post_register(fx, run)[0] == ie.EXIT_MISMATCH
+    cp, ix = stop_marks(fx, run)
+    assert [(e["step"], e["result"]) for e in cp] == [("S6'", "stopped")]
+    assert [(r["step"], r["event"]) for r in ix] == [("S6'", "stopped")]
+
+
+def test_ie_Y6_void_not_recorded_twice(fx):
+    run = fx.complete()
+    assert approve(fx, run)[0] == ie.EXIT_OK
+    (fx.repo / "tracked.txt").write_bytes(b"changed\n")
+    assert pre_register(fx, run)[0] == ie.EXIT_MISMATCH
+    cp, ix = stop_marks(fx, run)
+    assert [(e["step"], e["result"]) for e in cp] == [("S5", "approval_void")]
+    assert [(r["step"], r["event"]) for r in ix] == [("S5", "approval_void")]
+
+
+def test_ie_Y6_untrusted_evidence_writes_nothing(fx):
+    run = fx.complete()
+    rd = fx.evid / run
+    (rd / "diff.json").write_bytes((rd / "diff.json").read_bytes() + b" ")
+    before = tree_bytes(fx.evid)
+    code, out, err = approve(fx, run, "0" * 64)
+    assert code == ie.EXIT_MISMATCH
+    assert tree_bytes(fx.evid) == before
+
+
+# ── Y7 F-6:證據目錄本身是 junction ───────────────────────────────────────────
+
+@pytest.mark.skipif(os.name != "nt", reason="junction 只在 Windows 建得出來;其他平台由 symlink 題涵蓋(framework-updates/165)")
+@pytest.mark.parametrize("sub", WRITERS + ["resume"])
+def test_ie_Y7_junction_evidence_dir_stops(fx, sub):
+    run = fx.complete()
+    outside = fx.tmp / "outside"
+    os.rename(str(fx.evid), str(outside))
+    _junction(outside, fx.evid)
+    before = tree_bytes(outside)
+    code, out, err = run_any(fx, sub, run)
+    assert code == ie.EXIT_PRECONDITION, err
+    assert "(d)" in err
+    assert tree_bytes(outside) == before
+
+
+# ── Y8 F-7:鎖釋放失敗不回成功 ─────────────────────────────────────────────────
+
+@pytest.mark.parametrize("path", ["collect", "locked"])
+@pytest.mark.parametrize("fail", [False, True])
+def test_ie_Y8_lock_release_failure_never_reports_success(fx, monkeypatch, path, fail):
+    if path == "collect":
+        if fail:
+            unstable(fx, monkeypatch)
+        monkeypatch.setattr(ie, "_release_lock", lambda lock_path, content: False)
+        code, out, err = fx.collect()
+    else:
+        run = fx.complete()
+        monkeypatch.setattr(ie, "_release_lock", lambda lock_path, content: False)
+        code, out, err = approve(fx, run, "0" * 64 if fail else None)
+    assert code == (ie.EXIT_MISMATCH if fail else ie.EXIT_INTERNAL), err
+    assert "鎖釋放失敗" in err
+
+
+# ── Y9 結構:JSONL 只經 W1 的受保護開檔 ─────────────────────────────────────────
+
+def test_ie_Y9_jsonl_only_through_protected_open():
+    import ast
+    tree = ast.parse(MODULE_PATH.read_bytes().decode("utf-8"))
+    funcs = dict((n.name, n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
+
+    def calls(fn):
+        out = []
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Call):
+                f = n.func
+                if isinstance(f, ast.Name):
+                    out.append((f.id, n))
+                elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
+                    out.append((f.value.id + "." + f.attr, n))
+        return out
+
+    def called(fn):
+        return set(name for name, _n in calls(fn))
+
+    def names(node):
+        return set(n.id for n in ast.walk(node) if isinstance(n, ast.Name))
+
+    jsonl = {"CHECKPOINT_NAME", "INDEX_NAME"}
+    jsonl_funcs = [name for name, fn in funcs.items() if names(fn) & jsonl]
+    assert jsonl_funcs
+    for name in jsonl_funcs:
+        assert not called(funcs[name]) & {"open", "io.open", "os.open", "os.fdopen", "_open_fd"}, name
+    for name, fn in funcs.items():
+        for callee, node in calls(fn):
+            if callee in ("_file_sha", "_load", "io.open", "open", "os.open"):
+                assert not any(names(a) & jsonl for a in node.args), (name, callee)
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Constant) and isinstance(n.value, str):
+                assert not re.fullmatch(r"[\w./-]*\.jsonl", n.value), (name, n.value)
+    assert "_jsonl_open" in called(funcs["_read_jsonl"])
+    assert "_jsonl_open" in called(funcs["_open_for_append"])
+    assert "_open_for_append" in called(funcs["_append_records"])
+
+    def owners(callee):
+        return sorted(name for name, fn in funcs.items() if callee in called(fn))
+    assert owners("_open_fd") == ["_jsonl_open", "_open_dirfd"]
+    assert owners("os.open") == ["_acquire_lock", "_open_fd", "_write_artifact"]
+    assert owners("io.open") == sorted(["_file_sha", "_load", "_release_lock", "_require_own_lock",
+                                        "_worktree_state", "pre_register"])
+    appends = sorted(name for name, fn in funcs.items()
+                     if any(isinstance(n, ast.Attribute) and n.attr == "O_APPEND" for n in ast.walk(fn)))
+    assert appends == ["_jsonl_open"]
+
+
+# ── Y10 收尾補寫(裁定 B1 例外)────────────────────────────────────────────────
+
+@pytest.mark.parametrize("target", ["_write_s8", "_index_run_completed"])
+@pytest.mark.parametrize("change", ["head", "reattach", "lock"])
+def test_ie_Y10_closing_requires_all_checks(fx, monkeypatch, target, change):
+    run = _closing_interrupted(fx, monkeypatch, target)
+    s8_before = steps_of(fx, run).count("S8")
+    before = None
+    if change == "head":
+        move_head(fx)
+    elif change == "reattach":
+        (fx.repo / "tracked.txt").write_bytes(b"five\n")
+    else:
+        real = ie._reattach_mismatches
+
+        def steal(*args):
+            (fx.evid / ".lock").write_bytes(OTHER_LOCK)
+            return real(*args)
+        monkeypatch.setattr(ie, "_reattach_mismatches", steal)
+        before = without_lock(tree_bytes(fx.evid))
+    code, out, err = post_reattach(fx, run)
+    assert code == (ie.EXIT_INTERNAL if change == "lock" else ie.EXIT_MISMATCH), err
+    assert steps_of(fx, run).count("S8") == s8_before
+    assert [r["event"] for r in fx.index()].count("run_completed") == 0
+    if change == "lock":
+        assert "失配未記錄" in err
+        assert without_lock(tree_bytes(fx.evid)) == before
+
+
+@pytest.mark.parametrize("target", ["_write_s8", "_index_run_completed"])
+def test_ie_Y10_closing_completed_then_rerun_writes_nothing(fx, monkeypatch, target):
+    run = _closing_interrupted(fx, monkeypatch, target)
+    code, out, err = post_reattach(fx, run)
+    assert code == ie.EXIT_OK, err
+    [s8] = [e for e in fx.events(run) if e["step"] == "S8" and e["result"] == "completed"]
+    [final] = [r for r in fx.index() if r["event"] == "run_completed"]
+    assert (final["run_id"], final["package_fingerprint"], final["new_head"]) == (
+        s8["detail"]["run_id"], s8["detail"]["package_fingerprint"], s8["detail"]["new_head"])
+    before = frozen(fx)
+    code, out, err = post_reattach(fx, run)
+    assert code == ie.EXIT_OK, err
+    assert frozen(fx) == before
+
+
+# ── Y11 停下／核准不適用的逐筆配對 ──────────────────────────────────────────────
+
+@pytest.mark.parametrize("kind", ["step", "fingerprint"])
+def test_ie_Y11_stop_pairing_mismatch_is_inconsistent(fx, kind):
+    run = fx.complete()
+    assert approve(fx, run, "0" * 64)[0] == ie.EXIT_MISMATCH
+    if kind == "step":
+        recs = fx.index()
+        assert recs[-1]["event"] == "stopped"
+        recs[-1]["step"] = "S5"
+        write_lines(fx.evid / "index.jsonl", [line_of(r) for r in recs])
+    else:
+        cp = fx.evid / run / "checkpoint.jsonl"
+        recs = fx.events(run)
+        assert recs[-1]["result"] == "stopped"
+        recs[-1]["fingerprints"]["package_fingerprint"] = "1" * 64
+        write_lines(cp, [line_of(r) for r in recs])
+    before = tree_bytes(fx.evid)
+    code, out, err = fx.resume(run)
+    assert code == ie.EXIT_MISMATCH
+    assert "紀錄不一致" in err
+    assert tree_bytes(fx.evid) == before
+
+
+# ── Y12 收尾追加:檢查與寫入在同一個 fd(不得另開核對)───────────────────────────
+
+@pytest.mark.parametrize("target", ["_write_s8", "_index_run_completed"])
+def test_ie_Y12_closing_index_append_uses_one_fd(fx, monkeypatch, target):
+    run = _closing_interrupted(fx, monkeypatch, target)
+    events = []
+    state = {"after_verify": False}
+    real_verify, real_open_fd, real_fstat, real_write = ie.verify_run, ie._open_fd, ie._fstat, ie._os_write
+    real_tail = ie._JsonlFile.check_tail
+
+    def verify(site, run_id):
+        info = real_verify(site, run_id)
+        state["after_verify"] = True            # 之前證據重驗的唯讀開檔不計入
+        return info
+
+    def open_fd(path, flags, dir_fd=None):
+        fd = real_open_fd(path, flags, dir_fd=dir_fd)
+        if state["after_verify"]:
+            events.append(("open", str(path), fd))
+        return fd
+
+    def fstat(fd):
+        if state["after_verify"]:
+            events.append(("fstat", fd))
+        return real_fstat(fd)
+
+    def tail(self):
+        if state["after_verify"]:
+            events.append(("tail", self.fd))
+        return real_tail(self)
+
+    def write(fd, data):
+        if state["after_verify"]:
+            events.append(("write", fd, data))
+        return real_write(fd, data)
+    monkeypatch.setattr(ie, "verify_run", verify)
+    monkeypatch.setattr(ie, "_open_fd", open_fd)
+    monkeypatch.setattr(ie, "_fstat", fstat)
+    monkeypatch.setattr(ie, "_os_write", write)
+    monkeypatch.setattr(ie._JsonlFile, "check_tail", tail)
+    code, out, err = post_reattach(fx, run)
+    assert code == ie.EXIT_OK, err
+    opens = [i for i, e in enumerate(events) if e[0] == "open" and e[1].endswith("index.jsonl")]
+    writes = [i for i, e in enumerate(events) if e[0] == "write" and b'"run_completed"' in e[2]]
+    assert len(opens) == 1, events
+    assert len(writes) == 1
+    fd = events[opens[0]][2]
+    assert opens[0] < writes[0] and events[writes[0]][1] == fd
+    between = events[opens[0]:writes[0]]
+    assert ("fstat", fd) in between and ("tail", fd) in between
+
+
+# ── Y13 POSIX:原件、鎖、目錄的建立與刪除走方式甲(dir_fd 鏈)───────────────────────
+#
+# 本機(Windows)skip:本機未實測,先紅無法在本機驗證,待 CI。
+
+RUN_X = "20261029T000000Z-0000000"
+
+
+def _posix_swap(path, outside):
+    """把 `path` 換成指向 `outside` 的目錄 symlink(建立前父目錄被換掉)。"""
+    os.rename(str(path), str(path) + "-moved")
+    os.symlink(str(outside), str(path), target_is_directory=True)
+
+
+@POSIX_DIRFD
+def test_ie_Y13_posix_artifact_not_created_through_link(tmp_path):
+    site, evid = fake_site(tmp_path, index=None)
+    (evid / RUN_X).mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _posix_swap(evid / RUN_X, outside)
+    ctx = dict(site, run_id=RUN_X, run_dir=str(evid / RUN_X))
+    with pytest.raises(ie.Stop) as e:
+        ie._write_artifact(ctx, "snapshot.json", b"x\n")
+    assert e.value.code == ie.EXIT_PRECONDITION
+    assert os.listdir(str(outside)) == []
+
+
+@POSIX_DIRFD
+def test_ie_Y13_posix_lock_not_created_through_link(tmp_path):
+    site, evid = fake_site(tmp_path, index=None)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _posix_swap(evid, outside)
+    with pytest.raises(ie.Stop) as e:
+        ie._acquire_lock(str(evid), RUN_X)
+    assert e.value.code == ie.EXIT_PRECONDITION
+    assert os.listdir(str(outside)) == []
+
+
+@POSIX_DIRFD
+def test_ie_Y13_posix_lock_not_removed_through_link(tmp_path):
+    site, evid = fake_site(tmp_path, index=None)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / ".lock").write_bytes(b"mine")
+    _posix_swap(evid, outside)
+    assert ie._release_lock(str(evid / ".lock"), b"mine") is False
+    assert (outside / ".lock").read_bytes() == b"mine"
+
+
+@POSIX_DIRFD
+@pytest.mark.parametrize("which", ["evidence_root", "run_dir"])
+def test_ie_Y13_posix_dir_not_created_through_link(tmp_path, which):
+    site, evid = fake_site(tmp_path, index=None)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if which == "evidence_root":
+        evid.rmdir()
+        _posix_swap(evid.parent, outside)
+        parts = [".dev", "inventory-evidence"]
+    else:
+        _posix_swap(evid, outside)
+        parts = [".dev", "inventory-evidence", RUN_X]
+    with pytest.raises(ie.Stop) as e:
+        ie._make_dir(site, parts, exist_ok=which == "evidence_root")
+    assert e.value.code == ie.EXIT_PRECONDITION
+    assert os.listdir(str(outside)) == []
 
 
 # ── X 區:核准不適用 ───────────────────────────────────────────────────────────
