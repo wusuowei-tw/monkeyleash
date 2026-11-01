@@ -261,6 +261,59 @@ RULE_DIVERGENCE = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 降級組(刪規則輪,Jeff 2026-11-01 裁決):流程規則從「擋」降為「提示」。
+#
+# **依呼叫位置降級,不依訊息文字判代號。** 降級位置只有:
+#   `check()` 的兩個出口(前哨 `mode_hook`、提交逐檔 `mode_pre_commit`)
+#   提交時 R5 兩支(`check_third_axis_mount` / `check_to_spec_override`)、R6、R9 的呼叫位置
+# 其他結果一律照原樣擋(R4、R7、R10、R11、上游影子、各 fail-closed)。
+#
+# `check()` 只住 R1/R2/R3/R8 —— 它遇到第一筆就 return,所以**四條成組**:
+# 名單裡四條全在才降,部分在 ⇒ 照擋。結構測試釘住「`check()` 只含這四個代號」,
+# 日後要在 `check()` 裡加硬擋規則,得先把它搬出來,否則會被排在前面的降級規則吞掉。
+#
+# 降級提示**不進影子日誌**(裁決 b);豁免帳本記判定訊息的第一行、本機路徑先拿掉(裁決 a,
+# 見 `advisory_note`)。恢復:把代號從名單拿掉(`check()` 那組四條一起拿)。
+# ─────────────────────────────────────────────────────────────────────────────
+CHECK_RULES = frozenset({"R1", "R2", "R3", "R8"})
+ADVISORY_RULES = frozenset({"R1", "R2", "R3", "R8", "R5", "R6", "R9"})
+ADVISORY_HEAD = "[六站閘門/指引]"
+
+
+def _check_is_advisory():
+    """`check()` 出口降級與否。四條全在名單才算;部分在 ⇒ False(往擋倒)。"""
+    return CHECK_RULES <= ADVISORY_RULES
+
+
+def _advisory_text(msgs):
+    """降級提示的輸出。**標頭與擋下訊息分得開**,讓人一眼看出這幾則沒有擋。"""
+    return ("%s 以下是流程規則的判定 —— 已降為工作指引,本次不擋:\n%s"
+            % (ADVISORY_HEAD, "".join("  %s\n" % m for m in msgs)))
+
+
+# 拿掉 repo 根與家目錄之後,還長得像本機絕對路徑的形狀 ⇒ 整句不存。
+_ABS_PATH_SHAPE = re.compile(r"[A-Za-z]:[\\/]|(?<![\w.<>-])/(?:home|Users|root|tmp|var|mnt|cygdrive)/")
+
+
+def advisory_note(msg):
+    """豁免帳本 `advisory` 欄:判定訊息的**第一行**,本機路徑先拿掉(裁決 a)。
+
+    第一行之後常帶實際查找位置(絕對路徑,例如 R2 讀不到站牌那一則),所以只取第一行 ——
+    與 `log_shadow` 只記第一行是同一條限制。第一行裡的 repo 根與家目錄換成 `<repo>` / `<home>`;
+    換完仍有絕對路徑形狀(例如例外訊息夾帶的別處路徑)⇒ 不存原文,只留代號與一句說明。
+    """
+    lines = (msg or "").splitlines()
+    first = lines[0] if lines else ""
+    for real, mark in ((ROOT, "<repo>"), (os.path.expanduser("~"), "<home>")):
+        if real and real not in ("/", "\\"):
+            for form in (real, real.replace("\\", "/")):
+                first = first.replace(form, mark)
+    if _ABS_PATH_SHAPE.search(first):
+        m = re.match(r"\[[^\]]*\]", first)
+        return "%s(判定訊息含本機路徑形狀,原文未存)" % (m.group(0) if m else "")
+    return first
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 三份非原始碼清單。**判準只有一句:會不會被執行,或被建置工具當成邏輯消費。**
 #
 # 每一項都要寫理由,而且理由要用同一句判準表述 —— 清單一長,判準就會漂移,
@@ -3507,7 +3560,7 @@ def _hash_bytes(raw):
         return None
 
 
-def exemption_record(ex, verdict, at_commit, stage, ticket, content, tool=None):
+def exemption_record(ex, verdict, at_commit, stage, ticket, content, tool=None, advisory=None):
     """組出一筆帳本紀錄。
 
     `outcome` 把「豁免真的被用掉」與「嘗試被後面的規則擋下」分開 ——
@@ -3526,7 +3579,7 @@ def exemption_record(ex, verdict, at_commit, stage, ticket, content, tool=None):
         before = None
     after = _hash_bytes(content.encode("utf-8")) if content is not None else None
     changed = None if (before is None or after is None) else (before != after)
-    return {
+    rec = {
         "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "file": ex["file"], "module": ex["module"],
         "ticket": ex.get("ticket") if ex.get("ticket") is not None else ticket,
@@ -3541,9 +3594,14 @@ def exemption_record(ex, verdict, at_commit, stage, ticket, content, tool=None):
         "at_commit": bool(at_commit),
         "content_hash": before, "result_hash": after, "changes_bytes": changed,
     }
+    # 降級提示(刪規則輪):沒有擋,所以 outcome 照 granted;判定訊息另記一欄。
+    # **只在有提示時才加這個鍵** —— 其餘紀錄的形狀一個字不變。
+    if advisory:
+        rec["advisory"] = advisory_note(advisory)
+    return rec
 
 
-def log_exemptions(bucket, verdict, at_commit, content=None, tool=None):
+def log_exemptions(bucket, verdict, at_commit, content=None, tool=None, advisory=None):
     """在**強制點**把這一次判定用到的豁免寫進帳本。
 
     記錄失敗仍然 fail-closed:豁免的正當性建立在「它被記錄下來、可被逐筆對帳」
@@ -3554,7 +3612,7 @@ def log_exemptions(bucket, verdict, at_commit, content=None, tool=None):
     stage, ticket = load_stage()
     for ex in bucket:
         rec = exemption_record(ex, verdict, at_commit, stage, ticket, content,
-                               tool=tool)
+                               tool=tool, advisory=advisory)
         try:
             _append_jsonl(EXEMPTION_LOG, rec)
         except Exception as e:
@@ -4679,6 +4737,15 @@ def mode_hook():
     # 在帳本裡看得見(票 08)。
     used = []
     msg = check(path, content, exemptions=used)
+    if msg and _check_is_advisory():
+        # 刪規則輪:這個位置是 `check()` 的出口,而 `check()` 只住降級組 ⇒ 印提示、照常放行。
+        # 不進影子日誌(裁決 b);豁免帳本照記,判定訊息記在 `advisory` 欄(裁決 a)。
+        # 檔案工具這條路在 `check()` 之後沒有別的硬擋 —— 保留的硬擋都排在它前面。
+        _err(_advisory_text([msg]))
+        log_exemptions(used, verdict=None, at_commit=False, content=content,
+                       tool=payload.get("tool_name"), advisory=msg)
+        msg = None
+        used = []
     if msg:
         if shadow_active():
             log_shadow(msg, at_commit=False)
@@ -5193,6 +5260,8 @@ def mode_pre_commit():
         _err(u"[R10/policy-only] policy-only commit（policy_source=index）：staged 候選 policy 對現場成立"
              u"（DECLARED_OK；runtime 仍 UNPROVEN）。這是候選驗證，不是 HEAD 已生效的 policy。\n")
     violations = list(ext["violations"])
+    # 刪規則輪:降級位置的結果收在這裡 —— 印出、不擋、不進影子日誌(裁決 b)。
+    advisories = []
     incomplete = []      # 票 152 D7:未完整檢查的檔案 —— 只提示,不改變擋或放
     for f in staged:
         used = []
@@ -5203,15 +5272,24 @@ def mode_pre_commit():
             incomplete.append((f.replace("\\", "/"), marks))
         # 提交時 content 未知(檔案已經寫進去了),所以 changes_bytes 記 None ——
         # 「不知道有沒有變」不得寫成「確定沒變」。
+        if m and _check_is_advisory():
+            # `check()` 的出口(提交逐檔):只住降級組 ⇒ 提示;判定訊息記進豁免帳本(裁決 a)。
+            log_exemptions(used, verdict=None, at_commit=True, content=None,
+                           tool="pre-commit", advisory=m)
+            advisories.append(m)
+            continue
         log_exemptions(used, verdict=m, at_commit=True, content=None,
                        tool="pre-commit")
         if m:
             violations.append(m)
-    violations += check_skill_copies()
-    violations += check_third_axis_mount()
-    violations += check_to_spec_override()
-    violations += check_legacy_list()
-    violations += check_friction_numbers()
+    violations += check_skill_copies()      # R4:保留硬擋,不在降級位置
+    # R5 兩支、R6、R9:降級位置。**依呼叫位置分流,不看訊息文字** ——
+    # 名單裡沒有該代號時,同一個位置照舊擋(恢復只要拿掉名單裡那一格)。
+    for code, positioned in (("R5", check_third_axis_mount), ("R5", check_to_spec_override),
+                             ("R6", check_legacy_list), ("R9", check_friction_numbers)):
+        (advisories if code in ADVISORY_RULES else violations).extend(positioned())
+    if advisories:
+        _err(_advisory_text(advisories))
     if violations:
         if shadow_active():
             # 影子:不擋,逐筆寫進 shadow-log(每筆一個規則,per-rule 晉升要逐條算)。

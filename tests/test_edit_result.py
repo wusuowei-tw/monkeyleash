@@ -303,8 +303,11 @@ class TestThroughTheRealEntryPoint:
         assert rc != 2 or "R8" not in err
 
     def test_the_result_is_what_gets_blocked(self, repo, monkeypatch, capsys):
-        """反面:結果真的 import 了 research,前哨仍要擋(rc=2)。"""
+        """反面:結果真的 import 了 research,前哨仍要判到它。
+
+        刪規則輪:R8 降為指引 ⇒ 判到的證據從 rc 2 改成「R8 提示出現、rc 0」。
+        判定對象仍是編輯後的整檔結果(本檔的主題),只是出口從擋改成提示。"""
         io.open(repo / "analyst_tracker" / "store.py", "w",
                 encoding="utf-8", newline="\n").write("import research\n\ndef f():\n    return 1\n")
         rc, err = self._run(monkeypatch, capsys, _edit("    return 1", "    return 2"))
-        assert rc == 2 and "R8" in err, (rc, err)
+        assert rc == 0 and "[R8]" in err and gate.ADVISORY_HEAD in err, (rc, err)

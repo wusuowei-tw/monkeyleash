@@ -577,11 +577,13 @@ class TestIsolatedPreCommit:
         rc, err = pre_commit(repo)
         assert probe["target_in_staged"], (
             u"目標不在 staged 清單,這一格根本沒判到它:%r" % (probe["staged_paths"],))
-        assert rc != 0, (
-            u"pre-commit 放行了,而授予豁免的那一行只在工作樹、不在 index。"
+        # 刪規則輪:R3 降為指引 ⇒ 「授予豁免的那一行只在工作樹」的證據,從 rc 非 0
+        # 改成「R3 提示點名目標」;rc 不再由 R3 決定。反控那一格對照的是沒有這則提示。
+        assert rc == 0, u"R3 已降為指引,卻擋下了 commit:%r" % err
+        assert TARGET_REL in err, (
+            u"授予豁免的那一行只在工作樹、不在 index,而沒有點名目標的提示。"
             u"staged=%r stderr=%r" % (probe["staged_paths"], err))
-        assert TARGET_REL in err, u"擋下了但沒點名目標:%r" % err
-        assert "R3" in err, u"擋下了但不是 R3:%r" % err
+        assert "[R3" in err, u"點名了目標,但不是 R3:%r" % err
 
     def test_a_definition_that_is_staged_passes(self, defs_repo, pre_commit):
         """**反控**:同一份定義兩邊一致(且授予豁免)⇒ 必須回 0。
@@ -595,6 +597,8 @@ class TestIsolatedPreCommit:
         assert rc == 0, (
             u"兩版定義一致且授予 research 豁免,pre-commit 卻擋下 —— 誤擋。"
             u"staged=%r stderr=%r" % (probe["staged_paths"], err))
+        # 刪規則輪:正控也回 0 了,兩格的對照改由「有沒有 R3 提示」承擔。
+        assert "[R3" not in err, u"豁免成立卻出現 R3 提示:%r" % err
 
     def test_the_cwd_and_staged_list_are_what_we_think(self, defs_repo,
                                                        pre_commit):

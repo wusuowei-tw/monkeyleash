@@ -678,12 +678,18 @@ class TestR5IsActuallyInvokedAtTheAuthoritativeLayer:
         root = _skills_tree(tmp_path, VALID_CODE_REVIEW.replace(
             "Clean degradation is mandatory.", "(被上游版覆蓋掉了)"))
         _wire_pre_commit(monkeypatch, root)
+        # 刪規則輪:R5 降為指引 ⇒ 被呼叫的證據改成「提示點名 [R5] 與缺的掛載點」,rc 不由它決定;
+        # 另以 spy 證明保留硬擋的 R4 那一格在提示之後仍被執行(本 fixture 原本只是把它停掉)。
+        r4_calls = []
+        monkeypatch.setattr(gate, "check_skill_copies", lambda: r4_calls.append(1) or [])
         rc = gate.mode_pre_commit()
         err = capsys.readouterr().err
-        assert rc == 1, "正典缺掛載點,而 commit 沒有被擋下 —— R5 沒有被權威層呼叫"
-        assert "[R5]" in err, "擋下了,但訊息裡沒有 [R5](擋下的是別的規則):%r" % err
+        assert rc == 0, "R5 已降為指引,卻擋下了 commit:%r" % err
+        assert "[R5]" in err and gate.ADVISORY_HEAD in err, (
+            "正典缺掛載點,而沒有 [R5] 提示 —— R5 沒有被權威層呼叫:%r" % err)
         assert "Clean degradation is mandatory." in err, (
-            "訊息沒點名少了哪一個掛載點 —— 被擋的人查不到要修什麼:%r" % err)
+            "訊息沒點名少了哪一個掛載點 —— 查不到要修什麼:%r" % err)
+        assert r4_calls == [1], r4_calls
 
     def test_a_broken_to_spec_canon_blocks_the_commit(self, tmp_path,
                                                       monkeypatch, capsys):
@@ -695,11 +701,15 @@ class TestR5IsActuallyInvokedAtTheAuthoritativeLayer:
                             to_spec_body=VALID_TO_SPEC.replace(
                                 "LOCAL OVERRIDE (prototype snippets)", "(被覆蓋掉了)"))
         _wire_pre_commit(monkeypatch, root)
+        # 刪規則輪:R5 降為指引(同上一條)。
+        r4_calls = []
+        monkeypatch.setattr(gate, "check_skill_copies", lambda: r4_calls.append(1) or [])
         rc = gate.mode_pre_commit()
         err = capsys.readouterr().err
-        assert rc == 1, "to-spec 缺覆寫掛載點,而 commit 沒有被擋下"
-        assert "[R5]" in err, err
+        assert rc == 0, "R5 已降為指引,卻擋下了 commit:%r" % err
+        assert "[R5]" in err and gate.ADVISORY_HEAD in err, err
         assert "覆寫掛載點" in err, "訊息沒說出缺的是什麼:%r" % err
+        assert r4_calls == [1], r4_calls
 
     def test_a_clean_repo_does_not_block(self, tmp_path, monkeypatch):
         """**成對的另一半,而且這一條最要緊。**
@@ -725,11 +735,15 @@ class TestR5IsActuallyInvokedAtTheAuthoritativeLayer:
             to_spec_body=VALID_TO_SPEC.replace(
                 "LOCAL OVERRIDE (prototype snippets)", "(沒了)"))
         _wire_pre_commit(monkeypatch, root)
+        # 刪規則輪:R5 降為指引 —— 兩則都要出現在提示裡。
+        r4_calls = []
+        monkeypatch.setattr(gate, "check_skill_copies", lambda: r4_calls.append(1) or [])
         rc = gate.mode_pre_commit()
         err = capsys.readouterr().err
-        assert rc == 1, err
+        assert rc == 0, err
         assert "缺第三軸掛載點" in err, "少報了 code-review 那一半:%r" % err
         assert "覆寫掛載點" in err, "少報了 to-spec 那一半:%r" % err
+        assert r4_calls == [1], r4_calls
 
 
 class TestR5IsActuallyInvokedAtTheSentinel:

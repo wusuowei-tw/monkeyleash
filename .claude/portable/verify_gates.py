@@ -172,6 +172,10 @@ def scenario_r5(target):
     body = io.open(canon, encoding="utf-8").read()
     io.open(canon, "w", encoding="utf-8", newline="\n").write(
         body.replace("Data Integrity", "資料完整性"))
+    # 刪規則輪:R5 降為指引後,這條情境要證明「提示、不擋」—— 鏡像是複製出來的,
+    # 正典一改,保留硬擋的 R4 會跟著擋,commit 的 rc 就不是 R5 給的。所以從改過的正典重建鏡像,
+    # 讓這一格只剩 R5。`restore()` 先還原正典再重建鏡像,不會把改過的版本帶進下一格。
+    install.build_mirrors(target)
     write(target, "docs/adr/verify-trigger.md", "觸發一次 commit 用\n")
 
 
@@ -476,8 +480,70 @@ def load_target_gate(target):
     return mod
 
 
+# 由本檔自己建立的暫存 repo:{解析後的實際路徑: 基準 commit(安裝完成時記下;尚未記下為 None)}。
+# **防誤用,不是安全邊界** —— 同一個程序裡的程式碼照樣改得到這份紀錄;
+# 它擋的是「把呼叫者的目錄或別的 repo 誤傳給 restore()」,那會 reset --hard + clean 掉別人的東西。
+# 刻意不提供「把既有目錄登記成本次建立」的入口(續做四裁決 2)。
+_CREATED = {}
+
+
+def create_repo(target):
+    """原子建立 `target` 並記下它 —— **只有這裡建出來的 repo,`restore()` 才肯動。**
+
+    路徑在建立前已存在 ⇒ SystemExit,不刪、不覆蓋(舊版在這裡 rmtree,續做四裁決 1 移除)。
+    外層目錄只當位置用,不得被視為可清除。
+    """
+    parent = os.path.dirname(os.path.abspath(target))
+    os.makedirs(parent, exist_ok=True)
+    try:
+        os.mkdir(target)
+    except FileExistsError:
+        raise SystemExit("暫存 repo 的預定路徑已經存在:%s\n"
+                         "不清除、不覆蓋 —— 換一個新的外層目錄再跑。" % target)
+    real = os.path.realpath(target)
+    _CREATED[real] = None
+    return real
+
+
+def record_base(target):
+    """安裝完成時記下基準 commit。只接受經 `create_repo` 建立的 repo。"""
+    real = os.path.realpath(target)
+    if real not in _CREATED:
+        raise SystemExit("不是本次由 verify_gates 建立的 repo,不記基準:%s" % target)
+    _rc, head = sh(["git", "rev-parse", "HEAD"], target)
+    _CREATED[real] = head.strip()
+    return _CREATED[real]
+
+
+def _restore_guard(target):
+    """`restore()` 動手前的三道核對(續做三第 2 點);任一不符 ⇒ SystemExit,reset / clean 都不執行。"""
+    real = os.path.realpath(target)
+    # (c) 本次由 create_repo 建立、且已記下基準
+    if real not in _CREATED:
+        raise SystemExit("拒絕還原:%s 不是本次由 verify_gates 建立的 repo。" % target)
+    base = _CREATED[real]
+    if not base:
+        raise SystemExit("拒絕還原:%s 還沒記下基準 commit。" % target)
+    # (a) 實際 Git 根目錄 == 記錄的路徑
+    rc, top = sh(["git", "rev-parse", "--show-toplevel"], target, check=False)
+    if rc != 0 or os.path.normcase(os.path.realpath(top.strip())) != os.path.normcase(real):
+        raise SystemExit("拒絕還原:%s 的 Git 根目錄不是本次建立的 repo(%s)。" % (target, top.strip()))
+    # (b) 基準存在於該 repo,且 HEAD 是它本身或它的後代
+    rc, _out_ = sh(["git", "cat-file", "-e", base + "^{commit}"], target, check=False)
+    if rc != 0:
+        raise SystemExit("拒絕還原:基準 commit %s 不在 %s 裡。" % (base, target))
+    rc, _out_ = sh(["git", "merge-base", "--is-ancestor", base, "HEAD"], target, check=False)
+    if rc != 0:
+        raise SystemExit("拒絕還原:%s 的 HEAD 不是基準 %s 本身或它的後代。" % (target, base))
+    return base
+
+
 def restore(target):
     """回到安裝後的乾淨狀態。**兩半,因為這個 repo 有兩半。**
+
+    **還原目標是安裝完成時記下的基準,不是當下的 HEAD**(刪規則輪)。
+    降級組的情境提交會真的成功、HEAD 往前走;還原到 HEAD 會把那一格的改動留給下一格。
+    動手前先過 `_restore_guard`(防誤用,不是安全邊界)。
 
     追蹤側由 git 還原;**被 .gitignore 忽略的鏡像目錄 git 碰不到**,要重建。
 
@@ -497,7 +563,8 @@ def restore(target):
     **順序不能反**:先 `git reset` 讓正典回到 HEAD,再從正典重建鏡像 ——
     反過來的話,`scenario_r5` 改過的正典會被複製進鏡像,乾淨狀態就不乾淨了。
     """
-    sh(["git", "reset", "-q", "--hard", "HEAD"], target)
+    base = _restore_guard(target)
+    sh(["git", "reset", "-q", "--hard", base], target)
     sh(["git", "clean", "-qfd"], target)
     install.build_mirrors(target)
 
@@ -724,7 +791,14 @@ def run_evidence_scenarios(target):
     return failures
 
 
-def run_scenario(target, code, iso=None):
+def advisory_codes(gate):
+    """目標 gate 宣告的降級組(刪規則輪)。**從裝出去的那一份讀**,不在這裡另抄一份名單。"""
+    return frozenset(getattr(gate, "ADVISORY_RULES", ()) or ())
+
+
+def run_scenario(target, code, iso=None, advisory=False):
+    """`advisory=True`:這條規則已降為指引,成立條件反過來 —— commit **成功**且輸出含該代號。
+    擋下(rc 非 0)或沉默(沒有代號)都算失敗。前哨規則沒有提示可驗,要求以提示通過一律失敗。"""
     if code in PRECONTROL:
         PRECONTROL[code](target)
         sh(["git", "add", "-A"], target)
@@ -734,6 +808,8 @@ def run_scenario(target, code, iso=None):
             return False, u"正控未放行：" + out
         restore(target)
     marker = SCENARIOS[code](target)
+    if advisory and (marker == "predicate" or callable(marker)):
+        return False, u"前哨規則沒有「提示」這種結果可驗:%s" % code
     if marker == "predicate":
         # 前哨規則:直接問述詞。走 commit 驗不到它 —— 它管的是工具呼叫。
         gate = load_target_gate(target)
@@ -757,6 +833,8 @@ def run_scenario(target, code, iso=None):
     restore(target)
     if iso is not None:
         restore_user_layer(iso)
+    if advisory:
+        return rc == 0 and ("[%s]" % code in out or "[%s/" % code in out), out
     if code in EXPECTED_MARKER:
         blocked = rc != 0 and EXPECTED_MARKER[code] in out and EXPECTED_REASON[code] in out
     else:
@@ -928,13 +1006,9 @@ def prepare_target_env(target):
 
 def main(workdir):
     target = os.path.abspath(os.path.join(workdir, "verify-gates-repo"))
-    if os.path.exists(target):
-        # Windows 的 git object 檔是唯讀的,直接 rmtree 會 PermissionError。
-        # 清不掉舊的就會在上一輪的殘骸上跑,失敗原因會變成上一輪的狀態。
-        def _force(func, path, _exc):
-            os.chmod(path, 0o600)
-            func(path)
-        shutil.rmtree(target, onerror=_force)
+    # 刪規則輪(續做四):不再 rmtree 上一輪的殘骸 —— 已存在就停,要重跑就換新的外層目錄。
+    # 不在上一輪殘骸上跑的目的不變,只是由「先刪」換成「不准在既有路徑上建」。
+    create_repo(target)
 
     # 票 146 G-1:安裝、規則情境、目標 gate 的載入、框架測試與 evidence 情境全在同一個隔離家目錄內 ——
     # 真實 `~/.claude` 不讀不寫,目標 gate / leak scanner 的模組層常數也不會先綁到真實家目錄。
@@ -987,9 +1061,20 @@ def _main_isolated(target, iso):
             "\n這些規則沒有任何實測情境:%s\n"
             "規則存在但沒被證明擋得住,跟沒有規則的差別只在讀碼的人心裡。" % missing)
 
-    _out("\n=== 逐條實測(每條各擋一次)===")
+    # 每一格情境的 restore() 都還原到這一筆。install.main 之後到這裡只有讀檔與載入 gate、
+    # 沒有任何 commit,所以它就是安裝完成時的 HEAD。
+    record_base(target)
+    advised = advisory_codes(gate)
+    _out("\n=== 逐條實測(保留硬擋各擋一次;降級組 %s 各提示一次、不擋)==="
+         % (" ".join(sorted(advised, key=lambda c: int(c[1:]))) or "(無)"))
     failures = []
     for code in codes:
+        if code in advised:
+            ok, out = run_scenario(target, code, iso=iso, advisory=True)
+            _out("    %-4s %s" % (code, "提示、未擋 ✓" if ok else "沒有照預期提示 ✗"))
+            if not ok:
+                failures.append((code, out))
+            continue
         blocked, out = run_scenario(target, code, iso=iso)
         _report_rule_result(code, blocked)
         if blocked and code in PRECONTROL:

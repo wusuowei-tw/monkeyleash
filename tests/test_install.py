@@ -1394,3 +1394,255 @@ class TestT156RT9RT10InstallPrecheck:
         assert os.path.normcase(os.path.realpath(argv[i + 1])) == os.path.normcase(os.path.realpath(str(t)))
         assert argv[j + 1] == "downstream", argv
         assert _t156_snapshot(t) == before
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 刪規則輪 —— 安裝後自我檢查改以 R4 空提交探針證明閘門仍會擋
+# ══════════════════════════════════════════════════════════════════════════
+#
+# R2 降為提示之後,舊探針(前置站提交原始碼、要求 [R2 擋下)必然失敗。
+# 新探針在**被安裝的 repo 內**刪一個鏡像 SKILL.md,`git commit --allow-empty`,
+# 要求 R4 擋下且指向那個檔,再以 `build_mirrors` 重建(探針位置裁決整理 v2)。
+#
+# 本段用**假 git**(替換 `run`)驗探針自己的判定與前提;
+# 「真 git + 真 hook + 空提交會觸發 R4」的證據是完整安裝 fixture(v2 第 8 點),不是這裡。
+
+_RP_HEAD_A = "a" * 40
+_RP_HEAD_B = "b" * 40
+_RP_SKILL = "alpha"
+_RP_MIRROR_REL = ".claude/skills/%s/SKILL.md" % _RP_SKILL
+_RP_R4_BODY = u"鏡像缺少 %s —— 正典有而鏡像沒有。" % _RP_MIRROR_REL
+
+
+def _rp_block(*entries, **kw):
+    """照 `gate.py` 的 `mode_pre_commit` 擋下段的版面組出假輸出:
+    (可選的)提示段 → `commit 已擋下,N 項違規:` → 每項兩格縮排 → 結尾說明。"""
+    head = kw.get("advisory", u"")
+    return (head + u"\n[六站閘門/pre-commit] commit 已擋下,%d 項違規:\n\n" % len(entries)
+            + u"".join(u"  %s\n" % e for e in entries)
+            + u"\n上面每一項都指出了是哪一個前提沒滿足 —— 修掉它們再提交。\n")
+
+
+_RP_R4_ENTRY = u"[R4][enforce] " + _RP_R4_BODY
+_RP_R10_WRAP = u"[R10][enforce] [R4] %s（共 1 筆）" % _RP_R4_BODY
+
+
+def _rp_target(tmp_path):
+    t = tmp_path / "t"
+    body = b"# alpha\n"
+    for d in (".agents/skills", ".claude/skills", "skills"):
+        p = t.joinpath(*d.split("/")) / _RP_SKILL
+        p.mkdir(parents=True)
+        (p / "SKILL.md").write_bytes(body)
+    (t / ".dev").mkdir()
+    (t / ".dev" / "pipeline.json").write_bytes(b'{"current_stage": "idle"}\n')
+    return t
+
+
+class _RPGate(object):
+    def __init__(self, baseline=()):
+        self.baseline = list(baseline)
+
+    def check_skill_copies(self):
+        return list(self.baseline)
+
+
+class _RPGit(object):
+    """假 git:只回答探針會問的那幾個問題,其餘一律記下並視為未知指令。"""
+
+    def __init__(self, target, commit_rc=1, commit_out=None, staged="",
+                 on_commit=None):
+        self.target = target
+        self.calls = []
+        self.head = _RP_HEAD_A
+        self.index = "100644 0000 0\tREADME\n"
+        self.status = ""
+        self.staged = staged
+        self.commit_rc = commit_rc
+        self.commit_out = commit_out if commit_out is not None else _rp_block(_RP_R4_ENTRY)
+        self.on_commit = on_commit
+
+    def __call__(self, args, cwd, check=True):
+        args = list(args)
+        self.calls.append(args)
+        if args[:2] == ["git", "rev-parse"]:
+            return 0, self.head + "\n"
+        if args[:3] == ["git", "diff", "--cached"]:
+            return 0, self.staged
+        if args[:2] == ["git", "ls-files"]:
+            return 0, self.index
+        if args[:2] == ["git", "status"]:
+            return 0, self.status
+        if args[:2] == ["git", "commit"]:
+            if self.on_commit:
+                self.on_commit(self)
+            return self.commit_rc, self.commit_out
+        raise AssertionError(u"探針發出了未預期的指令:%r" % (args,))
+
+
+def _rp_probe(tmp_path, monkeypatch, tag, gate=None, **git_kw):
+    mod = _load("install_rp_" + tag, "install.py")
+    t = _rp_target(tmp_path)
+    fake = _RPGit(t, **git_kw)
+    monkeypatch.setattr(mod, "run", fake)
+    return mod, t, fake, (gate if gate is not None else _RPGate())
+
+
+def _rp_never(args_list, verb):
+    return not [a for a in args_list if len(a) > 1 and a[0] == "git" and a[1] == verb]
+
+
+class TestRulePruningInstallProbe:
+
+    def test_blocked_by_r4_naming_the_deleted_mirror_passes(self, tmp_path, monkeypatch):
+        """擋下且 R4 指向本次刪除的鏡像檔 ⇒ 通過;鏡像重建回原內容;
+        空提交、不 add 任何路徑、不寫 `.dev/pipeline.json`、不 reset。"""
+        mod, t, git, gate = _rp_probe(tmp_path, monkeypatch, "ok")
+        pipeline_before = (t / ".dev" / "pipeline.json").read_bytes()
+        out = mod._probe_r4(str(t), gate)
+        assert "[R4" in out and _RP_MIRROR_REL in out
+        commits = [a for a in git.calls if a[:2] == ["git", "commit"]]
+        assert len(commits) == 1 and "--allow-empty" in commits[0], git.calls
+        assert _rp_never(git.calls, "add") and _rp_never(git.calls, "reset"), git.calls
+        assert (t / ".dev" / "pipeline.json").read_bytes() == pipeline_before
+        assert (t / ".claude" / "skills" / _RP_SKILL / "SKILL.md").read_bytes() == b"# alpha\n"
+
+    def test_the_mirror_is_absent_while_the_commit_runs(self, tmp_path, monkeypatch):
+        """探針真的刪了那個鏡像檔才提交 —— 否則 R4 的訊息是別處來的。"""
+        seen = []
+        mirror = None
+
+        def look(git):
+            seen.append(os.path.exists(str(mirror)))
+        mod, t, git, gate = _rp_probe(tmp_path, monkeypatch, "absent", on_commit=look)
+        mirror = t / ".claude" / "skills" / _RP_SKILL / "SKILL.md"
+        mod._probe_r4(str(t), gate)
+        assert seen == [False]
+
+    def test_let_through_fails_and_reports_both_heads(self, tmp_path, monkeypatch):
+        """放行(rc=0)⇒ SystemExit,訊息含前後 HEAD 完整雜湊;不 reset。"""
+        def lands(git):
+            git.head = _RP_HEAD_B
+        mod, t, git, gate = _rp_probe(tmp_path, monkeypatch, "through",
+                                      commit_rc=0, commit_out=u"[master bbbbbbb] probe\n",
+                                      on_commit=lands)
+        with pytest.raises(SystemExit) as e:
+            mod._probe_r4(str(t), gate)
+        msg = str(e.value.code)
+        assert _RP_HEAD_A in msg and _RP_HEAD_B in msg, msg
+        assert _rp_never(git.calls, "reset"), git.calls
+
+    @pytest.mark.parametrize("out", [
+        u"error: cannot spawn .git/hooks/pre-commit: No such file or directory\n",
+        _rp_block(u"[R10/fail-closed] claude_root_invalid"),
+        _rp_block(u"[R4][enforce] 鏡像缺少 skills/%s/SKILL.md —— 正典有而鏡像沒有。" % _RP_SKILL),
+        # 區塊外(例如提示段)的 R4 字樣不算擋下
+        u"[六站閘門/指引] …\n  [R4] %s\n" % _RP_R4_BODY,
+    ], ids=["environment-error", "other-rule", "r4-names-another-file", "r4-outside-the-block"])
+    def test_nonzero_without_r4_on_the_deleted_mirror_fails(self, tmp_path, monkeypatch, out):
+        """rc≠0 但沒有 [R4、或 R4 沒指向本次刪除的檔 ⇒ SystemExit(不得當成成功阻擋)。"""
+        mod, t, git, gate = _rp_probe(tmp_path, monkeypatch, "nor4", commit_rc=1, commit_out=out)
+        with pytest.raises(SystemExit):
+            mod._probe_r4(str(t), gate)
+
+    @pytest.mark.parametrize("what", ["head", "index", "fingerprint"])
+    def test_any_change_across_the_probe_fails_without_reset(self, tmp_path, monkeypatch, what):
+        """前後 HEAD、index 或受影響內容指紋不同 ⇒ SystemExit,且沒有發出任何 reset。"""
+        def drift(git):
+            if what == "head":
+                git.head = _RP_HEAD_B
+            elif what == "index":
+                git.index += "100644 1111 0\tother\n"
+            else:
+                (git.target / ".dev" / "pipeline.json").write_bytes(b'{"current_stage": "spec"}\n')
+        mod, t, git, gate = _rp_probe(tmp_path, monkeypatch, "drift_" + what, on_commit=drift)
+        with pytest.raises(SystemExit) as e:
+            mod._probe_r4(str(t), gate)
+        assert _RP_HEAD_A in str(e.value.code)
+        assert _rp_never(git.calls, "reset"), git.calls
+
+    def test_staged_content_means_the_probe_does_not_run(self, tmp_path, monkeypatch):
+        """原本有暫存內容 ⇒ 不執行探針(不刪鏡像、不提交),工作內容不變。"""
+        mod, t, git, gate = _rp_probe(tmp_path, monkeypatch, "staged", staged="pkg/x.py\n")
+        rebuilt = []
+        monkeypatch.setattr(mod, "build_mirrors", lambda target: rebuilt.append(target) or [])
+        with pytest.raises(SystemExit):
+            mod._probe_r4(str(t), gate)
+        assert _rp_never(git.calls, "commit") and _rp_never(git.calls, "reset"), git.calls
+        assert _rp_never(git.calls, "restore") and _rp_never(git.calls, "stash"), git.calls
+        assert (t / ".claude" / "skills" / _RP_SKILL / "SKILL.md").exists()
+        assert rebuilt == []
+
+    @pytest.mark.parametrize("why", ["mirror-modified", "r4-baseline-red"])
+    def test_a_failed_mirror_precondition_stops_before_deleting(self, tmp_path, monkeypatch, why):
+        """鏡像有既存修改,或 R4 基準不通過 ⇒ 停下,未刪檔、未重建、未提交。"""
+        gate = _RPGate(baseline=["[R4] 鏡像缺少 skills/beta"] if why == "r4-baseline-red" else ())
+        mod, t, git, gate = _rp_probe(tmp_path, monkeypatch, "pre_" + why.replace("-", "_"), gate=gate)
+        mirror = t / ".claude" / "skills" / _RP_SKILL / "SKILL.md"
+        if why == "mirror-modified":
+            mirror.write_bytes(b"# alpha (user edit)\n")
+        before = mirror.read_bytes()
+        rebuilt = []
+        monkeypatch.setattr(mod, "build_mirrors", lambda target: rebuilt.append(target) or [])
+        with pytest.raises(SystemExit):
+            mod._probe_r4(str(t), gate)
+        assert mirror.read_bytes() == before
+        assert rebuilt == []
+        assert _rp_never(git.calls, "commit"), git.calls
+
+    def test_a_failed_rebuild_is_reported(self, tmp_path, monkeypatch):
+        """重建失敗 ⇒ SystemExit,訊息明說重建失敗與哪個檔沒回來。"""
+        mod, t, git, gate = _rp_probe(tmp_path, monkeypatch, "rebuild")
+
+        def boom(target):
+            raise OSError("disk full")
+        monkeypatch.setattr(mod, "build_mirrors", boom)
+        with pytest.raises(SystemExit) as e:
+            mod._probe_r4(str(t), gate)
+        msg = str(e.value.code)
+        assert u"重建" in msg and _RP_MIRROR_REL in msg and "disk full" in msg, msg
+        assert _rp_never(git.calls, "reset"), git.calls
+
+    def test_verify_no_longer_touches_the_stage_card_or_adds_a_probe_file(self):
+        """`verify()` 的探針段不再改站牌、不再建 `probe_gate_is_alive.py`(讀碼層級的反控)。"""
+        import inspect
+        mod = _load("install_rp_src", "install.py")
+        src = inspect.getsource(mod.verify)
+        assert "probe_gate_is_alive" not in src and '"current_stage"' not in src, src
+        assert "_probe_r4(" in src, src
+
+    @pytest.mark.parametrize("entries,advisory", [
+        ((_RP_R4_ENTRY,), u""),
+        ((_RP_R10_WRAP, _RP_R4_ENTRY), u""),
+        ((_RP_R4_ENTRY,), u"[六站閘門/指引] 以下是流程規則的判定 —— 已降為工作指引,本次不擋:\n"
+                          u"  [R6] not/in/the/tree.py 不在機制上線 commit 的樹裡\n"),
+    ], ids=["r4-only", "r4-plus-r10-wrapping-the-same-r4", "r4-plus-advisories"])
+    def test_the_allowed_hard_blocks_pass(self, tmp_path, monkeypatch, entries, advisory):
+        """收緊後的判定(續做三第 5 點):硬擋只有 R4(指向本次刪除的檔),
+        或另加一則**包著同一則 R4 違規**的 R10 ⇒ 通過。提示段不是硬擋,不影響。"""
+        mod, t, git, gate = _rp_probe(tmp_path, monkeypatch, "allowed",
+                                      commit_out=_rp_block(*entries, advisory=advisory))
+        mod._probe_r4(str(t), gate)
+
+    @pytest.mark.parametrize("extra", [
+        u"[R3][enforce] pkg/x.py 沒有對應的測試檔",
+        u"[R10/fail-closed] synced_unmanaged：未受管入口",
+        u"[R10][enforce] [R4] 鏡像內容與正典不一致:%s(共 1 筆)" % _RP_MIRROR_REL,
+        u"[R10][enforce] %s" % _RP_MIRROR_REL,
+    ], ids=["r4-plus-another-rule", "r4-plus-r10-fail-closed",
+            "r10-same-file-different-reason", "r10-only-names-the-file"])
+    def test_any_other_hard_block_fails(self, tmp_path, monkeypatch, extra):
+        """R4 + 其他任何硬擋 ⇒ SystemExit;R10 只同檔名而違規原因不同,也算其他硬擋。"""
+        mod, t, git, gate = _rp_probe(tmp_path, monkeypatch, "other",
+                                      commit_out=_rp_block(_RP_R4_ENTRY, extra))
+        with pytest.raises(SystemExit) as e:
+            mod._probe_r4(str(t), gate)
+        assert extra.split()[0] in str(e.value.code), e.value.code
+
+    def test_the_report_title_names_the_r4_probe(self):
+        """`main()` 印的標題只改字:不再說「R2 在 idle 站擋下」。"""
+        import inspect
+        mod = _load("install_rp_title", "install.py")
+        src = inspect.getsource(mod.main)
+        assert u"閘門實測（R4 空提交探針）" in src, src
+        assert u"R2 在 idle 站" not in src, src

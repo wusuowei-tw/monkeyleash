@@ -20,6 +20,7 @@
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -696,6 +697,7 @@ def verify(target):
     """安裝時**強制**跑一次。不通過就不算安裝完成。
 
     票 01 只驗 R2(最薄的端到端);全規則機器列舉的版本是票 02。
+    刪規則輪起 R2 只提示不擋,端到端探針改用保留硬擋的 R4(`_probe_r4`)。
 
     **直譯器(票 156 D-10)**:明確取 `<target>/.venv-gates` 的那一支執行 gate ——
     不經 sh 或 gatepy(從 PowerShell 跑安裝時 PATH 上通常沒有 sh)、
@@ -723,26 +725,127 @@ def verify(target):
     ok, detail = g.authoritative_layer(target)
     if not ok:
         raise SystemExit("權威層沒裝起來,安裝不算完成:%s" % detail)
+    return _probe_r4(target, g)
 
-    # 停在**前置站**才問得到 R2 在提交時的那個問題。
-    # idle 在提交時是故意放行的:實作做完站別本來就會走回 review / idle,
-    # 拿寫入時的問題去問提交會擋掉每一次合法提交(docs/adr/0005)。
-    # 這一點是端到端真的跑一次才會撞到的 —— 讀碼推不出來。
-    pipeline = os.path.join(target, ".dev", "pipeline.json")
-    saved = io.open(pipeline, encoding="utf-8").read()
-    io.open(pipeline, "w", encoding="utf-8", newline="\n").write(
-        json.dumps({"current_stage": "spec", "feature": "install-probe",
-                    "ticket_id": None, "updated": ""}, ensure_ascii=False, indent=2) + "\n")
 
-    probe = os.path.join(target, "probe_gate_is_alive.py")
-    io.open(probe, "w", encoding="utf-8", newline="\n").write("x = 1\n")
-    run(["git", "add", "probe_gate_is_alive.py"], target)
-    rc, out = run(["git", "commit", "-m", "probe"], target, check=False)
-    run(["git", "reset", "-q", "HEAD", "--", "probe_gate_is_alive.py"], target, check=False)
-    os.remove(probe)
-    io.open(pipeline, "w", encoding="utf-8", newline="\n").write(saved)
-    if rc == 0 or "[R2" not in out:
-        raise SystemExit("R2 沒有擋下前置站的原始碼提交 —— 閘門沒在守:\n%s" % out)
+PROBE_MIRROR_DIR = ".claude/skills"
+
+
+def _probe_fingerprint(path):
+    import hashlib
+    try:
+        return hashlib.sha256(io.open(path, "rb").read()).hexdigest()
+    except (IOError, OSError):
+        return None
+
+
+def _probe_snapshot(target, watched):
+    _, head = run(["git", "rev-parse", "HEAD"], target)
+    _, index = run(["git", "ls-files", "-s"], target)
+    _, status = run(["git", "status", "--porcelain=v1", "--untracked-files=all"], target)
+    return {"HEAD": head.strip(), "index": index, "status": status,
+            "fingerprint": dict((rel, _probe_fingerprint(os.path.join(target, *rel.split("/"))))
+                                for rel in watched)}
+
+
+_PROBE_BLOCK_HEAD = "[六站閘門/pre-commit] commit 已擋下"
+_PROBE_ENTRY = re.compile(r"^  (\[R\d+[^\]]*\](?:\[enforce\])?) ?(.*)$")
+
+
+def _probe_block_problems(out, rel, rc):
+    """探針的擋下只認 gate 的**擋下段**(`commit 已擋下` 之後、兩格縮排的那幾項),提示段不算。
+
+    允許的硬擋只有兩種:(i) R4,且指向本次刪除的鏡像檔;
+    (ii) R10,且內容就是**同一則** R4 違規(同檔、同原因)—— R10 的鏡像比對會把同一個缺檔再報一次。
+    其餘任何一項(別條規則、R4 指向別的檔、R10 只同檔名)都算其他硬擋。
+    """
+    lines = out.splitlines()
+    starts = [i for i, l in enumerate(lines) if l.startswith(_PROBE_BLOCK_HEAD)]
+    if not starts:
+        return ["提交被擋了(rc=%d),但輸出裡沒有閘門的擋下段 —— 環境錯誤或別的 hook 先擋,"
+                "不算閘門擋下。" % rc]
+    entries = []
+    for l in lines[starts[-1] + 1:]:
+        if l.startswith("[六站閘門"):
+            break
+        m = _PROBE_ENTRY.match(l)
+        if m:
+            entries.append((m.group(1), m.group(2)))
+    hit = re.compile(r"(?<![\w./-])%s(?![\w./-])" % re.escape(rel))
+    r4 = [body for tag, body in entries if tag.startswith("[R4") and hit.search(body)]
+    if not r4:
+        return ["提交被擋了(rc=%d),但擋下段裡沒有 R4 指向 %s 的那一則。" % (rc, rel)]
+    others = [tag + " " + body for tag, body in entries
+              if not (tag.startswith("[R4") and body in r4)
+              and not (tag.startswith("[R10") and any(("[R4] " + b) in body for b in r4))]
+    if others:
+        return ["擋下段裡有 R4 以外的硬擋 —— 探針問不準「閘門是不是因為 R4 而擋」:\n    %s"
+                % "\n    ".join(others)]
+    return []
+
+
+def _probe_r4(target, g):
+    """安裝後用**保留硬擋的 R4** 證明閘門還會擋(刪規則輪;探針位置裁決整理 v2)。
+
+    R1/R2/R3/R8 降為提示之後,舊探針(前置站提交原始碼、要 R2 擋)必然失敗。
+    在**被安裝的 repo 內**刪一個鏡像 SKILL.md,`git commit --allow-empty` ——
+    不 add 任何檔、不改站牌 —— 要求 R4 擋下且指向那個檔,之後以 `build_mirrors` 重建。
+    git 真的選中的那個 hook 跑起來才會有這個結果,所以它證明的是接線,不只是判定。
+
+    前提不成立就**不跑探針**,失敗也**不自動回退** —— 任何變動都印出來交給人。
+    """
+    staged = run(["git", "diff", "--cached", "--name-only"], target)[1].strip()
+    if staged:
+        raise SystemExit("安裝後自我檢查沒有執行:index 與 HEAD 不一致(有暫存內容)。\n"
+                         "探針要一個空的待提交區才問得準;不會替你退出暫存或搬動工作:\n%s"
+                         % staged)
+
+    canon = os.path.join(target, ".agents", "skills")
+    names = sorted(n for n in (os.listdir(canon) if os.path.isdir(canon) else [])
+                   if os.path.isfile(os.path.join(canon, n, "SKILL.md"))
+                   and os.path.isfile(os.path.join(target, *(PROBE_MIRROR_DIR.split("/") + [n, "SKILL.md"]))))
+    if not names:
+        raise SystemExit("安裝後自我檢查沒有執行:找不到可用來探針的鏡像 SKILL.md(%s/<skill>/SKILL.md)。"
+                         % PROBE_MIRROR_DIR)
+    rel = "%s/%s/SKILL.md" % (PROBE_MIRROR_DIR, names[0])
+    canon_rel = ".agents/skills/%s/SKILL.md" % names[0]
+    mirror = os.path.join(target, *rel.split("/"))
+    if _probe_fingerprint(mirror) != _probe_fingerprint(os.path.join(target, *canon_rel.split("/"))):
+        raise SystemExit("安裝後自我檢查沒有執行:鏡像 %s 與正典 %s 不一致(既存修改)。\n"
+                         "探針要刪再重建它,重建會蓋掉那份內容 —— 停下,沒有刪檔。" % (rel, canon_rel))
+    baseline = g.check_skill_copies()
+    if baseline:
+        raise SystemExit("安裝後自我檢查沒有執行:R4 在不刪檔時就已經不通過 ——\n"
+                         "那樣的擋下證明不了探針問的事。停下,沒有刪檔:\n%s" % "\n".join(baseline))
+
+    watched = (rel, canon_rel, ".dev/pipeline.json")
+    before = _probe_snapshot(target, watched)
+    os.remove(mirror)
+    rc, out = run(["git", "commit", "--allow-empty", "-q", "-m", "install self-check probe"],
+                  target, check=False)
+    rebuilt = None
+    try:
+        build_mirrors(target)
+    except Exception as e:  # noqa: BLE001 —— 重建失敗要原樣說出來
+        rebuilt = "%s: %s" % (type(e).__name__, e)
+    after = _probe_snapshot(target, watched)
+
+    problems = []
+    if rebuilt is not None:
+        problems.append("鏡像重建失敗(%s 可能沒有回來):%s" % (rel, rebuilt))
+    if rc == 0:
+        problems.append("空提交被放行了(rc=0)—— 閘門沒在守。")
+    else:
+        problems += _probe_block_problems(out, rel, rc)
+    for key in ("HEAD", "index", "status", "fingerprint"):
+        if before[key] != after[key]:
+            problems.append("探針前後 %s 不一致。" % key)
+    if problems:
+        raise SystemExit(
+            "安裝後自我檢查失敗,安裝不算完成:\n  %s\n"
+            "位置:%s\n探針前 HEAD:%s\n探針後 HEAD:%s\n"
+            "沒有做任何自動回退(不 reset、不改你的歷史)。提交輸出:\n%s"
+            % ("\n  ".join(problems), target, before["HEAD"], after["HEAD"], out))
     return out
 
 
@@ -854,7 +957,7 @@ def main(target):
         _out("    (別只看終端機 —— 那份檔案是這些決定的落地處)")
     else:
         _out("\n沒有待決定項目。")
-    _out("\n閘門實測(R2 在 idle 站擋下原始碼提交):")
+    _out("\n閘門實測（R4 空提交探針）:")
     for line in blocked.strip().splitlines():
         _out("    %s" % line)
 

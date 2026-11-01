@@ -1070,7 +1070,7 @@ class TestTheListItselfIsGuarded:
     def test_the_shipped_list_is_clean(self):
         assert gate.check_legacy_list() == []
 
-    def test_the_rule_is_actually_invoked_at_the_authoritative_layer(self, monkeypatch):
+    def test_the_rule_is_actually_invoked_at_the_authoritative_layer(self, monkeypatch, capsys):
         """規則存在但沒人呼叫,就是 F-017 的形狀 —— 在這裡釘死。"""
         monkeypatch.setattr(gate.subprocess, "check_output", lambda *a, **k: b"")
         monkeypatch.setattr(gate, "check_skill_copies", lambda: [])
@@ -1081,7 +1081,11 @@ class TestTheListItselfIsGuarded:
         monkeypatch.setattr(gate, "check_extension_integrity",
                             lambda staged_names=None: {"hard_block": None, "violations": [],
                                                        "report": None, "policy_source": "head"})
-        assert gate.mode_pre_commit() == 1, "pre-commit 沒有呼叫 check_legacy_list"
+        # 刪規則輪:R6 降為指引 —— 接線的證據改成「它的結果出現在提示裡」,rc 不再由它決定。
+        capsys.readouterr()
+        assert gate.mode_pre_commit() == 0, "R6 已降為指引,卻擋下了 commit"
+        err = capsys.readouterr().err
+        assert "假違規" in err and gate.ADVISORY_HEAD in err, "pre-commit 沒有呼叫 check_legacy_list:%r" % err
 
     def test_an_unreadable_list_is_not_silently_clean(self, tmp_path, monkeypatch):
         monkeypatch.setattr(gate, "LEGACY_LIST", str(tmp_path / "gone.txt"))
@@ -3068,11 +3072,13 @@ class TestEnforcementDoesNotTeachItsOwnBypass:
         # 替身漏一個參數,mode_pre_commit 會在**取清單**那一步就掛掉,
         # 而這條測試要驗的是它**擋下之後**說了什麼。
         monkeypatch.setattr(gate, "staged_paths", lambda cwd=None, gitlinks=None: [])
-        monkeypatch.setattr(gate, "check_skill_copies", lambda: [])
+        # 刪規則輪:R6 降為指引,不再產生擋下訊息 ⇒ 替身改接**保留硬擋**的呼叫位置(R4)。
+        # 本組驗的是「擋下之後說了什麼」,與是哪一條規則擋的無關;來源換成真的會擋的那一支。
+        monkeypatch.setattr(gate, "check_skill_copies",
+                            lambda: ["[R4] 測試用的違規"])
         monkeypatch.setattr(gate, "check_third_axis_mount", lambda: [])
         monkeypatch.setattr(gate, "check_to_spec_override", lambda: [])
-        monkeypatch.setattr(gate, "check_legacy_list",
-                            lambda: ["[R6] 測試用的違規"])
+        monkeypatch.setattr(gate, "check_legacy_list", lambda: [])
         monkeypatch.setattr(gate, "shadow_active", lambda: False)
         # 票 146 R10(4b 准改第 5 項):停掉 —— 本組驗的是一般違規的擋下訊息,不是 R10 硬擋。
         monkeypatch.setattr(gate, "check_extension_integrity",
@@ -3719,7 +3725,7 @@ class TestFrictionNumbersAreUnique:
         assert v, "讀不到檔案竟然回報乾淨(fail-open)"
 
     def test_the_rule_is_actually_invoked_at_the_authoritative_layer(
-            self, monkeypatch):
+            self, monkeypatch, capsys):
         """**最強的那一條**(照 R6 的先例):驗規則真的被 pre-commit 呼叫,
         不只是函式回對值。沒有這條的話,一個寫好卻沒接上的檢查會全綠。"""
         calls = []
@@ -3733,8 +3739,13 @@ class TestFrictionNumbersAreUnique:
         monkeypatch.setattr(gate, "check_extension_integrity",
                             lambda staged_names=None: {"hard_block": None, "violations": [],
                                                        "report": None, "policy_source": "head"})
-        assert gate.mode_pre_commit() == 1, "pre-commit 沒有呼叫 check_friction_numbers"
+        # 刪規則輪:R9 降為指引 —— rc 不再由它決定;接線證據改成 spy + 提示內容。
+        capsys.readouterr()
+        rc = gate.mode_pre_commit()
+        err = capsys.readouterr().err
+        assert rc == 0, "R9 已降為指引,卻擋下了 commit:%r" % err
         assert len(calls) >= 1, "check_friction_numbers 沒有被 pre-commit 呼叫"
+        assert "假違規" in err and gate.ADVISORY_HEAD in err, err
 
     def test_the_shipped_log_is_clean(self):
         """對**本庫現行的** friction-log 跑一次 —— 正對照,不是只測 tmp_path。"""
@@ -6282,12 +6293,18 @@ def test_d_mode_pre_commit_blocks_an_entry_absent_from_the_go_live_tree(
     assert gate.check_legacy_list() == [], (
         u"前提垮了:R6 對 index 那一份出聲了,這一格就分不出是誰擋的")
 
+    # 刪規則輪:R3 降為指引 ⇒ 證據從「rc 1」改成「R3 提示點名這支檔」;
+    # 另以 spy 證明保留硬擋的 R4 那一格在提示之後仍被執行。
+    r4_calls = []
+    monkeypatch.setattr(gate, "check_skill_copies", lambda: r4_calls.append(1) or [])
     rc = gate.mode_pre_commit()
     err = capsys.readouterr().err
-    assert rc == 1, u"不合法條目拿到豁免,commit 沒被擋:rc=%r\n%s" % (rc, err)
-    assert "[R3" in err, u"擋下的不是 R3:\n%s" % err
+    assert rc == 0, u"R3 已降為指引,卻擋下了 commit:rc=%r\n%s" % (rc, err)
+    assert "[R3" in err and "pkg/newbie.py" in err and gate.ADVISORY_HEAD in err, (
+        u"不合法條目拿到豁免,R3 沒有出聲:\n%s" % err)
     assert "[R6" not in err, (
-        u"R6 也出聲了 —— 這一格就證明不了是 D 在擋:\n%s" % err)
+        u"R6 也出聲了 —— 這一格就證明不了是 D 在判:\n%s" % err)
+    assert r4_calls == [1], u"R4 那一格沒有在提示之後執行:%r" % r4_calls
 
 
 def test_d_mode_pre_commit_passes_an_entry_present_in_the_go_live_tree(
@@ -7497,26 +7514,31 @@ class TestTicket148AuthorityLayerJudgesRenamedSource:
         return TestTicket146Integration._run(mod, capsys)
 
     def test_t148_7c_new_source_file_is_blocked_by_r2(self, tmp_path, monkeypatch, capsys):
-        """T148-7c(權威層正控;C0 綠):tickets 站新增 pkg/fresh.py ⇒ rc 1、含 [R2、不含 [R10。"""
+        """T148-7c(權威層正控;C0 綠):tickets 站新增 pkg/fresh.py ⇒ 判到 [R2、不含 [R10。
+        刪規則輪(α):R2 降為提示 ⇒ rc 0,提示指名該檔、不帶 [enforce]。"""
         root, home = self._root(tmp_path, monkeypatch)
         (root / "pkg").mkdir()
         (root / "pkg" / "fresh.py").write_bytes(b"def fresh():\n    return 1\n")
         _t148_git(root, "add", "pkg/fresh.py")
         rc, err = self._run(monkeypatch, capsys, root, home, "7c")
-        assert rc == 1, err
-        assert "[R2" in err, err
+        assert rc == 0, err
+        assert "[R2/commit] pkg/fresh.py" in err and gate.ADVISORY_HEAD in err, err
+        assert "[enforce]" not in err, err
         assert "[R10" not in err, err
 
     def test_t148_7_renamed_into_source_is_blocked_by_r2(self, tmp_path, monkeypatch, capsys):
-        """T148-7(權威層;C0 紅):tickets 站 `git mv docs/tool.py pkg/tool.py`(R)⇒ rc 1、含 [R2、不含 [R10。
-        C0 紅因(讀碼推論):ACM 不含 R ⇒ staged_paths 為空 ⇒ 逐檔 check 不跑 ⇒ rc 0。"""
+        """T148-7(權威層;C0 紅):tickets 站 `git mv docs/tool.py pkg/tool.py`(R)⇒ 判到 [R2、不含 [R10。
+        C0 紅因(讀碼推論):ACM 不含 R ⇒ staged_paths 為空 ⇒ 逐檔 check 不跑 ⇒ 判不到。
+        刪規則輪(α):R2 降為提示 ⇒ rc 0;rename 仍要被判到(提示指名新路徑)。"""
         root, home = self._root(tmp_path, monkeypatch)
         (root / "pkg").mkdir()
         _t148_git(root, "mv", "docs/tool.py", "pkg/tool.py")
         _t148_assert_rename(root, "docs/tool.py", "pkg/tool.py")
         rc, err = self._run(monkeypatch, capsys, root, home, "7")
-        assert rc == 1, u"rename 進原始碼目錄沒被權威層擋下:rc=%r\n%s" % (rc, err)
-        assert "[R2" in err, err
+        assert rc == 0, err
+        assert "[R2/commit] pkg/tool.py" in err and gate.ADVISORY_HEAD in err, \
+            u"rename 進原始碼目錄沒被權威層判到:\n%s" % err
+        assert "[enforce]" not in err, err
         assert "[R10" not in err, err
 
 
@@ -7796,16 +7818,19 @@ class TestTicket152JudgeSide:
         root = _t152_repo(tmp_path, monkeypatch, stage="review")
         _t152_write(root, _T152_KT_IMPL, u"class Foo\n")
         rc, err = _t152_pre_commit(root, monkeypatch, capsys, [_T152_KT_IMPL])
-        assert rc == 1, u"AC-B9:無測試的 .kt 在權威層放行:rc=%r\n%s" % (rc, err)
-        assert "[R3" in err, err
+        # 刪規則輪:R3 降為指引 ⇒ 判定仍要到(提示點名 R3 與這支檔),但不擋。
+        assert rc == 0, u"R3 已降為指引,卻擋下了 commit:rc=%r\n%s" % (rc, err)
+        assert "[R3" in err and _T152_KT_IMPL in err and gate.ADVISORY_HEAD in err, (
+            u"AC-B9:無測試的 .kt 在權威層沒有被判定:\n%s" % err)
 
     def test_ac_b9_control_pre_commit_blocks_an_untested_python_file(self, tmp_path, monkeypatch, capsys):
         """AC-B9 對照格|守住既有行為(可以原本就綠)|現行:無測試的 `.py` ⇒ rc 1、`[R3]`。"""
         root = _t152_repo(tmp_path, monkeypatch, stage="review")
         _t152_write(root, "pkg/thing.py", u"x = 1\n")
         rc, err = _t152_pre_commit(root, monkeypatch, capsys, ["pkg/thing.py"])
-        assert rc == 1, err
-        assert "[R3]" in err, err
+        # 刪規則輪:R3 降為指引。
+        assert rc == 0, err
+        assert "[R3]" in err and gate.ADVISORY_HEAD in err, err
 
     # ── AC-B10:R8 未檢查要看得見 ──────────────────────────────────────────
 
@@ -8018,8 +8043,9 @@ class TestTicket152Round2:
         _t152_write(root, "pkg/thing.py", u"x = 1\n")
         rc, err, _sh = _t152r2_pre_commit(root, monkeypatch, capsys,
                                           ["build.gradle.kts", "pkg/thing.py"])
-        assert rc == 1, err
-        assert "[R3]" in err and _T152R2_NOTE in err, err
+        # 刪規則輪:R3 降為指引 ⇒ 這個佈置走的是提示出口(rc 0);提示段仍要排在判定訊息之後。
+        assert rc == 0, err
+        assert "[R3]" in err and _T152R2_NOTE in err and gate.ADVISORY_HEAD in err, err
         assert err.index(_T152R2_NOTE) > err.index("[R3]"), err
         assert "build.gradle.kts" in err[err.index(_T152R2_NOTE):], err
 
@@ -8032,10 +8058,13 @@ class TestTicket152Round2:
         rc, err, shadow_logged = _t152r2_pre_commit(root, monkeypatch, capsys,
                                                     ["build.gradle.kts", "pkg/thing.py"],
                                                     shadow=True)
+        # 刪規則輪(裁決 b):降級提示**不進影子日誌** ⇒ 這個佈置沒有任何東西可以寫進影子,
+        # 影子訊息也不出現;提示段仍要排在 R3 提示之後。
         assert rc == 0, err
-        assert len(shadow_logged) == 1, shadow_logged
-        assert u"[六站閘門/影子]" in err and _T152R2_NOTE in err, err
-        assert err.index(_T152R2_NOTE) > err.index(u"[六站閘門/影子]"), err
+        assert shadow_logged == [], shadow_logged
+        assert u"[六站閘門/影子]" not in err, err
+        assert "[R3]" in err and _T152R2_NOTE in err, err
+        assert err.index(_T152R2_NOTE) > err.index("[R3]"), err
 
     @pytest.mark.parametrize("path", ["integration_test/a_test.dart",
                                       "app/src/androidTest/kotlin/x/FooTest.kt"])
@@ -8078,8 +8107,9 @@ class TestTicket152Round2:
         root = _t152_repo(tmp_path, monkeypatch, stage="review")
         _t152_write(root, _T152_DART_IMPL, u"int foo() => 1;\n")
         rc, err, _sh = _t152r2_pre_commit(root, monkeypatch, capsys, [_T152_DART_IMPL])
-        assert rc == 1, err
-        assert "[R3" in err, err
+        # 刪規則輪:R3 降為指引。
+        assert rc == 0, err
+        assert "[R3" in err and gate.ADVISORY_HEAD in err, err
 
     @pytest.mark.parametrize("impl_file", ["lib\\foo.dart", "./lib/foo.dart"])
     def test_f4_d5_non_posix_impl_file_is_not_qualifying(self, tmp_path, monkeypatch, impl_file):
@@ -8394,11 +8424,11 @@ def test_t158_c0_2_shadow_mode_does_not_exempt_r11(tmp_path, monkeypatch, capsys
     對照(先做):影子模式下,被 R1 擋的規格書寫入照舊只記帳、回 0 —— 證明影子確實開著、
     而且一般規則確實被它放行;否則下半段的 exit 2 可能只是影子根本沒生效。"""
     repo = _t158_c0_2_world(tmp_path, monkeypatch)
-    spec = repo / "docs" / "specs" / "x.md"
+    # 刪規則輪(裁決 b):R1 降為指引、不進影子日誌,所以它證明不了「影子確實開著」。
+    # 對照改用仍會進影子的保留規則 —— R7 的 Shell 寫入(同 `test_t158_c0_3_shadow_control_r7_still_only_logs`)。
     rc, err, shadow_logged = _t158_c0_2_hook(
-        monkeypatch, capsys, "Write",
-        {"file_path": str(spec), "content": "```\nx = 1\n```\n"}, shadow=True)
-    assert rc == 0 and any(m.startswith("[R1]") for m in shadow_logged), (rc, err, shadow_logged)
+        monkeypatch, capsys, "Bash", {"command": "echo x > pkg/x.py"}, shadow=True)
+    assert rc == 0 and any(m.startswith("[R7") for m in shadow_logged), (rc, err, shadow_logged)
 
     rc, err, shadow_logged = _t158_c0_2_hook(
         monkeypatch, capsys, "Write",
@@ -9274,3 +9304,240 @@ class TestT158ADPrefixBypass:
         """D102|回歸|同 D100,第二段是內嵌直譯器;原切法那一輪擋。"""
         msg = gate.bash_write_violation("git log x\\; python -c \"print(1)\"")
         assert msg and "[R7/內嵌直譯器]" in msg, msg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 刪規則輪(rule-pruning)—— 流程規則降為指引,**依呼叫位置**轉成提示,其他照擋。
+#
+# 裁決(Jeff 2026-11-01):降級位置只有 `check()` 的兩個出口(前哨 / 提交逐檔)、
+# 提交時 R5 兩支、R6、R9。`check()` 只住 R1/R2/R3/R8,四條成組;不依訊息文字判代號。
+# 降級提示不進影子日誌;豁免帳本記判定訊息的第一行,本機路徑先拿掉。
+# 保留硬擋(R4、R7、R10、R11、上游影子)由各自既有的測試守著,這一段只補降級那一半
+# 與「降級不得連帶放行」的對照。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RP_CHECK_GROUP = {"R1", "R2", "R3", "R8"}
+
+
+def _rp_check_source_codes():
+    import inspect
+    return set(gate.RULE_CODE_RE.findall(inspect.getsource(gate.check)))
+
+
+class TestRulePruningStructure:
+
+    def test_check_only_holds_the_four_check_rules(self):
+        """`check()` 遇到第一筆就 return;硬擋規則住進來會被排在前面的降級規則吞掉。"""
+        assert _rp_check_source_codes() == _RP_CHECK_GROUP
+
+    def test_the_check_group_is_all_or_nothing_in_the_advisory_list(self):
+        assert set(gate.CHECK_RULES) == _RP_CHECK_GROUP
+        inter = set(gate.ADVISORY_RULES) & _RP_CHECK_GROUP
+        assert inter in (set(), _RP_CHECK_GROUP), sorted(inter)
+
+    def test_retained_hard_rules_are_not_in_the_advisory_list(self):
+        assert not set(gate.ADVISORY_RULES) & {"R4", "R7", "R10", "R11"}, sorted(gate.ADVISORY_RULES)
+
+    def test_a_partial_check_group_does_not_downgrade(self, monkeypatch):
+        """名單只放了組內幾條 ⇒ 不降級(往擋倒),不是降其中幾條。"""
+        monkeypatch.setattr(gate, "ADVISORY_RULES", frozenset({"R1", "R2", "R3"}))
+        assert gate._check_is_advisory() is False
+        monkeypatch.setattr(gate, "ADVISORY_RULES", frozenset(_RP_CHECK_GROUP))
+        assert gate._check_is_advisory() is True
+
+
+def _rp_ledger(tmp_path, monkeypatch):
+    path = tmp_path / "gate-exemptions.jsonl"
+    monkeypatch.setattr(gate, "EXEMPTION_LOG", str(path))
+    monkeypatch.setattr(gate, "load_stage", lambda: ("implement", "rp"))
+    return path
+
+
+def _rp_records(path):
+    if not path.exists():
+        return []
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def _rp_fake_check(msg):
+    """替身 `check()`:用掉一個豁免、回 `msg`。驗的是**出口位置**怎麼處理它,不是規則本身。"""
+    def fake(path, content, at_commit=False, trace=None, exemptions=None):
+        if exemptions is not None:
+            exemptions.append({"file": "pkg/x.py", "module": "x", "ticket": None,
+                               "declared_in": "0004", "reason": "gate-self-modification"})
+        return msg
+    return fake
+
+
+def _rp_hook(monkeypatch, capsys, tool_input, shadow=False):
+    monkeypatch.setattr(gate, "upstream_shadow_violation", lambda: (None, None))
+    monkeypatch.setattr(gate, "mount_violations_cached", lambda: [])
+    monkeypatch.setattr(gate, "authoritative_layer", lambda *a, **k: (True, ""))
+    shadow_logged = []
+    monkeypatch.setattr(gate, "log_shadow",
+                        lambda msg, at_commit=False, command=None: shadow_logged.append(msg))
+    monkeypatch.setattr(gate, "shadow_active", lambda *a, **k: shadow)
+
+    class _Stdin:
+        buffer = io.BytesIO(json.dumps(
+            {"tool_name": "Write", "tool_input": tool_input}).encode("utf-8"))
+
+    monkeypatch.setattr(gate.sys, "stdin", _Stdin())
+    capsys.readouterr()
+    rc = gate.mode_hook()
+    return rc, capsys.readouterr().err, shadow_logged
+
+
+class TestRulePruningSentinelCheckExit:
+
+    @pytest.mark.parametrize("shadow", [False, True], ids=["enforce", "shadow"])
+    def test_a_check_result_is_advised_not_blocked(self, tmp_path, monkeypatch, capsys, shadow):
+        ledger = _rp_ledger(tmp_path, monkeypatch)
+        monkeypatch.setattr(gate, "check", _rp_fake_check(u"[R1] spec.md:規格書禁止含程式碼。"))
+        rc, err, shadow_logged = _rp_hook(
+            monkeypatch, capsys, {"file_path": str(tmp_path / "spec.md"), "content": "x"}, shadow=shadow)
+        assert rc == 0, err
+        assert "[R1] spec.md" in err and gate.ADVISORY_HEAD in err, err
+        assert shadow_logged == [], shadow_logged
+        recs = _rp_records(ledger)
+        assert len(recs) == 1 and recs[0]["outcome"] == "granted", recs
+        assert recs[0]["blocked_by"] is None and recs[0]["advisory"] == u"[R1] spec.md:規格書禁止含程式碼。", recs
+
+    def test_a_partial_group_still_blocks_at_the_sentinel(self, tmp_path, monkeypatch, capsys):
+        """反控:降級開關不成立時,同一個出口照舊擋 —— 證明上面那條的放行來自降級,不是替身。"""
+        _rp_ledger(tmp_path, monkeypatch)
+        monkeypatch.setattr(gate, "ADVISORY_RULES", frozenset({"R1"}))
+        monkeypatch.setattr(gate, "check", _rp_fake_check(u"[R1] spec.md:規格書禁止含程式碼。"))
+        rc, err, _sh = _rp_hook(monkeypatch, capsys, {"file_path": str(tmp_path / "spec.md"), "content": "x"})
+        assert rc == 2 and "[R1]" in err, (rc, err)
+
+    def test_the_ledger_keeps_only_the_first_line_without_local_paths(self, tmp_path, monkeypatch, capsys):
+        ledger = _rp_ledger(tmp_path, monkeypatch)
+        msg = (u"[R2/fail-closed] %s:讀不到流程狀態(x)。\n"
+               u"     實際查找的位置:%s\n" % (os.path.join(str(gate.ROOT), "pkg", "x.py"),
+                                         os.path.join(str(gate.ROOT), ".dev", "pipeline.json")))
+        monkeypatch.setattr(gate, "check", _rp_fake_check(msg))
+        rc, err, _sh = _rp_hook(monkeypatch, capsys, {"file_path": str(tmp_path / "x.py"), "content": "x"})
+        assert rc == 0, err
+        note = _rp_records(ledger)[0]["advisory"]
+        assert str(gate.ROOT) not in note and "實際查找的位置" not in note, note
+        assert note.startswith(u"[R2/fail-closed]"), note
+
+
+class TestRulePruningAdvisoryNote:
+
+    def test_the_repo_and_home_paths_are_replaced(self):
+        root = str(gate.ROOT)
+        note = gate.advisory_note(u"[R3] %s:找不到對應測試\n第二行" % os.path.join(root, "a.py"))
+        assert root not in note and note.startswith(u"[R3] <repo>"), note
+
+    def test_a_leftover_absolute_path_withholds_the_text(self):
+        note = gate.advisory_note(u"[R1/fail-closed] spec.md:讀不到內容(Z:\\elsewhere\\spec.md)")
+        assert "elsewhere" not in note and note.startswith("[R1/fail-closed]"), note
+
+    def test_no_message_gives_an_empty_note(self):
+        assert gate.advisory_note(None) == ""
+
+
+def _rp_pre_commit(monkeypatch, capsys, tmp_path, staged=(), check=None, r4=(), r5_axis=(),
+                   r5_spec=(), r6=(), r9=(), shadow=False, hard_block=None):
+    monkeypatch.setattr(gate, "upstream_shadow_violation", lambda: (None, None))
+    monkeypatch.setattr(gate, "staged_paths", lambda cwd=None, gitlinks=None: list(staged))
+    monkeypatch.setattr(gate, "_staged_names_all", lambda: list(staged))
+    monkeypatch.setattr(gate, "check_extension_integrity",
+                        lambda staged_names=None: {"hard_block": hard_block, "violations": [],
+                                                   "report": None, "policy_source": "head"})
+    calls = []
+
+    def stub(name, val):
+        monkeypatch.setattr(gate, name, lambda *a, **k: calls.append(name) or list(val))
+    stub("check_skill_copies", r4)
+    stub("check_third_axis_mount", r5_axis)
+    stub("check_to_spec_override", r5_spec)
+    stub("check_legacy_list", r6)
+    stub("check_friction_numbers", r9)
+    if check is not None:
+        monkeypatch.setattr(gate, "check", check)
+    ledger = _rp_ledger(tmp_path, monkeypatch)
+    shadow_logged = []
+    monkeypatch.setattr(gate, "log_shadow",
+                        lambda msg, at_commit=False, command=None: shadow_logged.append(msg))
+    monkeypatch.setattr(gate, "shadow_active", lambda *a, **k: shadow)
+    capsys.readouterr()
+    rc = gate.mode_pre_commit()
+    return rc, capsys.readouterr().err, shadow_logged, calls, ledger
+
+
+_RP_ALL_FIVE = ["check_skill_copies", "check_third_axis_mount", "check_to_spec_override",
+                "check_legacy_list", "check_friction_numbers"]
+
+
+class TestRulePruningPreCommit:
+
+    @pytest.mark.parametrize("shadow", [False, True], ids=["enforce", "shadow"])
+    def test_r5_r6_r9_are_advised_and_every_check_still_runs(self, tmp_path, monkeypatch, capsys, shadow):
+        rc, err, shadow_logged, calls, _l = _rp_pre_commit(
+            monkeypatch, capsys, tmp_path, r5_axis=[u"[R5] 第三軸假違規"], r5_spec=[u"[R5] 覆寫假違規"],
+            r6=[u"[R6] 清單假違規"], r9=[u"[R9] 撞號假違規"], shadow=shadow)
+        assert rc == 0, err
+        for m in (u"[R5] 第三軸假違規", u"[R5] 覆寫假違規", u"[R6] 清單假違規", u"[R9] 撞號假違規"):
+            assert m in err, (m, err)
+        assert gate.ADVISORY_HEAD in err, err
+        assert shadow_logged == [], shadow_logged
+        assert sorted(calls) == sorted(_RP_ALL_FIVE), calls
+
+    def test_r4_still_blocks_next_to_advisories(self, tmp_path, monkeypatch, capsys):
+        rc, err, _sh, calls, _l = _rp_pre_commit(
+            monkeypatch, capsys, tmp_path, r4=[u"[R4] 鏡像缺少 x"], r6=[u"[R6] 清單假違規"])
+        assert rc == 1, err
+        # 正式擋下的訊息會被插上 `[enforce]`(`tag_enforce`),提示不會。
+        assert u"[R4][enforce] 鏡像缺少 x" in err and u"[R6] 清單假違規" in err, err
+        assert "1 項違規" in err, err
+
+    def test_a_check_result_is_advised_while_r4_still_blocks(self, tmp_path, monkeypatch, capsys):
+        """A-3 提交處的情境在單元層:同一次提交,R3 提示 + R4 擋。"""
+        rc, err, _sh, calls, ledger = _rp_pre_commit(
+            monkeypatch, capsys, tmp_path, staged=["pkg/x.py"],
+            check=_rp_fake_check(u"[R3] pkg/x.py:找不到對應測試"), r4=[u"[R4] 鏡像缺少 x"])
+        assert rc == 1, err
+        assert u"[R3] pkg/x.py" in err and u"[R4][enforce] 鏡像缺少 x" in err, err
+        assert u"[R3][enforce]" not in err, err
+        assert "check_skill_copies" in calls, calls
+        recs = _rp_records(ledger)
+        assert len(recs) == 1 and recs[0]["advisory"] == u"[R3] pkg/x.py:找不到對應測試", recs
+        assert recs[0]["outcome"] == "granted" and recs[0]["at_commit"] is True, recs
+
+    def test_a_check_result_alone_does_not_block(self, tmp_path, monkeypatch, capsys):
+        rc, err, _sh, calls, _l = _rp_pre_commit(
+            monkeypatch, capsys, tmp_path, staged=["pkg/x.py"],
+            check=_rp_fake_check(u"[R3] pkg/x.py:找不到對應測試"))
+        assert rc == 0, err
+        assert u"[R3] pkg/x.py" in err and gate.ADVISORY_HEAD in err, err
+        assert sorted(calls) == sorted(_RP_ALL_FIVE), calls
+
+    def test_r10_hard_block_is_untouched(self, tmp_path, monkeypatch, capsys):
+        rc, err, _sh, calls, _l = _rp_pre_commit(
+            monkeypatch, capsys, tmp_path, r6=[u"[R6] 清單假違規"],
+            hard_block=u"[R10/fail-closed] 假硬擋")
+        assert rc == 1 and u"[R10/fail-closed] 假硬擋" in err, err
+
+    def test_shadow_logs_r4_but_not_the_advisories(self, tmp_path, monkeypatch, capsys):
+        rc, err, shadow_logged, _c, _l = _rp_pre_commit(
+            monkeypatch, capsys, tmp_path, r4=[u"[R4] 鏡像缺少 x"], r6=[u"[R6] 清單假違規"], shadow=True)
+        assert rc == 0, err
+        assert shadow_logged == [u"[R4] 鏡像缺少 x"], shadow_logged
+
+    def test_a_partial_group_blocks_the_check_exit_at_commit(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(gate, "ADVISORY_RULES", frozenset({"R5", "R6", "R9"}))
+        rc, err, _sh, _c, _l = _rp_pre_commit(
+            monkeypatch, capsys, tmp_path, staged=["pkg/x.py"],
+            check=_rp_fake_check(u"[R3] pkg/x.py:找不到對應測試"))
+        assert rc == 1 and u"[R3][enforce] pkg/x.py" in err, err
+
+    @pytest.mark.parametrize("code,kw", [("R5", "r5_axis"), ("R6", "r6"), ("R9", "r9")])
+    def test_each_listed_position_falls_back_to_blocking_when_unlisted(
+            self, tmp_path, monkeypatch, capsys, code, kw):
+        monkeypatch.setattr(gate, "ADVISORY_RULES", frozenset(set(gate.ADVISORY_RULES) - {code}))
+        rc, err, _sh, _c, _l = _rp_pre_commit(
+            monkeypatch, capsys, tmp_path, **{kw: [u"[%s] 假違規" % code]})
+        assert rc == 1, (code, err)

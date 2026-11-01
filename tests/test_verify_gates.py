@@ -128,7 +128,9 @@ def target(tmp_path):
     `git reset --hard` 自己就會把它還原,這條測試會綠得毫無理由。
     """
     root = str(tmp_path / "target")
-    os.makedirs(root)
+    # 刪規則輪(續做四):`restore()` 只接受由 verify_gates 自己建立並記錄的 repo ——
+    # 這裡改由那個建立函式產生目錄,其餘佈置一字不動。
+    vg.create_repo(root)
     _write(root, ".agents/skills/tdd/SKILL.md", "# tdd 正典\n")
     _write(root, ".claude/skills/tdd/SKILL.md", "# tdd 正典\n")
     _write(root, "skills/tdd/SKILL.md", "# tdd 正典\n")
@@ -141,6 +143,7 @@ def target(tmp_path):
     _git(["config", "user.name", "test"], root)
     _git(["add", "-A"], root)
     _git(["commit", "-qm", "base"], root)
+    vg.record_base(root)   # 基準 = 上一行那一筆;與舊版 `reset --hard HEAD` 在這裡指向同一個 commit
 
     # 前置條件:鏡像確實不在版控裡,否則本測試量到的是 git 而不是 restore
     tracked = subprocess.run(["git", "ls-files", MIRROR_REL],
@@ -954,3 +957,251 @@ def test_t158_c0_3_scenario_r11_asks_both_predicates(tmp_path, file_msg, shell_m
         assert msg is not None and u"[R11" in msg, msg
     else:
         assert u"[R11" not in (msg or u""), msg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 刪規則輪:目標 gate 的降級組(`ADVISORY_RULES`)在淨室裡要被證明「判到了、但不擋」——
+# commit **成功**且輸出含該代號。擋下或沉默都算失敗。保留硬擋的判定句不變。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _rp_wire(monkeypatch, commit_result, code="R6"):
+    calls = {"commit": 0}
+
+    def fake_sh(args, cwd, check=True):
+        if len(args) > 1 and args[1] == "commit":
+            calls["commit"] += 1
+            return commit_result
+        if list(args[1:4]) == ["diff", "--cached", "--name-only"]:
+            return 0, "docs/adr/verify-trigger.md\n"
+        return 0, ""
+    monkeypatch.setattr(vg, "sh", fake_sh)
+    monkeypatch.setattr(vg, "restore", lambda t: None)
+    monkeypatch.setitem(vg.SCENARIOS, code, lambda t: None)
+    return calls
+
+
+@pytest.mark.parametrize("commit_result,ok", [
+    ((0, u"[六站閘門/指引] [R6] 假違規"), True),
+    ((1, u"[R6] 假違規"), False),
+    ((0, u""), False),
+], ids=["advised", "blocked", "silent"])
+def test_rule_pruning_advisory_scenario_needs_success_and_the_code(tmp_path, monkeypatch, commit_result, ok):
+    calls = _rp_wire(monkeypatch, commit_result)
+    passed, out = vg.run_scenario(str(tmp_path), "R6", advisory=True)
+    assert passed is ok, (passed, out)
+    assert calls["commit"] == 1, calls
+
+
+def test_rule_pruning_non_advisory_judgement_is_unchanged(tmp_path, monkeypatch):
+    """保留硬擋的判定句:rc 非 0 且含代號 ⇒ 擋下;成功退出 ⇒ 沒擋到。"""
+    _rp_wire(monkeypatch, (1, u"[R4] 鏡像缺少 x"), code="R4")
+    assert vg.run_scenario(str(tmp_path), "R4")[0] is True
+    _rp_wire(monkeypatch, (0, u"[R4] 鏡像缺少 x"), code="R4")
+    assert vg.run_scenario(str(tmp_path), "R4")[0] is False
+
+
+def test_rule_pruning_advisory_is_refused_for_predicate_rules(tmp_path, monkeypatch):
+    """前哨規則(R7 / R11)沒有「提示」這種結果可驗 —— 要求它以提示通過一律判失敗。"""
+    import types
+    monkeypatch.setattr(vg, "load_target_gate", lambda target: types.SimpleNamespace())
+    monkeypatch.setitem(vg.SCENARIOS, "R11", lambda t: (lambda g: u"[R11] 假訊息"))
+    passed, _out = vg.run_scenario(str(tmp_path), "R11", advisory=True)
+    assert passed is False
+
+
+def test_rule_pruning_advisory_codes_come_from_the_target_gate():
+    import types
+    assert vg.advisory_codes(types.SimpleNamespace(ADVISORY_RULES=frozenset({"R6", "R9"}))) == {"R6", "R9"}
+    assert vg.advisory_codes(types.SimpleNamespace()) == frozenset()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 刪規則輪(續做三 / 續做四)—— `restore()` 還原到**安裝完成時的基準**,不是當下的 HEAD。
+#
+# 降級組的情境提交會真的成功,HEAD 因此往前走;舊版 `reset --hard HEAD` 會把那一格的改動
+# 留給下一格(實測:R3 的探針檔已在 HEAD、R10 正控 nothing to commit)。
+# 防護 (a)(b)(c) 是**防誤用**,不是安全邊界 —— 同一個程序裡的程式碼照樣改得到那份紀錄。
+# 以下全部在真的 git 暫存 repo 裡跑。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _rp_head(root):
+    return _git(["rev-parse", "HEAD"], root).stdout.decode("ascii").strip()
+
+
+def _rp_spy_sh(monkeypatch):
+    """記下 `sh` 收到的每一個 git 子指令,照常執行。"""
+    seen = []
+    real = vg.sh
+
+    def spy(args, cwd, check=True):
+        seen.append(list(args))
+        return real(args, cwd, check=check)
+    monkeypatch.setattr(vg, "sh", spy)
+    return seen
+
+
+def _rp_destructive(seen):
+    return [a for a in seen if len(a) > 1 and a[0] == "git" and a[1] in ("reset", "clean")]
+
+
+def _rp_tree(root):
+    out = {}
+    for dp, dn, fn in os.walk(root):
+        for n in fn:
+            p = os.path.join(dp, n)
+            out[os.path.relpath(p, root)] = io.open(p, "rb").read()
+    return out
+
+
+def test_rule_pruning_restore_returns_to_the_base_after_an_advisory_commit_lands(target, monkeypatch):
+    """提示格的提交成功(HEAD 往前一筆)、`run_scenario` 跑完 `restore()` 之後,HEAD 等於基準。"""
+    base = _rp_head(target)
+    monkeypatch.setitem(vg.SCENARIOS, "R1", lambda t: _write(t, "docs/adr/landed.md", "提示格落地\n"))
+    seen = _rp_spy_sh(monkeypatch)
+    vg.run_scenario(target, "R1", advisory=True)
+    assert [a for a in seen if a[:2] == ["git", "commit"]], "情境沒有走到 commit:%r" % seen
+    assert _rp_head(target) == base
+    assert not os.path.exists(os.path.join(target, "docs", "adr", "landed.md"))
+
+
+def test_rule_pruning_restore_refuses_a_repo_it_did_not_create(tmp_path, monkeypatch):
+    """沒經過建立函式的 repo ⇒ 拒絕,reset 與 clean 都沒有執行。"""
+    root = str(tmp_path / "foreign")
+    os.makedirs(root)
+    _git(["init", "-q"], root)
+    _git(["config", "user.email", "t@example.invalid"], root)
+    _git(["config", "user.name", "test"], root)
+    _write(root, "a.txt", "原內容\n")
+    _git(["add", "-A"], root)
+    _git(["commit", "-qm", "base"], root)
+    _write(root, "untracked.txt", "不能被清掉\n")
+    before = _rp_tree(root)
+    seen = _rp_spy_sh(monkeypatch)
+    with pytest.raises(SystemExit):
+        vg.restore(root)
+    assert _rp_destructive(seen) == [], seen
+    assert _rp_tree(root) == before
+
+
+def test_rule_pruning_restore_refuses_when_the_git_root_is_elsewhere(tmp_path, monkeypatch):
+    """記錄的路徑不是實際 Git 根目錄(內層 `.git` 不見了,git 往上找到外層 repo)⇒ 拒絕,未 reset、未 clean。"""
+    outer = str(tmp_path / "outer")
+    os.makedirs(outer)
+    inner = os.path.join(outer, "inner")
+    vg.create_repo(inner)
+    for args in (["init", "-q"], ["config", "user.email", "t@example.invalid"], ["config", "user.name", "test"]):
+        _git(args, inner)
+    _write(inner, "a.txt", "x\n")
+    _git(["add", "-A"], inner)
+    _git(["commit", "-qm", "inner base"], inner)
+    vg.record_base(inner)
+    import shutil
+
+    def _force(func, path, _exc):
+        os.chmod(path, 0o600)
+        func(path)
+    shutil.rmtree(os.path.join(inner, ".git"), onerror=_force)
+    for args in (["init", "-q"], ["config", "user.email", "t@example.invalid"], ["config", "user.name", "test"]):
+        _git(args, outer)
+    _write(outer, "o.txt", "外層\n")
+    _git(["add", "o.txt"], outer)
+    _git(["commit", "-qm", "outer base"], outer)
+    before = _rp_tree(outer)
+    seen = _rp_spy_sh(monkeypatch)
+    with pytest.raises(SystemExit):
+        vg.restore(inner)
+    assert _rp_destructive(seen) == [], seen
+    assert _rp_tree(outer) == before
+
+
+def test_rule_pruning_restore_refuses_when_head_is_not_a_descendant_of_the_base(target, monkeypatch):
+    """HEAD 不是基準本身或它的後代 ⇒ 拒絕,未還原。"""
+    base = _rp_head(target)
+    _git(["checkout", "-q", "--orphan", "elsewhere"], target)
+    _git(["commit", "-qm", "unrelated root"], target)
+    head = _rp_head(target)
+    assert head != base
+    seen = _rp_spy_sh(monkeypatch)
+    with pytest.raises(SystemExit):
+        vg.restore(target)
+    assert _rp_destructive(seen) == [], seen
+    assert _rp_head(target) == head
+
+
+def test_rule_pruning_restore_refuses_a_base_that_is_not_in_the_repo(target, monkeypatch):
+    """基準 commit 不存在於該 repo ⇒ 拒絕,未還原。(只在測試裡直接換掉紀錄的值,模擬紀錄指錯 repo。)"""
+    monkeypatch.setitem(vg._CREATED, os.path.realpath(target), "f" * 40)
+    _write(target, "docs/adr/stay.md", "不能被清掉\n")
+    seen = _rp_spy_sh(monkeypatch)
+    with pytest.raises(SystemExit):
+        vg.restore(target)
+    assert _rp_destructive(seen) == [], seen
+    assert os.path.exists(os.path.join(target, "docs", "adr", "stay.md"))
+
+
+def test_rule_pruning_create_repo_refuses_an_existing_path(tmp_path):
+    """預定路徑在建立前已存在 ⇒ SystemExit,原內容逐檔不變。"""
+    root = tmp_path / "exists"
+    (root / "sub").mkdir(parents=True)
+    (root / "a.txt").write_bytes(b"one\n")
+    (root / "sub" / "b.bin").write_bytes(b"\x00\x01")
+    before = _rp_tree(str(root))
+    with pytest.raises(SystemExit):
+        vg.create_repo(str(root))
+    assert _rp_tree(str(root)) == before
+    assert os.path.realpath(str(root)) not in vg._CREATED
+
+
+def test_rule_pruning_main_stops_when_the_repo_path_already_exists(tmp_path, monkeypatch):
+    """`main(workdir)` 的預定 repo 路徑已存在 ⇒ 停,不清除、不覆蓋,也不往下做任何安裝步驟。"""
+    wd = tmp_path / "wd"
+    old = wd / "verify-gates-repo"
+    (old / ".git").mkdir(parents=True)
+    (old / "leftover.txt").write_bytes(b"previous run\n")
+    (old / ".git" / "HEAD").write_bytes(b"ref: refs/heads/master\n")
+    before = _rp_tree(str(old))
+    called = []
+    monkeypatch.setattr(vg, "prepare_target_env", lambda t: called.append("prepare"))
+    monkeypatch.setattr(vg.install, "main", lambda t: called.append("install"))
+    with pytest.raises(SystemExit):
+        vg.main(str(wd))
+    assert called == [], called
+    assert _rp_tree(str(old)) == before
+
+
+def test_rule_pruning_main_records_the_base_right_after_install(tmp_path, monkeypatch):
+    """`main` 建立 repo 後才安裝,安裝完成當下的 HEAD 記為基準。"""
+    wd = tmp_path / "wd"
+    seen = {}
+
+    class _Stop(Exception):
+        pass
+
+    def fake_prepare(t):
+        seen["existed_empty"] = os.path.isdir(t) and os.listdir(t) == []
+        for args in (["init", "-q"], ["config", "user.email", "t@example.invalid"], ["config", "user.name", "test"]):
+            _git(args, t)
+
+    def fake_install(t):
+        _write(t, "x.txt", "x\n")
+        _git(["add", "-A"], t)
+        _git(["commit", "-qm", "installed"], t)
+        seen["head"] = _rp_head(t)
+        # 同 test_t146_52b:安裝後預設值檢查要讀的兩個檔(提交之後才放,hook 不會跑)
+        _write(t, ".git/hooks/pre-commit", "#!/bin/sh\npython .claude/portable/leak_scan.py --staged\n")
+        _write(t, ".gitignore", "\n".join(list(_install.GITIGNORE_FRAMEWORK)
+                                          + list(_install.GITIGNORE_SECRETS)) + "\n")
+
+    def first_scenario(t, code, iso=None, advisory=False):
+        seen["base"] = vg._CREATED.get(os.path.realpath(t))
+        raise _Stop()
+    import types
+    monkeypatch.setattr(vg, "prepare_target_env", fake_prepare)
+    monkeypatch.setattr(vg.install, "main", fake_install)
+    monkeypatch.setattr(vg, "load_target_gate", lambda t: types.SimpleNamespace(
+        rule_codes=lambda: ["R1"], ADVISORY_RULES=frozenset({"R1"})))
+    monkeypatch.setattr(vg, "run_scenario", first_scenario)
+    with pytest.raises(_Stop):
+        vg.main(str(wd))
+    assert seen.get("existed_empty") is True, seen
+    assert seen.get("base") == seen.get("head"), seen
