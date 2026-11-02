@@ -1141,9 +1141,10 @@ def _main_isolated(target, iso):
         raise SystemExit("\n%d 個 evidence policy 情境沒有成立:%s"
                          % (len(ev_failures), " ".join(EVIDENCE_LABELS[k] for k, _ in ev_failures)))
 
-    _out("\n全部 %d 條規則各擋下一次,權威層偵測正常,框架測試在新 repo 全綠,"
+    n_advised = len(advised.intersection(codes))
+    _out("\n%d 條硬擋各擋下一次、%d 條降級規則各提示一次、不擋,權威層偵測正常,框架測試在新 repo 全綠,"
          "evidence policy 兩正三負成立。"
-         "\n安裝位置:%s" % (len(codes), target))
+         "\n安裝位置:%s" % (len(codes) - n_advised, n_advised, target))
 
 
 if __name__ == "__main__":

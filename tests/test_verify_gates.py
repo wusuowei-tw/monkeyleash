@@ -1205,3 +1205,49 @@ def test_rule_pruning_main_records_the_base_right_after_install(tmp_path, monkey
         vg.main(str(wd))
     assert seen.get("existed_empty") is True, seen
     assert seen.get("base") == seen.get("head"), seen
+
+
+def test_rule_pruning_summary_counts_hard_and_advisory_rules_separately(tmp_path, monkeypatch):
+    """降級組非空時,成功總結要分列硬擋與降級條數,不再一律寫成「全部 N 條規則各擋下一次」。
+
+    降級數取 `advised` 與 `codes` 的交集:R99 只在降級組、不在規則清單,不得算進去。
+    """
+    wd = tmp_path / "wd"
+    printed = []
+
+    def fake_prepare(t):
+        for args in (["init", "-q"], ["config", "user.email", "t@example.invalid"], ["config", "user.name", "test"]):
+            _git(args, t)
+
+    def fake_install(t):
+        _write(t, "x.txt", "x\n")
+        _git(["add", "-A"], t)
+        _git(["commit", "-qm", "installed"], t)
+        _write(t, ".git/hooks/pre-commit", "#!/bin/sh\npython .claude/portable/leak_scan.py --staged\n")
+        _write(t, ".gitignore", "\n".join(list(_install.GITIGNORE_FRAMEWORK)
+                                          + list(_install.GITIGNORE_SECRETS)) + "\n")
+
+    def fake_authoritative_layer(t):
+        hook = os.path.join(t, ".git", "hooks", "pre-commit")
+        return os.path.exists(hook) and "leak_scan" in io.open(hook, encoding="utf-8").read(), "detail"
+
+    real_sh = vg.sh
+
+    def fake_sh(args, cwd, check=True):
+        if "pytest" in args:
+            return 0, "1 passed"
+        return real_sh(args, cwd, check=check)
+    import types
+    monkeypatch.setattr(vg, "_out", printed.append)
+    monkeypatch.setattr(vg, "prepare_target_env", fake_prepare)
+    monkeypatch.setattr(vg.install, "main", fake_install)
+    monkeypatch.setattr(vg, "load_target_gate", lambda t: types.SimpleNamespace(
+        rule_codes=lambda: ["R1", "R4", "R6"], ADVISORY_RULES=frozenset({"R1", "R6", "R99"}),
+        authoritative_layer=fake_authoritative_layer, not_installed_notice=lambda d: "notice"))
+    monkeypatch.setattr(vg, "run_scenario", lambda t, code, iso=None, advisory=False: (True, ""))
+    monkeypatch.setattr(vg, "sh", fake_sh)
+    monkeypatch.setattr(vg, "run_evidence_scenarios", lambda t: [])
+    vg.main(str(wd))
+    out = "\n".join(printed)
+    assert u"1 條硬擋各擋下一次、2 條降級規則各提示一次、不擋" in out, out
+    assert u"條規則各擋下一次" not in out, out
