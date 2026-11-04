@@ -184,30 +184,54 @@ def _exemption_buckets(recs):
     return val
 
 
+class _Records(list):
+    """`_read_jsonl` 的回傳:**仍是 list of dict**(既有呼叫點的契約不變),
+    另帶 `malformed` —— `[(行號, 錯誤類型), …]`(票 167 裁決 ③:出聲不擋)。"""
+    malformed = ()
+
+
 def _read_jsonl(path):
     """逐行讀 jsonl。回傳 list of dict;**檔不存在回 None**。
 
     **壞掉的行跳過,不讓整份變成「未記錄」** —— 一行壞掉不代表其餘不可讀,
     而把可讀的部分丟掉等於用一個小缺陷換一個大空白(裁 F)。
+
+    **但跳過不得靜默**(票 167 裁決 ③):壞行(解析失敗,或解析結果不是物件)
+    記進回傳值的 `malformed`,由呼叫端印出來。只記行號與類型,**不記原文**。
+    空行不算壞行。
     """
     if not os.path.exists(path):
         return None
-    recs = []
+    recs = _Records()
+    bad = []
     try:
         with io.open(path, encoding="utf-8-sig") as f:
-            for raw in f:
+            for lineno, raw in enumerate(f, 1):
                 raw = raw.strip()
                 if not raw:
                     continue
                 try:
                     rec = json.loads(raw)
-                except Exception:
+                except Exception as e:
+                    bad.append((lineno, u"解析失敗(%s)" % type(e).__name__))
                     continue
                 if isinstance(rec, dict):
                     recs.append(rec)
+                else:
+                    bad.append((lineno, u"非物件(%s)" % type(rec).__name__))
     except Exception:
         return None
+    recs.malformed = bad
     return recs
+
+
+def _malformed_note(recs):
+    """把 `_read_jsonl` 記下的壞行寫成一段附註。沒有壞行回空字串。"""
+    bad = getattr(recs, "malformed", None) or []
+    if not bad:
+        return u""
+    return u";壞行 %d 筆(%s)—— 已跳過,未計入上列" % (
+        len(bad), u"、".join(u"第 %d 行 %s" % (n, k) for n, k in bad))
 
 
 def _field(rec, key):
@@ -969,7 +993,7 @@ def _evidence(root, gate, ticket):
     if ex is None:
         exval = UNRECORDED
     else:
-        exval = _exemption_buckets(ex)
+        exval = _exemption_buckets(ex) + _malformed_note(ex)
     out.append(_line(u"exemptions", exval,
                      _rel(root, ex_log) if ex_log else NO_FUNC))
 

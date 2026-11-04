@@ -121,9 +121,14 @@ def parse_records(text):
         if not line:
             continue
         try:
-            out.append(json.loads(line))
+            rec = json.loads(line)
         except Exception as e:
             raise ValueError("帳本第 %d 行解析不了:%s" % (lineno, e))
+        # 票 167:`null` / 數字 / 字串解析得了,但不是一筆紀錄 —— 放進串列的話,
+        # `chain_breaks` 在 `.get` 才炸。同一條 fail:丟 `ValueError`,只給行號與型別,不給原文。
+        if not isinstance(rec, dict):
+            raise ValueError("帳本第 %d 行不是物件(%s)" % (lineno, type(rec).__name__))
+        out.append(rec)
     return out
 
 

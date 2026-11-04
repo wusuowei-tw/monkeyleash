@@ -2485,14 +2485,20 @@ def logged_exemption_backed(rel_path, base):
     log = EXEMPTION_LOG
     if not os.path.exists(log):
         return False
-    for line in io.open(log, encoding="utf-8"):
-        line = line.strip()
+    for lineno, raw in enumerate(io.open(log, encoding="utf-8"), 1):
+        line = raw.strip()
         if not line:
-            continue
+            continue        # 空行不算 malformed(票 167 裁決 ②)
+        # 票 167:malformed record(解析失敗,或解析結果不是物件)⇒ fail-closed。
+        # 原本這裡是 `except Exception: continue` —— 壞行被當成「沒有這一筆」,
+        # 而 `null` / 數字 / 字串解析得了、在下一行 `rec.get` 才炸成 traceback。
+        # 兩種都不是判定:一份讀不完整的帳本,答不了「有沒有這一筆豁免」。
         try:
             rec = json.loads(line)
-        except Exception:
-            continue
+        except Exception as e:
+            _ledger_malformed(log, lineno, raw, u"解析失敗(%s)" % type(e).__name__)
+        if not isinstance(rec, dict):
+            _ledger_malformed(log, lineno, raw, u"非物件(%s)" % type(rec).__name__)
         if rec.get("file") != rel_path or rec.get("module") != base:
             continue
         mods = committed_declaration(rec.get("declared_in") or "")
@@ -3622,8 +3628,39 @@ def log_exemptions(bucket, verdict, at_commit, content=None, tool=None, advisory
             raise SystemExit(2)
 
 
+def _ledger_malformed(path, lineno, raw, kind):
+    """豁免帳本有壞行 ⇒ 硬錯誤(票 167 Q1:fail-closed,不經降級組)。
+
+    走 `log_exemptions` 寫入失敗那一段的同一個出口:`_err` + `SystemExit(2)`。
+    **訊息刻意不回顯該行原文** —— 壞行可能含路徑、帳號等受保護內容,
+    回顯會讓守衛訊息再觸發守衛。定位靠行號、長度與雜湊。
+    雜湊定義:sha256(該行內容的 utf-8 位元組,不含 CR/LF 行尾)。
+    """
+    content = raw.rstrip("\r\n")
+    _err(u"[閘門/fail-closed] 豁免帳本有 malformed record,判定不了豁免 —— 一律擋下(票 167)。\n"
+         u"     帳本:%s\n"
+         u"     行號:%d\n"
+         u"     錯誤類型:%s\n"
+         u"     原始行長度:%d 字元\n"
+         u"     該行 SHA-256:%s(utf-8,不含 CR/LF 行尾)\n"
+         u"     修復:依票 167 AC-6 的隔離程序,把該行搬進 .dev/gate-exemptions.quarantine.jsonl"
+         u"(先備份主帳本),再從主帳本刪除該行。本訊息刻意不回顯該行原文。\n"
+         % (rel(path), lineno, kind, len(content),
+            hashlib.sha256(content.encode("utf-8")).hexdigest()))
+    raise SystemExit(2)
+
+
 def _append_jsonl(path, rec):
-    """追加一筆 JSON Lines。抽成函式是為了讓「寫入失敗」可以被測試注入。"""
+    """追加一筆 JSON Lines。抽成函式是為了讓「寫入失敗」可以被測試注入。
+
+    **只收物件**(票 167 AC-4):`json.dumps(None)` 正好是 `null`,而那一行
+    在讀取端是 malformed record。拒寫、出聲、丟 `TypeError` —— 呼叫端的
+    `except` 會接到它(`log_exemptions` 因此照舊 `SystemExit(2)`)。
+    """
+    if not isinstance(rec, dict):
+        _err(u"[閘門/帳本] 拒絕寫入非物件紀錄(型別 %s)到 %s —— 帳本每一筆都必須是 JSON 物件(票 167)。\n"
+             % (type(rec).__name__, rel(path)))
+        raise TypeError(u"帳本紀錄必須是 dict,實得 %s" % type(rec).__name__)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with io.open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")

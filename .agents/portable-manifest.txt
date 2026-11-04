@@ -198,6 +198,7 @@ tests/test_portable_output_encoding.py copy
 # 「帶走測試卻不帶走它驗的東西」那個形狀在這裡不成立。
 # 測試本身不碰真實帳本:全部用手造的紀錄串列,只有 CLI 那半讀檔案。
 tests/test_ledger_verify.py     copy
+tests/test_exemption_ledger_malformed.py copy
 # 票 114 刀一 B-4:行尾正規化的三端對帳。**出貨**:它驗的三處
 # (`.claude/hooks/redlight.py` 的 `content_hash`、`.claude/portable/sync.py` 的
 # `_norm` 與 `_read`)分別落在 `.claude/hooks/` 與 `.claude/portable/` 前綴底下
