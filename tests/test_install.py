@@ -492,7 +492,8 @@ def g3_installed_repo(tmp_path_factory):
     (含空的 `.claude`),並涵蓋整個 module 的使用期 —— 後續 node 仍會呼叫安裝目標的 gate。
     真實使用者層因此不被讀寫。"""
     import sys
-    target = tmp_path_factory.mktemp("g3-install") / "repo"
+    base = tmp_path_factory.mktemp("g3-install")
+    target = base / "repo"
     home = tmp_path_factory.mktemp("g3-home")
     (home / ".claude").mkdir()
     mp = pytest.MonkeyPatch()
@@ -503,12 +504,16 @@ def g3_installed_repo(tmp_path_factory):
         if "gate" in sys.modules:
             mp.setitem(sys.modules, "gate", sys.modules["gate"])
         mod = _load("install_for_g3_template", "install.py")
+        # 票 169 D4 例外(沙盒兩段式):target 由沙盒建立函式親手建立;候選根目錄在本 fixture 的 tmp 內。
+        # CANDIDATES_DIR 也指到 tmp —— 萬一走到一般路徑,也不會寫到上游的 `.dev/install-candidates/`。
+        mp.setattr(mod, "CANDIDATES_DIR", str(base / "candidates-not-used"))
+        sandbox = mod.create_disposable_repo(str(target), str(base / "install-candidates"))
         _g3_bootstrap_like_setup(target)
         # 票 156 D-6:事前檢查換成一律通過的替身。system-site venv 一定帶到額外套件,
         # 完整身分檢查不可能過 —— 「寫入前就失敗」只由 RT9 / RT10 驗。
         # `raising=False`:本站(實作前)install 還沒有 `_run_target_identity`。
         mp.setattr(mod, "_run_target_identity", lambda *a, **k: (True, "g3 stub"), raising=False)
-        mod.main(str(target))
+        mod.install_disposable(sandbox)
         yield target
     finally:
         mp.undo()
@@ -1646,3 +1651,581 @@ class TestRulePruningInstallProbe:
         src = inspect.getsource(mod.main)
         assert u"閘門實測（R4 空提交探針）" in src, src
         assert u"R2 在 idle 站" not in src, src
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 票 169 輪一紅燈 —— 新下游安裝的 extension 名冊前置核准(L1-2 裁 (a))
+# ══════════════════════════════════════════════════════════════════════════
+#
+# 本段釘住的介面(票 169〈五之一〉;實作站照此實作):
+#   install.main(target, approve_inventory=None)
+#   install.inventory_candidate(target, claude_root=..., upstream_head=...) -> (canonical_bytes, hash)
+#   install.CANDIDATES_DIR      候選檔根目錄(模組屬性,呼叫時才讀;本段一律換成 tmp)
+#   install.EXIT_INVENTORY_PENDING  未核准停止的結束碼(非 0 int)
+#   CLI:install.py <target> [--approve-inventory <64 碼 hex>];不得有任何自動核准旗標
+#
+# 隔離:家目錄一律指到 tmp(`_t169_home`),候選檔根目錄一律換成 tmp,
+# 不讀寫真實使用者層,不寫上游的 `.dev/`。
+# 紅燈類 = 前 6 條;baseline regression 類 = test_candidate_no_auto_approve_option。
+
+import json as _t169_json
+import shutil as _t169_shutil
+
+_T169_SKILL_REL = ("skills", "synced", "t169bucket", "SKILL.md")
+
+
+def _t169_sha(data):
+    return _t156_hashlib.sha256(data).hexdigest()
+
+
+def _t169_home(tmp_path, monkeypatch):
+    """隔離家目錄 `<tmp>/t169-home/.claude`:一個 synced bucket(SKILL.md + marker)與一個自訂 command。"""
+    home = tmp_path / "t169-home"
+    claude = home / ".claude"
+    base = claude / "skills" / "synced"
+    (base / "t169bucket").mkdir(parents=True)
+    (base / "t169bucket" / "SKILL.md").write_bytes(b"# t169 synced skill\n")
+    (base / ".bucket-t169bucket").write_bytes(b"t169bucket\n")
+    (claude / "commands").mkdir()
+    (claude / "commands" / "t169cmd.md").write_bytes(b"# t169 custom command\n")
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(_t156_sys, "path", list(_t156_sys.path))
+    if "gate" in _t156_sys.modules:
+        monkeypatch.setitem(_t156_sys.modules, "gate", _t156_sys.modules["gate"])
+    assert os.path.expanduser("~") == str(home), "家目錄沒有隔離 —— 拒絕往下"
+    return claude
+
+
+def _t169_target(tmp_path, name="target", real_venv=False):
+    """乾淨、已有一個 commit 的 target;`.venv-gates/` 已登記在 exclude(否則 refuse_if_dirty 會擋)。"""
+    t = _t156_clean_git_target(tmp_path, name)
+    with open(str(t / ".git" / "info" / "exclude"), "a", encoding="utf-8", newline="\n") as f:
+        f.write(".venv-gates/\n")
+    if real_venv:
+        import venv
+        venv.EnvBuilder(system_site_packages=True, with_pip=False).create(str(t / ".venv-gates"))
+    else:
+        _t156_fake_venv(t)
+    return t
+
+
+def _t169_mod(tmp_path, monkeypatch, tag):
+    mod = _load("install_t169_" + tag, "install.py")
+    cands = tmp_path / "t169-candidates"
+    monkeypatch.setattr(mod, "CANDIDATES_DIR", str(cands), raising=False)
+    monkeypatch.setattr(mod, "_run_target_identity", lambda *a, **k: (True, "t169 stub"))
+    return mod, cands
+
+
+def _t169_run(mod, target, capsys, **kw):
+    """跑 `main`,預期 SystemExit。回 (結束碼, 全部輸出 + 結束訊息)。"""
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as e:
+        mod.main(str(target), **kw)
+    cap = capsys.readouterr()
+    return e.value.code, cap.out + cap.err + "\n" + str(e.value.code)
+
+
+def _t169_candidates(cands):
+    """`<CANDIDATES_DIR>/<target-id>/<hash>.json` 全部候選檔(排序後的 Path 串列)。"""
+    out = []
+    if cands.is_dir():
+        for d in sorted(cands.iterdir()):
+            if d.is_dir():
+                out.extend(sorted(p for p in d.iterdir() if p.name.endswith(".json")))
+    return out
+
+
+def _t169_only_candidate(cands):
+    files = _t169_candidates(cands)
+    assert len(files) == 1, files
+    return files[0], files[0].name[:-len(".json")]
+
+
+class TestTicket169InstallCandidate:
+
+    def test_candidate_without_approval_stops_before_any_write(self, tmp_path, monkeypatch, capsys):
+        """不帶旗標 ⇒ 結束碼 EXIT_INVENTORY_PENDING(非 0);target 全部檔案(含 `.git/` 的 HEAD、index、config)
+        與開始前相同;候選檔存在,檔名 = 其 bytes 的 SHA-256 = 輸出印出的 hash。"""
+        _t169_home(tmp_path, monkeypatch)
+        t = _t169_target(tmp_path)
+        mod, cands = _t169_mod(tmp_path, monkeypatch, "pending")
+        before = _t156_snapshot(t)
+        code, out = _t169_run(mod, t, capsys)
+        assert code not in (0, None), out
+        assert code == getattr(mod, "EXIT_INVENTORY_PENDING", u"<install 未定義 EXIT_INVENTORY_PENDING>"), out
+        assert _t156_snapshot(t) == before, "target 在核准前被寫入"
+        f, h = _t169_only_candidate(cands)
+        assert _t169_sha(f.read_bytes()) == h
+        assert h in out, out
+
+    def test_candidate_hash_binds_head_target_and_content(self, tmp_path, monkeypatch):
+        """同一狀態重算兩次 ⇒ 相同;只改 agent-gates HEAD / target 路徑 / target HEAD / synced 內容 ⇒ hash 各不相同。"""
+        claude = _t169_home(tmp_path, monkeypatch)
+        t = _t169_target(tmp_path)
+        mod, _cands = _t169_mod(tmp_path, monkeypatch, "binds")
+        cand = getattr(mod, "inventory_candidate", None)
+        assert cand is not None, "install 沒有 inventory_candidate"
+        up = "1" * 40
+        b1, h1 = cand(str(t), claude_root=str(claude), upstream_head=up)
+        b2, h2 = cand(str(t), claude_root=str(claude), upstream_head=up)
+        assert (b1, h1) == (b2, h2)
+        assert _t169_sha(b1) == h1
+        doc = _t169_json.loads(b1.decode("utf-8"))
+        assert doc["agent_gates_head"] == up, doc
+        seen = {"base": h1}
+        seen["upstream_head"] = cand(str(t), claude_root=str(claude), upstream_head="2" * 40)[1]
+        moved = tmp_path / "target-moved"
+        _t169_shutil.copytree(str(t), str(moved))
+        seen["target_path"] = cand(str(moved), claude_root=str(claude), upstream_head=up)[1]
+        (t / "app.txt").write_text("app v2\n", encoding="utf-8")
+        _t156_git(t, "add", "app.txt")
+        _t156_git(t, "commit", "-q", "-m", "second")
+        seen["target_head"] = cand(str(t), claude_root=str(claude), upstream_head=up)[1]
+        claude.joinpath(*_T169_SKILL_REL).write_bytes(b"# t169 synced skill v2\n")
+        seen["synced_content"] = cand(str(t), claude_root=str(claude), upstream_head=up)[1]
+        assert len(set(seen.values())) == len(seen), seen
+
+    def test_candidate_approved_hash_proceeds(self, tmp_path, monkeypatch, capsys):
+        """帶正確 hash ⇒ 安裝跑完;目標名冊非空且等於候選的 inventory;verify 不再判 synced 額外或 user-commands 未登記。"""
+        _t169_home(tmp_path, monkeypatch)
+        t = _t169_target(tmp_path, real_venv=True)
+        mod, cands = _t169_mod(tmp_path, monkeypatch, "approved")
+        _code, _out = _t169_run(mod, t, capsys)
+        f, h = _t169_only_candidate(cands)
+        doc = _t169_json.loads(f.read_bytes().decode("utf-8"))
+        capsys.readouterr()
+        mod.main(str(t), approve_inventory=h)
+        cap = capsys.readouterr()
+        out = cap.out + cap.err
+        with open(str(t / ".agents" / "extension-inventory.json"), encoding="utf-8") as fh:
+            inv = _t169_json.load(fh)
+        assert inv["entries"], inv
+        assert inv == doc["inventory"], (inv, doc["inventory"])
+        assert u"未受管入口：synced" not in out and u"user-commands 未登記" not in out, out
+        assert u"閘門實測（R4 空提交探針）" in out, out
+
+    def test_candidate_stale_approval_zero_write(self, tmp_path, monkeypatch, capsys):
+        """取得 hash 後改一個 synced 檔,再帶舊 hash ⇒ 停止;target 不變;寫出新候選(新 hash 有印出);舊候選仍在。"""
+        claude = _t169_home(tmp_path, monkeypatch)
+        t = _t169_target(tmp_path)
+        mod, cands = _t169_mod(tmp_path, monkeypatch, "stale")
+        _t169_run(mod, t, capsys)
+        f1, h1 = _t169_only_candidate(cands)
+        old = f1.read_bytes()
+        claude.joinpath(*_T169_SKILL_REL).write_bytes(b"# t169 synced skill changed\n")
+        before = _t156_snapshot(t)
+        code, out = _t169_run(mod, t, capsys, approve_inventory=h1)
+        assert code not in (0, None), out
+        assert _t156_snapshot(t) == before, "過期核准仍寫入了 target"
+        assert f1.is_file() and f1.read_bytes() == old, "舊候選被動過"
+        new = [p for p in _t169_candidates(cands) if p.name != f1.name]
+        assert len(new) == 1, new
+        h2 = new[0].name[:-len(".json")]
+        assert h2 != h1 and _t169_sha(new[0].read_bytes()) == h2
+        assert h2 in out, out
+
+    def test_candidate_hash_from_other_target_rejected(self, tmp_path, monkeypatch, capsys):
+        """A repo 的 hash 用在 B repo ⇒ 停止,B 零寫入。"""
+        _t169_home(tmp_path, monkeypatch)
+        a = _t169_target(tmp_path, "repo-a")
+        b = _t169_target(tmp_path, "repo-b")
+        mod, cands = _t169_mod(tmp_path, monkeypatch, "other")
+        _t169_run(mod, a, capsys)
+        _fa, ha = _t169_only_candidate(cands)
+        before = _t156_snapshot(b)
+        code, out = _t169_run(mod, b, capsys, approve_inventory=ha)
+        assert code not in (0, None), out
+        assert _t156_snapshot(b) == before, "別的 target 的核准寫入了 B"
+
+    def test_candidate_recomputes_and_rejects_corrupt_existing_file(self, tmp_path, monkeypatch, capsys):
+        """產生候選 H → 竄改 <H>.json → 帶 H 重跑 ⇒ 依現況重算仍得 H,但既有檔 hash 不符 ⇒ 停止;
+        target 不變;<H>.json 未被覆寫(仍是竄改後的 bytes);輸出標示候選證據毀損。"""
+        claude = _t169_home(tmp_path, monkeypatch)
+        t = _t169_target(tmp_path)
+        mod, cands = _t169_mod(tmp_path, monkeypatch, "corrupt")
+        _t169_run(mod, t, capsys)
+        f, h = _t169_only_candidate(cands)
+        orig = f.read_bytes()
+        up = _t169_json.loads(orig.decode("utf-8"))["agent_gates_head"]
+        tampered = orig + b"\n{\"t169\": \"tampered\"}\n"
+        f.write_bytes(tampered)
+        before = _t156_snapshot(t)
+        code, out = _t169_run(mod, t, capsys, approve_inventory=h)
+        assert code not in (0, None), out
+        assert _t156_snapshot(t) == before, "候選證據毀損時仍寫入了 target"
+        assert f.read_bytes() == tampered, "毀損的候選檔被覆寫"
+        assert (u"候選證據毀損" in out) or ("candidate evidence corruption" in out.lower()), out
+        assert h in out, out
+        assert mod.inventory_candidate(str(t), claude_root=str(claude), upstream_head=up)[1] == h
+
+    @pytest.mark.parametrize("argv", [
+        ["--approve-latest", "{t}"],
+        ["{t}", "--approve-latest"],
+        ["--auto-approve", "{t}"],
+        ["{t}", "--approve-inventory", "latest"],
+        ["{t}", "--approve-inventory"],
+    ], ids=["approve-latest-first", "approve-latest-last", "auto-approve", "approve-inventory-latest",
+            "approve-inventory-no-value"])
+    def test_candidate_no_auto_approve_option(self, tmp_path, monkeypatch, argv):
+        """baseline regression:CLI 不接受任何自動核准類旗標,在參數層就拒絕(不走到事前檢查),target 不被建立。"""
+        _t169_home(tmp_path, monkeypatch)
+        t = tmp_path / "never-created"
+        script = os.path.join(PORTABLE, "install.py")
+        args = [a.replace("{t}", str(t)) for a in argv]
+        p = _t156_subprocess.run([_t156_sys.executable, script] + args, capture_output=True,
+                                 env=dict(os.environ), timeout=120)
+        out = (p.stdout + p.stderr).decode("utf-8", "replace")
+        assert p.returncode != 0, out
+        assert u"[安裝/事前檢查]" not in out, out
+        assert not t.exists()
+
+
+# ── 票 169 輪二紅燈:空 repo(UNBORN)與非 git 目錄(裁決者 2026-11-04)──────────────
+# 隔離同上:家目錄 `_t169_home`、候選檔根目錄 `_t169_mod`(CANDIDATES_DIR 換成 tmp)。
+
+def _t169_unborn_target(tmp_path, name="unborn"):
+    """`git init` 之後尚無任何 commit 的 target(unborn branch);`.venv-gates/` 已登記在 exclude。"""
+    t = tmp_path / name
+    t.mkdir()
+    _t156_git(t, "init", "-q")
+    _t156_git(t, "config", "user.email", "t@t")
+    _t156_git(t, "config", "user.name", "t")
+    with open(str(t / ".git" / "info" / "exclude"), "a", encoding="utf-8", newline="\n") as f:
+        f.write(".venv-gates/\n")
+    _t156_fake_venv(t)
+    return t
+
+
+class TestTicket169UnbornAndNonRepo:
+
+    def test_candidate_unborn_target_head_sentinel(self, tmp_path, monkeypatch, capsys):
+        """unborn target ⇒ 停止、零寫入,候選 target.head 恰為 "UNBORN";建第一個 commit 後再跑 ⇒
+        target.head 為 40 碼 SHA、新 hash ≠ 舊 hash;帶舊 hash ⇒ 停止、零寫入。"""
+        _t169_home(tmp_path, monkeypatch)
+        t = _t169_unborn_target(tmp_path)
+        mod, cands = _t169_mod(tmp_path, monkeypatch, "unborn")
+        pending = getattr(mod, "EXIT_INVENTORY_PENDING", u"<install 未定義 EXIT_INVENTORY_PENDING>")
+        before = _t156_snapshot(t)
+        code, out = _t169_run(mod, t, capsys)
+        assert code == pending, out
+        assert _t156_snapshot(t) == before, "unborn target 在核准前被寫入"
+        f1, h1 = _t169_only_candidate(cands)
+        doc1 = _t169_json.loads(f1.read_bytes().decode("utf-8"))
+        assert doc1["target"]["head"] == "UNBORN", doc1["target"]
+        (t / "app.txt").write_text("app\n", encoding="utf-8")
+        _t156_git(t, "add", "app.txt")
+        _t156_git(t, "commit", "-q", "-m", "first")
+        sha = _t156_git(t, "rev-parse", "HEAD").stdout.decode("ascii").strip()
+        code2, out2 = _t169_run(mod, t, capsys)
+        assert code2 == pending, out2
+        new = [p for p in _t169_candidates(cands) if p.name != f1.name]
+        assert len(new) == 1, new
+        h2 = new[0].name[:-len(".json")]
+        doc2 = _t169_json.loads(new[0].read_bytes().decode("utf-8"))
+        assert doc2["target"]["head"] == sha and len(sha) == 40, (doc2["target"], sha)
+        assert h2 != h1
+        before2 = _t156_snapshot(t)
+        code3, out3 = _t169_run(mod, t, capsys, approve_inventory=h1)
+        assert code3 not in (0, None), out3
+        assert _t156_snapshot(t) == before2, "過期的 UNBORN 核准仍寫入了 target"
+
+    def test_candidate_non_repo_target_stops(self, tmp_path, monkeypatch, capsys):
+        """不是 git repo 的目錄 ⇒ 停止、內容與開始前相同(不得被 git init)、訊息指示先 git init、不產生候選。"""
+        _t169_home(tmp_path, monkeypatch)
+        t = tmp_path / "plain"
+        t.mkdir()
+        (t / "keep.txt").write_text("keep\n", encoding="utf-8")
+        _t156_fake_venv(t)
+        mod, cands = _t169_mod(tmp_path, monkeypatch, "nonrepo")
+        before = _t156_snapshot(t)
+        code, out = _t169_run(mod, t, capsys)
+        assert code not in (0, None), out
+        assert _t156_snapshot(t) == before, "非 git 目錄被寫入"
+        assert not (t / ".git").exists(), "installer 自行 git init 了目標"
+        assert "git init" in out, out
+        assert _t169_candidates(cands) == [], "非 git 目錄不應產生候選"
+
+
+# ── 票 169 輪三紅燈:D4 沙盒例外(裁決者 2026-11-04,E1～E5)────────────────────────
+# 本段釘住的內部介面(只有函式呼叫,沒有 CLI / 環境變數 / 設定檔入口):
+#   install.create_disposable_repo(path, candidates_dir) -> 沙盒物件(親手 mkdir path;登記在同一程序的記憶體內)
+#   install.install_disposable(sandbox)   只接受上面那個物件本身;其他一律拒絕、零寫入
+#   install._registered_sandbox(obj)      判定函式(只看記憶體登記,不讀磁碟、不讀環境)
+# 實作前的基準(輪三 Grep 實量,出現次數):install.py 的 os.environ / getenv 0 次;verify_gates.py 6 次。
+
+import inspect as _t169_inspect
+import re as _t169_re
+
+_T169_ENV_RE = _t169_re.compile(r"os\.environ|getenv")
+_T169_ENV_BASELINE = {"install.py": 0, "verify_gates.py": 6}
+
+
+def _t169_src(name):
+    with open(os.path.join(PORTABLE, name), encoding="utf-8") as f:
+        return f.read()
+
+
+class TestTicket169DisposableException:
+
+    def test_candidate_disposable_self_approve_completes(self, tmp_path, monkeypatch, capsys):
+        """沙盒建立函式親手建立的 tmp repo ⇒ 內部兩段式(產生候選 → 取 hash → 交回)完成安裝;
+        候選檔只出現在沙盒的候選根目錄,不出現在 CANDIDATES_DIR。"""
+        _t169_home(tmp_path, monkeypatch)
+        mod, cands = _t169_mod(tmp_path, monkeypatch, "disposable_ok")
+        sb_cands = tmp_path / "sb-candidates"
+        sandbox = mod.create_disposable_repo(str(tmp_path / "sb-repo"), str(sb_cands))
+        repo = tmp_path / "sb-repo"
+        assert repo.is_dir()
+        _g3_bootstrap_like_setup(repo)
+        mod.install_disposable(sandbox)
+        out = capsys.readouterr().out
+        f, _h = _t169_only_candidate(sb_cands)
+        doc = _t169_json.loads(f.read_bytes().decode("utf-8"))
+        with open(str(repo / ".agents" / "extension-inventory.json"), encoding="utf-8") as fh:
+            inv = _t169_json.load(fh)
+        assert inv["entries"] and inv == doc["inventory"], inv
+        assert _t169_candidates(cands) == [], "候選檔寫到了沙盒以外的候選根目錄"
+        assert u"閘門實測（R4 空提交探針）" in out, out
+
+    def test_candidate_disposable_rejects_foreign_target(self, tmp_path, monkeypatch):
+        """不是沙盒物件親手建立的 tmp repo(路徑同樣在 tmp 下)⇒ 拒絕 self-approve、該 repo 零寫入、不產生候選。"""
+        _t169_home(tmp_path, monkeypatch)
+        foreign = _t169_target(tmp_path, "foreign")
+        mod, cands = _t169_mod(tmp_path, monkeypatch, "disposable_foreign")
+        before = _t156_snapshot(foreign)
+        with pytest.raises(SystemExit) as e:
+            mod.install_disposable(str(foreign))
+        assert e.value.code not in (0, None)
+        assert _t156_snapshot(foreign) == before, "外來 repo 被寫入"
+        assert _t169_candidates(cands) == []
+
+    @pytest.mark.parametrize("how", ["plain-string", "constructed-object", "retargeted-copy"])
+    def test_candidate_disposable_rejects_forged_sandbox(self, tmp_path, monkeypatch, how):
+        """以字串路徑、直接建構的物件、或複製真沙盒屬性後改指外來路徑的物件冒充沙盒 ⇒ 拒絕、零寫入。"""
+        _t169_home(tmp_path, monkeypatch)
+        foreign = _t169_target(tmp_path, "foreign")
+        mod, cands = _t169_mod(tmp_path, monkeypatch, "disposable_forged_" + how.replace("-", "_"))
+        sb_cands = tmp_path / "sb-candidates"
+        real = mod.create_disposable_repo(str(tmp_path / "sb-real"), str(sb_cands))
+        if how == "plain-string":
+            forged = str(foreign)
+        elif how == "constructed-object":
+            forged = type(real)(str(foreign))
+        else:
+            forged = type(real)(str(foreign))
+            for k, v in getattr(real, "__dict__", {}).items():
+                try:
+                    setattr(forged, k, v)
+                except AttributeError:
+                    pass
+        before = _t156_snapshot(foreign)
+        with pytest.raises(SystemExit) as e:
+            mod.install_disposable(forged)
+        assert e.value.code not in (0, None)
+        assert _t156_snapshot(foreign) == before, "冒充的沙盒寫入了外來 repo"
+        assert _t169_candidates(cands) == [] and _t169_candidates(sb_cands) == []
+
+    def test_candidate_disposable_no_external_entry(self):
+        """CLI 選項集合 = 實作前({--rehook})+ --approve-inventory;兩支檔讀環境變數的次數不變;
+        main 的參數只有 target 與 approve_inventory;判定函式不讀磁碟、環境、設定檔。"""
+        src = _t169_src("install.py")
+        block = src.split('if __name__ == "__main__":', 1)[1]
+        flags = set(_t169_re.findall(r'"(--[a-z][a-z-]*)"', block))
+        assert flags == {"--rehook", "--approve-inventory"}, flags
+        for word in ("disposable", "self_approve", "self-approve", "sandbox"):
+            assert word not in block.lower(), word
+        for name, want in _T169_ENV_BASELINE.items():
+            got = len(_T169_ENV_RE.findall(_t169_src(name)))
+            assert got == want, (name, got, want)
+        mod = _load("install_t169_entry", "install.py")
+        assert list(_t169_inspect.signature(mod.main).parameters) == ["target", "approve_inventory"]
+        judge = _t169_inspect.getsource(getattr(mod, "_registered_sandbox"))
+        for bad in ("open(", "exists(", "isfile(", "listdir(", "environ", "getenv", "json", "argv"):
+            assert bad not in judge, bad
+
+
+# ── 票 169 輪四紅燈:第一個 commit 前重驗與自動復原(裁決者 2026-11-04,新裁決 3／4)──────────
+# 本段釘住的介面(只有內部函式,沒有 CLI / 環境變數 / 設定檔入口):
+#   install.EXIT_REVERIFY_ROLLED_BACK  重驗不一致、已復原(與 3/4/5 不同)
+#   install.EXIT_ROLLBACK_FAILED       復原失敗或復原後驗證不一致(hard fail)
+#   install._rollback(journal)         復原的唯一入口(spy 對象)
+#   install._rb_remove(path)           復原時刪除一個本次新建的路徑
+#   install._rb_restore(path, data, mode) / install._rb_restore_dir(path)  復原時還原開始前的檔 / 目錄
+# 「核准後內容改變」一律包住 installer 內部已寫入的一步(build_mirrors,在 copy_into 之後)去改假 claude_root。
+
+
+def _t169_git(t, *args):
+    return _t156_subprocess.run(["git"] + list(args), cwd=str(t), capture_output=True)
+
+
+def _t169_repo_state(t):
+    """HEAD、index(ls-files -s 全文)、tracked / untracked 集合、.gitignore bytes、repo-local config 全文、
+    .git/hooks 內容、core.hooksPath。"""
+    head = _t169_git(t, "rev-parse", "--verify", "-q", "HEAD")
+    hp = _t169_git(t, "config", "--get", "core.hooksPath")
+    gi = t / ".gitignore"
+    hooks_dir = t / ".git" / "hooks"
+    hooks = {}
+    if hooks_dir.is_dir():
+        for p in sorted(hooks_dir.iterdir()):
+            hooks[p.name] = p.read_bytes() if p.is_file() else "<dir>"
+    return {
+        "head": (head.returncode, head.stdout),
+        "index": _t169_git(t, "ls-files", "-s", "-z").stdout,
+        "tracked": set(_t169_git(t, "ls-files", "-z").stdout.split(b"\0")),
+        "untracked": set(_t169_git(t, "ls-files", "--others", "--exclude-standard", "-z").stdout.split(b"\0")),
+        "gitignore": gi.read_bytes() if gi.exists() else None,
+        "config": _t169_git(t, "config", "--local", "--list", "-z").stdout,
+        "hooks": hooks,
+        "hooksPath": (hp.returncode, hp.stdout),
+    }
+
+
+def _t169_worktree(t):
+    """`.git/` 以外的全部路徑(含 ignored):檔 → sha256,目錄 → "<dir>"。"""
+    out = {}
+    for dp, dns, fns in os.walk(str(t)):
+        rel_dir = os.path.relpath(dp, str(t)).replace("\\", "/")
+        if rel_dir == ".git" or rel_dir.startswith(".git/"):
+            continue
+        if rel_dir != ".":
+            out[rel_dir] = "<dir>"
+        for fn in fns:
+            rel = fn if rel_dir == "." else rel_dir + "/" + fn
+            if rel.startswith(".git/"):
+                continue
+            with open(os.path.join(dp, fn), "rb") as f:
+                out[rel] = _t169_sha(f.read())
+    return out
+
+
+def _t169_change_after_write(mod, monkeypatch, claude):
+    """包住 build_mirrors:原步驟照跑(框架檔已部分寫入),之後改假 claude_root 的 synced 檔。"""
+    real = mod.build_mirrors
+
+    def wrapped(target):
+        made = real(target)
+        claude.joinpath(*_T169_SKILL_REL).write_bytes(b"# t169 synced skill changed after approval\n")
+        return made
+    monkeypatch.setattr(mod, "build_mirrors", wrapped)
+
+
+def _t169_rollback_case(tmp_path, monkeypatch, capsys, tag, target):
+    """共用流程:取得核准 hash → 包住寫入步驟 → 帶 hash 重跑。回 (mod, cands, h1, 結束碼, 輸出, 前狀態, 前工作樹)。"""
+    claude = _t169_home_dir(tmp_path)
+    mod, cands = _t169_mod(tmp_path, monkeypatch, tag)
+    _t169_run(mod, target, capsys)
+    _f1, h1 = _t169_only_candidate(cands)
+    state0, tree0 = _t169_repo_state(target), _t169_worktree(target)
+    _t169_change_after_write(mod, monkeypatch, claude)
+    code, out = _t169_run(mod, target, capsys, approve_inventory=h1)
+    return mod, cands, h1, code, out, state0, tree0
+
+
+def _t169_home_dir(tmp_path):
+    return tmp_path / "t169-home" / ".claude"
+
+
+class TestTicket169Rollback:
+
+    def _assert_restored(self, mod, cands, h1, code, out, state0, tree0, target):
+        want = getattr(mod, "EXIT_REVERIFY_ROLLED_BACK", u"<install 未定義 EXIT_REVERIFY_ROLLED_BACK>")
+        assert code == want, out
+        assert code not in (0, None, mod.EXIT_INVENTORY_PENDING, mod.EXIT_INVENTORY_MISMATCH,
+                            mod.EXIT_CANDIDATE_CORRUPT), code
+        assert _t169_repo_state(target) == state0, "復原後 repo 狀態與開始前不同"
+        assert _t169_worktree(target) == tree0, "復原後工作樹(含 ignored)與開始前不同"
+        new = [p for p in _t169_candidates(cands) if p.name[:-len(".json")] != h1]
+        assert len(new) == 1, new
+        h2 = new[0].name[:-len(".json")]
+        assert h2 != h1 and _t169_sha(new[0].read_bytes()) == h2
+        assert h2 in out, out
+
+    def test_candidate_rollback_after_partial_write_restores_exact_state(self, tmp_path, monkeypatch, capsys):
+        """核准後、框架檔已部分寫入時 synced 改變 ⇒ 重驗不一致 ⇒ 停止、沒有 commit、全部復原;新候選與新 hash。"""
+        _t169_home(tmp_path, monkeypatch)
+        t = _t169_target(tmp_path)
+        res = _t169_rollback_case(tmp_path, monkeypatch, capsys, "rb_partial", t)
+        self._assert_restored(*res, target=t)
+
+    def test_candidate_rollback_keeps_preexisting_ignored_paths(self, tmp_path, monkeypatch, capsys):
+        """開始前已存在、被忽略的目錄與檔(.venv-gates、installer 會 rmtree 重建的 .claude/skills、
+        installer 會寫入的 .dev/)在復原後仍存在且 bytes 相同;不被當成本次新建而刪除。"""
+        _t169_home(tmp_path, monkeypatch)
+        t = _t169_target(tmp_path)
+        with open(str(t / ".git" / "info" / "exclude"), "a", encoding="utf-8", newline="\n") as f:
+            f.write("/.claude/skills/\n/.dev/\n")
+        (t / ".claude" / "skills" / "old-skill").mkdir(parents=True)
+        (t / ".claude" / "skills" / "old-skill" / "SKILL.md").write_bytes(b"# preexisting ignored skill\n")
+        (t / ".dev").mkdir()
+        (t / ".dev" / "keep.txt").write_bytes(b"preexisting ignored note\n")
+        venv_files = {p: p.read_bytes() for p in (t / ".venv-gates").rglob("*") if p.is_file()}
+        res = _t169_rollback_case(tmp_path, monkeypatch, capsys, "rb_ignored", t)
+        self._assert_restored(*res, target=t)
+        assert (t / ".claude" / "skills" / "old-skill" / "SKILL.md").read_bytes() == b"# preexisting ignored skill\n"
+        assert (t / ".dev" / "keep.txt").read_bytes() == b"preexisting ignored note\n"
+        assert not (t / ".dev" / "pipeline.json").exists()
+        assert {p: p.read_bytes() for p in (t / ".venv-gates").rglob("*") if p.is_file()} == venv_files
+
+    def test_candidate_rollback_failure_hard_fails(self, tmp_path, monkeypatch, capsys):
+        """復原中某一步失敗 ⇒ hard fail(結束碼與「已復原」不同);訊息說未恢復、不說已恢復;不再呼叫其他修復步驟。"""
+        claude = _t169_home(tmp_path, monkeypatch)
+        t = _t169_target(tmp_path)
+        mod, cands = _t169_mod(tmp_path, monkeypatch, "rb_fail")
+        _t169_run(mod, t, capsys)
+        _f1, h1 = _t169_only_candidate(cands)
+        calls = {"rollback": 0, "remove": 0, "restore": 0, "restore_dir": 0}
+        real_rollback = mod._rollback
+
+        def spy_rollback(*a, **k):
+            calls["rollback"] += 1
+            return real_rollback(*a, **k)
+
+        def failing_remove(*a, **k):
+            calls["remove"] += 1
+            raise OSError("t169 injected rollback failure")
+
+        def spy_restore(*a, **k):
+            calls["restore"] += 1
+
+        def spy_restore_dir(*a, **k):
+            calls["restore_dir"] += 1
+        monkeypatch.setattr(mod, "_rollback", spy_rollback)
+        monkeypatch.setattr(mod, "_rb_remove", failing_remove)
+        monkeypatch.setattr(mod, "_rb_restore", spy_restore)
+        monkeypatch.setattr(mod, "_rb_restore_dir", spy_restore_dir)
+        _t169_change_after_write(mod, monkeypatch, claude)
+        code, out = _t169_run(mod, t, capsys, approve_inventory=h1)
+        assert code == mod.EXIT_ROLLBACK_FAILED and code != mod.EXIT_REVERIFY_ROLLED_BACK, out
+        assert u"未恢復" in out and u"已恢復" not in out, out
+        assert calls["rollback"] == 1 and calls["remove"] == 1, calls
+        assert calls["restore"] == 0 and calls["restore_dir"] == 0, calls
+
+    def test_candidate_rollback_not_used_after_first_commit(self, tmp_path, monkeypatch, capsys):
+        """第一個 commit 之後的步驟失敗 ⇒ 復原函式不被呼叫(R7)。"""
+        _t169_home(tmp_path, monkeypatch)
+        t = _t169_target(tmp_path)
+        mod, cands = _t169_mod(tmp_path, monkeypatch, "rb_after_commit")
+        _t169_run(mod, t, capsys)
+        _f1, h1 = _t169_only_candidate(cands)
+        head0 = _t169_git(t, "rev-parse", "HEAD").stdout
+        calls = []
+        monkeypatch.setattr(mod, "_rollback", lambda *a, **k: calls.append(a))
+
+        def boom(*a, **k):
+            raise RuntimeError("t169 failure after the first commit")
+        monkeypatch.setattr(mod, "generate_legacy_list", boom)
+        with pytest.raises(RuntimeError):
+            mod.main(str(t), approve_inventory=h1)
+        assert calls == [], calls
+        assert _t169_git(t, "rev-parse", "HEAD").stdout != head0, "第一個 commit 沒有發生"
+
+    def test_candidate_rollback_unborn_target(self, tmp_path, monkeypatch, capsys):
+        """UNBORN 目標同第一條情境 ⇒ 仍無 commit、狀態與開始前相同。"""
+        _t169_home(tmp_path, monkeypatch)
+        t = _t169_unborn_target(tmp_path)
+        res = _t169_rollback_case(tmp_path, monkeypatch, capsys, "rb_unborn", t)
+        self._assert_restored(*res, target=t)
+        assert _t169_git(t, "rev-parse", "--verify", "-q", "HEAD").returncode != 0

@@ -487,22 +487,28 @@ def load_target_gate(target):
 _CREATED = {}
 
 
+INSTALL_CANDIDATES_DIRNAME = "install-candidates"
+
+
 def create_repo(target):
     """原子建立 `target` 並記下它 —— **只有這裡建出來的 repo,`restore()` 才肯動。**
 
     路徑在建立前已存在 ⇒ SystemExit,不刪、不覆蓋(舊版在這裡 rmtree,續做四裁決 1 移除)。
     外層目錄只當位置用,不得被視為可清除。
+
+    票 169 D4 例外(E1 / E3):目錄由 `install.create_disposable_repo` 親手建立,回傳的沙盒物件
+    是安裝時 self-approve 的唯一依據(`install.main` 收到它才會自己交回剛算出的 hash);
+    候選根目錄在同一個外層目錄 `<workdir>/install-candidates`,不寫上游的 `.dev/`。
     """
     parent = os.path.dirname(os.path.abspath(target))
     os.makedirs(parent, exist_ok=True)
     try:
-        os.mkdir(target)
+        sandbox = install.create_disposable_repo(target, os.path.join(parent, INSTALL_CANDIDATES_DIRNAME))
     except FileExistsError:
         raise SystemExit("暫存 repo 的預定路徑已經存在:%s\n"
                          "不清除、不覆蓋 —— 換一個新的外層目錄再跑。" % target)
-    real = os.path.realpath(target)
-    _CREATED[real] = None
-    return real
+    _CREATED[os.path.realpath(sandbox)] = None
+    return sandbox
 
 
 def record_base(target):
@@ -1005,10 +1011,10 @@ def prepare_target_env(target):
 
 
 def main(workdir):
-    target = os.path.abspath(os.path.join(workdir, "verify-gates-repo"))
     # 刪規則輪(續做四):不再 rmtree 上一輪的殘骸 —— 已存在就停,要重跑就換新的外層目錄。
     # 不在上一輪殘骸上跑的目的不變,只是由「先刪」換成「不准在既有路徑上建」。
-    create_repo(target)
+    # 票 169:往下傳的是 create_repo 回傳的沙盒物件本身(install.main 只認它)。
+    target = create_repo(os.path.abspath(os.path.join(workdir, "verify-gates-repo")))
 
     # 票 146 G-1:安裝、規則情境、目標 gate 的載入、框架測試與 evidence 情境全在同一個隔離家目錄內 ——
     # 真實 `~/.claude` 不讀不寫,目標 gate / leak scanner 的模組層常數也不會先綁到真實家目錄。

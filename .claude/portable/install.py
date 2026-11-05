@@ -80,6 +80,22 @@ KNOWN_HOOKS = {
 }
 VENV_GATES = ".venv-gates"
 
+# 票 169:新下游安裝的 extension 名冊前置核准(D1～D4)。
+# 候選檔根目錄是**模組屬性、呼叫時才讀**(測試換成 tmp);拋棄式 repo 用它自己的候選根目錄(D4 例外 / E3)。
+CANDIDATES_DIR = os.path.join(SRC_ROOT, ".dev", "install-candidates")
+_REAL_CANDIDATES_DIR = CANDIDATES_DIR      # E3 的比對基準:不隨測試替換而移動
+CANDIDATE_SCHEMA = "monkeyleash.install-candidate"
+CANDIDATE_VERSION = 1
+CANDIDATE_NOTE = u"install-candidate(票 169)"
+UNBORN = "UNBORN"                          # UNBORN 裁決:尚無 commit 的 target_head(全大寫、逐字)
+EXIT_INVENTORY_PENDING = 3                 # 候選已產生、尚未核准(下游零寫入)
+EXIT_INVENTORY_MISMATCH = 4                # 核准 hash 與現況不一致(D3;下游零寫入)
+EXIT_CANDIDATE_CORRUPT = 5                 # 既有候選檔內容 hash 與檔名不符(D1;下游零寫入、原檔不覆寫)
+EXIT_REVERIFY_ROLLED_BACK = 6              # 第一個 commit 前重驗不一致、已自動復原並驗證(新裁決 3／4)
+EXIT_ROLLBACK_FAILED = 7                   # 自動復原失敗或復原後驗證不一致(R6:hard fail,未恢復)
+_HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")
+_HEX40 = re.compile(r"\A[0-9a-f]{40}\Z")
+
 # 安裝出的 repo 的 .gitignore 必帶兩組:框架垃圾 + 秘密檔。
 # 秘密那組是預設值問題:框架裝好的新專案,第一個放進去的秘密(.env)
 # 原本不被任何規則守著 —— 不是使用者疏忽,是安裝器沒給預設。
@@ -450,18 +466,23 @@ def _settings_hook_commands(target):
     return out
 
 
-def write_extension_policy(target):
+def write_extension_policy(target, approved=None):
     """票 146 G-2:安裝器的最小 extension policy —— 空 inventory + 只授權安裝器寫入的 hook command。
 
     **這是安裝預設,不是核准過的觀測快照**:不登記任何使用者擴充(dev-mods / skills / commands / synced / .mcp.json)。
     兩份都不存在 ⇒ 產生,回 `created=True`;兩份都存在且合法 ⇒ 保留不覆寫,`created=False`;
     只有一份、任一不合法或 JSON 解析失敗 ⇒ SystemExit,**之前不寫任何檔**。
     常數與驗證函式取自目標 repo 的 redlight —— 與判定器是同一份,不在這裡另寫一份。
+
+    `approved`(票 169):安裝前置核准過的 `(allowlist, inventory)`。給了 ⇒ 目標不得已有任何一份 policy,
+    寫入的就是核准的內容(取代空名冊預設);hook command 必須與複製過去的 settings.json 一致,否則停止。
     """
     rl = _target_redlight(target)
     allow_path = os.path.join(target, *rl.EXT_ALLOWLIST_FILE.split("/"))
     inv_path = os.path.join(target, *rl.EXT_INVENTORY_FILE.split("/"))
     present = [os.path.lexists(p) for p in (allow_path, inv_path)]
+    if approved is not None and any(present):
+        raise SystemExit("核准的 extension policy 不覆蓋目標既有的 policy 檔 —— 安裝停止。")
     if all(present):
         docs = []
         for rel, p in ((rl.EXT_ALLOWLIST_FILE, allow_path), (rl.EXT_INVENTORY_FILE, inv_path)):
@@ -479,13 +500,18 @@ def write_extension_policy(target):
         have = rl.EXT_ALLOWLIST_FILE if present[0] else rl.EXT_INVENTORY_FILE
         raise SystemExit("extension policy 只有一份(%s)—— 不補另一份、不覆寫,安裝停止。" % have)
     hooks = _settings_hook_commands(target)
-    allow = {}
-    for k in rl.EXT_ALLOWLIST_FIELDS:
-        allow[k] = []
-    allow["schema"] = rl.EXT_ALLOWLIST_SCHEMA
-    allow["version"] = rl.EXT_ALLOWLIST_VERSION
-    allow["project_settings_hook_commands"] = hooks
-    inv = {"schema": rl.EXT_INVENTORY_SCHEMA, "version": rl.EXT_INVENTORY_VERSION, "entries": []}
+    if approved is not None:
+        allow, inv = json.loads(json.dumps(approved[0])), json.loads(json.dumps(approved[1]))
+        if allow.get("project_settings_hook_commands") != hooks:
+            raise SystemExit("核准的 hook command 與目標 .claude/settings.json 不一致 —— 安裝停止。")
+    else:
+        allow = {}
+        for k in rl.EXT_ALLOWLIST_FIELDS:
+            allow[k] = []
+        allow["schema"] = rl.EXT_ALLOWLIST_SCHEMA
+        allow["version"] = rl.EXT_ALLOWLIST_VERSION
+        allow["project_settings_hook_commands"] = hooks
+        inv = {"schema": rl.EXT_INVENTORY_SCHEMA, "version": rl.EXT_INVENTORY_VERSION, "entries": []}
     for k in rl.EXT_INVENTORY_FIELDS:
         if k not in inv:
             raise SystemExit("目標 redlight 的 EXT_INVENTORY_FIELDS 多出未知欄位 %r —— 產生不了合法 inventory" % k)
@@ -499,7 +525,7 @@ def write_extension_policy(target):
 
 
 def write_decisions_pending(target, buckets, carried_untracked, unmarked, policy_file=None,
-                           extension_policy=None):
+                           extension_policy=None, extension_note=None):
     """把需要人決定的項目**寫成檔案**,不只印終端機。
 
     印出來沒人看等於沒列(F-036 的同一個病:訊號不落地就等於沒有訊號)。
@@ -522,6 +548,7 @@ def write_decisions_pending(target, buckets, carried_untracked, unmarked, policy
         # 票 146 G-2:安裝來源記在這裡與安裝 commit 訊息,不在 policy 檔加頂層 note(五處閉合裁決)。
         sections.append(("extension policy 是安裝器產生的最小版 —— 不是核准過的觀測快照",
                          list(extension_policy),
+                         extension_note or
                          "由安裝器產生：空 inventory + 安裝器寫入的 hook command；未登記任何使用者擴充；"
                          "這不是核准過的觀測快照。R10 在 pre-commit 以這兩份的 HEAD 版本判定;"
                          "使用者層(`~/.claude`)有任何未登記的入口,commit 就會被擋。"
@@ -879,34 +906,516 @@ def refuse_if_dirty(target):
             % (len(changes), listed, more))
 
 
-def main(target):
+# ── 票 169:安裝前置核准(preflight)與 D4 沙盒例外 ─────────────────────────────────
+#
+# 順序(全部在第一個寫入目標之前):precheck → require_git_repo → refuse_if_dirty →
+# 既有 policy 檢查 → 產生候選(D2)→ 依 D1 落地 → 判核准(D3)。任何一步不過 ⇒ 下游零寫入。
+
+def _canon(path):
+    return os.path.normcase(os.path.realpath(os.fspath(path)))
+
+
+def _inside(child, parent):
+    c, p = _canon(child), _canon(parent)
+    return c == p or c.startswith(p.rstrip(os.sep) + os.sep)
+
+
+def _git_out(args, cwd):
+    p = subprocess.run(["git"] + list(args), cwd=cwd, capture_output=True)
+    return p.returncode, p.stdout.decode("utf-8", "replace").strip()
+
+
+def require_git_repo(target):
+    """非 git 目錄裁決(票 169):target 必須是 git repo 的最上層;不是 ⇒ 零寫入拒絕。
+
+    安裝器**不再**替人 `git init` 或建立目錄 —— 那是一次未受治理的寫入。
+    """
+    hint = ("[安裝/事前檢查] %s 不是 git repo 的最上層 —— 請先 git init"
+            "(安裝器不會替你 git init 或建立目錄;下游未寫入)。" % target)
+    if not os.path.lexists(os.path.join(target, ".git")):
+        raise SystemExit(hint)
+    rc, top = _git_out(["rev-parse", "--show-toplevel"], target)
+    if rc != 0 or not top or _canon(top) != _canon(target):
+        raise SystemExit(hint)
+
+
+def target_head(target):
+    """UNBORN 裁決:有 commit ⇒ 完整 40 碼 SHA;unborn branch ⇒ `UNBORN`;其他狀態 ⇒ 停止。"""
+    rc, out = _git_out(["rev-parse", "--verify", "-q", "HEAD^{commit}"], target)
+    if rc == 0 and _HEX40.match(out):
+        return out
+    rc2, _ref = _git_out(["symbolic-ref", "-q", "HEAD"], target)
+    if rc != 0 and rc2 == 0:
+        return UNBORN
+    raise SystemExit("[安裝/名冊候選] 讀不出 target 的 HEAD(不是 40 碼 commit,也不是 unborn branch)"
+                     " —— 下游未寫入。")
+
+
+def _upstream_head():
+    rc, out = _git_out(["rev-parse", "HEAD"], SRC_ROOT)
+    if rc != 0 or not _HEX40.match(out):
+        raise SystemExit("[安裝/名冊候選] 讀不到 agent-gates 的 HEAD(完整 40 碼)—— 下游未寫入。")
+    return out
+
+
+def _source_redlight():
+    """上游(本檔所在 repo)的 `.claude/hooks/redlight.py` —— 會被複製到目標的同一份。
+
+    preflight 在任何寫入之前跑,目標此時還沒有 redlight,所以不能用 `_target_redlight`。
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "source_redlight", os.path.join(SRC_ROOT, ".claude", "hooks", "redlight.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _canonical_bytes(doc):
+    return json.dumps(doc, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _sha256(data):
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+def target_id(canonical_path):
+    """D1 的 `<target-id>`:target canonical 路徑的 SHA-256 前 16 碼(只當資料夾名,不參與核准判定)。"""
+    return _sha256(canonical_path.encode("utf-8"))[:16]
+
+
+def inventory_candidate(target, claude_root=None, upstream_head=None):
+    """D2:依現況產生候選 ⇒ `(canonical_bytes, candidate_hash)`。純讀,不寫任何檔。
+
+    現況一律取自上游 redlight 的 `extension_report`(R10 自己的觀測,不另寫一套算法);
+    `claude_root` 為 None ⇒ 同 R10 取使用者層 `~/.claude`。`upstream_head` 為 None ⇒ 讀 agent-gates 的 HEAD。
+    任何一項無法登記(觀測失敗、symlink / 讀不到、`.mcp.json` 讀不到)⇒ SystemExit,下游未寫入。
+    """
+    rl = _source_redlight()
+    report = rl.extension_report(target, claude_root)
+    if report.get("observation") != "ok":
+        raise SystemExit("[安裝/名冊候選] 使用者層觀測失敗:%s —— 下游未寫入。" % report.get("reason"))
+    surfaces = report.get("surfaces") or {}
+    errors = surfaces.get("errors") or []
+    if errors:
+        raise SystemExit("[安裝/名冊候選] 觀測失敗:%s: %s(共 %d 筆)—— 下游未寫入。"
+                         % (errors[0][0], errors[0][-1], len(errors)))
+
+    def entries(pairs, label):
+        out = []
+        for rel, sha in sorted(pairs, key=lambda item: item[0]):
+            if sha is None:
+                raise SystemExit("[安裝/名冊候選] %s 有無法登記的項目(symlink 或讀不到):%s —— 下游未寫入。"
+                                 % (label, rel))
+            out.append({"path": rel, "sha256": sha, "note": CANDIDATE_NOTE})
+        return out
+
+    mcp = list(surfaces.get("mcp_json_servers") or [])
+    if any(isinstance(m, str) and m.endswith(": unreadable") for m in mcp):
+        raise SystemExit("[安裝/名冊候選] 目標的 .mcp.json 讀不到或格式不明 —— 下游未寫入。")
+    allow = {}
+    for k in rl.EXT_ALLOWLIST_FIELDS:
+        allow[k] = []
+    allow["schema"] = rl.EXT_ALLOWLIST_SCHEMA
+    allow["version"] = rl.EXT_ALLOWLIST_VERSION
+    allow["dev_mod_files"] = entries(surfaces.get("dev_mod_files") or [], "dev-mods")
+    allow["user_skill_plugins"] = entries(surfaces.get("user_skill_plugins") or [], "user-skills")
+    allow["user_commands"] = entries(surfaces.get("user_commands") or [], "user-commands")
+    allow["project_settings_hook_commands"] = _settings_hook_commands(SRC_ROOT)
+    allow["mcp_json_servers"] = mcp
+    inv = {"schema": rl.EXT_INVENTORY_SCHEMA, "version": rl.EXT_INVENTORY_VERSION,
+           "entries": entries(surfaces.get("synced_files") or [], "synced")}
+    if not (rl._extension_allowlist_ok(allow) and rl._extension_inventory_ok(inv)):
+        raise SystemExit("[安裝/名冊候選] 產生的候選沒有通過 redlight 的 policy 驗證 —— 下游未寫入。")
+    doc = {"schema": CANDIDATE_SCHEMA, "version": CANDIDATE_VERSION,
+           "agent_gates_head": upstream_head if upstream_head is not None else _upstream_head(),
+           "target": {"path": _canon(target).replace("\\", "/"), "head": target_head(target)},
+           "inventory": inv, "allowlist": allow}
+    data = _canonical_bytes(doc)
+    return data, _sha256(data)
+
+
+def _shown_candidate(cands_dir, tid, digest):
+    """候選檔的**相對**位置(不印本機絕對路徑)。"""
+    tail = "%s/%s.json" % (tid, digest)
+    try:
+        rel = os.path.relpath(cands_dir, SRC_ROOT)
+    except ValueError:
+        rel = None
+    if rel and not rel.startswith(".."):
+        return rel.replace("\\", "/") + "/" + tail
+    return "<候選根目錄>/" + tail
+
+
+def _store_candidate(cands_dir, data, digest):
+    """D1:候選落地。已存在 ⇒ 只驗它自己的 bytes(不符 ⇒ 候選證據毀損、停止、不覆寫);不存在 ⇒ 新建。回相對位置。"""
+    doc = json.loads(data.decode("utf-8"))
+    tid = target_id(doc["target"]["path"])
+    folder = os.path.join(cands_dir, tid)
+    path = os.path.join(folder, digest + ".json")
+    shown = _shown_candidate(cands_dir, tid, digest)
+    if os.path.lexists(path):
+        try:
+            with io.open(path, "rb") as f:
+                existing = f.read()
+        except OSError:
+            existing = None
+        if existing is None or _sha256(existing) != digest:
+            _out("[安裝/名冊候選] 候選證據毀損(candidate evidence corruption):%s 的內容 hash 與檔名不符。" % shown)
+            _out("    依現況重算的 hash:%s" % digest)
+            _out("    原檔未覆寫、下游未寫入、安裝停止。請人工檢視該檔再決定怎麼處置。")
+            raise SystemExit(EXIT_CANDIDATE_CORRUPT)
+    else:
+        os.makedirs(folder, exist_ok=True)
+        with io.open(path, "xb") as f:
+            f.write(data)
+    return shown
+
+
+def inventory_preflight(target, approve, cands_dir, claude_root=None, upstream_head=None):
+    """D1 / D3:產生候選並依 D1 落地,再判核准。回 `("pending", hash, 位置)` 或 `("approved", 候選文件, hash)`。
+
+    核准判定**只**比對「依現況重算的 hash」與 `approve` —— 既有候選檔只驗它自己的 bytes,
+    從不拿來當判定來源。其餘情形一律 SystemExit,下游零寫入。
+    """
+    data, digest = inventory_candidate(target, claude_root=claude_root, upstream_head=upstream_head)
+    doc = json.loads(data.decode("utf-8"))
+    shown = _store_candidate(cands_dir, data, digest)
+    if approve is None:
+        return "pending", digest, shown
+    if approve != digest:
+        _out("[安裝/名冊候選] 核准的 hash 與依現況重算的 hash 不一致 —— 下游未寫入、安裝停止。")
+        _out("    核准值:%s" % approve)
+        _out("    現況:  %s" % digest)
+        _out("    新候選:%s(需要重新審閱並由 Jeff 明示核准)" % shown)
+        raise SystemExit(EXIT_INVENTORY_MISMATCH)
+    return "approved", doc, digest
+
+
+class DisposableRepo(str):
+    """D4 例外(E1):`create_disposable_repo` 親手建立的拋棄式 repo。
+
+    做成 str 子類別只為了能直接當路徑用;**判定一律看 `_registered_sandbox` 的記憶體登記**,
+    不看這個型別、它的值或任何屬性 —— 自己建構一個同型別的物件不會被登記。
+    """
+    __slots__ = ()
+
+
+_DISPOSABLE = {}
+
+
+def create_disposable_repo(path, candidates_dir):
+    """E1 / E3:親手 `mkdir` 一個拋棄式 repo 目錄並登記在本程序記憶體;回傳的物件是 self-approve 的唯一依據。
+
+    目錄已存在 ⇒ `FileExistsError` 外傳(不是親手建立的就不登記)。候選根目錄不得落在上游真正的
+    `.dev/install-candidates/` 之下,也不得在拋棄式 repo 裡面。只有內部呼叫;沒有 CLI、環境變數或設定檔入口。
+    """
+    path = os.path.abspath(os.fspath(path))
+    cands = os.path.abspath(os.fspath(candidates_dir))
+    if _inside(cands, _REAL_CANDIDATES_DIR):
+        raise SystemExit("[安裝/拋棄式] 候選根目錄不得在上游的 .dev/install-candidates/ 之下 —— 拒絕。")
+    if _inside(cands, path):
+        raise SystemExit("[安裝/拋棄式] 候選根目錄不得在拋棄式 repo 裡面 —— 拒絕。")
+    os.mkdir(path)
+    real = os.path.realpath(path)
+    obj = DisposableRepo(real)
+    _DISPOSABLE[id(obj)] = (obj, os.path.normcase(real), cands)
+    return obj
+
+
+def _registered_sandbox(obj):
+    """E1:`obj` 必須**正是** `create_disposable_repo` 回傳的那個物件。回登記項或 None。
+
+    只查本程序的記憶體登記(以物件身分比對);不讀磁碟、不讀環境變數、不看路徑樣式或字串值。
+    """
+    entry = _DISPOSABLE.get(id(obj))
+    if entry is None or entry[0] is not obj:
+        return None
+    return entry
+
+
+def install_disposable(sandbox):
+    """D4 例外的入口(內部函式):只接受 `create_disposable_repo` 回傳的物件本身;其他一律拒絕、零寫入(E1 / E5)。"""
+    if _registered_sandbox(sandbox) is None:
+        raise SystemExit("[安裝/拋棄式] 拒絕 self-approve:目標不是本程序以 create_disposable_repo 親手建立的"
+                         "拋棄式 repo —— 未寫入任何東西。")
+    return main(sandbox)
+
+
+def _approve_inventory(target, approve, cands_dir, self_approve):
+    """`approve` 為 None 且不是拋棄式 repo ⇒ 印 hash 與候選位置後停止(EXIT_INVENTORY_PENDING)。
+
+    拋棄式 repo(D4 例外):把剛算出的 hash 交回**同一條**比對路徑 —— 依現況重算、逐字比對(E4)。
+    """
+    state = inventory_preflight(target, approve, cands_dir)
+    if state[0] == "pending" and self_approve:
+        state = inventory_preflight(target, state[1], cands_dir)
+    if state[0] == "pending":
+        _out("[安裝/名冊核准] 下游尚未寫入任何東西。extension 名冊候選已產生:")
+        _out("    候選 hash:%s" % state[1])
+        _out("    候選檔:  %s" % state[2])
+        _out("    審閱候選內容後由 Jeff 明示核准,再以 --approve-inventory <hash> 重跑安裝。")
+        _out("    (產生候選 ≠ 核准候選;agent 不得自行推導、複製或代填這個 hash。)")
+        raise SystemExit(EXIT_INVENTORY_PENDING)
+    return state[1], state[2]
+
+
+# ── 票 169 輪四:第一個 commit 前重驗與自動復原(新裁決 3／4,R1～R7)────────────────
+#
+# 範圍(R7):只涵蓋「第一個寫入」到「第一個 commit 成功」之間;commit 一成功就離開,之後的失敗不復原。
+# journal(R2 的寫入紀錄)= 這一段**每一步會寫的路徑**,在寫入前一次登記:框架檔、鏡像兩棵樹、
+# 產生的狀態檔、hooks、兩份 policy、目標 redlight 載入時留下的 `__pycache__`,以及 `git add` /
+# `git commit` 會寫的 `.git/index`、`.git/objects/`、`.git/COMMIT_EDITMSG`、`.git/index.lock`。
+
+_JOURNAL_FILES = (".dev/pipeline.json", ".dev/test-runs.jsonl", ".dev/gate-exemptions.jsonl", "CLAUDE.md",
+                  ".gitignore", PORTABLE_HOOK_REL, "bootstrap.sh", ".agents/portable-manifest.txt",
+                  POLICY_TEMPLATE, ".git/hooks/pre-commit", ".git/index", ".git/index.lock",
+                  ".git/COMMIT_EDITMSG")
+_JOURNAL_TREES = (".claude/skills", "skills", ".claude/hooks/__pycache__", ".git/objects")
+_NO_BYTES_TREES = (".git/objects",)        # 既有物件不會被改寫;只記存在,不讀內容
+
+
+class _ReverifyMismatch(Exception):
+    """第一個 commit 前重算的候選 hash 與核准值不一致。帶著新候選的 bytes 與 hash。"""
+
+    def __init__(self, data, digest):
+        Exception.__init__(self, digest)
+        self.data = data
+        self.digest = digest
+
+
+def _under(rel, root):
+    return rel == root or rel.startswith(root + "/")
+
+
+def _fs_snapshot(target):
+    """R1:target 底下**全部**路徑(含 `.git/`、ignored、目錄本身)→ 種類 dir / file / link。不跟隨連結。"""
+    import stat as _stat
+    out = {}
+    for dp, dns, fns in os.walk(target, followlinks=False):
+        for name in list(dns) + list(fns):
+            p = os.path.join(dp, name)
+            rel = os.path.relpath(p, target).replace("\\", "/")
+            mode = os.lstat(p).st_mode
+            out[rel] = "link" if _stat.S_ISLNK(mode) else ("dir" if _stat.S_ISDIR(mode) else "file")
+    return out
+
+
+def _git_state(target):
+    """R1:HEAD、index、tracked / untracked / ignored、repo-local config、core.hooksPath(git 看得到的那一半)。"""
+    def g(*args):
+        p = subprocess.run(["git"] + list(args), cwd=target, capture_output=True)
+        return p.returncode, p.stdout
+    return {"head": g("rev-parse", "--verify", "-q", "HEAD"),
+            "symref": g("symbolic-ref", "-q", "HEAD"),
+            "index": g("ls-files", "-s", "-z"),
+            "status": g("status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored"),
+            "config": g("config", "--local", "--list", "-z"),
+            "hooksPath": g("config", "--get", "core.hooksPath")}
+
+
+class _Journal(object):
+    """R1 的開始前快照 + R2 的寫入紀錄。只在記憶體裡,不落地。"""
+
+    def __init__(self, target, files, trees):
+        self.target = target
+        self.files = frozenset(files)
+        self.trees = tuple(trees)
+        anc = set()
+        for rel in list(self.files) + list(self.trees):
+            parts = rel.split("/")
+            for i in range(1, len(parts)):
+                anc.add("/".join(parts[:i]))
+        self.ancestors = frozenset(anc)
+        self.git = None
+        self.fs = None
+        self.data = {}
+
+    def journaled(self, rel):
+        return rel in self.files or rel in self.ancestors or any(_under(rel, t) for t in self.trees)
+
+
+def _begin_journal(target, copy_paths, rl):
+    """R1:任何寫入之前的快照。寫入點開始前就是連結或型別不符 ⇒ 不動手(下游零寫入)。"""
+    import stat as _stat
+    files = set(copy_paths) | set(_JOURNAL_FILES) | {rl.EXT_ALLOWLIST_FILE, rl.EXT_INVENTORY_FILE}
+    j = _Journal(target, files, _JOURNAL_TREES)
+    j.git = _git_state(target)
+    j.fs = _fs_snapshot(target)
+    for rel, kind in sorted(j.fs.items()):
+        if not j.journaled(rel):
+            continue
+        want = "file" if rel in j.files else "dir"
+        if kind == "link" or (rel in j.files or rel in j.ancestors) and kind != want:
+            raise SystemExit("[安裝/事前檢查] %s 開始前就存在,且是 %s(安裝器要寫的是 %s)—— 下游未寫入。"
+                             % (rel, kind, want))
+    keep = [rel for rel, kind in j.fs.items() if kind == "file"
+            and (rel == ".git/config" or _under(rel, ".git/hooks")
+                 or (j.journaled(rel) and not any(_under(rel, t) for t in _NO_BYTES_TREES)))]
+    for rel in keep:
+        full = os.path.join(target, *rel.split("/"))
+        with io.open(full, "rb") as f:
+            j.data[rel] = (f.read(), _stat.S_IMODE(os.lstat(full).st_mode))
+    return j
+
+
+def _rb_remove(path):
+    """復原:刪除一個本次新建的路徑(R2)。目錄只用 rmdir —— 裡面有不在紀錄內的東西就失敗,不連帶刪。"""
+    import stat as _stat
+    if _stat.S_ISDIR(os.lstat(path).st_mode):
+        os.rmdir(path)
+        return
+    try:
+        os.chmod(path, _stat.S_IWRITE | _stat.S_IREAD)     # git 物件是唯讀檔(Windows 上 remove 會被拒)
+    except OSError:
+        pass
+    os.remove(path)
+
+
+def _rb_restore_dir(path):
+    """復原:重建一個開始前就存在的目錄(R3)。"""
+    os.mkdir(path)
+
+
+def _rb_restore(path, data, mode):
+    """復原:把開始前就存在的檔寫回開始前的 bytes(R3)。"""
+    with io.open(path, "wb") as f:
+        f.write(data)
+    os.chmod(path, mode)
+
+
+def _rollback_failed(reason):
+    """R6:hard fail。不再嘗試任何其他修復,也不宣稱恢復了原狀。"""
+    _out("[安裝/復原失敗] %s。" % reason)
+    _out("    下游 repo **未恢復**到安裝前的狀態 —— 安裝器不再嘗試其他修復;請人工檢查目標 repo。")
+    raise SystemExit(EXIT_ROLLBACK_FAILED)
+
+
+def _rollback_diffs(journal):
+    """R5:與開始前逐項比對。回不一致項目的名稱(不含任何檔案內容)。"""
+    target = journal.target
+    diffs = []
+    if _git_state(target) != journal.git:
+        diffs.append("git 狀態(HEAD / index / status / config / core.hooksPath)")
+    if _fs_snapshot(target) != journal.fs:
+        diffs.append("檔案系統路徑集合")
+    for rel, (data, _mode) in sorted(journal.data.items()):
+        full = os.path.join(target, *rel.split("/"))
+        try:
+            with io.open(full, "rb") as f:
+                same = f.read() == data
+        except OSError:
+            same = False
+        if not same:
+            diffs.append(rel)
+    return diffs
+
+
+def _rollback(journal):
+    """第一個 commit 前失敗的自動復原(R2 / R3 / R5 / R6;只在 main 的復原範圍內被呼叫,R7)。
+
+    順序:刪除「開始前不存在 且 在寫入紀錄裡」的路徑(由深到淺)→ 重建開始前存在、現在不見的目錄
+    → 把開始前存在、現在不同的檔寫回原 bytes → 逐項驗證。任何一步失敗或驗證不一致 ⇒ hard fail。
+    開始前就存在的路徑(含 ignored)從不刪除。
+    """
+    target = journal.target
+    try:
+        now = _fs_snapshot(target)
+        new = [rel for rel in now if rel not in journal.fs and journal.journaled(rel)]
+        for rel in sorted(new, key=lambda r: (-r.count("/"), r)):
+            _rb_remove(os.path.join(target, *rel.split("/")))
+        for rel in sorted(r for r, k in journal.fs.items() if k == "dir"):
+            full = os.path.join(target, *rel.split("/"))
+            if not os.path.isdir(full):
+                _rb_restore_dir(full)
+        for rel, (data, mode) in sorted(journal.data.items()):
+            full = os.path.join(target, *rel.split("/"))
+            try:
+                with io.open(full, "rb") as f:
+                    same = f.read() == data
+            except OSError:
+                same = False
+            if not same:
+                _rb_restore(full, data, mode)
+    except Exception as e:
+        _rollback_failed(u"復原中途失敗(%s)" % type(e).__name__)
+    diffs = _rollback_diffs(journal)
+    if diffs:
+        _rollback_failed(u"復原後與開始前不一致:%s" % u"、".join(diffs[:5]))
+
+
+def _reverify_before_commit(target, approved_hash):
+    """新裁決 3:第一個 git add 之前,依現況重新產生候選並重算 hash;不一致 ⇒ _ReverifyMismatch。"""
+    data, digest = inventory_candidate(target)
+    if digest != approved_hash:
+        raise _ReverifyMismatch(data, digest)
+
+
+def main(target, approve_inventory=None):
+    sandbox = _registered_sandbox(target)
+    if approve_inventory is not None and not (isinstance(approve_inventory, str)
+                                              and _HEX64.match(approve_inventory)):
+        raise SystemExit("--approve-inventory 必須是 64 碼小寫 hex(逐字來自 Jeff 的明示核准)。")
     target = os.path.abspath(target)
-    precheck(target)              # 票 156 G4:任何寫入之前(含下一行的 makedirs)
-    os.makedirs(target, exist_ok=True)
+    if sandbox is not None and os.path.normcase(os.path.realpath(target)) != sandbox[1]:
+        raise SystemExit("[安裝/拋棄式] 拋棄式 repo 的實際位置與建立時不同 —— 拒絕。")
+    precheck(target)              # 票 156 G4:任何寫入之前
+    require_git_repo(target)      # 票 169 非 git 目錄裁決:不再 makedirs / git init
     refuse_if_dirty(target)
-    if not os.path.isdir(os.path.join(target, ".git")):
-        run(["git", "init", "-q"], target)
-        run(["git", "config", "user.email", "gate@local"], target)
-        run(["git", "config", "user.name", "gate"], target)
+    rl = _source_redlight()
+    for rel in (rl.EXT_ALLOWLIST_FILE, rl.EXT_INVENTORY_FILE):
+        if os.path.lexists(os.path.join(target, *rel.split("/"))):
+            raise SystemExit("[安裝/事前檢查] 目標已有 %s —— 新下游安裝不接手既有的 extension policy;"
+                             "下游未寫入。" % rel)
+    cands = sandbox[2] if sandbox is not None else CANDIDATES_DIR
+    approved, approved_hash = _approve_inventory(target, approve_inventory, cands, sandbox is not None)
 
     all_files, untracked = source_files()
     buckets, unmarked = classify(all_files)
     carried_untracked = [p for p in untracked if manifest.in_scope(p)]
-    copy_into(target, buckets["copy"])
-    mirrors = build_mirrors(target)
-    generate_manifest(target)     # 它標 ask,copy 桶帶不過去 —— 得自己產
-    generate_state(target)
-    hook = install_hook(target)
-    portable_hook, boot = install_portable_layer(target)
-    _template, policy_file = write_policy_template(target)
-    # 票 146 G-2:在第一個 `git add -A` 之前 —— 隨既有的安裝 commit 進 HEAD,不另開 commit、不新增豁免。
-    ext_allow, ext_inv, _created = write_extension_policy(target)
+    journal = _begin_journal(target, buckets["copy"], rl)     # 輪四 R1:任何寫入之前
+    try:
+        copy_into(target, buckets["copy"])
+        mirrors = build_mirrors(target)
+        generate_manifest(target)     # 它標 ask,copy 桶帶不過去 —— 得自己產
+        generate_state(target)
+        hook = install_hook(target)
+        portable_hook, boot = install_portable_layer(target)
+        _template, policy_file = write_policy_template(target)
+        # 票 146 G-2:在第一個 `git add -A` 之前 —— 隨既有的安裝 commit 進 HEAD,不另開 commit、不新增豁免。
+        ext_allow, ext_inv, _created = write_extension_policy(
+            target, approved=(approved["allowlist"], approved["inventory"]))
+        n_inv = len(approved["inventory"]["entries"])
+        n_files = sum(len(approved["allowlist"][k]) for k in ("dev_mod_files", "user_skill_plugins", "user_commands"))
+        n_mcp = len(approved["allowlist"]["mcp_json_servers"])
+        ext_note = None
+        if n_inv or n_files or n_mcp:
+            ext_note = ("由安裝前置核准(票 169)登記:候選 hash %s;inventory %d 筆、allowlist 檔案型 %d 筆、"
+                        ".mcp.json server %d 筆,另加安裝器寫入的 hook command。R10 在 pre-commit 以這兩份的 HEAD 版本判定;"
+                        "使用者層(`~/.claude`)之後有任何未登記的變動,commit 就會被擋。"
+                        % (approved_hash, n_inv, n_files, n_mcp))
 
-    run(["git", "add", "-A"], target)
-    # **在 add 之後、commit 之前。** `update-index --chmod` 改的是既有 index 條目,
-    # 放在 add 之前沒有對象可改;放在 commit 之後那個 mode 進不了這一筆。
-    stage_hook_executable(target)
-    run(["git", "commit", "-q", "--no-verify", "-m", "裝上六站閘門(框架安裝)"], target)
+        # 新裁決 3:第一個 git add / commit 之前重驗。
+        _reverify_before_commit(target, approved_hash)
+        run(["git", "add", "-A"], target)
+        # **在 add 之後、commit 之前。** `update-index --chmod` 改的是既有 index 條目,
+        # 放在 add 之前沒有對象可改;放在 commit 之後那個 mode 進不了這一筆。
+        stage_hook_executable(target)
+        run(["git", "commit", "-q", "--no-verify", "-m", "裝上六站閘門(框架安裝)"], target)
+    except BaseException as e:
+        # R7:只有第一個 commit 成功之前的失敗會走到這裡。
+        _rollback(journal)
+        if isinstance(e, _ReverifyMismatch):
+            shown = _store_candidate(cands, e.data, e.digest)
+            _out("[安裝/名冊重驗] 第一個 commit 前依現況重算的 hash 與核准值不一致 —— 安裝停止;"
+                 "下游已復原到安裝前狀態並逐項驗證過。")
+            _out("    核准值:%s(已失效)" % approved_hash)
+            _out("    現況:  %s" % e.digest)
+            _out("    新候選:%s(需要重新審閱並由 Jeff 明示核准)" % shown)
+            raise SystemExit(EXIT_REVERIFY_ROLLED_BACK)
+        _out("[安裝/復原] 第一個 commit 前失敗 —— 下游已復原到安裝前狀態並逐項驗證過;原始錯誤如下。")
+        raise
     _, go_live = run(["git", "rev-parse", "HEAD"], target)
     go_live = go_live.strip()
 
@@ -918,7 +1427,8 @@ def main(target):
     blocked = verify(target)
     pending = write_decisions_pending(
         target, buckets, carried_untracked, unmarked, policy_file=policy_file,
-        extension_policy=[os.path.relpath(p, target).replace("\\", "/") for p in (ext_allow, ext_inv)])
+        extension_policy=[os.path.relpath(p, target).replace("\\", "/") for p in (ext_allow, ext_inv)],
+        extension_note=ext_note)
 
     _out("裝好了:%s" % target)
     _out("  複製      %d 個檔案" % len(buckets["copy"]))
@@ -963,10 +1473,17 @@ def main(target):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == "--rehook":
-        _out("[rehook] %s" % rehook(sys.argv[2]))
+    args = sys.argv[1:]
+    if len(args) == 2 and args[0] == "--rehook":
+        _out("[rehook] %s" % rehook(args[1]))
         sys.exit(0)
-    if len(sys.argv) != 2 or sys.argv[1].startswith("--"):
+    if len(args) == 1 and not args[0].startswith("--"):
+        main(args[0])
+    elif (len(args) == 3 and not args[0].startswith("--") and args[1] == "--approve-inventory"
+          and _HEX64.match(args[2])):
+        main(args[0], approve_inventory=args[2])
+    else:
         raise SystemExit("用法:python .claude/portable/install.py <目標目錄>\n"
+                         "      python .claude/portable/install.py <目標目錄> --approve-inventory <64 碼 hex>"
+                         "(值必須逐字來自 Jeff 的明示核准)\n"
                          "      python .claude/portable/install.py --rehook <已安裝的目標目錄>")
-    main(sys.argv[1])

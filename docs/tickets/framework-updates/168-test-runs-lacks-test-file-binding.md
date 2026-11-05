@@ -45,3 +45,9 @@
 ## 五｜不在本票範圍
 
 - 豁免帳本（見票 167）。
+
+---
+## 補充佐證（2026-11-04，裁決者裁 B：記入本票，不另開票）
+票 167 commit 45ac49d 時，R3 對 .claude/portable/ledger_verify.py 與 .claude/portable/status.py 提示「沒有屬於本票的紅燈紀錄」；
+但票 167 的紅燈測試寫在 tests/test_exemption_ledger_malformed.py（首跑 21 failed，含 status 5 條、ledger_verify 3 條）。
+R3 以同名配對（status.py ↔ tests/test_status.py）找紅燈，看不到跨檔測試。此案與本票「帳本說不清跑的是哪個測試檔」相關，列為佐證；兩者是否同一根因，未證明。
