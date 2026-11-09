@@ -45,7 +45,7 @@
     },
     {
       "path": "skills/<bucket>/built-in-browser/SKILL.md",
-      "sha256": "b5a720afbcde0d6a77c1bc1d34ab56f3d4b09d071b92129783b4faf7f2a3fe62",
+      "sha256": "56f181e1f006956dd170d46097b1b10edb739f7d4cad42c1f2039fb21e307132",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -445,7 +445,7 @@
     },
     {
       "path": "skills/<bucket>/manifest.json",
-      "sha256": "23db3c3c746707e5ad000452587105967aecc7b7c8f32c0d42d63a777181469f",
+      "sha256": "7377419d46ea23232cf2ee3a2688607960d98cb39ab9a8f1d992bdbe012a3b9f",
       "note": "Jeff 核准 2026-10-28 本次重新登記；可查歷史共 7 次（票 158 A-s-R 形狀審查）"
     },
     {
