@@ -1,6 +1,6 @@
 # 票 169 —— 新下游安裝必死於 R10 空名冊 —— installer 先 commit 後驗證，留下半套
 
-**狀態**：~~**立案（2026-11-04）。只立案與記錄調查結果；實作未開始。**~~ ~~**AC 與設計已定案（2026-11-04）；紅燈測試已寫（輪一）；實作未開始。**~~ ~~**實作完成、綠燈與全套已跑（輪三，2026-11-04）；未 commit。**~~ **實作完成（含 commit 前重驗與自動復原）、綠燈與全套已跑（輪四，2026-11-04）；未 commit。**
+**狀態**：~~**立案（2026-11-04）。只立案與記錄調查結果；實作未開始。**~~ ~~**AC 與設計已定案（2026-11-04）；紅燈測試已寫（輪一）；實作未開始。**~~ ~~**實作完成、綠燈與全套已跑（輪三，2026-11-04）；未 commit。**~~ ~~**實作完成（含 commit 前重驗與自動復原）、綠燈與全套已跑（輪四，2026-11-04）；未 commit。**~~ **結案（2026-11-09）：AC-1～AC-3 全部通過；後續可用性問題移至票 170。**
 **優先度**：LifeApp 接線的前提（裁決者 2026-11-04）。
 **立案**：2026-11-04。票號 169 於立案當下重查 `docs/tickets/framework-updates/` 取得（當時最大號 168；寫檔前 `Test-Path` 確認無此檔、Glob 確認無 169 開頭的檔案）。
 **性質**：缺陷票（第一層）＋設計待答題（第二層）。
@@ -201,3 +201,55 @@ git worktree 型目標（.git 為檔案）暫時拒絕安裝，列為已知限�
 - 票 165：名冊更新流程。裁決者記為暫停中；票面狀態欄為「候選…未授權實作」。
 - 票 167：同期修帳本。
 - 票 146（R10 本體）、票 149／151（contract 的來源）。
+- 票 170：安裝流程可用性與表述修正（AC-3 驗收發現，三個子項）。
+
+---
+
+## 七之一｜AC-3 驗收結果（2026-11-09）
+
+- **彩排**：`<rehearsal>`（LifeApp 複本，origin 已移除）；上游 HEAD `5528204`。全程不連網；唯一的連網動作是第一輪 `setup_gates_env` 下載 7 個釘死版本與指紋的套件。
+- **第一輪**：不帶核准 ⇒ 結束碼 3。安裝前後對彩排做完整檔案快照，digest 相同（entries 2806），下游零寫入；上游只多 1 個候選檔。候選內容：synced 231（skills 228、plugins 3）、user_commands 1、hook command 1，其餘 0。
+- **核准**：Jeff 親手提供核准 hash（未經任何 agent 代填）。
+- **第二輪**：帶核准安裝 ⇒ 結束碼 0；commit 前重驗一致；探針照設計擋下。安裝後上游快照比出量測帳本（`.dev/intercepts-2026-11.jsonl`）變動而停手。
+- **第三輪（首跑）**：起點條件誤寫「彩排 status 必須無輸出」而停（指令錯誤，未執行任何動作）；之後更正為只允許 `?? docs/decisions-pending.md`。
+- **第三輪（重跑）**：648 行清單閘口因 installer_state 2≠3 而停；上游面驗證通過。
+- **第三輪-B**：
+  - 上游 `ls-files` 證明三個狀態檔中只有 `.dev/gate-exemptions.jsonl` 在上游追蹤 ⇒ 2＋1＝3，閘口成立。
+  - 彩排中「上游 ignored 卻存在」的檔全部落在 setup_venv／mirror／pycache／installer_state 四類，other＝0。未取得原始 648 路徑集合，所以不能逐條判定每一項；訊息是否只是顯示錯誤，留待票 170。
+  - 安裝後檢查：2 個安裝 commit、名冊 231、user_commands 恰為 `finmind.md`、pre-commit hook 存在。
+  - verify_gates 結束碼 0（4 條硬擋各擋一次、7 條降級各提示一次、新 repo 框架測試 3076 passed）。
+  - bootstrap 因 PowerShell 找不到 `sh` 而未啟動。
+- **第四輪**：以 Git 安裝目錄的 `bin\sh.exe` 完整路徑、WorkingDirectory＝彩排執行 bootstrap ⇒ 子程序 ExitCode 0、identity ok；彩排 `core.hooksPath`＝`.githooks`（config 只新增此鍵）；上游 config 逐字不變。
+- **AC-3 對照表**：
+
+  | 項目 | 狀態 |
+  |---|---|
+  | 安裝 | 完成（第二輪） |
+  | 探針 | 完成（第二輪；第三輪-B verify_gates 內再次成立） |
+  | decisions-pending | 完成（已產生，未處理） |
+  | bootstrap（hooksPath） | 完成（第四輪） |
+  | verify_gates | 完成（第三輪-B） |
+  | 上游面驗證 | 完成（第三輪-B、第四輪） |
+
+  ⇒ 六項全部完成，**AC-3 通過**。
+- 「除 Jeff 的 hash 核准外，過程中沒有人工修改 inventory 或 allowlist」：成立。
+- 各輪報告（`.dev/reports/`，不進版控）：
+  - `20261105T010426Z-ac3-rehearsal-r1.md`（第一輪）
+  - `20261105T014945Z-ac3-rehearsal-r2.md`（第二輪）
+  - `20261105T021109Z-ac3-rehearsal-r3.md`（第三輪首跑）
+  - `20261105T022038Z-ac3-rehearsal-r3.md`（第三輪重跑）
+  - `20261109T133756Z-ac3-rehearsal-r3b.md`（第三輪-B）
+  - `20261109T135947Z-ac3-rehearsal-r4.md`（第四輪）
+
+## 七之二｜驗收過程中的裁決與例外（Jeff）
+
+- 上游被 git 忽略的 `__pycache__/*.pyc` 為可接受副作用；第二輪起 installer／verify_gates 一律加直譯器選項 `-B`。
+- `.dev/intercepts-2026-11.jsonl` 的 append-only 變化為治理系統自身副作用，條件 L1～L4：開始前記錄完整 bytes 基準；結束後基準逐 byte 不變（新檔＝基準＋尾段）；尾段依 gate.py 帳本寫入契約逐行對應本輪活動；例外只限該檔。
+- bootstrap 以 Git 內建 `sh.exe` 的完整路徑、WorkingDirectory 指定為彩排執行（不開串接指令例外、不用 Bash 工具、不由人工代跑）。
+
+## 七之三｜驗收過程偏差（照實保留）
+
+- 第三輪首跑：指令錯誤（起點條件誤寫），未執行任何動作即停。
+- 第三輪-B：呼叫紀錄起算前的兩次 Read（確認兩支腳本逐字相同）未列入呼叫紀錄。
+- 第四輪：兩支腳本未重新 Read 比對，依據是前一輪已逐字確認、之後未曾寫入。
+- 第一輪 installer 未加 `-B`，是否寫過上游 `__pycache__`：未查證。
