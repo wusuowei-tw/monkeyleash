@@ -396,7 +396,7 @@ class TestInstallOutWritesUtf8Bytes:
     「**這一條驗的是本組函式,不是整支 `main()`**」。
 
     **⚠ 而「端到端由 CI 淨室守著」在【這一格】不成立** ——
-    `.github/workflows/tests.yml:20` 是 `runs-on: ubuntu-latest`,
+    `.github/workflows/tests.yml:20` 是 `runs-on: ubuntu-24.04`,
     **Linux 的 locale 是 utf-8,cp950 在那裡不會發生**。
     ⇒ 淨室證得到「安裝跑得完」,**證不到「cp950 主控台上不會炸」**。
     那一格的唯一覆蓋就是本類(票 115 實測,2026-09-09;`F-113` 的同一條:

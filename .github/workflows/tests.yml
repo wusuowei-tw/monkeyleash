@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # 2026-11-09 Jeff 裁：ubuntu-latest 已遷移至 26.04 且無 3.11.9 預建版；釘 24.04、3.11.9 不動；24.04 退役前需再處理
     steps:
       # 第三方 action 一律釘 40 位 commit sha,不釘標籤。
       # 標籤可以被移動,而移動不會通知任何人 —— 與 provenance 同一原理:
