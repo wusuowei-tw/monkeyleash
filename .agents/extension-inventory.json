@@ -90,12 +90,12 @@
     },
     {
       "path": "skills/<bucket>/docx/LICENSE.txt",
-      "sha256": "79f6d8f5b427252fa3b1c11ecdbdb6bf610b944f7530b4de78f770f38741cfaa",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/docx/SKILL.md",
-      "sha256": "9aa8eb9703e6567fae50bb79dd35db0c8d001fb55155cc7958aaa851ee24402c",
+      "sha256": "b555a732276bba637440d124c1e1a3f8a322ad0441ae885a611c82083441cab7",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -120,17 +120,17 @@
     },
     {
       "path": "skills/<bucket>/docx/scripts/office/helpers/__init__.py",
-      "sha256": "e62e525673baa71fa2c9f01d637c37b44383146a46c28957ba3d9d41e1a4ba21",
+      "sha256": "1804a5fc0d06bcfe54e45de7be52821f7edb2639f32a3d5c5ff1dd93c94ac5f0",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/docx/scripts/office/helpers/pptx_chart.py",
-      "sha256": "47ac266f7d39d11ede6bb0d1f3a19d801394fd2964636f1b48beb701f1832964",
+      "sha256": "aed734e9a6c743ae712fc228c868bf0f6abcfb6a53549eefb19081b15d240fda",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/docx/scripts/office/helpers/pptx_slide.py",
-      "sha256": "7b9f69b4a5bd6a2d9eabf9e0e3e796d7a421373145f6a8cd11f60b7ba2d6a5d0",
+      "sha256": "06fe06953bf038826b85ecc142f4dc9299a37fa0c4e4dd9b00b10486df33524d",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -340,7 +340,7 @@
     },
     {
       "path": "skills/<bucket>/docx/scripts/office/validate.py",
-      "sha256": "346a4c89d92fff55e610f11efda48c30228815b29bdb10b987e48f7af70acf1e",
+      "sha256": "21d48e4e86df93e889a01e7d03e7ca63816da3278c9cc4353b89d43246e02364",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -355,12 +355,12 @@
     },
     {
       "path": "skills/<bucket>/docx/scripts/office/validators/docx.py",
-      "sha256": "93d3444c0ef3f043d21a2285c46d2cda478426b930dc33dcf3b11265935517b5",
+      "sha256": "7b0f1a23c9cd9ff07187d9d7d359f62317f94a5e389d63fd19766e1688a195a2",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/docx/scripts/office/validators/pptx.py",
-      "sha256": "17eadad2b7a8374ccbe4cda45693bcd6a36f9d61a7d60f9c9ceef9464dec8299",
+      "sha256": "3a100ec5f00ae183bca67f4aaa8e3e902caee60254e141b8120f32c53d85cee7",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -445,7 +445,7 @@
     },
     {
       "path": "skills/<bucket>/manifest.json",
-      "sha256": "8f43d6e5b165ba0b098a152d56ab81113efa6ad46f005db89f3de199853b5111",
+      "sha256": "23db3c3c746707e5ad000452587105967aecc7b7c8f32c0d42d63a777181469f",
       "note": "Jeff 核准 2026-10-28 本次重新登記；可查歷史共 7 次（票 158 A-s-R 形狀審查）"
     },
     {
@@ -470,7 +470,7 @@
     },
     {
       "path": "skills/<bucket>/pdf/LICENSE.txt",
-      "sha256": "79f6d8f5b427252fa3b1c11ecdbdb6bf610b944f7530b4de78f770f38741cfaa",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -480,7 +480,7 @@
     },
     {
       "path": "skills/<bucket>/pdf/SKILL.md",
-      "sha256": "9f78b8359fbd4943ad260a7a1e436e5a96503406d6c34e99f69223d647d85b9c",
+      "sha256": "d1c7caf5f35eb7d37877dd7fc33a095037be2b34fb5d2f7f4d43bde3165bb4ee",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -525,12 +525,12 @@
     },
     {
       "path": "skills/<bucket>/pptx/LICENSE.txt",
-      "sha256": "79f6d8f5b427252fa3b1c11ecdbdb6bf610b944f7530b4de78f770f38741cfaa",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/pptx/SKILL.md",
-      "sha256": "710a823f644c0187a88e6d9e8c8385bb646b4844ac28570dbc4e8f9bae013860",
+      "sha256": "3679488c7e497c9b2f14bf026f39624d4c45b9519d845bc08650ce31598b0d6a",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -540,12 +540,12 @@
     },
     {
       "path": "skills/<bucket>/pptx/scripts/add_slide.py",
-      "sha256": "3922f819ee1f6b8bdc6aa146d1a86de70640f5f919321fe3f01a764482ff69c9",
+      "sha256": "23a4c66a9f43e651189cbc9f82ba0a8271d19dc8d44cf0c426dda66f7eb6a93a",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/pptx/scripts/apply_theme.js",
-      "sha256": "cd7caefb9d03fedf07d17695929a3988c70c4ae9f653afa07649687f7151e0e1",
+      "sha256": "e440b33c43f2e707076cb64b57ca926ce886564b115c19ee23ac487bdb1a6259",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -555,17 +555,17 @@
     },
     {
       "path": "skills/<bucket>/pptx/scripts/office/helpers/__init__.py",
-      "sha256": "e62e525673baa71fa2c9f01d637c37b44383146a46c28957ba3d9d41e1a4ba21",
+      "sha256": "1804a5fc0d06bcfe54e45de7be52821f7edb2639f32a3d5c5ff1dd93c94ac5f0",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/pptx/scripts/office/helpers/pptx_chart.py",
-      "sha256": "47ac266f7d39d11ede6bb0d1f3a19d801394fd2964636f1b48beb701f1832964",
+      "sha256": "aed734e9a6c743ae712fc228c868bf0f6abcfb6a53549eefb19081b15d240fda",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/pptx/scripts/office/helpers/pptx_slide.py",
-      "sha256": "7b9f69b4a5bd6a2d9eabf9e0e3e796d7a421373145f6a8cd11f60b7ba2d6a5d0",
+      "sha256": "06fe06953bf038826b85ecc142f4dc9299a37fa0c4e4dd9b00b10486df33524d",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -775,7 +775,7 @@
     },
     {
       "path": "skills/<bucket>/pptx/scripts/office/validate.py",
-      "sha256": "346a4c89d92fff55e610f11efda48c30228815b29bdb10b987e48f7af70acf1e",
+      "sha256": "21d48e4e86df93e889a01e7d03e7ca63816da3278c9cc4353b89d43246e02364",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -790,12 +790,12 @@
     },
     {
       "path": "skills/<bucket>/pptx/scripts/office/validators/docx.py",
-      "sha256": "93d3444c0ef3f043d21a2285c46d2cda478426b930dc33dcf3b11265935517b5",
+      "sha256": "7b0f1a23c9cd9ff07187d9d7d359f62317f94a5e389d63fd19766e1688a195a2",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/pptx/scripts/office/validators/pptx.py",
-      "sha256": "17eadad2b7a8374ccbe4cda45693bcd6a36f9d61a7d60f9c9ceef9464dec8299",
+      "sha256": "3a100ec5f00ae183bca67f4aaa8e3e902caee60254e141b8120f32c53d85cee7",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -905,27 +905,27 @@
     },
     {
       "path": "skills/<bucket>/xlsx/LICENSE.txt",
-      "sha256": "79f6d8f5b427252fa3b1c11ecdbdb6bf610b944f7530b4de78f770f38741cfaa",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/xlsx/SKILL.md",
-      "sha256": "6712b39718fe815054abca9c3ee72f989613e6f771c8a5c58f30a65a6c905622",
+      "sha256": "caa1e1c29cf974c8d874bf3d0a70838445e7342b570f856ddb3e4a21ef7c7e8b",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/xlsx/scripts/office/helpers/__init__.py",
-      "sha256": "e62e525673baa71fa2c9f01d637c37b44383146a46c28957ba3d9d41e1a4ba21",
+      "sha256": "1804a5fc0d06bcfe54e45de7be52821f7edb2639f32a3d5c5ff1dd93c94ac5f0",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/xlsx/scripts/office/helpers/pptx_chart.py",
-      "sha256": "47ac266f7d39d11ede6bb0d1f3a19d801394fd2964636f1b48beb701f1832964",
+      "sha256": "aed734e9a6c743ae712fc228c868bf0f6abcfb6a53549eefb19081b15d240fda",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/xlsx/scripts/office/helpers/pptx_slide.py",
-      "sha256": "7b9f69b4a5bd6a2d9eabf9e0e3e796d7a421373145f6a8cd11f60b7ba2d6a5d0",
+      "sha256": "06fe06953bf038826b85ecc142f4dc9299a37fa0c4e4dd9b00b10486df33524d",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -1135,7 +1135,7 @@
     },
     {
       "path": "skills/<bucket>/xlsx/scripts/office/validate.py",
-      "sha256": "346a4c89d92fff55e610f11efda48c30228815b29bdb10b987e48f7af70acf1e",
+      "sha256": "21d48e4e86df93e889a01e7d03e7ca63816da3278c9cc4353b89d43246e02364",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
@@ -1150,12 +1150,12 @@
     },
     {
       "path": "skills/<bucket>/xlsx/scripts/office/validators/docx.py",
-      "sha256": "93d3444c0ef3f043d21a2285c46d2cda478426b930dc33dcf3b11265935517b5",
+      "sha256": "7b0f1a23c9cd9ff07187d9d7d359f62317f94a5e389d63fd19766e1688a195a2",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
       "path": "skills/<bucket>/xlsx/scripts/office/validators/pptx.py",
-      "sha256": "17eadad2b7a8374ccbe4cda45693bcd6a36f9d61a7d60f9c9ceef9464dec8299",
+      "sha256": "3a100ec5f00ae183bca67f4aaa8e3e902caee60254e141b8120f32c53d85cee7",
       "note": "synced snapshot 2026-10-06 skills；Jeff 核准 2026-10-06"
     },
     {
