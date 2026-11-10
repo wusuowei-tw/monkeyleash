@@ -6,8 +6,8 @@
 
 核心前提:**Prompt 是建議,檔案和 hook 才是法律。**
 
-*目前實證範圍:1 位使用者・1 個 agent(Claude Code)・1 個 OS(Windows)・
-第一個外部專案待驗證。*
+*目前實證範圍:1 位使用者(作者本人)・1 個 agent(Claude Code)・1 個 OS(Windows)・
+已裝進作者自己的幾個專案;尚無其他使用者。*
 
 [![tests](https://github.com/wusuowei-tw/monkeyleash/actions/workflows/tests.yml/badge.svg)](https://github.com/wusuowei-tw/monkeyleash/actions/workflows/tests.yml)
 
@@ -59,10 +59,10 @@ monkeyleash 是我發現自己專案門口那六道關卡,在四十幾次改動�
 
 | 東西 | 是什麼 |
 |---|---|
-| **九條規則(R1–R9)** | 機器強制的限制:agent 可以寫什麼、寫到哪、什麼時候寫。規格書裡不准放程式碼、不准寫到當前階段範圍外、生產檔要有測試、生產碼不准 `import research/`、鏡像要一致、friction 號不准重複……等。權威清單是 `.claude/hooks/gate.py` 的 `rule_codes()`,它從規則自己的擋下訊息掃出來。 |
+| **規則(R 系列)** | 機器檢查的限制:agent 可以寫什麼、寫到哪、什麼時候寫。**不是每一條都會擋。** 刪規則輪(2026-11-01)之後,**流程類**規則 —— 規格書裡不准放程式碼、不准寫到當前階段範圍外、生產檔要有測試、生產碼不准 `import research/`、skills patch 掛載檢查、上線豁免清單、friction 號不准重複 —— 改為印出**提示**、照常放行。仍然會**擋**的是完整性類:鏡像要與正典 skills 一致(R4)、前哨無法擔保的 Bash/PowerShell 寫入(R7)、Claude Code 擴充入口對照已提交名冊的完整性(R10)、AI 不准寫站牌檔(R11)。權威清單是 `.claude/hooks/gate.py` 的 `rule_codes()`;哪些只提示是同檔的 `ADVISORY_RULES`。兩個數字都不寫在這裡,因為它們會變。 |
 | **G1** | **使用者層**的獨立防護,不走六站流程:擋下破壞性檔案系統指令(`rm -rf`、`Remove-Item -Recurse`…),對照一份 agent 改不動的保護清單。**這是一個 denylist hook,不是沙箱** —— 真正的隔離要靠容器或作業系統權限。 |
 | **兩層 repo 強制** | **前哨**(`PreToolUse` hook,每一次 Bash / Edit / Write 執行前先判)與**權威**(`pre-commit`,`core.hooksPath`,agent 在正常 commit 路徑上繞不過的那層)。每條規則宣告自己住在哪一層。 |
-| **六站主線流程** | `grill-with-docs → to-spec → to-tickets → implement → code-review → improve-codebase-architecture`。另有兩個站不在主線上:`idle`(待命)與 `research`(探索區,不准寫生產碼)。目前在哪一站是一個由人編輯的檔案;agent 讀得到、改不了。只有允許寫程式的站才能寫程式。 |
+| **六站主線流程** | `grill-with-docs → to-spec → to-tickets → implement → code-review → improve-codebase-architecture`。另有兩個站不在主線上:`idle`(待命)與 `research`(探索區,不准寫生產碼)。目前在哪一站是一個由人編輯的檔案;agent 讀得到、改不了。在不允許寫程式的站寫程式,會收到提示而不是被擋;但 AI 改站牌本身會被擋(R11)。 |
 
 > **「六站」是名字不是站數,站別以 `.agents/pipeline-stages.yaml` 為準。**
 > 上表的「六站主線流程」數的是**主線上**那六個;定義檔另有 `idle` 與 `research`,
@@ -72,14 +72,14 @@ monkeyleash 是我發現自己專案門口那六道關卡,在四十幾次改動�
 | **帳本** | 每一次豁免、每一次攔截、每一次測試,都追加到 `.dev/*.jsonl`,雜湊逐筆相接。用 `git checkout` 還原會在鏈上留下看得見的缺口,而不是一個乾淨的謊。 |
 | **`status`** | 一個指令印出 repo 的真實狀態 —— HEAD、階段、票號、哪些 hook 證明得了在場、哪些只是「宣稱」—— 每一行都帶 `(source: …)` 來源欄。證明不了的行印「未證明」,不印綠勾。 |
 | **唯讀 MCP server** | 給 Claude Desktop 的四支工具:`status_all`、`ticket(n)`、`friction(code)`、`latest_report`(最近一輪執行者回報)。零寫入路徑,由一條 AST 測試守著 —— 出現任何寫入呼叫就紅。 |
-| **Friction log** | 148 則(編號至 `F-159`;缺號是設計上允許的)。每一則是系統或作者被騙過的一種方式,寫在現在負責擋它的那一行程式旁邊。每一則都是實際撞過的失敗模式,不是假想的威脅清單。**這是這個 repo 最重要的資產。** |
-| **正對照** | 一條測試只有在「故意把守衛弄壞、它真的紅了」之後才算可信。九條規則做完這道的有四條;另外五條列為「尚未證明」,不列為通過。 |
+| **Friction log** | 以 `F-` 編號(缺號是設計上允許的)。每一則是系統或作者被騙過的一種方式,寫在現在負責擋它的那一行程式旁邊。每一則都是實際撞過的失敗模式,不是假想的威脅清單。**這是這個 repo 最重要的資產。** |
+| **正對照** | 一條測試只有在「故意把守衛弄壞、它真的紅了」之後才算可信。目前做完這道的是 R1、R5、R8、R9(票 102、47、104、103);其餘規則一律列為「尚未證明」,不列為通過。 |
 
 ## 它**不**主張什麼
 
 - 它不會讓 agent 寫出正確的程式。它讓「檢查跑過了」變成一句可以驗證的話。
-- 除了作者,還沒有任何人跑過它。第一個外部專案已排定;在那之前,「別人也能用」
-  是未證明的。
+- 只有作者跑過它。它已裝進作者自己的幾個專案,但還沒有其他人用過;
+  「別人也能用」是未證明的。
 - 規則 R4(鏡像一致)目前在 Windows 上做不了突變測試 —— symlink 相關測試在
   Windows 會跳過。這件事有記錄,沒有藏。
 - 前哨那一層可以被 agent 的宿主關掉,只有權威層是結構性的。繞過前哨會被記錄;
@@ -91,35 +91,31 @@ monkeyleash 是我發現自己專案門口那六道關卡,在四十幾次改動�
   先弄清楚用的是哪一份,再修錯的那一側。
 - 閘門訊息目前是繁體中文。
 
-## 十分鐘上手
+## 上手
 
-需要 Python `>= 3.10` 與 git。
+需要 git 與 Python 3.11 底座(CI 釘 3.11.9)。閘門**不**用你的全域 Python 跑:
+它只從 repo 自己的環境 `.venv-gates/` 執行,這個環境照帶 hash 的鎖定檔建立(票 156)。
 
 ```bash
 git clone https://github.com/wusuowei-tw/monkeyleash.git
 cd monkeyleash
-pip install -e ".[dev]"
-python -m pytest -q      # 乾淨 clone 上:2 failed
-sh bootstrap.sh          # 用 core.hooksPath 接上 .githooks/(每個 clone 一次)
-python -m pytest -q      # 現在:1 failed
+python .claude/portable/setup_gates_env.py . --profile upstream   # 建 .venv-gates/ —— 要連網
+sh bootstrap.sh                                                    # 用 core.hooksPath 接上 .githooks/(每個 clone 一次)
+.venv-gates/bin/python -m pytest -q                                # Windows:.venv-gates\Scripts\python.exe
 ```
+
+**順序不能換。** `.venv-gates/` 還沒建好之前,`bootstrap.sh` 會拒絕接上 hook ——
+指向一個不存在的環境的 hook,會把每一次 commit 都鎖死。
 
 **Windows 請在 Git Bash 裡跑 `bootstrap.sh` 那一行**(裝 git 時會一起裝)——
 PowerShell 沒有 `sh` 這個指令。其餘指令任何殼都跑得動。
 
-**`pip install -e ".[dev]"` 那一行在乾淨機器上不是可選的。**
-2026-09-04 筆電實測:少了它,`pytest` 會在 **collection 階段整套中斷**
-(不是某一條紅,是整套沒跑)——
-`ModuleNotFoundError: No module named 'mcp'`、`1 error during collection`。
-**中斷的 collection 回報的是「零條測試」,而那看起來不像缺相依,看起來像什麼都沒發生。**
+**不要為了讓閘門能跑而把套件 `pip install` 進全域 Python。** 用 `.venv-gates`
+以外的直譯器執行 `gate.py` 會被它的身分檢查擋下;裝進全域只會讓它**看起來**裝好了。
 
-**第一次跑的那兩條紅正是重點**,而它們**不是同一種紅**
-(2026-09-04 在乾淨 clone 上實測):
-
-| 測試 | `bootstrap.sh` 之後 | 為什麼 |
-|---|---|---|
-| `TestAuthorityLayerIsWired::test_this_repo_itself_is_wired` | **轉綠** | 它就是那條說「權威層沒裝」的測試。在裝好之前本來就該是紅的。 |
-| `TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce` | **已退場(票 137,2026-09-24)** | 它原本在**每一台**新機器上都紅:它要 `.dev/test-runs.jsonl` 裡的排水證據,而那個檔 gitignored、clone 永遠不會有(票 124)。排水紀錄現在是 `.agents/legacy-no-redlight.txt` 裡的 `# drained:` 註解,**跟著版控走**;接手的 `TestT137TheRealListUnderTheNewRule` **不讀那份帳本**。CI 也不再為此 deselect 任何測試。 |
+如果在 `bootstrap.sh` 之前就跑測試,
+`TestAuthorityLayerIsWired::test_this_repo_itself_is_wired` 會**刻意**是紅的:
+它就是那條說「權威層沒接上」的測試。跑過 `bootstrap.sh` 之後它會轉綠。
 
 然後看 repo 的狀態:
 
@@ -129,18 +125,32 @@ python .claude/portable/status.py
 
 每一行都有來源。印「未證明」的行,是這支工具拒絕猜的東西。
 
-裝進另一個 repo:
+### 裝進另一個 repo
+
+安裝是**跑兩次,中間由人核准**(票 169、171、172)。全部從這份上游 checkout 執行:
 
 ```bash
-python .claude/portable/install.py <目標 repo 路徑>
+# 0. 目標必須已經是 git repo(git init)
+python .claude/portable/setup_gates_env.py <目標 repo>                     # 目標自己的 .venv-gates/ —— 要連網
+.venv-gates/bin/python .claude/portable/install.py <目標 repo>             # 第一次:只產候選,不寫入目標
+#    → 印出候選 hash,以結束碼 3 結束;由人檢視候選並核准那一個 hash
+.venv-gates/bin/python .claude/portable/install.py <目標 repo> --approve-inventory <hash>   # 第二次:安裝
 ```
 
-安裝**一律建立 commit**,並在最後**強制驗證** ——
-**裝好的定義是驗證通過,不是檔案複製完。** 事後驗證:
+核准綁的是什麼:第一次執行會把這台機器上看得到的 Claude Code 擴充檔(R10 名冊)記進一份候選,
+並印出它的 SHA-256。核准的意思是「**就是這一個版本**」—— **不代表內容逐項審閱過**。
+第二次執行會重算候選,一致才繼續;hash 必須來自人,不能由 agent 或任何檔案代填。
+
+可能看到的結束碼:`3` 候選待核准・`4` 核准的 hash 與現況不符(什麼都沒寫)・
+`5` 既有候選檔毀損・`6` 第一個 commit 前重驗不符,目標已還原・`7` 還原失敗(停下來看)。
+
+核准之後,安裝才會寫檔、建 commit,並在最後**強制驗證** ——
+**裝好的定義是驗證通過,不是檔案複製完。** Python 位元碼(`__pycache__/`、`.pyc`、`.pyo`)
+一律不帶。之後在目標 repo 裡跑一次 `sh bootstrap.sh`。事後驗證:
 
 ```bash
-python .claude/portable/verify_gates.py <暫存目錄>   # 全規則,含淨室安裝
-python .claude/portable/g1_verify.py                 # G1 保護清單
+.venv-gates/bin/python .claude/portable/verify_gates.py <暫存目錄>   # 全規則,含淨室安裝
+python .claude/portable/g1_verify.py                                 # G1 保護清單(使用者層)
 ```
 
 ## 不會寫程式?讓 AI 幫你裝
@@ -149,12 +159,14 @@ python .claude/portable/g1_verify.py                 # G1 保護清單
 
 ```
 請照 monkeyleash(https://github.com/wusuowei-tw/monkeyleash)README 的
-「Quickstart」章節,把它裝進這個專案。
+「Quick start」章節,把它裝進這個專案。
 
 這件事的規矩:
 1. 每執行一個指令之前,先用白話說明它會做什麼、為什麼 —— 然後才執行。
-2. 裝完之後,跑 README 裡的驗證指令,把完整輸出原樣貼回給我。
-3. 任何一步失敗或被擋下,把原始錯誤訊息逐字回報。不要繞過、不要改路徑、
+2. 安裝第一次跑完會停下來並印出候選 hash。把候選與 hash 給我看,然後停下。
+   不要自己核准,也不要把 hash 填進下一個指令,除非我親自給你。
+3. 裝完之後,跑 README 裡的驗證指令,把完整輸出原樣貼回給我。
+4. 任何一步失敗或被擋下,把原始錯誤訊息逐字回報。不要繞過、不要改路徑、
    不要動閘門的狀態檔 —— 停下來問我。
 ```
 
@@ -173,6 +185,9 @@ python .claude/portable/g1_verify.py                 # G1 保護清單
   `bootstrap.sh` 之後它才存在。**
 - 所以:**不跑 `bootstrap.sh` 的人得到的強制是「無」,不用 Claude Code 的 agent
   得到的是「只有權威層」。** 那是設計的邊界,不是缺陷。
+- 有些規則刻意只住在一層:R7 與 R11 判的是 agent 的工具**怎麼**寫檔,而 commit
+  看不到這件事,所以它們只在前哨。哪些規則兩層判法不同、為什麼,宣告在
+  `.claude/hooks/gate.py` 的 `RULE_DIVERGENCE`。
 
 沒有 per-repo 開關:裝好之後每一條規則都無條件生效(`docs/adr/0010`)。
 
@@ -218,18 +233,16 @@ hooks 與 CI)。monkeyleash 在「強制」這件事上跟它們重疊,在多 ag
 
 ## 狀態
 
-持續開發中,一個維護者。下面的數字截至 2026-09-04:
+持續開發中,一個維護者。這一段**刻意不寫任何數字** —— 測試數、規則數、friction 則數、
+票數每週都在長,寫在這裡的數字會過期,而且過期時沒有任何東西會出聲。目前的狀態與數量請到來源查看:
 
-| | |
+| 要看什麼 | 去哪裡看 |
 |---|---|
-| 測試,本機 | **1313** 條通過(3 skipped、3 xfailed) |
-| 測試,CI | **1303** 條通過(差額逐項列在票 106) |
-| 規則 | **9** 條(R1–R9),另有使用者層的 G1 |
-| Friction log | **148** 則,編號至 `F-159` |
-| 票 | **105** 個檔,編號至 106 |
-
-> 「幾則」與「編號到幾」在這裡是兩件事:friction 號與票號都可能有缺號
-> (改號會留下空洞,而 R9 刻意不查連號)。上表兩個都給。
+| 測試 | CI 是否通過:看最上面的徽章(它是狀態,不是數量)。目前本機測試總數:執行 `.venv-gates/bin/python -m pytest -q` |
+| repo 狀態(HEAD、階段、票號、hook) | `.claude/portable/status.py` |
+| 規則,以及哪些只提示 | `.claude/hooks/gate.py` 的 `rule_codes()` 與 `ADVISORY_RULES` |
+| Friction 條目 | `docs/agents/friction-log.md`(編號依設計可以有缺號) |
+| 票 | `docs/tickets/`(一票一檔;編號可以有缺號) |
 
 ## 授權
 

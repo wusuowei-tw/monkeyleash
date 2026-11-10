@@ -7,8 +7,9 @@ the agent's work line by line.** Formerly `agent-gates`.
 
 Core premise: **prompts are suggestions; files and hooks are law.**
 
-*Current evidence base: 1 user · 1 agent (Claude Code) · 1 OS (Windows) ·
-first external project pending.*
+*Current evidence base: 1 user (the author) · 1 agent (Claude Code) ·
+1 OS (Windows) · installed in several of the author's own projects; no other
+user yet.*
 
 [![tests](https://github.com/wusuowei-tw/monkeyleash/actions/workflows/tests.yml/badge.svg)](https://github.com/wusuowei-tw/monkeyleash/actions/workflows/tests.yml)
 
@@ -64,10 +65,10 @@ Two things are deliberate here:
 
 | Piece | What it is |
 |---|---|
-| **9 rules (R1–R9)** | Machine-enforced constraints on what the agent may write, where, and when: no code in specs, no writing outside the current stage's scope, no production file without a test, no `import research/` from production code, mirrors must match, no duplicate friction numbers, and so on. The authoritative list is `rule_codes()` in `.claude/hooks/gate.py`, derived from the rules' own block messages. |
+| **Rules (R-series)** | Machine-checked constraints on what the agent may write, where, and when. **Not all of them block.** Since the rule-pruning round (2026-11-01) the *workflow* rules — no code in specs, no writing outside the current stage's scope, no production file without a test, no `import research/` from production code, the skills-patch mount checks, the go-live exemption list, no duplicate friction numbers — print an **advisory** and let the action through. The rules that still **block** are the integrity ones: mirrors must match the canonical skills (R4), Bash/PowerShell writes the outpost can't vouch for (R7), Claude Code extension integrity checked against a committed inventory (R10), and the AI may not write the stage file (R11). The authoritative list is `rule_codes()` in `.claude/hooks/gate.py`; which ones are advisory is `ADVISORY_RULES` in the same file. Neither count is written here, because both change. |
 | **G1** | A *user-level* guard, independent of the pipeline, that blocks destructive filesystem commands (`rm -rf`, `Remove-Item -Recurse`, …) against a protected list the agent cannot edit. **This is a denylist hook, not a sandbox** — real isolation needs containers or OS-level permissions. |
 | **Two repository enforcement layers** | An *outpost* (`PreToolUse` hook, judges every Bash/Edit/Write before it runs) and an *authority* (`pre-commit`, `core.hooksPath`, the structural layer — not bypassable on the normal commit path). Rules declare which layer they live on. |
-| **Six-station main-line pipeline** | `grill-with-docs → to-spec → to-tickets → implement → code-review → improve-codebase-architecture`. Two further stages exist off the main line: `idle` (standby) and `research` (an exploration area that may not write production code). The stage is a file the human edits; the agent can read it but not change it. Source writes are allowed only in stages that allow them. |
+| **Six-station main-line pipeline** | `grill-with-docs → to-spec → to-tickets → implement → code-review → improve-codebase-architecture`. Two further stages exist off the main line: `idle` (standby) and `research` (an exploration area that may not write production code). The stage is a file the human edits; the agent can read it but not change it. Writing source outside a stage that allows it is reported as an advisory, not blocked; changing the stage itself is blocked for the AI (R11). |
 
 > **"Six-station" is a name, not a count — the stages are defined by `.agents/pipeline-stages.yaml`.**
 > The row above counts the six on the main line; the definition file also carries
@@ -77,15 +78,16 @@ Two things are deliberate here:
 | **Ledgers** | Every exemption, every intercepted call, every test run, appended to `.dev/*.jsonl` with hashes chained. A restore that goes through `git checkout` leaves a visible gap in the chain rather than a clean lie. |
 | **`status`** | One command that prints the repo's real state — HEAD, stage, ticket, which hooks are provably installed, which are only *claimed* — with every line carrying a `(source: …)` column. Lines it can't prove print `未證明` (unproven), not a green tick. |
 | **Read-only MCP server** | Four tools for Claude Desktop: `status_all`, `ticket(n)`, `friction(code)`, `latest_report` (the latest executor report). Zero write paths, verified by an AST test that fails if a write call ever appears. |
-| **Friction log** | 148 entries (numbered up to `F-159`; gaps are legal by design). Each one is a way the system or its author got fooled, written next to the line of code that now guards against it. Every entry is a failure mode met in practice, not a hypothetical threat list. This is the repo's most important asset. |
-| **Positive controls** | Tests that are only trusted after a bounded mutation has made them fail on purpose. 4 of 9 rules have been through this so far. The other 5 are listed as *not yet proven*, not as passing. |
+| **Friction log** | Numbered `F-` entries (gaps are legal by design). Each one is a way the system or its author got fooled, written next to the line of code that now guards against it. Every entry is a failure mode met in practice, not a hypothetical threat list. This is the repo's most important asset. |
+| **Positive controls** | Tests that are only trusted after a bounded mutation has made them fail on purpose. So far R1, R5, R8 and R9 have been through this (tickets 102, 47, 104, 103). Every other rule is *not yet proven* this way, and is not listed as passing. |
 
 ## What it does *not* claim
 
 - It does not make the agent write correct code. It makes "the checks ran" a
   verifiable statement.
-- It has not been run by anyone but the author. The first external project is
-  scheduled; until then, "works for other people" is unproven.
+- It has only been run by the author. It is installed in several of the
+  author's own projects, but no one else has used it yet; "works for other
+  people" is unproven.
 - Rule R4 (mirror consistency) cannot currently be mutation-tested on Windows —
   symlink tests skip there. This is recorded, not hidden.
 - The outpost layer can be turned off by the agent's host. Only the authority
@@ -99,36 +101,35 @@ Two things are deliberate here:
   out which set was used, then fix whichever side is wrong.
 - Gate messages are currently in Traditional Chinese.
 
-## Quick start (10 minutes)
+## Quick start
 
-Requires Python `>= 3.10` and git.
+Requires git and a Python 3.11 base interpreter (CI pins 3.11.9). The gates do
+**not** run on your global Python: they run only from a repo-local environment,
+`.venv-gates/`, built from hash-locked requirements (ticket 156).
 
 ```bash
 git clone https://github.com/wusuowei-tw/monkeyleash.git
 cd monkeyleash
-pip install -e ".[dev]"
-python -m pytest -q      # on a fresh clone: 2 failed
-sh bootstrap.sh          # wires .githooks/ via core.hooksPath (once per clone)
-python -m pytest -q      # now: 1 failed
+python .claude/portable/setup_gates_env.py . --profile upstream   # builds .venv-gates/ — needs network
+sh bootstrap.sh                                                    # wires .githooks/ via core.hooksPath (once per clone)
+.venv-gates/bin/python -m pytest -q                                # Windows: .venv-gates\Scripts\python.exe
 ```
+
+**Order matters.** `bootstrap.sh` refuses to wire the hooks until a valid
+`.venv-gates/` exists — a hook that points at a missing environment would lock
+every commit.
 
 **On Windows, run the `bootstrap.sh` line in Git Bash** (bundled with Git for
 Windows) — PowerShell has no `sh`. Everything else runs in any shell.
 
-**The `pip install -e ".[dev]"` line is not optional on a clean machine.**
-Measured 2026-09-04 on a fresh laptop: skipping it makes `pytest` abort during
-*collection* — the whole suite, not one test — with
-`ModuleNotFoundError: No module named 'mcp'` and `1 error during collection`.
-An aborted collection reports **zero tests run**, which does not look like a
-missing dependency; it looks like nothing happened.
+**Do not `pip install` into your global Python to make the gates work.** Running
+`gate.py` with any interpreter other than `.venv-gates` is refused by its
+identity check; installing globally only makes it *look* set up.
 
-**The two failures on the first run are the point**, and they are not the same
-kind of failure (measured on a clean clone, 2026-09-04):
-
-| Test | After `bootstrap.sh` | Why |
-|---|---|---|
-| `TestAuthorityLayerIsWired::test_this_repo_itself_is_wired` | **goes green** | It is the test that says *"the authority layer is not installed"*. It should be red until it is. |
-| `TestLegacyNoRedlightList::test_the_list_is_what_the_generator_would_produce` | **retired (ticket 137, 2026-09-24)** | It used to stay red on *every* fresh machine, because it needed drainage evidence from `.dev/test-runs.jsonl` — gitignored, so never present in a clone (ticket 124). Drainage is now recorded as a `# drained:` comment inside `.agents/legacy-no-redlight.txt`, which travels with the repo, and its replacement `TestT137TheRealListUnderTheNewRule` does not read that ledger. CI no longer deselects anything for this. |
+If you run the tests before `bootstrap.sh`,
+`TestAuthorityLayerIsWired::test_this_repo_itself_is_wired` is red **on
+purpose**: it is the test that says *"the authority layer is not wired"*. It goes
+green once `bootstrap.sh` has run.
 
 Then look at the state of the repo:
 
@@ -139,18 +140,38 @@ python .claude/portable/status.py
 Every line has a source. Lines that say `未證明` are things the tool refuses to
 guess.
 
-Install into another repository:
+### Installing into another repository
+
+Installation is **two runs with a human approval in between** (tickets 169,
+171, 172). Run everything from this upstream checkout:
 
 ```bash
-python .claude/portable/install.py <path-to-target-repo>
+# 0. the target must already be a git repo (git init)
+python .claude/portable/setup_gates_env.py <target-repo>                    # its own .venv-gates/ — needs network
+.venv-gates/bin/python .claude/portable/install.py <target-repo>            # run 1: candidate only, writes nothing to the target
+#    → prints a candidate hash and exits with code 3; a human reviews the candidate and approves that exact hash
+.venv-gates/bin/python .claude/portable/install.py <target-repo> --approve-inventory <hash>   # run 2: installs
 ```
 
-Install always creates a commit and ends with a full verification —
-*installed* means *verified*, not *copied*. Verify later with:
+What the approval binds: run 1 records the Claude Code extension files it can see
+on this machine (the R10 inventory) into a candidate and prints its SHA-256. The
+approval says *"this exact version"* — it does **not** mean the contents were
+reviewed. Run 2 recomputes the candidate and proceeds only if it still matches;
+the hash must come from the human, never from the agent or from a file.
+
+Exit codes you may see: `3` candidate waiting for approval · `4` approved hash
+no longer matches (nothing written) · `5` an existing candidate file is
+corrupt · `6` re-check before the first commit failed and the target was
+restored · `7` that restore failed (stop and look).
+
+Only after approval does install write files, create its commits and end with
+a full verification — *installed* means *verified*, not *copied*. Python
+bytecode (`__pycache__/`, `.pyc`, `.pyo`) is never copied. Then run
+`sh bootstrap.sh` inside the target once. Verify later with:
 
 ```bash
-python .claude/portable/verify_gates.py <scratch-dir>   # every rule, clean-room
-python .claude/portable/g1_verify.py                    # G1 protected list
+.venv-gates/bin/python .claude/portable/verify_gates.py <scratch-dir>   # every rule, clean-room
+python .claude/portable/g1_verify.py                                    # G1 protected list (user level)
 ```
 
 ## No coding background? Let your AI install it
@@ -160,14 +181,17 @@ inside the project you want to protect:
 
 ```
 Install monkeyleash (https://github.com/wusuowei-tw/monkeyleash) into this
-project by following the "Quickstart" section of its README.
+project by following the "Quick start" section of its README.
 
 Rules for this task:
 1. Before running each command, explain in plain language what it does and
    why — then run it.
-2. When the install finishes, run the verification commands from the README
+2. The install stops after its first run and prints a candidate hash. Show me
+   the candidate and the hash, then STOP. Do not approve it yourself, and do
+   not copy the hash into the next command unless I give it to you.
+3. When the install finishes, run the verification commands from the README
    and paste their complete output back to me.
-3. If anything fails or gets blocked, report the original error message
+4. If anything fails or gets blocked, report the original error message
    verbatim. Do not work around it, do not change paths, do not edit the
    gate's state files — stop and ask me.
 ```
@@ -189,6 +213,10 @@ What that adds up to:
 - So: someone who never runs `bootstrap.sh` gets **no** enforcement, and an
   agent that is not Claude Code gets **the authority layer only**. That is the
   boundary of the design, not a defect.
+- Some rules live on one layer only by design: R7 and R11 judge *how* a file is
+  written by the agent's tools, which a commit cannot see, so they exist only on
+  the outpost. Which rules differ between the layers, and why, is declared in
+  `RULE_DIVERGENCE` in `.claude/hooks/gate.py`.
 
 There is no per-repo switch: once installed, every rule is active
 (`docs/adr/0010`).
@@ -244,19 +272,18 @@ edit), the evidence (ledgers, intercepts, test-run records, reports), the
 
 ## Status
 
-Actively developed, one maintainer. Numbers below are from 2026-09-04:
+Actively developed, one maintainer. This section deliberately carries **no
+counts** — test totals, rules, friction entries and tickets all grow every week,
+and a number written here would go stale without anything saying so. Current
+status and counts can be checked at their source:
 
-| | |
+| What | Where |
 |---|---|
-| Tests, local | **1313** passed (3 skipped, 3 xfailed) |
-| Tests, CI | **1303** passed (the difference is itemised in ticket 106) |
-| Rules | **9** (R1–R9), plus G1 at the user level |
-| Friction log | **148** entries, numbered up to `F-159` |
-| Tickets | **105 files**, numbered up to 106 |
-
-> Counts and highest numbers are different things here: friction numbers and
-> ticket numbers may have gaps (a renumbered entry leaves a hole, and R9
-> deliberately does not check for consecutive numbering). Both are given above.
+| Tests | CI pass/fail: the badge at the top (a status, not a count). Current test total: run `.venv-gates/bin/python -m pytest -q` locally |
+| Repo state (HEAD, stage, ticket, hooks) | `.claude/portable/status.py` |
+| Rules, and which are advisory | `rule_codes()` and `ADVISORY_RULES` in `.claude/hooks/gate.py` |
+| Friction entries | `docs/agents/friction-log.md` (numbers may have gaps by design) |
+| Tickets | `docs/tickets/` (one file per ticket; numbers may have gaps) |
 
 ## License
 
