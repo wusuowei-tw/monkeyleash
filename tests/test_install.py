@@ -2229,3 +2229,247 @@ class TestTicket169Rollback:
         res = _t169_rollback_case(tmp_path, monkeypatch, capsys, "rb_unborn", t)
         self._assert_restored(*res, target=t)
         assert _t169_git(t, "rev-parse", "--verify", "-q", "HEAD").returncode != 0
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 票 171 —— installer 把上游已核准的 synced contract 帶到下游候選(D1～D6)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# 本段釘住的介面:
+#   install.inventory_candidate(target, claude_root=..., upstream_head=..., upstream_inventory=None)
+#   install.upstream_inventory_head(root=None)   D1 的 HEAD 讀取函式(None ⇒ 上游 repo)
+# 隔離:claude_root 一律是 tmp;走 main 的兩條另把家目錄指到 tmp,候選根目錄換成 tmp(`_t169_mod`)。
+# 新增能力類 = 6 條;相容性基線類 = test_t171_no_contracts_unchanged_bytes。
+
+_T171_BKT = "t171bkt"
+_T171_UUID = b"12345678-1234-4234-8234-123456789abc"
+_T171_LCR = _T171_UUID + b" "
+_T171_SK = _T171_UUID + b" alpha,beta"
+_T171_MJ_ID = "marketplace_t171a"
+
+
+def _t171_mj_bytes(mid=_T171_MJ_ID):
+    doc = {"etag": "t171etag", "parserVersion": 1002,
+           "rows": [{"name": "anthropic-plugin-directory", "display_name": "Anthropic Directory",
+                     "scope": "default", "source": {"source": "claudeai"}, "id": mid,
+                     "updated_at": "2026-11-10T00:00:00Z"}]}
+    return _t169_json.dumps(doc).encode("utf-8")
+
+
+_T171_FILES = {"sk": ("skills", ".last-complete-round"), "lcr": ("plugins", ".last-complete-round"),
+               "mj": ("plugins", ".marketplaces.json")}
+_T171_NAMES = {"sk": "synced-skills-last-round-v1", "lcr": "synced-last-round-v1",
+               "mj": "synced-marketplaces-v1"}
+
+
+def _t171_claude(base, contracts=("sk", "lcr", "mj"), mj_id=_T171_MJ_ID, overrides=None):
+    """假 claude_root:skills 與 plugins 兩根各一個 bucket(含 marker)、數個一般檔與指定的契約檔。"""
+    claude = base / ".claude"
+    for root in ("skills", "plugins"):
+        synced = claude / root / "synced"
+        (synced / _T171_BKT).mkdir(parents=True)
+        (synced / (".bucket-" + _T171_BKT)).write_bytes(b"t171 marker\n")
+    (claude / "skills" / "synced" / _T171_BKT / "SKILL.md").write_bytes(b"# t171 synced skill\n")
+    (claude / "skills" / "synced" / _T171_BKT / "ref").mkdir()
+    (claude / "skills" / "synced" / _T171_BKT / "ref" / "notes.md").write_bytes(b"t171 notes\n")
+    (claude / "plugins" / "synced" / _T171_BKT / "plugin.json").write_bytes(b"{}\n")
+    content = {"sk": _T171_SK, "lcr": _T171_LCR, "mj": _t171_mj_bytes(mj_id)}
+    content.update(overrides or {})
+    for key in contracts:
+        root, name = _T171_FILES[key]
+        (claude / root / "synced" / _T171_BKT / name).write_bytes(content[key])
+    return claude
+
+
+def _t171_contract_entry(key, mj_id=_T171_MJ_ID):
+    pins = {"id_sha256": _t169_sha(mj_id.encode("utf-8"))} if key == "mj" else {}
+    root, name = _T171_FILES[key]
+    return {"path": "%s/<bucket>/%s" % (root, name), "contract": {"name": _T171_NAMES[key], "pins": pins},
+            "note": u"t171 upstream note(不得被照抄)"}
+
+
+def _t171_upstream(contracts=("sk", "lcr", "mj"), mj_id=_T171_MJ_ID):
+    """上游名冊:一筆 sha256 項目(不承接)+ 指定的 contract 項目;無 contract ⇒ version 1。"""
+    entries = [{"path": "skills/<bucket>/SKILL.md", "sha256": "0" * 64, "note": u"t171 upstream note"}]
+    entries.extend(_t171_contract_entry(k, mj_id) for k in contracts)
+    return {"schema": "monkeyleash.extension-inventory", "version": 2 if contracts else 1, "entries": entries}
+
+
+def _t171_inv(data):
+    return _t169_json.loads(data.decode("utf-8"))["inventory"]
+
+
+def _t171_by_path(inv):
+    return dict((e["path"], e) for e in inv["entries"])
+
+
+class TestTicket171CarriesSyncedContracts:
+
+    def test_t171_contracts_carried_as_v2(self, tmp_path, monkeypatch, capsys):
+        """AC-1:上游 3 條 contract、本機三檔都在且合法 ⇒ version 2;三條為 contract 項目(name／pins 同上游、
+        note 為 installer 自己的字串);其餘仍為 sha256。D6:待核准輸出印筆數與名稱,不印 pins 值。"""
+        claude = _t171_claude(tmp_path / "home")
+        t = _t156_clean_git_target(tmp_path)
+        mod = _load("install_t171_v2", "install.py")
+        up = _t171_upstream()
+        data, _h = mod.inventory_candidate(str(t), claude_root=str(claude), upstream_head="1" * 40,
+                                           upstream_inventory=up)
+        inv = _t171_inv(data)
+        assert inv["version"] == 2, inv
+        got = _t171_by_path(inv)
+        for want in up["entries"][1:]:
+            e = got[want["path"]]
+            assert set(e) == {"path", "contract", "note"}, e
+            assert e["contract"] == want["contract"], e
+            assert e["note"] != want["note"] and u"171" in e["note"], e
+        rest = [e for p, e in got.items() if p not in [w["path"] for w in up["entries"][1:]]]
+        assert rest and all(set(e) == {"path", "sha256", "note"} for e in rest), rest
+        assert "skills/<bucket>/SKILL.md" in got and got["skills/<bucket>/SKILL.md"]["sha256"] != "0" * 64
+
+        _t169_home(tmp_path, monkeypatch)
+        mod2, _cands = _t169_mod(tmp_path, monkeypatch, "t171_v2_out")
+        home_claude = _t169_home_dir(tmp_path)
+        for key in ("sk", "lcr", "mj"):
+            root, name = _T171_FILES[key]
+            base = home_claude / root / "synced"
+            if not (base / "t169bucket").is_dir():
+                (base / "t169bucket").mkdir(parents=True)
+                (base / ".bucket-t169bucket").write_bytes(b"t169bucket\n")
+            (base / "t169bucket" / name).write_bytes({"sk": _T171_SK, "lcr": _T171_LCR,
+                                                       "mj": _t171_mj_bytes()}[key])
+        monkeypatch.setattr(mod2, "upstream_inventory_head", lambda root=None: up)
+        t2 = _t169_target(tmp_path, "target-out")
+        _code, out = _t169_run(mod2, t2, capsys)
+        assert u"承接上游 contract 3 筆" in out, out
+        for name in _T171_NAMES.values():
+            assert name in out, out
+        assert up["entries"][3]["contract"]["pins"]["id_sha256"] not in out, out
+
+    def test_t171_no_contracts_unchanged_bytes(self, tmp_path):
+        """AC-2(相容性基線):步驟一以票 171 前的呼叫方式產生 bytes 並印基準 SHA-256;
+        步驟二才走新參數(上游無 contract;上游有 contract 但本機都不存在),bytes 必須與步驟一相同。
+
+        基準 SHA-256 的對象:candidate canonical bytes,但 `target` 兩欄(tmp 路徑與 commit hash,
+        每次 pytest 都不同)先換成固定字樣;其餘逐位元照原樣。步驟二的比對用未正規化的原始 bytes。"""
+        claude = _t171_claude(tmp_path / "home", contracts=())
+        t = _t156_clean_git_target(tmp_path)
+        mod = _load("install_t171_base", "install.py")
+        base, _h = mod.inventory_candidate(str(t), claude_root=str(claude), upstream_head="1" * 40)
+        doc = _t169_json.loads(base.decode("utf-8"))
+        doc["target"] = {"path": "<t171-target>", "head": "<t171-head>"}
+        norm = _t169_json.dumps(doc, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        print("T171_BASELINE_SHA256 %s" % _t169_sha(norm))
+        assert _t171_inv(base)["version"] == 1
+        for up in (_t171_upstream(contracts=()), _t171_upstream()):
+            data, _h2 = mod.inventory_candidate(str(t), claude_root=str(claude), upstream_head="1" * 40,
+                                                upstream_inventory=up)
+            assert data == base, up["version"]
+
+    def test_t171_contract_check_failure_zero_write(self, tmp_path, monkeypatch, capsys):
+        """AC-3:本機一個契約檔不合法 ⇒ inventory_candidate SystemExit(只帶類別/欄位代碼、不帶檔案內容);
+        走 main ⇒ 停止、target 零寫入、候選根目錄沒有任何候選檔。"""
+        bad = b"NOT-A-UUID-t171-secret-content-xxxxx "
+        claude = _t171_claude(tmp_path / "home", overrides={"lcr": bad})
+        t = _t156_clean_git_target(tmp_path)
+        mod = _load("install_t171_bad", "install.py")
+        with pytest.raises(SystemExit) as e:
+            mod.inventory_candidate(str(t), claude_root=str(claude), upstream_head="1" * 40,
+                                    upstream_inventory=_t171_upstream())
+        msg = str(e.value.code)
+        assert u"contract_format/uuid" in msg, msg
+        assert "t171-secret" not in msg, msg
+
+        _t169_home(tmp_path, monkeypatch)
+        home_claude = _t169_home_dir(tmp_path)
+        base = home_claude / "plugins" / "synced"
+        (base / "t169bucket").mkdir(parents=True)
+        (base / ".bucket-t169bucket").write_bytes(b"t169bucket\n")
+        (base / "t169bucket" / ".last-complete-round").write_bytes(bad)
+        mod2, cands = _t169_mod(tmp_path, monkeypatch, "t171_bad_main")
+        monkeypatch.setattr(mod2, "upstream_inventory_head", lambda root=None: _t171_upstream())
+        t2 = _t169_target(tmp_path, "target-bad")
+        before = _t156_snapshot(t2)
+        code, out = _t169_run(mod2, t2, capsys)
+        assert code not in (0, None, mod2.EXIT_INVENTORY_PENDING), out
+        assert _t156_snapshot(t2) == before, "契約檔驗證失敗仍寫入了 target"
+        assert _t169_candidates(cands) == [], "契約檔驗證失敗仍寫出了候選檔"
+        assert "t171-secret" not in out, out
+
+    def test_t171_partial_presence(self, tmp_path):
+        """上游 3 條、本機只有 skills 的 `.last-complete-round` ⇒ 只承接 1 條、version 2;另兩條不出現。"""
+        claude = _t171_claude(tmp_path / "home", contracts=("sk",))
+        t = _t156_clean_git_target(tmp_path)
+        mod = _load("install_t171_partial", "install.py")
+        data, _h = mod.inventory_candidate(str(t), claude_root=str(claude), upstream_head="1" * 40,
+                                           upstream_inventory=_t171_upstream())
+        inv = _t171_inv(data)
+        assert inv["version"] == 2, inv
+        carried = [e for e in inv["entries"] if "contract" in e]
+        assert [e["contract"]["name"] for e in carried] == ["synced-skills-last-round-v1"], carried
+        paths = set(_t171_by_path(inv))
+        assert "plugins/<bucket>/.last-complete-round" not in paths
+        assert "plugins/<bucket>/.marketplaces.json" not in paths
+
+    def test_t171_hash_binds_pins(self, tmp_path):
+        """上游 contract 的 pins 不同 ⇒ candidate hash 不同。
+        `synced-marketplaces-v1` 的 pins 綁本機檔的 id,只改 pins 會讓契約驗證失敗;所以兩個情境各自
+        id 與 pins 成對,而 contract 項目不含檔案 hash —— 兩份候選唯一的差別就是 pins。"""
+        t = _t156_clean_git_target(tmp_path)
+        mod = _load("install_t171_pins", "install.py")
+        out = {}
+        for mid in ("marketplace_t171a", "marketplace_t171b"):
+            claude = _t171_claude(tmp_path / mid, mj_id=mid)
+            out[mid] = mod.inventory_candidate(str(t), claude_root=str(claude), upstream_head="1" * 40,
+                                               upstream_inventory=_t171_upstream(mj_id=mid))
+        (da, ha), (db, hb) = out["marketplace_t171a"], out["marketplace_t171b"]
+        assert ha != hb
+        ia, ib = _t171_by_path(_t171_inv(da)), _t171_by_path(_t171_inv(db))
+        diff = [p for p in set(ia) | set(ib) if ia.get(p) != ib.get(p)]
+        assert diff == ["plugins/<bucket>/.marketplaces.json"], diff
+        assert ia[diff[0]]["contract"]["pins"] != ib[diff[0]]["contract"]["pins"]
+
+    def test_t171_installed_target_r10_synced_verified(self, tmp_path, monkeypatch, capsys):
+        """AC-4:帶正確 hash 完成安裝 ⇒ 下游名冊 version 2;下游自己的 redlight 判 synced ⇒ verified True。"""
+        _t169_home(tmp_path, monkeypatch)
+        home_claude = _t169_home_dir(tmp_path)
+        _t169_shutil.rmtree(str(home_claude / "skills"))
+        built = _t171_claude(tmp_path / "t171-src")
+        for root in ("skills", "plugins"):
+            _t169_shutil.copytree(str(built / root), str(home_claude / root))
+        t = _t169_target(tmp_path, real_venv=True)
+        mod, cands = _t169_mod(tmp_path, monkeypatch, "t171_r10")
+        monkeypatch.setattr(mod, "upstream_inventory_head", lambda root=None: _t171_upstream())
+        _t169_run(mod, t, capsys)
+        _f, h = _t169_only_candidate(cands)
+        capsys.readouterr()
+        mod.main(str(t), approve_inventory=h)
+        capsys.readouterr()
+        with open(str(t / ".agents" / "extension-inventory.json"), encoding="utf-8") as fh:
+            inv = _t169_json.load(fh)
+        assert inv["version"] == 2 and len([e for e in inv["entries"] if "contract" in e]) == 3, inv
+        rl = _g_load_from(t / ".claude" / "hooks" / "redlight.py", "t171_target_redlight")
+        report = rl.extension_report(str(t), str(home_claude))
+        v = rl.synced_verification(report["inventory"], report["surfaces"], claude_root=str(home_claude))
+        assert v["verified"] is True, v
+
+    def test_t171_source_is_head_not_worktree(self, tmp_path):
+        """AC-5:D1 的 HEAD 讀取函式只取 HEAD blob —— 工作樹名冊與 HEAD 不同時回 HEAD 版;
+        把它的結果交給 inventory_candidate ⇒ 照 HEAD 版承接。"""
+        repo = _t156_clean_git_target(tmp_path, "upstream-repo")
+        head_doc = _t171_upstream()
+        (repo / ".agents").mkdir()
+        inv_path = repo / ".agents" / "extension-inventory.json"
+        inv_path.write_text(_t169_json.dumps(head_doc), encoding="utf-8")
+        _t156_git(repo, "add", ".agents/extension-inventory.json")
+        _t156_git(repo, "commit", "-q", "-m", "t171 inventory")
+        inv_path.write_text(_t169_json.dumps(_t171_upstream(contracts=())), encoding="utf-8")
+        mod = _load("install_t171_head", "install.py")
+        reader = getattr(mod, "upstream_inventory_head", None)
+        assert reader is not None, "install 沒有 upstream_inventory_head"
+        got = reader(str(repo))
+        assert got == head_doc, got
+        claude = _t171_claude(tmp_path / "home")
+        t = _t156_clean_git_target(tmp_path)
+        data, _h = mod.inventory_candidate(str(t), claude_root=str(claude), upstream_head="1" * 40,
+                                           upstream_inventory=got)
+        assert _t171_inv(data)["version"] == 2

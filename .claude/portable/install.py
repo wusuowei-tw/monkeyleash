@@ -87,6 +87,9 @@ _REAL_CANDIDATES_DIR = CANDIDATES_DIR      # E3 的比對基準:不隨測試替�
 CANDIDATE_SCHEMA = "monkeyleash.install-candidate"
 CANDIDATE_VERSION = 1
 CANDIDATE_NOTE = u"install-candidate(票 169)"
+# 票 171:承接上游 HEAD 名冊的 contract 項目時一律用這個 note(不抄上游 note)。
+CARRIED_CONTRACT_NOTE = u"install-candidate(票 171 承接上游已提交名冊的 contract 項目)"
+UPSTREAM_INVENTORY_REL = ".agents/extension-inventory.json"
 UNBORN = "UNBORN"                          # UNBORN 裁決:尚無 commit 的 target_head(全大寫、逐字)
 EXIT_INVENTORY_PENDING = 3                 # 候選已產生、尚未核准(下游零寫入)
 EXIT_INVENTORY_MISMATCH = 4                # 核准 hash 與現況不一致(D3;下游零寫入)
@@ -971,6 +974,58 @@ def _source_redlight():
     return mod
 
 
+def upstream_inventory_head(root=None):
+    """票 171 D1:上游 **HEAD 已提交** 的 `.agents/extension-inventory.json`(不讀工作樹)。`root` 為 None ⇒ 上游 repo。
+
+    讀不到 / 解析失敗 ⇒ SystemExit,下游未寫入。合格與否由呼叫端以 redlight 的 `_extension_inventory_ok` 判定。
+    """
+    root = SRC_ROOT if root is None else os.fspath(root)
+    p = subprocess.run(["git", "cat-file", "blob", "HEAD:" + UPSTREAM_INVENTORY_REL], cwd=root, capture_output=True)
+    if p.returncode != 0:
+        raise SystemExit("[安裝/名冊候選] 讀不到上游 HEAD 已提交的 %s —— 下游未寫入。" % UPSTREAM_INVENTORY_REL)
+    try:
+        return json.loads(p.stdout.decode("utf-8"))
+    except Exception:
+        raise SystemExit("[安裝/名冊候選] 上游 HEAD 的 %s 解析失敗 —— 下游未寫入。" % UPSTREAM_INVENTORY_REL)
+
+
+def _carry_contracts(rl, upstream_inventory, synced_pairs, claude_root):
+    """票 171 D2 / D3:回 `{邏輯路徑: contract 項目}`(只含本次觀測到、且通過契約驗證的)。
+
+    只承接 contract.name 在 `EXT_CONTRACT_PATHS` 且 path 等於該名稱寫死路徑的項目;path / contract 逐字照抄、
+    note 用 `CARRIED_CONTRACT_NOTE`。本機不在 synced_files ⇒ 不承接;驗證失敗或實際路徑解析不了 ⇒ SystemExit
+    (只印類別/欄位代碼)。
+    """
+    if not rl._extension_inventory_ok(upstream_inventory):
+        raise SystemExit("[安裝/名冊候選] 上游 HEAD 名冊沒有通過 redlight 的 policy 驗證 —— 下游未寫入。")
+    have = set(rel for rel, _sha in synced_pairs)
+    carried = {}
+    for item in upstream_inventory.get("entries") or []:
+        contract = item.get("contract") if isinstance(item, dict) else None
+        if not isinstance(contract, dict):
+            continue
+        name, path = contract.get("name"), item.get("path")
+        if name not in rl.EXT_CONTRACT_PATHS or path != rl.EXT_CONTRACT_PATHS[name]:
+            continue
+        if path not in have:
+            continue
+        real = rl._synced_contract_real_path(claude_root, path)
+        if real is None:
+            raise SystemExit("[安裝/名冊候選] contract %s 的實際路徑無法解析 —— 下游未寫入。" % name)
+        res = rl.synced_contract_check(name, real, contract.get("pins"))
+        if res is not None:
+            raise SystemExit("[安裝/名冊候選] contract %s 驗證失敗:%s/%s —— 下游未寫入。"
+                             % (name, res.get("category"), res.get("field")))
+        carried[path] = {"path": path, "contract": {"name": name, "pins": dict(contract["pins"])},
+                         "note": CARRIED_CONTRACT_NOTE}
+    return carried
+
+
+def _carried_contract_names(inv):
+    """D6:候選 inventory 裡承接的 contract 名稱(依路徑排序)。"""
+    return [e["contract"]["name"] for e in inv.get("entries") or [] if "contract" in e]
+
+
 def _canonical_bytes(doc):
     return json.dumps(doc, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -985,12 +1040,14 @@ def target_id(canonical_path):
     return _sha256(canonical_path.encode("utf-8"))[:16]
 
 
-def inventory_candidate(target, claude_root=None, upstream_head=None):
+def inventory_candidate(target, claude_root=None, upstream_head=None, upstream_inventory=None):
     """D2:依現況產生候選 ⇒ `(canonical_bytes, candidate_hash)`。純讀,不寫任何檔。
 
     現況一律取自上游 redlight 的 `extension_report`(R10 自己的觀測,不另寫一套算法);
     `claude_root` 為 None ⇒ 同 R10 取使用者層 `~/.claude`。`upstream_head` 為 None ⇒ 讀 agent-gates 的 HEAD。
     任何一項無法登記(觀測失敗、symlink / 讀不到、`.mcp.json` 讀不到)⇒ SystemExit,下游未寫入。
+    票 171:`upstream_inventory` 為 None ⇒ 讀上游 HEAD 已提交的名冊(`upstream_inventory_head`);其中本機觀測到
+    且通過契約驗證的 contract 項目取代同路徑的 sha256 項目,承接 ≥1 條 ⇒ version 2;0 條 ⇒ 與票 171 前逐位元相同。
     """
     rl = _source_redlight()
     report = rl.extension_report(target, claude_root)
@@ -1024,8 +1081,13 @@ def inventory_candidate(target, claude_root=None, upstream_head=None):
     allow["user_commands"] = entries(surfaces.get("user_commands") or [], "user-commands")
     allow["project_settings_hook_commands"] = _settings_hook_commands(SRC_ROOT)
     allow["mcp_json_servers"] = mcp
-    inv = {"schema": rl.EXT_INVENTORY_SCHEMA, "version": rl.EXT_INVENTORY_VERSION,
-           "entries": entries(surfaces.get("synced_files") or [], "synced")}
+    synced_pairs = surfaces.get("synced_files") or []
+    up_inv = upstream_inventory if upstream_inventory is not None else upstream_inventory_head()
+    carried = _carry_contracts(rl, up_inv, synced_pairs, report.get("claude_root"))
+    synced_entries = [carried.get(e["path"], e) for e in entries(synced_pairs, "synced")]
+    inv = {"schema": rl.EXT_INVENTORY_SCHEMA,
+           "version": rl.EXT_INVENTORY_VERSION_CONTRACT if carried else rl.EXT_INVENTORY_VERSION,
+           "entries": synced_entries}
     if not (rl._extension_allowlist_ok(allow) and rl._extension_inventory_ok(inv)):
         raise SystemExit("[安裝/名冊候選] 產生的候選沒有通過 redlight 的 policy 驗證 —— 下游未寫入。")
     doc = {"schema": CANDIDATE_SCHEMA, "version": CANDIDATE_VERSION,
@@ -1083,7 +1145,7 @@ def inventory_preflight(target, approve, cands_dir, claude_root=None, upstream_h
     doc = json.loads(data.decode("utf-8"))
     shown = _store_candidate(cands_dir, data, digest)
     if approve is None:
-        return "pending", digest, shown
+        return "pending", digest, shown, doc
     if approve != digest:
         _out("[安裝/名冊候選] 核准的 hash 與依現況重算的 hash 不一致 —— 下游未寫入、安裝停止。")
         _out("    核准值:%s" % approve)
@@ -1155,6 +1217,9 @@ def _approve_inventory(target, approve, cands_dir, self_approve):
         _out("[安裝/名冊核准] 下游尚未寫入任何東西。extension 名冊候選已產生:")
         _out("    候選 hash:%s" % state[1])
         _out("    候選檔:  %s" % state[2])
+        names = _carried_contract_names(state[3]["inventory"])
+        if names:
+            _out(u"    承接上游 contract %d 筆（名稱：%s）" % (len(names), u"、".join(names)))
         _out("    審閱候選內容後由 Jeff 明示核准,再以 --approve-inventory <hash> 重跑安裝。")
         _out("    (產生候選 ≠ 核准候選;agent 不得自行推導、複製或代填這個 hash。)")
         raise SystemExit(EXIT_INVENTORY_PENDING)
