@@ -180,11 +180,31 @@ def ignored_framework_files():
     ig = git_paths(["ls-files", "--others", "--ignored", "--exclude-standard"],
                    SRC_ROOT)
     return [p for p in ig
-            if manifest.in_scope(p) and manifest.mark_for(p) != "skip"]
+            if not is_bytecode(p) and manifest.in_scope(p) and manifest.mark_for(p) != "skip"]
+
+
+_BYTECODE_DIR = "__pycache__"
+_BYTECODE_EXTS = (".pyc", ".pyo")
+
+
+def is_bytecode(rel_path):
+    """票 172 D1:位元碼的唯一判定 —— 任一段恰為 `__pycache__`,或副檔名為 `.pyc`／`.pyo`(不分大小寫)。
+
+    不靠 manifest 標記:標記表只能逐目錄寫 skip,而 copy 目錄與巢狀深度是開放集合,
+    位元碼的標誌(目錄名與兩個副檔名)才是封閉的那一邊。
+    """
+    parts = rel_path.split("/")
+    if _BYTECODE_DIR in parts:
+        return True
+    return os.path.splitext(parts[-1])[1].lower() in _BYTECODE_EXTS
 
 
 def classify(paths):
-    """逐檔分類。回傳 (要複製的, 各標記的清單, 靠預設過關的)。"""
+    """逐檔分類。回傳 (要複製的, 各標記的清單, 靠預設過關的)。
+
+    票 172 D2:位元碼先排除,不進任何桶(因此不進 copy 桶、journal、copy_into)。
+    """
+    paths = [p for p in paths if not is_bytecode(p)]
     buckets = {m: [] for m in manifest.MARKS}
     for p in paths:
         if manifest.in_scope(p):
@@ -1519,7 +1539,9 @@ def main(target, approve_inventory=None):
     # 被 .gitignore 蓋住的框架檔:帶了,但要說。
     # 不說的話,下一個人不會知道他的 .gitignore 正在對抗安裝器 ——
     # 而那個狀態的後果是「裝出沒有閘門的 repo」,且安裝過程安靜又成功(票 18)。
-    hidden = ignored_framework_files()
+    # 票 172 D3:只列「ignored 框架檔 ∩ 本次實際交給 copy_into 的 copy 桶」—— 宣稱「已強制帶過去」才為真。
+    copied = set(buckets["copy"])
+    hidden = [p for p in ignored_framework_files() if p in copied]
     if hidden:
         _out("\n**來源的 .gitignore 蓋住了這些框架檔**,已強制帶過去 ——"
              "請確認那是刻意的:")

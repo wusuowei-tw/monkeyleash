@@ -498,6 +498,8 @@ docs/agents/friction-local.md   generate
 CLAUDE.md                       generate
 
 # 位元碼快取,由來源產生;帶過去只是噪音
+# 位元碼另由 install.py 的程式層規則全域排除(票 172:任意深度的 __pycache__、.pyc、.pyo),
+# 本表下面兩行只是多一層防護 —— 不要以為只有這兩個目錄被擋,也不要靠補行來擋新目錄。
 .claude/hooks/__pycache__/    skip
 .claude/portable/__pycache__/ skip
 

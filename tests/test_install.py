@@ -136,7 +136,8 @@ class TestEnumerationDoesNotLoseFilesToGitignore:
         """**負控**:不是「所有 ignored 都帶」。
 
         鏡像(`.claude/skills/`)不在任何框架前綴底下,`in_scope` 為假;
-        `__pycache__` 在 `.claude/hooks/` 底下但標 `skip`,標記表擋住。
+        本例的 `.claude/hooks/__pycache__/` 剛好在標記表標 `skip`,但那只是其中兩個目錄的事實,
+        不是通則 —— 位元碼的全域排除在 install.py 的 `is_bytecode`(票 172)。
         少了這條,「一律帶」也會讓上面兩條過 —— 而那會把鏡像與位元碼裝進新 repo。
         """
         import subprocess
@@ -2473,3 +2474,117 @@ class TestTicket171CarriesSyncedContracts:
         data, _h = mod.inventory_candidate(str(t), claude_root=str(claude), upstream_head="1" * 40,
                                            upstream_inventory=got)
         assert _t171_inv(data)["version"] == 2
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 票 172 —— installer 不帶位元碼(AC-1)、「已強制帶過去」清單只列真的複製的檔(AC-2)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# 隔離:來源 repo 一律是 tmp(monkeypatch SRC_ROOT),或以 monkeypatch 換掉列舉函式;
+# 走 main 的條目把家目錄與候選根目錄都換成 tmp(`_t169_home`／`_t169_mod`)。紅燈類 = 全部 4 條。
+
+_T172_BYTECODE = (".claude/patches/__pycache__/a.cpython-311.pyc", ".claude/hooks/sub/__pycache__/b.cpython-311.pyc",
+                  ".agents/skills/s/__pycache__/c.pyc", "tests/fixtures/hooks/__pycache__/d.pyc",
+                  ".claude/portable/e.pyo", ".claude/hooks/F.PYC")
+_T172_TRACKED = (_T172_BYTECODE[0], _T172_BYTECODE[5])
+_T172_UNTRACKED = (_T172_BYTECODE[1], _T172_BYTECODE[2])
+_T172_IGNORED = (_T172_BYTECODE[3], _T172_BYTECODE[4])
+_T172_FORCED_TITLE = u"已強制帶過去"
+
+
+def _t172_write(root, rel, data=b"t172\n"):
+    p = root.joinpath(*rel.split("/"))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
+
+
+def _t172_forced_section(out):
+    """「已強制帶過去」標題之後、到第一個空行為止的清單行(去掉縮排)。沒有標題 ⇒ None。"""
+    lines = out.splitlines()
+    for i, line in enumerate(lines):
+        if _T172_FORCED_TITLE in line:
+            got = []
+            for nxt in lines[i + 1:]:
+                if not nxt.strip():
+                    break
+                got.append(nxt.strip())
+            return got
+    return None
+
+
+def _t172_installed_out(tmp_path, monkeypatch, capsys, tag, hidden):
+    """真實安裝一次(先產候選、再帶 hash):來源列舉固定為安裝前的現況,ignored 清單換成 `hidden`。回全部輸出。"""
+    _t169_home(tmp_path, monkeypatch)
+    t = _t169_target(tmp_path, "target-" + tag, real_venv=True)
+    mod, cands = _t169_mod(tmp_path, monkeypatch, tag)
+    frozen = mod.source_files()
+    monkeypatch.setattr(mod, "source_files", lambda: frozen)
+    monkeypatch.setattr(mod, "ignored_framework_files", lambda: list(hidden))
+    _t169_run(mod, t, capsys)
+    _f, h = _t169_only_candidate(cands)
+    capsys.readouterr()
+    mod.main(str(t), approve_inventory=h)
+    cap = capsys.readouterr()
+    return cap.out + cap.err
+
+
+class TestTicket172BytecodeAndForcedList:
+
+    def test_t172_bytecode_never_in_copy_bucket(self, tmp_path, monkeypatch):
+        """AC-1:tracked / untracked / ignored 三種來源、多個 copy 目錄與深度、大寫副檔名的位元碼,
+        都不進 classify 的 copy 桶;正常框架檔仍在。ignored_framework_files() 也不含位元碼。"""
+        src = _t156_clean_git_target(tmp_path, "t172-src")
+        for rel in _T172_TRACKED + (".claude/patches/ok.py",):
+            _t172_write(src, rel)
+        _t172_write(src, ".gitignore", b"tests/fixtures/hooks/__pycache__/\n*.pyo\n")
+        _t156_git(src, "add", "-f", *(_T172_TRACKED + (".claude/patches/ok.py", ".gitignore")))
+        _t156_git(src, "commit", "-q", "-m", "t172 tracked")
+        for rel in _T172_UNTRACKED + _T172_IGNORED:
+            _t172_write(src, rel)
+        ignored = _t156_git(src, "ls-files", "--others", "--ignored", "--exclude-standard").stdout.decode()
+        assert set(_T172_IGNORED) <= set(ignored.split()), ignored
+        mod = _load("install_t172_classify", "install.py")
+        monkeypatch.setattr(mod, "SRC_ROOT", str(src))
+        all_files, _u = mod.source_files()
+        assert set(_T172_TRACKED) <= set(all_files), all_files
+        buckets, _n = mod.classify(all_files)
+        assert ".claude/patches/ok.py" in buckets["copy"], buckets["copy"]
+        assert set(buckets["copy"]).isdisjoint(_T172_BYTECODE), buckets["copy"]
+        assert set(mod.ignored_framework_files()).isdisjoint(_T172_BYTECODE)
+
+    def test_t172_bytecode_not_copied_by_main(self, tmp_path, monkeypatch):
+        """AC-1 端到端:main 實際交給 copy_into 的路徑不含任何位元碼(copy_into 換成記錄後中止,不寫 target)。"""
+        _t169_home(tmp_path, monkeypatch)
+        t = _t169_target(tmp_path, "target-t172-main")
+        mod, _cands = _t169_mod(tmp_path, monkeypatch, "t172_main")
+        monkeypatch.setattr(mod, "source_files",
+                            lambda: ([".claude/hooks/gate.py"] + list(_T172_BYTECODE), []))
+        monkeypatch.setattr(mod, "_approve_inventory", lambda *a, **k: ({}, "0" * 64))
+        seen = []
+
+        class _T172Stop(Exception):
+            pass
+
+        def record(target, paths):
+            seen.extend(paths)
+            raise _T172Stop()
+        monkeypatch.setattr(mod, "copy_into", record)
+        with pytest.raises(BaseException):
+            mod.main(str(t))
+        assert ".claude/hooks/gate.py" in seen, seen
+        assert set(seen).isdisjoint(_T172_BYTECODE), seen
+
+    def test_t172_forced_list_only_actually_copied(self, tmp_path, monkeypatch, capsys):
+        """AC-2:ignored = 框架檔 + .dev/ 的 generate + 位元碼 ⇒ 清單只有那個框架檔。"""
+        hidden = [".claude/hooks/gate.py", ".dev/reports/t172-x.md",
+                  ".claude/hooks/__pycache__/t172x.cpython-311.pyc"]
+        out = _t172_installed_out(tmp_path, monkeypatch, capsys, "t172_list", hidden)
+        listed = _t172_forced_section(out)
+        assert listed == [".claude/hooks/gate.py"], (listed, out)
+        assert "t172-x.md" not in out and "t172x" not in out, out
+
+    def test_t172_no_forced_list_when_nothing_copied(self, tmp_path, monkeypatch, capsys):
+        """AC-2:ignored 只有 .dev/ 的 generate 與位元碼 ⇒ 不印「已強制帶過去」標題行。"""
+        hidden = [".dev/reports/t172-y.md", ".dev/pipeline.json", ".claude/patches/__pycache__/t172y.pyc"]
+        out = _t172_installed_out(tmp_path, monkeypatch, capsys, "t172_none", hidden)
+        assert _T172_FORCED_TITLE not in out, out

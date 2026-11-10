@@ -20,6 +20,8 @@
 
 ### S1｜「已強制帶過去」清單疑似與實際 copy scope 不一致
 
+**已移至票 172（2026-11-10，Jeff 裁 3B）**；本段保留原文作紀錄，S1 不再在本票處理。
+
 - installer 輸出「**來源的 .gitignore 蓋住了這些框架檔**,已強制帶過去」（`.claude/portable/install.py:1459`），並列出 648 個上游被忽略的檔，多數在 `.dev/reports/`。
 - 清單來源 `ignored_framework_files()`（`install.py:160`）只排除 `skip`（`:180`）；而 `.dev/` 在 manifest 標 `generate`（`.agents/portable-manifest.txt:135`），不進 copy 桶。
 - AC-3 第三輪-B 的全量 `git check-ignore` 證據：彩排中「上游 ignored 卻存在」的檔，全部落在 setup_venv／mirror／pycache／installer_state 四個已知類別，other＝0。verify_gates 的輸出也含同形清單。
@@ -42,6 +44,7 @@
 ## 三｜AC 草案（**草案，待裁決者定案**）
 
 - **AC-S1**：installer 的「已強制帶過去」清單只列實際被複製進 target 的檔（或改成不宣稱已複製的措辭）；有測試證明：上游 ignored、標 `generate` 的路徑不會出現在該清單裡，或出現時措辭不宣稱已複製。
+  - **AC-S1 已移至票 172（2026-11-10，Jeff 裁 3B）**；本條保留原文作紀錄，不再在本票驗收。
 - **AC-S2**：名冊經核准登記了任何項目時，decisions-pending 的 extension policy 段標題不再宣稱「不是核准過的觀測快照」；名冊為空時維持原標題；兩種情況都有測試。
 - **AC-S3**：從 target 以外的 git repo 目錄執行 bootstrap，不會改到任何 repo 的 `core.hooksPath`（明確拒絕，或改以腳本自身位置定位）；有測試證明。Windows 上的執行方式在 installer 結尾提示或 bootstrap 失敗訊息中寫明（是否需要測試，待裁）。
 
