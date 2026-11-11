@@ -72,6 +72,24 @@ SELF_PATHS = (".claude/portable/leak_scan.py",
 # 因為它對每一個同類檔案都成立;身分豁免綁檔名就是開後門。
 SKIP_BASENAMES = (".gitignore",)
 
+# **第三種豁免:精確路徑的身分豁免(票 173)。** 綁 repo 相對路徑,不綁檔名、
+# 不綁副檔名:只有這一個路徑成立,大小寫敏感、正規化(反斜線轉正斜線、取 repo 相對)
+# 後全等才算。`app/gradle/wrapper/gradle-wrapper.jar`、`other.jar`、
+# `Gradle/Wrapper/...` 都照掃 —— 照掃的結果是「讀不到內容」而擋下。
+#
+# 由來:Gradle wrapper 的 jar 是 Gradle 官方要求進版控的二進位檔,
+# 掃描器讀不懂就 fail-closed,於是任何含 wrapper 的下游都無法提交。
+#
+# **不放進 SELF_PATHS**:SELF_PATHS 還會傳進 `scanner.scan_paths` 當「掃描器自己」,
+# 而這個檔不是掃描器 —— 混進去之後,讀的人分不出哪一筆是「掃描器不掃自己」、
+# 哪一筆是「這個檔沒被掃」。這裡的豁免在 `scan()` 裡**可見地**分流
+# (pre-commit 印提示、review 列入未內容掃描),SELF_PATHS 那條是靜默的。
+#
+# **已知限制**:只綁路徑不綁內容。同一路徑被換成其他二進位檔
+# (或可解碼且含機密的檔)仍會放行。緩解只有可見提示與 review 列出;
+# 版本與 SHA-256 由 wrapper 自己的治理線管,不在這裡維護第二份。
+EXACT_PATH_UNSCANNED = ("gradle/wrapper/gradle-wrapper.jar",)
+
 # ── 審查模式的副檔名**白名單**(票 39 / P2,裁決 4)────────────────────
 #
 # pre-commit 那個情境用黑名單(`SKIP_SUFFIX`)是對的:跳過二進位省時間也省雜訊。
@@ -214,6 +232,10 @@ def scan(paths, review=False, staged=False):
     `staged` 管位元組從哪來。把來源綁到 `review` 上的話,
     `--staged --review` 會變成「稽核 index」而 `--staged` 單獨用是「稽核工作樹」,
     **同一個旗標在兩種組合下指不同的對象** —— 那正是票 132 要修的病的形狀。
+
+    `EXACT_PATH_UNSCANNED` 的路徑在 `should_skip` 之前分流(票 173),不讀內容:
+    review 模式列入未內容掃描清單;非 review 模式放行,但回傳前一律印提示,
+    提示不影響退出碼。
     """
     try:
         groups = load_patterns()
@@ -222,9 +244,17 @@ def scan(paths, review=False, staged=False):
              % (PATTERNS_FILE, e))
         return 2
 
-    certs, rest, not_scanned = [], [], []
+    certs, rest, not_scanned, exempted = [], [], [], []
     for p in paths:
         rel = scanner.rel_path(ROOT, p)
+        if rel in EXACT_PATH_UNSCANNED:
+            # 票 173:大小寫敏感全等;rel 已由 scanner.rel_path 正規化。
+            if review:
+                not_scanned.append(
+                    (rel, "精確路徑豁免(Gradle wrapper)—— 未內容掃描,需人工確認"))
+            else:
+                exempted.append(rel)
+            continue
         if should_skip(p):
             if review:
                 not_scanned.append((rel, "跳過清單(掃描器自己 / 類別豁免 / 二進位)"))
@@ -241,6 +271,14 @@ def scan(paths, review=False, staged=False):
     hits = certs + scanner.scan_paths(rest, groups, root=ROOT,
                                       self_paths=SELF_PATHS,
                                       reader=staged_reader if staged else None)
+
+    if exempted:
+        # 票 173:放行要看得見(比照 gitlink_note),不影響退出碼。
+        _err("\n[洩漏偵測] 依精確路徑豁免、未內容掃描的檔案(%d):\n"
+             % len(exempted))
+        for rel in exempted:
+            _err("  %s\n" % rel)
+        _err("  只認 repo 相對路徑,不認內容 —— 這不是「掃過沒事」。\n")
 
     if review:
         # **必要部分,不是選項。** 清單不在,「跳過」這件事就不存在於報告上,

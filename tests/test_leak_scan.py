@@ -1212,3 +1212,102 @@ class TestTicket148RenamedFileIsScanned:
             pytest.fail(u"佈置未形成「rename + 修改」(name-status):%r" % rows)
         rc = ls.main(["--staged"])
         _t148_assert_hit(rc, capsys.readouterr().err, u"notes/b.txt")
+
+
+# ── 票 173:gradle/wrapper/gradle-wrapper.jar 的精確路徑豁免 ─────────────
+#
+# 樣本是「解不出可讀文字」的位元組。**只接 range(32) 不夠**:那一段用 UTF-16-LE
+# 解得出 U+0100、U+0302… 這種可讀字,反對照會因此「沒命中、放行」而假綠。
+# 所以每 32 個控制位元組後面接 32 個 NUL,讓 UTF-16/UTF-32 兩種寬編碼都解出控制字元。
+# `_t173_bin()` 自己斷言這個前提 —— 樣本若被判為可讀,測試沒有測到東西。
+
+_T173_WRAPPER = u"gradle/wrapper/gradle-wrapper.jar"
+_T173_UNREADABLE = u"命中 pattern:<讀不到內容>"
+
+
+def _t173_bin():
+    raw = b"PK\x03\x04" + (bytes(bytearray(range(32))) + b"\x00" * 32) * 64
+    text, why = ls.scanner.decode_bytes(raw)
+    assert text is None and why, u"t173 樣本被掃描器判為可讀,測試前提不成立"
+    return raw
+
+
+def _t173_stage(root, rels, data=None):
+    for rel in rels:
+        p = root.joinpath(*rel.split(u"/"))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(_t173_bin() if data is None else data)
+        _t148_git(root, "add", "--", rel)
+
+
+def _t173_assert_unreadable_hit(rc, err, rels):
+    assert rc == 1, u"leak scan 回 %r(預期 1):%s" % (rc, err)
+    assert _T173_UNREADABLE in err, u"沒有以「讀不到內容」擋下:%s" % err
+    for rel in rels:
+        assert (rel + u":") in err, u"擋下報告沒有點名 %s:%s" % (rel, err)
+
+
+class TestTicket173WrapperJarExactPathExemption:
+
+    def test_t173_exact_wrapper_path_passes_with_visible_notice(self, tmp_path, monkeypatch, capsys):
+        """AC-1(紅燈類):精確路徑 ⇒ `--staged` 回 0,且 stderr 有可見提示。"""
+        root = _t148_repo(tmp_path, monkeypatch)
+        _t173_stage(root, [_T173_WRAPPER])
+        rc = ls.main(["--staged"])
+        err = capsys.readouterr().err
+        assert rc == 0, u"精確路徑的 wrapper jar 被擋(rc=%r):%s" % (rc, err)
+        assert _T173_WRAPPER in err, u"放行時沒有點名該路徑(靜默跳過):%s" % err
+        assert u"精確路徑豁免" in err and u"未內容掃描" in err, u"提示字樣不全:%s" % err
+
+    def test_t173_notice_does_not_mask_other_hits(self, tmp_path, monkeypatch, capsys):
+        """AC-1(紅燈類):jar 的豁免提示不得遮掉同批文字檔的命中。"""
+        root = _t148_repo(tmp_path, monkeypatch)
+        _t173_stage(root, [_T173_WRAPPER])
+        (root / "notes").mkdir()
+        io.open(str(root / "notes" / "n.md"), "w", encoding="utf-8", newline="\n").write(
+            u"token=" + _TOK + u"\n")
+        _t148_git(root, "add", "notes/n.md")
+        rc = ls.main(["--staged"])
+        err = capsys.readouterr().err
+        assert rc == 1, u"文字檔的命中沒有擋下 commit(rc=%r):%s" % (rc, err)
+        assert u"notes/n.md:" in err, u"文字檔的命中不在報告裡:%s" % err
+        assert u"精確路徑豁免" in err and _T173_WRAPPER in err, u"jar 的豁免提示不見了:%s" % err
+
+    def test_t173_review_lists_wrapper_as_unscanned(self, tmp_path, monkeypatch, capsys):
+        """AC-3(紅燈類):`--staged --review` ⇒ 非 0,未內容掃描清單含該路徑且理由為精確路徑豁免。"""
+        root = _t148_repo(tmp_path, monkeypatch)
+        _t173_stage(root, [_T173_WRAPPER])
+        rc = ls.main(["--staged", "--review"])
+        err = capsys.readouterr().err
+        assert rc != 0, u"review 模式把未掃的 jar 當成乾淨(rc=0):%s" % err
+        assert ls.REVIEW_HEADER in err and _T173_WRAPPER in err, u"未內容掃描清單沒有該路徑:%s" % err
+        tail = err.split(_T173_WRAPPER, 1)[1]
+        assert u"精確路徑豁免" in tail, u"清單理由不是精確路徑豁免:%s" % err
+
+    def test_t173_exemption_set_is_exactly_one_path(self):
+        """AC-4(紅燈類):豁免集合恰為一個路徑。"""
+        assert ls.EXACT_PATH_UNSCANNED == (u"gradle/wrapper/gradle-wrapper.jar",)
+
+    def test_t173_same_name_elsewhere_still_blocked(self, tmp_path, monkeypatch, capsys):
+        """AC-2(反對照):同名檔在其他目錄 ⇒ 仍以讀不到內容擋下。"""
+        root = _t148_repo(tmp_path, monkeypatch)
+        rels = [u"app/gradle/wrapper/gradle-wrapper.jar", u"sub/gradle-wrapper.jar"]
+        _t173_stage(root, rels)
+        rc = ls.main(["--staged"])
+        _t173_assert_unreadable_hit(rc, capsys.readouterr().err, rels)
+
+    def test_t173_other_jars_still_blocked(self, tmp_path, monkeypatch, capsys):
+        """AC-2(反對照):其他 .jar ⇒ 仍擋(不是全域 .jar 豁免)。"""
+        root = _t148_repo(tmp_path, monkeypatch)
+        rels = [u"gradle/wrapper/other.jar", u"libs/x.jar"]
+        _t173_stage(root, rels)
+        rc = ls.main(["--staged"])
+        _t173_assert_unreadable_hit(rc, capsys.readouterr().err, rels)
+
+    def test_t173_case_variant_still_blocked(self, tmp_path, monkeypatch, capsys):
+        """AC-2(反對照):大小寫變體 ⇒ 仍擋(比對大小寫敏感)。"""
+        root = _t148_repo(tmp_path, monkeypatch)
+        rels = [u"Gradle/Wrapper/gradle-wrapper.jar"]
+        _t173_stage(root, rels)
+        rc = ls.main(["--staged"])
+        _t173_assert_unreadable_hit(rc, capsys.readouterr().err, rels)
