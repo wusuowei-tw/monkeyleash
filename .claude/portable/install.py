@@ -2,12 +2,19 @@
 """把六站閘門裝進另一個 repo。
 
 用法:python .claude/portable/install.py <目標目錄>
+      python .claude/portable/install.py <目標目錄> --approve-inventory <64 碼 hex>
+      python .claude/portable/install.py --rehook <已安裝的目標目錄>
+
+**兩次執行,中間由人核准(票 169)。** 第一次只產名冊候選、印出候選 hash,以結束碼 3 結束,
+目標零寫入;由人檢視候選並親自核准那一個 hash,第二次帶 `--approve-inventory <hash>` 重跑,
+依現況重算一致才寫入。hash 只能逐字來自人的明示核准,agent 不得自行推導或代填。
+已安裝的目標只走 `--rehook`,不得重跑完整安裝(票 156 D12)。
 
 **單一路徑,零分支。** 全新專案不是另一種情境,它只是「既有原始碼數為零」的特例:
 同一條路徑跑完會產出一份空的豁免清單。為空 repo 開第二條分支的話,
 較少被走到的那條就是下一個 F-009(規則存在但沒被走過)。
 
-安裝**一律建立 commit**:go-live sha 必須指向一個真的存在的 commit,
+核准之後,安裝**一律建立 commit**:go-live sha 必須指向一個真的存在的 commit,
 而安裝框架本來就是一次變更 —— 既有專案也該有那個 commit,空 repo 只是它的第一個。
 
 裝 skill 是**安裝的一部分**,不是前置條件。當前置條件的話,漏做時 R4/R5

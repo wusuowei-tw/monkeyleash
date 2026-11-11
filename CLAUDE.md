@@ -47,6 +47,12 @@
 寫死條數或結尾編號的話,下次加規則時不會有人記得回來改這裡,
 而**表看起來仍然完整**。本表因此只求「列出的每一條都對」,不宣稱「列完了」):
 
+> **⚠ 擋還是只提示,以 `gate.py` 的 `ADVISORY_RULES` 為準(刪規則輪,2026-11-01 裁決)。**
+> 名單裡的規則照常判定、照常印出訊息,但**降為工作指引、本次不擋**(訊息標頭是 `[六站閘門/指引]`);
+> 不在名單裡的照擋,fail-closed 也照擋。下表「判定」欄寫的是**判什麼**,
+> 其中的「→ 擋」是規則原本的判定結果,**不代表它現在仍會擋** —— 名單會變,
+> 所以不在這張表裡逐條寫死;要知道某條現在擋不擋,去讀 `ADVISORY_RULES`。
+
 | 規則 | 判定 |
 |---|---|
 | R1 | 規格書內容含程式碼 → 擋。**路徑兩條**:`docs/specs/**` 與 `.scratch/<feature>/spec.md`(官方 issue tracker 的規定位置;只守前者的話 R1 在官方佈局下是死規則)。**樣式八個**:``` 圍籬,以及行首的 `def` / `class` / `import` / `from` / `function` / `const` / `let`。讀不到內容 → **fail-closed 照擋** |
@@ -59,7 +65,8 @@
 | R10 | Claude Code 擴充入口完整性（票 146）：pre-commit 以 HEAD 的 .agents/extension-allowlist.json 與 extension-inventory.json 為唯一 authority，核對 dev-mods / 使用者 skills / commands / synced 兩根 / 專案 hook / .mcp.json 八個靜態入口。未登記 ⇒ 擋；觀測失敗、authority 缺失、synced 未納管或驗證失敗 ⇒ **fail-closed 硬擋，不受影子豁免**。只改兩份 policy 的 commit 改以 index 中的候選 policy 判定（policy-only 通道，H-6）。本規則只證明「已知靜態入口符合 committed policy」，**不證明本 session 實際載入集合**（runtime 恆 UNPROVEN）。|
 | R11 | AI 用檔案工具（Write／Edit／MultiEdit／NotebookEdit）寫站牌 `.dev/pipeline.json` → 擋（票 158）。**只在前哨擋**，比照 R7（理由見 gate.py 的 RULE_DIVERGENCE 宣告）：提交時不判——提交時分不出是誰改的，而合法修改者是使用者本人；繞過前哨就沒有第二道。路徑先正規化再比對（./、絕對路徑、..；大小寫與反斜線依平台）。**不受影子豁免**。站牌只能由使用者本人修改。Bash／PowerShell 指令寫站牌也擋（含許可前綴與影子模式），讀取不擋；目標看不出來但指令涉及站牌時也擋。腳本內寫入、git 清除指令、PowerShell 短別名等仍是已知缺口，不保證能擋。|
 
-被擋時不要繞過(改路徑、換工具、改 pipeline.json)。跳過流程由使用者自行修改 `.dev/pipeline.json` 的 `current_stage`。
+被擋時不要繞過(改路徑、換工具、改 pipeline.json)。收到「指引」(沒有擋)時,照指引修正或停下回報,
+不得把「這次沒擋」當成「可以這樣做」。跳過流程由使用者自行修改 `.dev/pipeline.json` 的 `current_stage`。
 
 ## skills 更新
 

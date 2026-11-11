@@ -1096,9 +1096,15 @@ PYTHONIOENCODING=utf-8 .venv-gates/Scripts/python.exe -m pytest -q -rs      # �
 sh bootstrap.sh                                   # 上游這個 clone 接上權威層(每個 clone 一次;要求上游 .venv-gates 已合法)
 # 目標 repo 必須已 git init(setup 要登記 .git/info/exclude),而且還沒裝過 agent-gates
 python .claude/portable/setup_gates_env.py <目標 repo>   # 3.11 底座;downstream profile(預設);要連網
+# (下兩行的 .venv-gates/… 是**上游自己的** .venv-gates,在上游根目錄執行上游的 install.py;
+#  目標自己的 .venv-gates 只由 installer 拿去做事前身分檢查,不是用來執行 installer)
 .venv-gates/Scripts/python.exe .claude/portable/install.py <目標 repo>
-                                                  # 事前檢查以「目標自己的 .venv-gates」執行 runtime_identity(downstream);
-                                                  # 不合法就在任何寫入之前拒絕。一律建 commit(go-live sha)、最後強制驗證
+                                                  # 第一次:只產名冊候選、印出候選 hash,結束碼 3;目標零寫入
+# → 由人檢視候選並親自核准那一個 hash(核准綁定版本,不代表內容逐項審閱);agent 不得自行推導或代填
+.venv-gates/Scripts/python.exe .claude/portable/install.py <目標 repo> --approve-inventory <hash>
+                                                  # 第二次:依現況重算一致才寫入;事前檢查以「目標自己的 .venv-gates」執行 runtime_identity(downstream);
+                                                  # 不合法就在任何寫入之前拒絕。核准後一律建 commit(go-live sha)、最後強制驗證
+# → 在目標 repo 裡跑一次 sh bootstrap.sh(接上目標自己的權威層;Windows 用 Git Bash)
 # → 讀 <目標 repo>/docs/decisions-pending.md,把裡面每一項問清楚、處理完刪掉
 .venv-gates/Scripts/python.exe .claude/portable/verify_gates.py <暫存目錄>
                                                   # 全規則 + 淨室;核心模式不連網(從上游 .venv-gates 離線複製)
@@ -1107,6 +1113,11 @@ python .claude/portable/g1_verify.py               # G1 保護清單(使用者�
 
 > **原文(票 156 之前,照 F-036 保留)**:原本是 `sh bootstrap.sh` → `python install.py <目標>` → `python verify_gates.py <暫存目錄>`,
 > 沒有建 `.venv-gates` 這一步,也不分直譯器。
+>
+> **票 169 更正(2026-11-10 補記)**:上面那段原本只有一行 `install.py <目標 repo>`、註解寫「一律建 commit」。
+> 票 169 之後安裝分兩次執行、中間由人核准名冊候選 hash;票 171 讓候選承接上游已提交名冊的 synced contract;
+> 票 172 起位元碼(`__pycache__/`、`.pyc`、`.pyo`)一律不帶。結束碼:3 候選待核准・4 核准 hash 與現況不符・
+> 5 既有候選檔毀損・6 第一個 commit 前重驗不符已還原・7 還原失敗。
 
 **裝好的定義是驗證通過,不是檔案複製完。** `decisions-pending.md` 清空才算安裝的人工部分做完。
 
